@@ -564,11 +564,11 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
 async fn from_env_reads_only_the_socket_path_out_of_the_tmux_triple() {
     // tmux exports `<socket_path>,<server_pid>,<session_id>`. The pid and the
     // session id are frozen when a pane spawns, so only the path is used.
-    let server = Server::from_env_value(Some("/tmp/libtmux-from-env.sock,4242,$7"))
+    let server = Server::from_env_value(Some("/tmp/libtmux-rs-test/from-env.sock,4242,$7"))
         .expect("a well-formed TMUX value resolves");
     assert_eq!(
         server.socket_path(),
-        std::path::Path::new("/tmp/libtmux-from-env.sock"),
+        std::path::Path::new("/tmp/libtmux-rs-test/from-env.sock"),
     );
 
     for rejected in ["", ",4242,$7", "no-commas-at-all"] {

@@ -221,9 +221,9 @@ impl Server {
     ///
     /// ```
     /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/libtmux-builder-example.sock")
+    ///     .socket_path("/tmp/libtmux-rs-test/builder-example.sock")
     ///     .build()?;
-    /// assert_eq!(server.socket_path(), std::path::Path::new("/tmp/libtmux-builder-example.sock"));
+    /// assert_eq!(server.socket_path(), std::path::Path::new("/tmp/libtmux-rs-test/builder-example.sock"));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
     pub fn builder() -> ServerBuilder {
@@ -236,7 +236,7 @@ impl Server {
     ///
     /// ```
     /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/libtmux-identity-example.sock")
+    ///     .socket_path("/tmp/libtmux-rs-test/identity-example.sock")
     ///     .build()?;
     /// assert_eq!(server.identity(), server.identity());
     /// # Ok::<(), libtmux::Error>(())
@@ -252,7 +252,7 @@ impl Server {
     ///
     /// ```
     /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/libtmux-socket-example.sock")
+    ///     .socket_path("/tmp/libtmux-rs-test/socket-example.sock")
     ///     .build()?;
     /// assert!(server.socket_path().is_absolute());
     /// # Ok::<(), libtmux::Error>(())
@@ -380,7 +380,7 @@ impl Server {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/libtmux-command-example-absent.sock")
+    ///     .socket_path("/tmp/libtmux-rs-test/command-example-absent.sock")
     ///     .build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// assert!(result.exit_code().is_some());
@@ -418,7 +418,7 @@ impl Server {
     /// use libtmux::{Command, CommandChain};
     ///
     /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/libtmux-chain-example-absent.sock")
+    ///     .socket_path("/tmp/libtmux-rs-test/chain-example-absent.sock")
     ///     .build()?;
     /// let chain = CommandChain::new(Command::new("list-sessions"))
     ///     .then(Command::new("list-panes"));
@@ -2363,7 +2363,7 @@ impl ServerBuilder {
     ///
     /// ```
     /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/libtmux-explicit-example.sock")
+    ///     .socket_path("/tmp/libtmux-rs-test/explicit-example.sock")
     ///     .build()?;
     /// assert!(server.socket_path().is_absolute());
     /// # Ok::<(), libtmux::Error>(())

@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn test_support_adds_one_no_start_global_option() {
         let configuration = resolve(
-            &SocketSelection::Path(PathBuf::from("/tmp/libtmux-test-support.sock")),
+            &SocketSelection::Path(PathBuf::from("/tmp/libtmux-rs-test/test-support.sock")),
             Some(PathBuf::from("/tmp/libtmux-test-support.conf")),
             None,
             context(
@@ -557,7 +557,7 @@ mod tests {
         assert!(arguments.windows(2).any(|pair| {
             pair == [
                 b"-S".as_slice(),
-                b"/tmp/libtmux-test-support.sock".as_slice(),
+                b"/tmp/libtmux-rs-test/test-support.sock".as_slice(),
             ]
         }));
         assert!(arguments.windows(2).any(|pair| {

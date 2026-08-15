@@ -786,7 +786,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-id.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-id.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// assert!(result.request_id() > 0);
     /// server.shutdown().await?;
@@ -808,7 +808,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-command.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-command.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// assert_eq!(result.command().to_string(), r#""list-sessions""#);
     /// server.shutdown().await?;
@@ -830,7 +830,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-stdout.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-stdout.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let _: &[u8] = result.stdout();
     /// server.shutdown().await?;
@@ -852,7 +852,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-stderr.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-stderr.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let _: &[u8] = result.stderr();
     /// server.shutdown().await?;
@@ -874,7 +874,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-streams.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-streams.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let (_stdout, _stderr) = result.into_streams();
     /// server.shutdown().await?;
@@ -900,7 +900,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-stdout-utf8.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-stdout-utf8.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let _text = result.stdout_utf8()?;
     /// server.shutdown().await?;
@@ -925,7 +925,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-stderr-utf8.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-stderr-utf8.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let _text = result.stderr_utf8()?;
     /// server.shutdown().await?;
@@ -946,7 +946,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-stdout-lossy.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-stdout-lossy.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let _text = result.stdout_lossy();
     /// server.shutdown().await?;
@@ -968,7 +968,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-stderr-lossy.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-stderr-lossy.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let _text = result.stderr_lossy();
     /// server.shutdown().await?;
@@ -990,7 +990,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-success.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-success.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// let _success = result.success();
     /// server.shutdown().await?;
@@ -1012,7 +1012,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-code.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-code.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// assert!(result.exit_code().is_some());
     /// server.shutdown().await?;
@@ -1034,7 +1034,7 @@ impl CommandResult {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-result-signal.sock").build()?;
+    /// let server = libtmux::Server::builder().socket_path("/tmp/libtmux-rs-test/result-signal.sock").build()?;
     /// let result = server.cmd(libtmux::Command::new("list-sessions")).await?;
     /// assert!(result.signal().is_none());
     /// server.shutdown().await?;
