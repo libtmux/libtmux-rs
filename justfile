@@ -129,13 +129,6 @@ package:
         --package libtmux --package libtmux-macros --all-features
     bash scripts/check-package-contents.sh
 
-# Report what a version bump would owe, against the last release
-[group: 'release']
-semver:
-    cargo semver-checks check-release \
-        --package libtmux --package libtmux-macros --package tmux-mcp \
-        --all-features
-
 # Regenerate the tmux option schema from tmux's own source
 [group: 'release']
 option-schema path:

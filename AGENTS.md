@@ -137,6 +137,13 @@ Rekor -- and it covers the same bytes crates.io serves, because `cargo
 package` is byte-deterministic for a given tree, which was measured rather
 than assumed.
 
+**There is no `semver` recipe, on purpose.** `cargo-semver-checks` cannot say
+anything useful here: it treats a prerelease-to-prerelease step as a major
+change and skips every lint, so a run reports `0 checks: 0 pass, 254 skip` and
+then `no semver update required`. That reads like a clean bill of health and
+is not one. The changelog is the record of what changed until the first
+non-prerelease version, at which point the recipe is worth adding back.
+
 **One step is not in this repository.** Each published crate has to name this
 workflow as a trusted publisher, once, in the crates.io UI under the crate's
 Settings. The values are:
