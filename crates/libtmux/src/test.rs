@@ -1381,9 +1381,16 @@ mod tests {
             }
         }
 
+        // The subject here is the daemon-exited path, not the clock. A
+        // lifecycle timeout of the same magnitude as the observer interval
+        // makes the two race, and on a loaded machine the clock wins: the
+        // failure reads `StartupTimedOut`, which is a different path through
+        // the code and says nothing about the one under test. The ceiling is
+        // therefore far above the interval. It costs nothing, because a
+        // daemon that exits is noticed when it exits.
         let error = TestServerBuilder::new()
             .tmux_executable(&executable)
-            .lifecycle_timeout(Duration::from_millis(50))
+            .lifecycle_timeout(Duration::from_secs(5))
             .start_with_leader_observer(
                 |_| LeaderObservation::Unavailable,
                 Some(Duration::from_millis(50)),

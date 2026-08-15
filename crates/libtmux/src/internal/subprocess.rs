@@ -1069,6 +1069,14 @@ mod tests {
     const CHILD_TEST: &str = "internal::subprocess::tests::child_helper";
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+    /// How long a poll loop waits before looking again.
+    ///
+    /// Sleeping rather than yielding matters: these loops wait on a separate
+    /// process, and a spinning task holds a worker thread against the thing
+    /// it is waiting for. With two worker threads and a loaded machine, that
+    /// is enough to miss the deadline it is measuring.
+    const POLL_INTERVAL: Duration = Duration::from_millis(1);
+
     #[cfg(feature = "tracing")]
     const TRACE_CHILD_ENV: &str = "LIBTMUX_RS_TRACING_TEST_CHILD";
     #[cfg(feature = "tracing")]
@@ -1294,7 +1302,7 @@ mod tests {
                         return pids;
                     }
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
         })
         .await
@@ -1312,7 +1320,7 @@ mod tests {
                 if matches!(test_kill_process(pid(value)), Err(Errno::SRCH)) {
                     return;
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
         })
         .await
@@ -1623,7 +1631,7 @@ mod tests {
         let shutdown = tokio::spawn(async move { shutdown_executor.shutdown().await });
         tokio::time::timeout(TEST_TIMEOUT, async {
             while executor.is_accepting() {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
         })
         .await

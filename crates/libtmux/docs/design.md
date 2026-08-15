@@ -1184,3 +1184,27 @@ the others return the output.
 
 CI found this, not the local gate -- the workspace's own tmux is unaffected,
 which is exactly what the compatibility lanes are for.
+
+### Two shapes that make a test flaky under load
+
+Both of these passed locally for a long time and failed in CI, which has fewer
+cores than a developer machine and runs the whole workspace at once. Neither
+was a timeout that needed raising.
+
+**A poll loop must sleep, not yield.** The subprocess tests wait on a separate
+process: a child writing its PIDs to a file, or a process to become reapable.
+Written with `tokio::task::yield_now`, the waiting task never gives up its
+worker thread, so on a two-worker runtime it competes with the very process it
+is waiting for. The deadline it then misses is one it caused. They sleep a
+millisecond instead, which is still far more often than anything being waited
+on can change.
+
+**Two deadlines of the same magnitude race.** `never_observe_fallback_cleans_an_exited_leaders_group`
+set a 50ms lifecycle timeout alongside a 50ms observer interval, and asserted
+the error was `DaemonExited`. Under load the clock won and the error was
+`StartupTimedOut` -- a different path, saying nothing about the one under
+test. The ceiling now sits far above the interval. It costs nothing, because a
+daemon that exits is noticed when it exits, not when the timeout expires.
+
+The general rule: a test's deadline should bound the thing it is *not*
+testing, by enough that it never becomes the thing it measures.
