@@ -1410,7 +1410,14 @@ mod tests {
     async fn deadline_kills_awaits_and_unregisters_the_child() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let pid_path = directory.path().join("deadline.pid");
-        let executor = executor("block", Duration::from_millis(100));
+        // The deadline has to lose to the child's startup, not race it. The
+        // child publishes its PID and the test reads it back, so a deadline
+        // that expires first kills the child before it ever writes, and the
+        // read then waits out its own five seconds for a file nobody will
+        // write. At 100ms that happened on CI, where re-executing this binary
+        // takes longer than it does here. The length is not what is under
+        // test; that the deadline kills, awaits, and unregisters is.
+        let executor = executor("block", Duration::from_secs(2));
         let dispatch =
             tokio::spawn(executor.execute(request(4, [pid_path.as_os_str().to_os_string()])));
         let child_pid = read_pids(&pid_path, 1).await[0];
@@ -1493,7 +1500,9 @@ mod tests {
     async fn exited_leader_anchors_group_while_descendant_holds_pipes() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let pid_path = directory.path().join("exited-leader.pid");
-        let executor = executor("descendant-parent-exits", Duration::from_millis(100));
+        // Same race as `deadline_kills_awaits_and_unregisters_the_child`, and
+        // worse: two PIDs have to be published before the deadline expires.
+        let executor = executor("descendant-parent-exits", Duration::from_secs(2));
         let dispatch =
             tokio::spawn(executor.execute(request(25, [pid_path.as_os_str().to_os_string()])));
         let pids = read_pids(&pid_path, 2).await;

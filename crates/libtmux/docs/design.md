@@ -1206,6 +1206,15 @@ the error was `DaemonExited`. Under load the clock won and the error was
 test. The ceiling now sits far above the interval. It costs nothing, because a
 daemon that exits is noticed when it exits, not when the timeout expires.
 
+**A deadline under test must still lose to setup.** Two subprocess tests gave
+the executor a 100ms deadline and then read back a PID the child publishes on
+startup. When the deadline wins, the child is killed before it writes, and the
+read waits out its own five seconds for a file nobody will write -- so the
+failure names the read, not the deadline that caused it. Re-executing the test
+binary takes longer on a CI runner than on a developer machine, which is why
+only CI saw it. Shrinking the deadline to 1ms reproduces it exactly, which is
+how the mechanism was confirmed rather than guessed.
+
 The general rule: a test's deadline should bound the thing it is *not*
 testing, by enough that it never becomes the thing it measures.
 
