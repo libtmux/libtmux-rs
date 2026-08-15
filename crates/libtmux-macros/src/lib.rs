@@ -1,4 +1,10 @@
 //! Derive macros for libtmux filter expressions.
+//!
+//! Start from the [`libtmux` documentation][libtmux]: this crate is the
+//! implementation of its `derive` feature, and a caller does not depend on it
+//! directly.
+//!
+//! [libtmux]: https://docs.rs/libtmux
 
 use std::collections::HashSet;
 

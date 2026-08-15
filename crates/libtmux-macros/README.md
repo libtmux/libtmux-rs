@@ -1,7 +1,7 @@
 # libtmux-macros
 
-Procedural macros for [`libtmux`](https://docs.rs/libtmux). It currently
-provides one derive, `Filterable`.
+`#[derive(Filterable)]` for [`libtmux`](https://docs.rs/libtmux): give your own
+structs the same typed query grammar `libtmux` uses for tmux objects.
 
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not
@@ -9,17 +9,30 @@ provides one derive, `Filterable`.
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
-You do not need to depend on this crate. `libtmux` re-exports the macro behind
-its `derive` feature:
+## Install
+
+You do not depend on this crate. `libtmux` re-exports the macro behind its
+`derive` feature:
+
+```console
+$ cargo add libtmux@0.1.0-alpha.3 --features derive
+```
+
+<details>
+<summary>Cargo.toml</summary>
 
 ```toml
 [dependencies]
 libtmux = { version = "0.1.0-alpha.3", features = ["derive"] }
 ```
 
-`#[derive(Filterable)]` generates typed field handles for your own struct, so
-it can be filtered with the same expressions and the same portable JSON
-grammar `libtmux` uses for tmux objects:
+</details>
+
+`libtmux` itself never requires proc macros: its own `Filterable`
+implementations are hand-written, and this derive exists for structs outside
+that crate. Turning the feature off removes the dependency entirely.
+
+## Use it
 
 ```rust
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
@@ -44,13 +57,31 @@ assert_eq!(jobs.iter().matching(&retried).count(), 1);
 
 Field types are read from the struct, and they decide which operations exist:
 `attempts.gt(2)` compiles because the field is an integer, and `name.gt(..)`
-does not, because text has no ordering. Field attributes cover the rest --
-`rename`, `skip`, `enum`, and the `many` and `one` relations.
+does not, because text has no ordering. Getting that wrong is a compile error
+naming the field, not an expression that quietly matches nothing.
 
-See the [`libtmux::query`](https://docs.rs/libtmux/latest/libtmux/query/)
-documentation for the expression grammar, relations, and the versioned wire
-format.
+## Attributes
+
+| Attribute | On | What it does |
+| --- | --- | --- |
+| `#[filterable(target = "…")]` | struct | Names the type in the portable JSON form |
+| `#[filterable(rename = "…")]` | field | Uses a different name in expressions |
+| `#[filterable(skip)]` | field | Leaves the field out |
+| `#[filterable(enum)]` | field | Treats the field as a closed set of values |
+| `#[filterable(many = …)]` | field | Declares a one-to-many relation |
+| `#[filterable(one = …)]` | field | Declares a one-to-one relation |
+
+A relation lets a question about what a value *contains* stay one expression:
+`parents.children.any(children.name.eq("build"))`.
+
+## Documentation
+
+- [`libtmux::query`](https://docs.rs/libtmux/latest/libtmux/query/) — the
+  expression grammar, relations, and the versioned wire format
+- [The `libtmux` guide](https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md#filtering)
+  — filtering tmux objects, which uses the same grammar
 
 ## License
 
-MIT, the same as `libtmux`.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
+or [MIT license](LICENSE-MIT) at your option.

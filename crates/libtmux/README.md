@@ -1,7 +1,16 @@
 # libtmux
 
-Drive tmux from Rust: typed, async control over servers, sessions, windows, and
-panes.
+[![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]
+
+[crates.io]: https://img.shields.io/crates/v/libtmux.svg
+[crate]: https://crates.io/crates/libtmux
+[docs.rs]: https://img.shields.io/docsrs/libtmux
+[docs]: https://docs.rs/libtmux
+[MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
+[rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
+
+**Drive tmux from Rust: typed, async control over servers, sessions, windows,
+and panes.**
 
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not
@@ -10,24 +19,35 @@ panes.
 > expect to edit it.
 
 ```rust
-use libtmux::Server;
+use libtmux::test::TestServer;
 
-# async fn walk() -> Result<(), libtmux::Error> {
-let server = Server::new()?;
-let session = server.new_session("work").await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Runs for real. `TestServer` is an isolated tmux on its own socket under
+    // `/tmp/libtmux-rs-test/`, torn down at the end. Your own code says
+    // `let server = libtmux::Server::new()?;` instead; nothing else changes.
+    let guard = TestServer::new().await?;
+    let server = guard.server();
 
-let window = session.new_window("editor").await?;
-let pane = window.active_pane().await?.expect("a window has a pane");
+    let session = server.new_session("work").await?;
+    let window = session.new_window("editor").await?;
+    let pane = window.active_pane().await?.expect("a window has a pane");
 
-pane.send_keys("cargo test").await?;
-pane.send_key_names(["Enter"]).await?;
+    pane.send_keys("echo hello").await?;
+    pane.send_key_names(["Enter"]).await?;
 
-for line in pane.capture().await? {
-    println!("{}", line.to_string_lossy());
+    for line in pane.capture().await? {
+        println!("{}", line.to_string_lossy());
+    }
+
+    guard.shutdown().await?;
+    Ok(())
 }
-# Ok(())
-# }
 ```
+
+The examples on this page run as written, against a throwaway tmux. To run
+them yourself, enable the `test-support` feature as a dev-dependency:
+`libtmux = { version = "0.1.0-alpha.3", features = ["test-support"] }`.
 
 Every accessor that reaches tmux is `async`; everything that reads an
 already-taken snapshot is not. Commands run without a shell, and results keep
@@ -121,20 +141,29 @@ a connection and use it.
 one per object:
 
 ```rust
-# async fn tree(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-for branch in server.hierarchy().await? {
-    println!("{}", branch.session.name().to_string_lossy());
+use libtmux::test::TestServer;
 
-    for window in &branch.windows {
-        println!("  {}", window.window.name().to_string_lossy());
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let server = guard.server();
+    server.new_session("work").await?;
 
-        for pane in &window.panes {
-            println!("    {pane}");
+    for branch in server.hierarchy().await? {
+        println!("{}", branch.session.name().to_string_lossy());
+
+        for window in &branch.windows {
+            println!("  {}", window.window.name().to_string_lossy());
+
+            for pane in &window.panes {
+                println!("    {pane}");
+            }
         }
     }
+
+    guard.shutdown().await?;
+    Ok(())
 }
-# Ok(())
-# }
 ```
 
 Listings come in pairs. The plain form returns an empty `Vec` when the
@@ -148,21 +177,27 @@ or value, so a comparison that has no meaning for a field does not compile:
 
 ```rust
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
+use libtmux::test::TestServer;
 
-# async fn find(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-let panes = server.try_panes().await?;
-let fields = libtmux::Pane::filter_fields();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let server = guard.server();
+    server.new_session("work").await?;
 
-let editors = fields
-    .pane_current_command
-    .starts_with("nvim")
-    .and(fields.pane_active.eq(true));
+    let panes = server.try_panes().await?;
+    let fields = libtmux::Pane::filter_fields();
 
-for pane in panes.iter().matching(&editors) {
-    println!("{pane}");
+    let active_shell = fields
+        .pane_current_command
+        .starts_with("sh")
+        .and(fields.pane_active.eq(true));
+
+    assert_eq!(panes.iter().matching(&active_shell).count(), 1);
+
+    guard.shutdown().await?;
+    Ok(())
 }
-# Ok(())
-# }
 ```
 
 A question about what a session *contains* needs the shape that holds its
@@ -170,19 +205,34 @@ windows, so `SessionTree` and `WindowTree` carry relations:
 
 ```rust
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
+use libtmux::test::TestServer;
 use libtmux::{SessionTree, WindowTree};
 
-# async fn contained(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-let sessions = SessionTree::filter_fields();
-let windows = WindowTree::filter_fields();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let server = guard.server();
 
-let building = sessions.windows.any(windows.window.window_name.eq("build"));
+    let ci = server.new_session("ci").await?;
+    ci.new_window("build").await?;
+    server.new_session("idle").await?;
 
-for branch in server.hierarchy().await?.iter().matching(&building) {
-    println!("{}", branch.session);
+    let sessions = SessionTree::filter_fields();
+    let windows = WindowTree::filter_fields();
+    let building = sessions.windows.any(windows.window.window_name.eq("build"));
+
+    let names: Vec<_> = server
+        .hierarchy()
+        .await?
+        .iter()
+        .matching(&building)
+        .map(|branch| branch.session.name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["ci"]);
+
+    guard.shutdown().await?;
+    Ok(())
 }
-# Ok(())
-# }
 ```
 
 With `serde`, an expression lowers to a versioned JSON envelope, so a CLI, an
@@ -209,15 +259,23 @@ write, because an object disappearing is an ordinary race rather than a failed
 request.
 
 ```rust
-# async fn resilient(session: &libtmux::Session) -> Result<(), libtmux::Error> {
-match session.try_windows().await {
-    Ok(windows) => println!("{} windows", windows.len()),
-    Err(error) if error.is_object_gone() => println!("gone"),
-    Err(error) if error.is_transient() => println!("retry: {error}"),
-    Err(error) => return Err(error),
+use libtmux::test::TestServer;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let session = guard.server().new_session("work").await?;
+
+    match session.try_windows().await {
+        Ok(windows) => println!("{} windows", windows.len()),
+        Err(error) if error.is_object_gone() => println!("gone"),
+        Err(error) if error.is_transient() => println!("retry: {error}"),
+        Err(error) => return Err(error.into()),
+    }
+
+    guard.shutdown().await?;
+    Ok(())
 }
-# Ok(())
-# }
 ```
 
 ## Cancellation and shutdown
@@ -272,4 +330,5 @@ longer documents ship inside the crate, next to the source:
 
 ## License
 
-MIT.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
+or [MIT license](LICENSE-MIT) at your option.

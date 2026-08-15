@@ -31,6 +31,10 @@ quote = "1.0.35"
 syn = "3.0"
 
 [dev-dependencies]
+# Renamed on purpose: every UI test then proves the derive resolves the crate
+# through `proc-macro-crate` rather than assuming it is called `libtmux`. It
+# is why this crate's own doctests cannot say `libtmux`, and why the README's
+# example is compiled from the `libtmux` crate instead.
 renamed_libtmux = { package = "libtmux", path = "../libtmux", features = ["derive"] }
 trybuild = "1.0.116"
 

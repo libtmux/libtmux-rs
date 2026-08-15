@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+//!
 //! Build tmux workspaces from tmuxp-style YAML.
 //!
 //! This crate exists to exercise the `libtmux` public API from outside, the
@@ -118,7 +120,7 @@ impl<'server> WorkspaceBuilder<'server> {
     /// )?;
     ///
     /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/tmux-workspace-plan-example.sock")
+    ///     .socket_path("/tmp/libtmux-rs-test/plan-example.sock")
     ///     .build()?;
     /// let plan = WorkspaceBuilder::new(&server).plan(&workspace);
     ///
@@ -332,3 +334,14 @@ impl<'server> WorkspaceBuilder<'server> {
         if enter { keys.enter() } else { keys }
     }
 }
+
+/// Compiles the `libtmux-macros` README's examples, and nothing else.
+///
+/// It cannot be compiled from `libtmux`, where the derive resolves the crate
+/// to `crate`, nor from `libtmux-macros`, whose only dependency on `libtmux`
+/// is deliberately renamed so the UI tests prove that resolution works. Here
+/// `libtmux` is an ordinary dependency under its own name, which is the one
+/// case a reader of that README is actually in.
+#[cfg(doctest)]
+#[doc = include_str!("../../libtmux-macros/README.md")]
+pub struct MacrosReadme;

@@ -15,7 +15,7 @@ thiserror.workspace = true
 yaml-rust2 = "0.11.0"
 
 [dev-dependencies]
-libtmux = { workspace = true, features = ["test-support"] }
+libtmux = { workspace = true, features = ["derive", "test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
