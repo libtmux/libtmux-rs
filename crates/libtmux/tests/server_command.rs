@@ -1043,3 +1043,27 @@ async fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
         "client shutdown leaves the isolated tmux daemon running"
     );
 }
+
+#[test]
+fn an_absent_tmux_variable_is_told_apart_from_a_malformed_one() {
+    // No variable at all: the ordinary state of a process nobody started
+    // inside tmux, which a caller may reasonably branch on.
+    let outside = Server::from_env_value(None::<OsString>).expect_err("not inside tmux");
+    assert_configuration_error(&outside, ServerConfigurationErrorKind::NotInsideTmux, &[]);
+
+    // Present but not tmux's triple: something rewrote it, which is a broken
+    // environment rather than a state to branch on. Collapsing the two into
+    // one variant loses exactly that distinction.
+    for broken in ["", ",7,$0"] {
+        let error = Server::from_env_value(Some(broken)).expect_err("malformed value");
+        assert_configuration_error(
+            &error,
+            ServerConfigurationErrorKind::MalformedTmuxVariable,
+            &[],
+        );
+    }
+
+    // And a well-formed value still resolves.
+    Server::from_env_value(Some("/tmp/libtmux-rs-dev/from-env.sock,7,$0"))
+        .expect("a triple names a socket");
+}

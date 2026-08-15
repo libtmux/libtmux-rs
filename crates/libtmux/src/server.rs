@@ -635,7 +635,11 @@ impl Server {
             .map(|index| &bytes[..index])
             .filter(|socket| !socket.is_empty())
             .ok_or_else(|| {
-                Error::invalid_server_configuration(ServerConfigurationErrorKind::NotInsideTmux)
+                // The variable exists and does not say what tmux says, which
+                // is a different problem from not being inside tmux at all.
+                Error::invalid_server_configuration(
+                    ServerConfigurationErrorKind::MalformedTmuxVariable,
+                )
             })?;
 
         Self::builder()

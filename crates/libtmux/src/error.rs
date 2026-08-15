@@ -27,8 +27,19 @@ pub enum ServerConfigurationErrorKind {
     WorkingDirectoryUnavailable,
     /// A stable socket root could not be captured.
     SocketRootUnavailable,
-    /// The `TMUX` variable was absent, empty, or not tmux's triple.
+    /// There is no `TMUX` variable, so this process is not inside tmux.
+    ///
+    /// Distinct from [`Self::MalformedTmuxVariable`], which means the
+    /// variable is there and does not say what tmux says: the first is an
+    /// ordinary state a caller may branch on, the second is a broken
+    /// environment worth reporting.
     NotInsideTmux,
+
+    /// The `TMUX` variable is present but is not tmux's triple.
+    ///
+    /// tmux writes `socket,pid,session`. An empty value, or one with no
+    /// socket before the first comma, means something rewrote it.
+    MalformedTmuxVariable,
 }
 
 /// Why a control-mode connection failed.
