@@ -1,0 +1,42 @@
+[workspace]
+members = ["crates/*"]
+default-members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0-alpha.3"
+authors = ["libtmux contributors"]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/tmux-python/libtmux"
+
+# Shared dependency versions. A crate names the features it needs; the
+# version lives here so a bump is one edit rather than one per crate.
+[workspace.dependencies]
+libtmux = { path = "crates/libtmux", version = "0.1.0-alpha.3" }
+serde = { version = "1.0.225", features = ["derive"] }
+serde_json = "1.0.149"
+tempfile = "3.20"
+thiserror = "2.0"
+tokio = "1.40"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("cygwin"))'] }
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# A library returns errors; it does not decide to end the caller's process.
+# clippy.toml exempts test code, which asserts instead.
+expect_used = "deny"
+panic = "deny"
+unwrap_used = "deny"
+# Deadlock shapes, in a crate whose whole surface is async.
+await_holding_invalid_type = "deny"
+await_holding_lock = "deny"

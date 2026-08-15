@@ -1,0 +1,5 @@
+error: Filterable can only be derived for a struct with named fields
+ --> tests/ui/fail/tuple_struct.rs:5:16
+  |
+5 | struct TupleRow(String);
+  |                ^^^^^^^^

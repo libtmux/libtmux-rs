@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/relation_closure.rs:18:50
+   |
+18 |     let _ = Parent::filter_fields().children.any(|_: &Child| true);
+   |                                              --- ^^^^^^^^^^^^^^^^ expected `FilterExpr<Child>`, found closure
+   |                                              |
+   |                                              arguments to this method are incorrect
+   |
+   = note: expected struct `FilterExpr<Child>`
+             found closure `{closure@$DIR/tests/ui/fail/relation_closure.rs:18:50: 18:61}`
+note: method defined here
+  --> $WORKSPACE/crates/libtmux/src/query.rs
+   |
+   |     pub fn any(self, expression: FilterExpr<To>) -> FilterExpr<From> {
+   |            ^^^

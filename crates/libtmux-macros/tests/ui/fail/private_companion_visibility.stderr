@@ -1,0 +1,11 @@
+error[E0603]: struct `PrivateRowFields` is private
+  --> tests/ui/fail/private_companion_visibility.rs:16:19
+   |
+16 |     let _: model::PrivateRowFields;
+   |                   ^^^^^^^^^^^^^^^^ private struct
+   |
+note: the struct `PrivateRowFields` is defined here
+  --> tests/ui/fail/private_companion_visibility.rs:10:12
+   |
+10 |     struct PrivateRow {
+   |            ^^^^^^^^^^

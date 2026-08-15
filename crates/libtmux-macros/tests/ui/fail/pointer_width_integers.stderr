@@ -1,0 +1,11 @@
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+ --> tests/ui/fail/pointer_width_integers.rs:6:13
+  |
+6 |     signed: isize,
+  |             ^^^^^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+ --> tests/ui/fail/pointer_width_integers.rs:7:15
+  |
+7 |     unsigned: usize,
+  |               ^^^^^

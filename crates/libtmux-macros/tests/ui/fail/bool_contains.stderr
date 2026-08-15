@@ -1,0 +1,5 @@
+error[E0599]: no method named `contains` found for reference `&BoolField<BoolRow>` in the current scope
+  --> tests/ui/fail/bool_contains.rs:12:22
+   |
+12 |     let _ = (&field).contains("true");
+   |                      ^^^^^^^^ method not found in `&BoolField<BoolRow>`

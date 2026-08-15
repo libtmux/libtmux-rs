@@ -1,0 +1,11 @@
+error: unknown filterable container option `surprise`
+ --> tests/ui/fail/unknown_helper_items.rs:4:40
+  |
+4 | #[filterable(target = "unknown_items", surprise)]
+  |                                        ^^^^^^^^
+
+error: unknown filterable field option `mystery`
+ --> tests/ui/fail/unknown_helper_items.rs:6:18
+  |
+6 |     #[filterable(mystery)]
+  |                  ^^^^^^^

@@ -1,0 +1,23 @@
+error: filterable `many` requires exactly `Vec<Related>`
+  --> tests/ui/fail/many_non_vec.rs:11:22
+   |
+11 |     optional_vector: Option<Vec<Child>>,
+   |                      ^^^^^^
+
+error: filterable `many` requires exactly `Vec<Related>`
+  --> tests/ui/fail/many_non_vec.rs:13:10
+   |
+13 |     set: HashSet<Child>,
+   |          ^^^^^^^
+
+error: filterable `many` requires exactly `Vec<Related>`
+  --> tests/ui/fail/many_non_vec.rs:15:12
+   |
+15 |     array: [Child; 1],
+   |            ^^^^^^^^^^
+
+error: filterable `many` requires exactly `Vec<Related>`
+  --> tests/ui/fail/many_non_vec.rs:17:13
+   |
+17 |     loader: fn() -> Vec<Child>,
+   |             ^^

@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libtmux.git-pull.com/schema/filter-v1.schema.json",
+  "title": "libtmux portable filter expression version 1",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "target": {
+      "$ref": "#/$defs/name"
+    },
+    "expr": {
+      "$ref": "#/$defs/expression"
+    }
+  },
+  "required": ["version", "target", "expr"],
+  "additionalProperties": false,
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "expression": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/and"
+        },
+        {
+          "$ref": "#/$defs/or"
+        },
+        {
+          "$ref": "#/$defs/not"
+        },
+        {
+          "$ref": "#/$defs/stringScalar"
+        },
+        {
+          "$ref": "#/$defs/booleanScalar"
+        },
+        {
+          "$ref": "#/$defs/membershipScalar"
+        },
+        {
+          "$ref": "#/$defs/relation"
+        }
+      ]
+    },
+    "and": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "and"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/expression"
+          },
+          "minItems": 2
+        }
+      },
+      "required": ["op", "args"],
+      "additionalProperties": false
+    },
+    "or": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "or"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/expression"
+          },
+          "minItems": 2
+        }
+      },
+      "required": ["op", "args"],
+      "additionalProperties": false
+    },
+    "not": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "not"
+        },
+        "expr": {
+          "$ref": "#/$defs/expression"
+        }
+      },
+      "required": ["op", "expr"],
+      "additionalProperties": false
+    },
+    "stringScalar": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "enum": [
+            "eq",
+            "eq_ignore_case",
+            "contains",
+            "contains_ignore_case",
+            "starts_with",
+            "starts_with_ignore_case",
+            "ends_with",
+            "ends_with_ignore_case",
+            "regex",
+            "regex_ignore_case",
+            "lt",
+            "lte",
+            "gt",
+            "gte"
+          ]
+        },
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "booleanScalar": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "eq"
+        },
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "value": {
+          "type": "boolean"
+        }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "membershipScalar": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "enum": ["in", "not_in"]
+        },
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "boolean"
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      "required": ["op", "field", "value"],
+      "additionalProperties": false
+    },
+    "relation": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "relation"
+        },
+        "field": {
+          "$ref": "#/$defs/name"
+        },
+        "quantifier": {
+          "enum": ["any", "all", "none", "is"]
+        },
+        "expr": {
+          "$ref": "#/$defs/expression"
+        }
+      },
+      "required": ["op", "field", "quantifier", "expr"],
+      "additionalProperties": false
+    }
+  }
+}

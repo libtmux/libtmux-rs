@@ -1,0 +1,5 @@
+error: filterable `rename` cannot be combined with `skip`
+ --> tests/ui/fail/rename_plus_skip.rs:6:37
+  |
+6 |     #[filterable(rename = "cached", skip)]
+  |                                     ^^^^

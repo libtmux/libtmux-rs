@@ -1,0 +1,5 @@
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+ --> tests/ui/fail/type_alias.rs:8:12
+  |
+8 |     label: Label,
+  |            ^^^^^

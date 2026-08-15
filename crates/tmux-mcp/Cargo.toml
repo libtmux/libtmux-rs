@@ -1,0 +1,49 @@
+[package]
+name = "tmux-mcp"
+# Not inherited. Only this crate has changed since the workspace version was
+# last published, and inheriting would force libtmux and libtmux-macros to be
+# republished byte-identical just so this one's dependency on them resolves.
+version = "0.1.0-alpha.4"
+authors.workspace = true
+edition.workspace = true
+# Not inherited. The workspace floor is the libraries' floor, which this
+# crate cannot meet: rmcp and darling require 1.88, so inheriting 1.85 would
+# publish a version that does not build.
+rust-version = "1.88"
+description = "Model Context Protocol server exposing tmux through libtmux"
+documentation = "https://docs.rs/tmux-mcp"
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
+keywords = ["tmux", "mcp", "terminal-use", "cli-use", "shell-use"]
+categories = ["command-line-utilities", "development-tools", "api-bindings"]
+include = [
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/examples/**/*.rs",
+    "/src/**/*.rs",
+    "/tests/**/*.rs",
+]
+
+[dependencies]
+libtmux = { workspace = true, features = ["plan", "control-mode", "query", "serde"] }
+regex = "1.13"
+rmcp = { version = "3.0", features = ["server", "macros", "transport-io"] }
+schemars = "1"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tokio-util = "0.7"
+
+[dev-dependencies]
+libtmux = { workspace = true, features = ["plan", "control-mode", "query", "serde", "test-support"] }
+rmcp = { version = "3.0", features = ["server", "client", "macros", "transport-io"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

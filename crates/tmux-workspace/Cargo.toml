@@ -1,0 +1,23 @@
+[package]
+name = "tmux-workspace"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Build tmux workspaces from tmuxp-style YAML using libtmux"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+libtmux = { workspace = true, features = ["plan"] }
+thiserror.workspace = true
+yaml-rust2 = "0.11.0"
+
+[dev-dependencies]
+libtmux = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

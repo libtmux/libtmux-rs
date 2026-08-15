@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/relation_arbitrary_matcher.rs:26:49
+   |
+26 |     let _ = Parent::filter_fields().favorite.is(Always);
+   |                                              -- ^^^^^^ expected `FilterExpr<Child>`, found `Always`
+   |                                              |
+   |                                              arguments to this method are incorrect
+   |
+   = note: expected struct `FilterExpr<Child>`
+              found struct `Always`
+note: method defined here
+  --> $WORKSPACE/crates/libtmux/src/query.rs
+   |
+   |     pub fn is(self, expression: FilterExpr<To>) -> FilterExpr<From> {
+   |            ^^

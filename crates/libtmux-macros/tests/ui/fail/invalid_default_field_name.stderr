@@ -1,0 +1,23 @@
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+ --> tests/ui/fail/invalid_default_field_name.rs:8:5
+  |
+8 |     BadName: String,
+  |     ^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+ --> tests/ui/fail/invalid_default_field_name.rs:9:5
+  |
+9 |     badName: String,
+  |     ^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_default_field_name.rs:10:5
+   |
+10 |     _bad: String,
+   |     ^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_default_field_name.rs:11:5
+   |
+11 |     café: String,
+   |     ^^^^

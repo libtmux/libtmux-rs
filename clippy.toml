@@ -1,0 +1,14 @@
+# Test code asserts; production code returns errors. The workspace denies
+# expect, unwrap, and panic, and these three exemptions keep every test file
+# from repeating the same allow attribute to say so.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+
+# Holding a tokio guard across an await point deadlocks the moment two tasks
+# reach it. Nothing here does today; this keeps it that way.
+await-holding-invalid-types = [
+    "tokio::sync::MutexGuard",
+    "tokio::sync::RwLockReadGuard",
+    "tokio::sync::RwLockWriteGuard",
+]

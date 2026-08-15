@@ -1,0 +1,47 @@
+error: filterable `rename` is only valid on fields
+ --> tests/ui/fail/misplaced_helper_items.rs:6:5
+  |
+6 |     rename = "container_name",
+  |     ^^^^^^
+
+error: filterable `skip` is only valid on fields
+ --> tests/ui/fail/misplaced_helper_items.rs:7:5
+  |
+7 |     skip,
+  |     ^^^^
+
+error: filterable `enum` is only valid on fields
+ --> tests/ui/fail/misplaced_helper_items.rs:8:5
+  |
+8 |     enum,
+  |     ^^^^
+
+error: filterable `many` is only valid on fields
+ --> tests/ui/fail/misplaced_helper_items.rs:9:5
+  |
+9 |     many,
+  |     ^^^^
+
+error: filterable `one` is only valid on fields
+  --> tests/ui/fail/misplaced_helper_items.rs:10:5
+   |
+10 |     one
+   |     ^^^
+
+error: filterable `fields` is only valid on the container
+  --> tests/ui/fail/misplaced_helper_items.rs:13:18
+   |
+13 |     #[filterable(fields = "FieldHandles")]
+   |                  ^^^^^^
+
+error: filterable `target` is only valid on the container
+  --> tests/ui/fail/misplaced_helper_items.rs:15:18
+   |
+15 |     #[filterable(target = "field_target")]
+   |                  ^^^^^^
+
+error: filterable `crate` is only valid on the container
+  --> tests/ui/fail/misplaced_helper_items.rs:17:18
+   |
+17 |     #[filterable(crate = "renamed_libtmux")]
+   |                  ^^^^^

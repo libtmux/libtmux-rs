@@ -1,0 +1,17 @@
+error: filterable `one` requires exactly `Option<Related>`
+ --> tests/ui/fail/one_non_option.rs:9:12
+  |
+9 |     child: Child,
+  |            ^^^^^
+
+error: filterable `one` requires exactly `Option<Related>`
+  --> tests/ui/fail/one_non_option.rs:11:13
+   |
+11 |     vector: Vec<Child>,
+   |             ^^^
+
+error: filterable `one` requires exactly `Option<Related>`
+  --> tests/ui/fail/one_non_option.rs:13:13
+   |
+13 |     loader: fn() -> Option<Child>,
+   |             ^^

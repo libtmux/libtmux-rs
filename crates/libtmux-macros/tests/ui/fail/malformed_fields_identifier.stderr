@@ -1,0 +1,5 @@
+error: filterable `fields` must contain one Rust identifier
+ --> tests/ui/fail/malformed_fields_identifier.rs:4:52
+  |
+4 | #[filterable(target = "malformed_fields", fields = "not::an::identifier")]
+  |                                                    ^^^^^^^^^^^^^^^^^^^^^

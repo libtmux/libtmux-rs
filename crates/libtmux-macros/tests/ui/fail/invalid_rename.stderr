@@ -1,0 +1,47 @@
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+ --> tests/ui/fail/invalid_rename.rs:6:27
+  |
+6 |     #[filterable(rename = "")]
+  |                           ^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+ --> tests/ui/fail/invalid_rename.rs:8:27
+  |
+8 |     #[filterable(rename = "Uppercase")]
+  |                           ^^^^^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_rename.rs:10:27
+   |
+10 |     #[filterable(rename = "lowerUpper")]
+   |                           ^^^^^^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_rename.rs:12:27
+   |
+12 |     #[filterable(rename = "lower-hyphen")]
+   |                           ^^^^^^^^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_rename.rs:14:27
+   |
+14 |     #[filterable(rename = "lower space")]
+   |                           ^^^^^^^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_rename.rs:16:27
+   |
+16 |     #[filterable(rename = "loweré")]
+   |                           ^^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_rename.rs:18:27
+   |
+18 |     #[filterable(rename = "1leading_digit")]
+   |                           ^^^^^^^^^^^^^^^^
+
+error: filter field name must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_rename.rs:20:27
+   |
+20 |     #[filterable(rename = "_leading_underscore")]
+   |                           ^^^^^^^^^^^^^^^^^^^^^

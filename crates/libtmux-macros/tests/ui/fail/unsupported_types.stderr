@@ -1,0 +1,35 @@
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/unsupported_types.rs:18:12
+   |
+18 |     float: f64,
+   |            ^^^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/unsupported_types.rs:19:16
+   |
+19 |     reference: &'static str,
+   |                ^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/unsupported_types.rs:20:17
+   |
+20 |     collection: Vec<String>,
+   |                 ^^^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/unsupported_types.rs:21:12
+   |
+21 |     tuple: (String, bool),
+   |            ^^^^^^^^^^^^^^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/unsupported_types.rs:22:22
+   |
+22 |     nested_optional: Option<Option<String>>,
+   |                      ^^^^^^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/unsupported_types.rs:23:21
+   |
+23 |     qualified_self: <Holder as HasValue>::Value,
+   |                     ^

@@ -1,0 +1,5 @@
+error: Filterable can only be derived for a struct with named fields
+ --> tests/ui/fail/enum_item.rs:5:1
+  |
+5 | enum State {
+  | ^^^^

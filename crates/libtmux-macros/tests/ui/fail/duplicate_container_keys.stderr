@@ -1,0 +1,17 @@
+error: duplicate filterable container option `target`
+  --> tests/ui/fail/duplicate_container_keys.rs:10:5
+   |
+10 |     target = "second",
+   |     ^^^^^^
+
+error: duplicate filterable container option `fields`
+  --> tests/ui/fail/duplicate_container_keys.rs:11:5
+   |
+11 |     fields = "SecondFields",
+   |     ^^^^^^
+
+error: duplicate filterable container option `crate`
+  --> tests/ui/fail/duplicate_container_keys.rs:12:5
+   |
+12 |     crate = "renamed_libtmux"
+   |     ^^^^^

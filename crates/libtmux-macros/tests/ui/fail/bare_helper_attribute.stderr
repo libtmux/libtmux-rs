@@ -1,0 +1,11 @@
+error: filterable attributes require parenthesized options
+ --> tests/ui/fail/bare_helper_attribute.rs:4:1
+  |
+4 | #[filterable]
+  | ^
+
+error: filterable attributes require parenthesized options
+  --> tests/ui/fail/bare_helper_attribute.rs:13:5
+   |
+13 |     #[filterable]
+   |     ^

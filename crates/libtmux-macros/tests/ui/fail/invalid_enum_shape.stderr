@@ -1,0 +1,11 @@
+error: filterable `enum` requires a plain type path or `Option<EnumType>`
+ --> tests/ui/fail/invalid_enum_shape.rs:9:17
+  |
+9 |     collection: Vec<State>,
+  |                 ^^^
+
+error: filterable `enum` requires a plain type path or `Option<EnumType>`
+  --> tests/ui/fail/invalid_enum_shape.rs:11:22
+   |
+11 |     nested_optional: Option<Option<State>>,
+   |                      ^^^^^^

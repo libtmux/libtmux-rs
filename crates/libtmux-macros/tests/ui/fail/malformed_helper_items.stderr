@@ -1,0 +1,29 @@
+error: filterable `fields` requires a string value
+ --> tests/ui/fail/malformed_helper_items.rs:4:51
+  |
+4 | #[filterable(target = "malformed_items", fields = 7, crate)]
+  |                                                   ^
+
+error: filterable `crate` requires a string value
+ --> tests/ui/fail/malformed_helper_items.rs:4:54
+  |
+4 | #[filterable(target = "malformed_items", fields = 7, crate)]
+  |                                                      ^^^^^
+
+error: filterable `rename` requires a string value
+ --> tests/ui/fail/malformed_helper_items.rs:6:27
+  |
+6 |     #[filterable(rename = false)]
+  |                           ^^^^^
+
+error: filterable `skip` is a bare flag and does not accept a value
+ --> tests/ui/fail/malformed_helper_items.rs:8:18
+  |
+8 |     #[filterable(skip = true)]
+  |                  ^^^^
+
+error: filterable `enum` is a bare flag and does not accept a value
+  --> tests/ui/fail/malformed_helper_items.rs:10:18
+   |
+10 |     #[filterable(enum("state"))]
+   |                  ^^^^

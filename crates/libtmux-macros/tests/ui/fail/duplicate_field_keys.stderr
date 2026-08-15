@@ -1,0 +1,29 @@
+error: duplicate filterable field option `rename`
+ --> tests/ui/fail/duplicate_field_keys.rs:9:18
+  |
+9 |     #[filterable(rename = "second")]
+  |                  ^^^^^^
+
+error: duplicate filterable field option `skip`
+  --> tests/ui/fail/duplicate_field_keys.rs:12:18
+   |
+12 |     #[filterable(skip)]
+   |                  ^^^^
+
+error: duplicate filterable field option `enum`
+  --> tests/ui/fail/duplicate_field_keys.rs:15:18
+   |
+15 |     #[filterable(enum)]
+   |                  ^^^^
+
+error: duplicate filterable field option `many`
+  --> tests/ui/fail/duplicate_field_keys.rs:18:18
+   |
+18 |     #[filterable(many)]
+   |                  ^^^^
+
+error: duplicate filterable field option `one`
+  --> tests/ui/fail/duplicate_field_keys.rs:21:18
+   |
+21 |     #[filterable(one)]
+   |                  ^^^

@@ -1,0 +1,17 @@
+error: filterable `many` conflicts with `enum`
+ --> tests/ui/fail/conflicting_field_annotations.rs:6:24
+  |
+6 |     #[filterable(enum, many)]
+  |                        ^^^^
+
+error: filterable `one` conflicts with `many`
+ --> tests/ui/fail/conflicting_field_annotations.rs:8:24
+  |
+8 |     #[filterable(many, one)]
+  |                        ^^^
+
+error: filterable `enum` conflicts with `skip`
+  --> tests/ui/fail/conflicting_field_annotations.rs:10:24
+   |
+10 |     #[filterable(skip, enum)]
+   |                        ^^^^

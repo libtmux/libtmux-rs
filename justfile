@@ -1,0 +1,155 @@
+# justfile for the libtmux Rust workspace
+# https://just.systems/
+
+set shell := ["bash", "-uc"]
+
+# List all available commands
+default:
+    @just --list
+
+# Run the whole test suite
+[group: 'test']
+test *args:
+    cargo test --locked --workspace --all-targets --all-features {{ args }}
+
+# Run documentation tests, including the examples on the front page
+[group: 'test']
+doctest:
+    cargo test --locked --workspace --doc --all-features
+
+# Run the suite on each crate's minimum supported Rust version
+#
+# Two floors, because they are two promises. The libraries support 1.85 and
+# say so; tmux-mcp cannot, because rmcp and darling require 1.88. A crate
+# tested only at the workspace floor can publish a rust-version it does not
+# meet, which is what happened before this covered it.
+[group: 'test']
+msrv:
+    rustup run 1.85.0 cargo test --locked \
+        --package libtmux --package libtmux-macros --package tmux-workspace \
+        --all-targets --all-features
+    rustup run 1.85.0 cargo hack check --locked \
+        --package libtmux --package libtmux-macros \
+        --each-feature --all-targets
+    rustup run 1.88.0 cargo test --locked \
+        --package tmux-mcp --all-targets
+
+# Test the script that points every agent CLI at a build of this server
+#
+# Needs pytest and tomlkit. -c and --confcutdir keep pytest from walking up
+# into the Python project above this directory, whose config and conftest
+# would otherwise be applied to a Rust workspace.
+[group: 'test']
+swap-test *args:
+    python3 -m pytest scripts/test_mcp_swap.py -c /dev/null --confcutdir=. {{ args }}
+
+# Build every pinned tmux release and run the suite against each
+[group: 'test']
+compat:
+    bash scripts/test-tmux-format-compat.sh
+
+# Watch files and run tests on change (requires entr)
+[group: 'test']
+watch-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v entr > /dev/null; then
+        fd -e rs -e toml . crates | entr -c just test
+    else
+        just test
+        just _entr-warn
+    fi
+
+# Check formatting without changing anything
+[group: 'lint']
+fmt-check:
+    cargo fmt --all -- --check
+
+# Format the workspace
+[group: 'lint']
+fmt:
+    cargo fmt --all
+
+# Run clippy over every target and feature
+[group: 'lint']
+clippy:
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+# Check the crate builds with no features, and each feature alone
+[group: 'lint']
+features:
+    cargo check --locked --package libtmux --all-targets --no-default-features
+    cargo hack check --locked --workspace --each-feature --all-targets
+
+# Check dependency licences, advisories, and sources
+[group: 'lint']
+deny:
+    cargo deny check
+
+# Watch files and run clippy on change (requires entr)
+[group: 'lint']
+watch-clippy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v entr > /dev/null; then
+        fd -e rs -e toml . crates | entr -c just clippy
+    else
+        just clippy
+        just _entr-warn
+    fi
+
+# Build the API documentation
+[group: 'docs']
+docs:
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
+
+# Build documentation including dependencies, so intra-doc links resolve
+[group: 'docs']
+docs-full:
+    cargo doc --locked --workspace --all-features
+
+# Serve the built documentation on http://127.0.0.1:8971
+[group: 'docs']
+serve-docs port='8971': docs-full
+    @echo "serving http://127.0.0.1:{{ port }}"
+    python3 -m http.server {{ port }} --bind 127.0.0.1 --directory target/doc
+
+# Run the hierarchy benchmark against real tmux
+[group: 'bench']
+bench *args:
+    cargo bench --features test-support --bench hierarchy -- {{ args }}
+
+# Build the crates that get published, and verify what they contain
+#
+# --allow-dirty so this stays runnable mid-change; `cargo publish` does its
+# own clean-tree check when it matters.
+[group: 'release']
+package:
+    cargo package --locked --allow-dirty \
+        --package libtmux --package libtmux-macros --all-features
+    bash scripts/check-package-contents.sh
+
+# Report what a version bump would owe, against the last release
+[group: 'release']
+semver:
+    cargo semver-checks check-release \
+        --package libtmux --package libtmux-macros --package tmux-mcp \
+        --all-features
+
+# Regenerate the tmux option schema from tmux's own source
+[group: 'release']
+option-schema path:
+    python3 scripts/generate-option-schema.py {{ path }}
+
+# Run every gate CI runs
+[group: 'check']
+check: fmt-check clippy test doctest docs features deny msrv package
+
+[private]
+_entr-warn:
+    @echo "----------------------------------------------------------"
+    @echo "     ! File watching functionality non-operational !      "
+    @echo "                                                          "
+    @echo "Install entr(1) to automatically run tasks on file change."
+    @echo "See https://eradman.com/entrproject/                      "
+    @echo "----------------------------------------------------------"

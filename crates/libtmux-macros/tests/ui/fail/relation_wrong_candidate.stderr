@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+  --> tests/ui/fail/relation_wrong_candidate.rs:28:33
+   |
+28 |     let _ = fields.children.any(expression.clone());
+   |                             --- ^^^^^^^^^^^^^^^^^^ expected `FilterExpr<Child>`, found `FilterExpr<Other>`
+   |                             |
+   |                             arguments to this method are incorrect
+   |
+   = note: expected struct `FilterExpr<Child>`
+              found struct `FilterExpr<Other>`
+note: method defined here
+  --> $WORKSPACE/crates/libtmux/src/query.rs
+   |
+   |     pub fn any(self, expression: FilterExpr<To>) -> FilterExpr<From> {
+   |            ^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/fail/relation_wrong_candidate.rs:29:32
+   |
+29 |     let _ = fields.favorite.is(expression);
+   |                             -- ^^^^^^^^^^ expected `FilterExpr<Child>`, found `FilterExpr<Other>`
+   |                             |
+   |                             arguments to this method are incorrect
+   |
+   = note: expected struct `FilterExpr<Child>`
+              found struct `FilterExpr<Other>`
+note: method defined here
+  --> $WORKSPACE/crates/libtmux/src/query.rs
+   |
+   |     pub fn is(self, expression: FilterExpr<To>) -> FilterExpr<From> {
+   |            ^^

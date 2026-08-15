@@ -1,0 +1,5 @@
+error: duplicate stable filter field name
+ --> tests/ui/fail/duplicate_wire_name.rs:8:5
+  |
+8 |     name: String,
+  |     ^^^^

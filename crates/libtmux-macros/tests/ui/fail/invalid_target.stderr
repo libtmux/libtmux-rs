@@ -1,0 +1,47 @@
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+ --> tests/ui/fail/invalid_target.rs:4:23
+  |
+4 | #[filterable(target = "")]
+  |                       ^^
+
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_target.rs:10:23
+   |
+10 | #[filterable(target = "Uppercase")]
+   |                       ^^^^^^^^^^^
+
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_target.rs:16:23
+   |
+16 | #[filterable(target = "lowerUpper")]
+   |                       ^^^^^^^^^^^^
+
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_target.rs:22:23
+   |
+22 | #[filterable(target = "lower-hyphen")]
+   |                       ^^^^^^^^^^^^^^
+
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_target.rs:28:23
+   |
+28 | #[filterable(target = "lower space")]
+   |                       ^^^^^^^^^^^^^
+
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_target.rs:34:23
+   |
+34 | #[filterable(target = "loweré")]
+   |                       ^^^^^^^^
+
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_target.rs:40:23
+   |
+40 | #[filterable(target = "1leading_digit")]
+   |                       ^^^^^^^^^^^^^^^^
+
+error: filter target must match ASCII `[a-z][a-z0-9_]*`
+  --> tests/ui/fail/invalid_target.rs:46:23
+   |
+46 | #[filterable(target = "_leading_underscore")]
+   |                       ^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,17 @@
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/explicit_annotations_required.rs:27:12
+   |
+27 |     state: State,
+   |            ^^^^^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/explicit_annotations_required.rs:28:15
+   |
+28 |     children: Vec<Child>,
+   |               ^^^
+
+error: unsupported filter field type; use String, TmuxText, bool, a fixed-width integer, an outer Option of one of those types, or an explicit enum/many/one annotation
+  --> tests/ui/fail/explicit_annotations_required.rs:29:15
+   |
+29 |     favorite: Option<Child>,
+   |               ^^^^^^

@@ -1,0 +1,116 @@
+[package]
+name = "libtmux"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Async typed tmux client and object model"
+documentation = "https://docs.rs/libtmux"
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
+keywords = ["tmux", "terminal", "multiplexer", "async", "tokio"]
+categories = ["api-bindings", "asynchronous", "os::unix-apis"]
+include = [
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/docs/design.md",
+    "/docs/parity.md",
+    "/benches/**/*.rs",
+    "/examples/**/*.rs",
+    "/schema/**/*.json",
+    "/src/**/*.rs",
+    "/tests/fixtures/filter-v1/*.json",
+    "/tests/fixtures/dialect-v1/*.json",
+    "/tests/**/*.rs",
+]
+
+[lib]
+path = "src/lib.rs"
+
+[[example]]
+name = "scratch"
+required-features = ["test-support"]
+
+# An example needs a `main`, so it is skipped by cargo rather than emptied by
+# a file-level cfg the way the filter test binaries are.
+[[example]]
+name = "find"
+required-features = ["query"]
+
+# The matrix compares the transports against each other, so it needs one of
+# each rather than a subset.
+[[example]]
+name = "sweep"
+required-features = ["test-support"]
+
+[[example]]
+name = "matrix"
+required-features = ["plan", "control-mode", "blocking", "test-support", "query"]
+
+[[bench]]
+name = "hierarchy"
+harness = false
+required-features = ["test-support"]
+
+[[test]]
+name = "filter_derive"
+path = "tests/filter_derive.rs"
+required-features = ["derive"]
+
+[[test]]
+name = "filter_serde"
+path = "tests/filter_serde.rs"
+
+[features]
+# The only feature on by default. Filtering is what most callers reach for
+# after listing something, and it is the one capability whose absence changes
+# how code is written rather than what it can reach. A caller that only drives
+# tmux turns it off and drops the regex engine with it.
+default = ["query"]
+# Everything a caller might reach for, so a preset replaces remembering the
+# list. `test-support` is deliberately absent: it belongs to a dev-dependency,
+# not to a build of the library.
+full = ["blocking", "control-mode", "derive", "plan", "query", "serde", "tracing"]
+blocking = ["tokio/rt"]
+control-mode = ["dep:futures-core", "tokio/io-util", "tokio/process", "tokio/sync"]
+# The derive writes `impl Filterable`, which does not exist without `query`.
+derive = ["dep:libtmux-macros", "query"]
+# Recording tmux work before doing it. No new dependencies: it is opt-in
+# because it is API surface a caller who only dispatches commands never needs.
+plan = []
+query = ["dep:caseless", "dep:regex"]
+serde = ["dep:serde"]
+test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
+tracing = ["dep:tracing"]
+
+[dependencies]
+caseless = { version = "0.2", optional = true }
+futures-core = { version = "0.3", optional = true }
+libtmux-macros = { version = "0.1.0-alpha.3", path = "../libtmux-macros", optional = true }
+regex = { version = "1.13", optional = true }
+rustix = { version = "1.1.4", features = ["process"] }
+serde = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tracing = { version = "0.1.29", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.7.0", features = ["async_tokio"] }
+futures-core = "0.3"
+jsonschema = { version = "=0.49.9", default-features = false }
+serde_json.workspace = true
+static_assertions = "1.1.0"
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio-stream = "0.1.19"
+tracing-subscriber = "0.3.23"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
