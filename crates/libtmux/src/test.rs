@@ -1785,9 +1785,17 @@ pub async fn retry_until(
         if Instant::now() >= deadline {
             return Err(RetryTimeout { waited: within });
         }
-        tokio::task::yield_now().await;
+        // Sleeping rather than yielding, because the condition almost always
+        // waits on tmux or on another process. A task that yields keeps its
+        // worker thread and competes with whatever it is waiting for, so on a
+        // busy machine it makes its own deadline harder to meet. This is a
+        // public helper, so every caller would inherit that.
+        tokio::time::sleep(RETRY_POLL_INTERVAL).await;
     }
 }
+
+/// How long [`retry_until`] waits before testing its condition again.
+const RETRY_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 /// A condition did not hold before its deadline.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

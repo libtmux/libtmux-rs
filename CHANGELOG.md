@@ -23,6 +23,10 @@ While the version is `0.1.0-alpha.*`, any release may break the API.
   than only each session's. tmux keeps the two in separate stores and merges
   them when it starts a process: the session's value wins, a server-only name
   still arrives, and a hidden one is absent rather than empty.
+- `PaneDirection` and `Window::focus_direction`, for moving focus by where a
+  pane sits rather than by its index. It returns the pane instead of an
+  `Option` because tmux wraps at the edge: asking to go up from the topmost
+  pane lands on the bottom one rather than reporting nothing above.
 - `Error::CapabilityDefective`, for a capability the running release has and
   gets wrong. `Server::run_shell` now raises it on tmux 3.3, 3.3a, and 3.4,
   which send `run-shell` output to a pane's copy-mode buffer instead of the

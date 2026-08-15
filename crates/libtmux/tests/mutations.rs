@@ -769,3 +769,100 @@ async fn a_taken_session_name_is_classified_rather_than_a_bare_refusal() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn directional_focus_follows_the_layout_and_wraps_at_the_edge() {
+    use libtmux::{NewWindowOptions, PaneDirection, SplitDirection};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("directions")
+        .await
+        .expect("session");
+
+    // Two panes, one above the other. Kept to two because `split` divides
+    // whichever pane is active, and splitting is detached by default, so a
+    // third pane's position depends on focus rather than on the call.
+    let stacked = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a session has a window");
+    let mut top = stacked
+        .active_pane()
+        .await
+        .expect("panes")
+        .expect("a window has a pane");
+    let bottom = stacked
+        .split(SplitDirection::Below)
+        .await
+        .expect("split below");
+
+    top.select().await.expect("focus the top pane");
+    assert_eq!(
+        stacked
+            .focus_direction(PaneDirection::Below)
+            .await
+            .expect("focus moves")
+            .id(),
+        bottom.id(),
+        "down from the top",
+    );
+    assert_eq!(
+        stacked
+            .focus_direction(PaneDirection::Above)
+            .await
+            .expect("focus moves")
+            .id(),
+        top.id(),
+        "up from the bottom",
+    );
+
+    // tmux wraps rather than refusing, so this lands on the other pane
+    // instead of reporting that there is nothing above.
+    assert_eq!(
+        stacked
+            .focus_direction(PaneDirection::Above)
+            .await
+            .expect("the edge is not an error")
+            .id(),
+        bottom.id(),
+        "up from the top wraps to the bottom",
+    );
+
+    // Side by side, in a window of its own for the same reason.
+    let side = session
+        .new_window(NewWindowOptions::new("side").command("sleep 300"))
+        .await
+        .expect("window created");
+    let mut left = side
+        .active_pane()
+        .await
+        .expect("panes")
+        .expect("a window has a pane");
+    let right = side
+        .split(SplitDirection::Right)
+        .await
+        .expect("split right");
+
+    left.select().await.expect("focus the left pane");
+    assert_eq!(
+        side.focus_direction(PaneDirection::Right)
+            .await
+            .expect("focus moves")
+            .id(),
+        right.id(),
+        "right from the left",
+    );
+    assert_eq!(
+        side.focus_direction(PaneDirection::Left)
+            .await
+            .expect("focus moves")
+            .id(),
+        left.id(),
+        "left from the right",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

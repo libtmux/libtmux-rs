@@ -31,6 +31,35 @@ use crate::{Command, CommandResult, Error, IndexedHooks, ObjectKind, OptionValue
 ///
 /// Getters that describe the window itself, such as [`Window::name`], read the
 /// window. Getters that describe its place in a session, such as
+/// Which way to move focus among a window's panes.
+///
+/// tmux decides what is "up" from a pane's position on screen rather than
+/// from its index, so these follow the layout rather than the pane order.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum PaneDirection {
+    /// The pane above.
+    Above,
+    /// The pane below.
+    Below,
+    /// The pane to the left.
+    Left,
+    /// The pane to the right.
+    Right,
+}
+
+impl PaneDirection {
+    /// The tmux flag that selects this direction.
+    const fn flag(self) -> &'static str {
+        match self {
+            Self::Above => "-U",
+            Self::Below => "-D",
+            Self::Left => "-L",
+            Self::Right => "-R",
+        }
+    }
+}
+
 /// [`Window::index`] and [`Window::is_active`], read the link.
 #[derive(Clone)]
 pub struct Window {
@@ -275,6 +304,67 @@ impl Window {
     /// snapshot and this call.
     pub async fn active_pane(&self) -> Result<Option<Pane>, Error> {
         Ok(self.try_panes().await?.into_iter().find(Pane::is_active))
+    }
+
+    /// Move focus one pane in this direction, and report where it landed.
+    ///
+    /// tmux wraps: asking to go up from the topmost pane lands on the bottom
+    /// one, and a window holding a single pane stays where it is. Neither is
+    /// a failure, and tmux reports neither, so this returns the pane rather
+    /// than absence. A caller that wants to know whether it moved compares
+    /// the returned ID with the one it started from.
+    ///
+    /// Direction follows the layout, not the pane index: "up" means the pane
+    /// drawn above this one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses the move.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::{PaneDirection, SplitDirection};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("directions").await?;
+    /// let window = session.active_window().await?.expect("a session has a window");
+    ///
+    /// // Splitting leaves focus where it was, so the top pane is still active.
+    /// let lower = window.split(SplitDirection::Below).await?;
+    ///
+    /// let moved = window.focus_direction(PaneDirection::Below).await?;
+    /// assert_eq!(moved.id(), lower.id(), "focus moved down to the new pane");
+    ///
+    /// // Down again from the bottom wraps rather than failing.
+    /// let wrapped = window.focus_direction(PaneDirection::Below).await?;
+    /// assert_ne!(wrapped.id(), lower.id(), "the edge wraps back to the top");
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn focus_direction(&self, direction: PaneDirection) -> Result<Pane, Error> {
+        let target = self.id().to_string();
+        listing::mutate(
+            &self.core,
+            "select-pane",
+            Command::new("select-pane")
+                .arg(direction.flag())
+                .arg("-t")
+                .arg(&target),
+        )
+        .await?;
+
+        self.active_pane().await?.ok_or(Error::ObjectGone {
+            kind: ObjectKind::Window,
+            id: target,
+        })
     }
 
     /// Move to the pane that was active before this one, and return it.
