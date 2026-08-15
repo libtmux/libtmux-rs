@@ -17,6 +17,12 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.4 - 2026-08-15
+
+`libtmux` and `libtmux-macros` are 0.1.0-alpha.4; `tmux-mcp` is 0.1.0-alpha.5,
+because it already occupied alpha.4. Its own behaviour is unchanged since then:
+it is republished to pick up the licence and repository metadata.
+
 ### Added
 
 - `Error::OptionRejected` carries an `OptionErrorKind` saying which way tmux
@@ -54,10 +60,13 @@ full.
   convention. Releases up to and including `0.1.0-alpha.3` were MIT only.
 - `repository` points at this workspace rather than at the Python libtmux
   repository, which does not contain this code.
+- Published from CI by a `v*` tag, with no stored API token: the workflow
+  exchanges a GitHub OIDC identity for a short-lived crates.io token.
 
-## 0.1.0-alpha.4 - 2026-08-14
+## tmux-mcp 0.1.0-alpha.4 - 2026-08-14
 
-`tmux-mcp` only.
+That crate alone. Version numbers diverge from here, because `tmux-mcp`
+moves at its own pace.
 
 ## 0.1.0-alpha.3 - 2026-08-14
 
