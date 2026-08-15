@@ -6,6 +6,12 @@
 # Cargo.lock is committed, not ignored: this workspace ships binaries
 # (tmux-mcp), and a lock file is what makes their builds reproducible.
 
+# Python bytecode. The compat and MCP-swap helpers under scripts/ are
+# Python, so running them leaves caches next to the sources.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Coverage and profiling artefacts.
 *.profraw
 *.profdata
