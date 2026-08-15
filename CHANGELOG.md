@@ -17,6 +17,20 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `Client::attached_session`, `attached_window`, and `attached_pane`, plus
+  `Error::UnreadableFormatValue` for the case where tmux answers an id query
+  with something that is not an id. The window and pane are the session's
+  current ones rather than a per-client view, because tmux keeps no per-client
+  focus.
+
+### Removed
+
+- The `semver` recipe. `cargo-semver-checks` skips every lint on a
+  prerelease-to-prerelease step, so it reported `0 checks` and then `no semver
+  update required`, which reads like a clean bill of health and is not one.
+
 ## 0.1.0-alpha.4 - 2026-08-15
 
 `libtmux` and `libtmux-macros` are 0.1.0-alpha.4; `tmux-mcp` is 0.1.0-alpha.5,

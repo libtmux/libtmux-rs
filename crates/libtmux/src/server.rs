@@ -192,7 +192,10 @@ pub struct Server {
 
 impl Server {
     /// Build a handle onto a connection an object already holds.
-    #[cfg(feature = "control-mode")]
+    ///
+    /// Not feature-gated: a `Client` resolving what it is attached to needs a
+    /// server to look ids up through, and that has nothing to do with control
+    /// mode.
     pub(crate) const fn from_core(core: Arc<Core>) -> Self {
         Self { core }
     }

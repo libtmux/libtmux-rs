@@ -1,7 +1,9 @@
 //! Client handles and their snapshot getters.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
 
 use crate::formats::TmuxText;
@@ -123,6 +125,162 @@ impl Client {
         let mut refreshed = self.clone();
         refreshed.refresh().await?;
         Ok(refreshed)
+    }
+
+    /// Read one ID out of this client's format tree.
+    ///
+    /// tmux resolves a client target to the session it is attached to, that
+    /// session's current window, and that window's active pane, so one
+    /// `display-message` answers any of the three. `None` means the client is
+    /// attached to nothing.
+    async fn attached_id(&self, format: &str) -> Result<Option<TmuxText>, Error> {
+        let result = self
+            .core
+            .execute(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(OsString::from_vec(self.name().as_bytes().to_vec()))
+                    .arg(OsString::from(format)),
+            )
+            .await?;
+        if !result.success() {
+            let stderr = result.stderr_lossy();
+            if stderr.trim_end() == crate::error::NO_CURRENT_CLIENT {
+                return Ok(None);
+            }
+            return Err(Error::refused(
+                "display-message",
+                result.exit_code(),
+                stderr.into_owned(),
+                None,
+            ));
+        }
+
+        let stdout = result.stdout();
+        let value = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+        if value.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(TmuxText::from(value.to_vec())))
+    }
+
+    /// The session this client is attached to.
+    ///
+    /// `None` when the client is attached to nothing, which is an ordinary
+    /// state rather than a failure.
+    ///
+    /// Resolved through `#{session_id}` rather than `#{client_session}`. The
+    /// latter is what tmux calls the attachment, but it is a *name*, and a
+    /// name is not a handle: tmux will create a session called `a:b` and then
+    /// refuse to address it, because `:` separates a session from a window in
+    /// a target. The ID is unambiguous by construction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached, or answers with an ID
+    /// this crate cannot parse.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    /// let session = server.new_session("work").await?;
+    ///
+    /// // A control-mode connection is a client, so the server has one to find.
+    /// # #[cfg(feature = "control-mode")]
+    /// # {
+    /// let control = libtmux::control::ControlMode::attach(server, session.id()).await?;
+    /// let client = server.try_clients().await?.into_iter().next().expect("one client");
+    ///
+    /// let attached = client.attached_session().await?.expect("it is attached");
+    /// assert_eq!(attached.id(), session.id());
+    /// control.shutdown().await?;
+    /// # }
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn attached_session(&self) -> Result<Option<crate::Session>, Error> {
+        let Some(id) = self.attached_id("#{session_id}").await? else {
+            return Ok(None);
+        };
+        let id: crate::SessionId =
+            id.to_string_lossy()
+                .parse()
+                .map_err(|detail| Error::UnreadableFormatValue {
+                    format: "#{session_id}",
+                    detail,
+                })?;
+        crate::Server::from_core(Arc::clone(&self.core))
+            .session_by_id(&id)
+            .await
+    }
+
+    /// The current window of the session this client is attached to.
+    ///
+    /// Not this client's own view. tmux keeps the current window on the
+    /// session -- `curw` is a member of `struct session`, not of
+    /// `struct client` -- so every client attached to one session reports the
+    /// same window, and one client changing it changes it for all of them.
+    ///
+    /// `None` when the client is attached to nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached, or answers with an ID
+    /// this crate cannot parse.
+    pub async fn attached_window(&self) -> Result<Option<crate::Window>, Error> {
+        let Some(id) = self.attached_id("#{window_id}").await? else {
+            return Ok(None);
+        };
+        let id: crate::WindowId =
+            id.to_string_lossy()
+                .parse()
+                .map_err(|detail| Error::UnreadableFormatValue {
+                    format: "#{window_id}",
+                    detail,
+                })?;
+        crate::Server::from_core(Arc::clone(&self.core))
+            .window_by_id(&id)
+            .await
+    }
+
+    /// The active pane of the current window of this client's session.
+    ///
+    /// Shares the caveat on [`Self::attached_window`], and adds one: this is
+    /// the window's active pane, not a per-client focus, because tmux does
+    /// not keep one. Two clients on the same session always report the same
+    /// pane.
+    ///
+    /// `None` when the client is attached to nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached, or answers with an ID
+    /// this crate cannot parse.
+    pub async fn attached_pane(&self) -> Result<Option<crate::Pane>, Error> {
+        let Some(id) = self.attached_id("#{pane_id}").await? else {
+            return Ok(None);
+        };
+        let id: crate::PaneId =
+            id.to_string_lossy()
+                .parse()
+                .map_err(|detail| Error::UnreadableFormatValue {
+                    format: "#{pane_id}",
+                    detail,
+                })?;
+        crate::Server::from_core(Arc::clone(&self.core))
+            .pane_by_id(&id)
+            .await
     }
 
     /// Detach this client from its server.

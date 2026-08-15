@@ -1245,3 +1245,40 @@ processes then finds two where the test means one.
 
 Measured by pinning the lib suite to two cores at eight test threads: one
 failure in six runs before, twelve clean runs after.
+
+### A client's attachment is a name, so it is read as an id instead
+
+The format catalog gives `client_session` and `client_last_session` the
+semantic owner `ClientAttachment` rather than `Client`, and leaves them
+catalog-only, so the client snapshot has no session field. That classification
+was recorded before the reason for it was, and the parity ledger stalled on
+"is an attachment part of a client's identity?" -- a question with no useful
+answer, since identity here is `(ServerIdentity, client_name)` and every other
+field in the snapshot is mutable state too.
+
+The real reason is narrower and settles it. `format_cb_client_session` returns
+`c->session->name`, so `client_session` is a *name*, and a name is not a handle
+in tmux: this crate has already established that tmux will create a session
+called `a:b` and then refuse to address it, because `:` separates a session
+from a window in a target. Projecting the field would put a value in the
+snapshot that a caller cannot reliably turn back into a `Session`.
+
+A client's format tree resolves the whole chain as ids, which is what the
+accessors use:
+
+```console
+$ tmux list-clients -F '#{client_session} #{session_id} #{window_id} #{pane_id}'
+plain $0 @0 %0
+```
+
+So `Client::attached_session`, `attached_window`, and `attached_pane` each
+read one id and hand it to the existing by-id lookup. `client_session` stays
+catalog-only, and no `ClientAttachment` type is needed: the ownership it
+records is about format semantics, not about a public struct.
+
+Two of the three carry a caveat worth stating rather than discovering.
+`curw` is a member of `struct session`, not `struct client`, so the window a
+client reports is the session's current window: every client attached to that
+session reports the same one, and one client changing it changes it for all of
+them. The pane follows from the window, because tmux keeps no per-client
+focus.

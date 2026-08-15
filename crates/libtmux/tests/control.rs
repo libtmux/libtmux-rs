@@ -530,3 +530,76 @@ async fn detaching_a_session_removes_the_clients_attached_to_it() {
     let _ = events.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_client_reports_the_session_window_and_pane_it_is_attached_to() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("attached").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a session has a window");
+    let pane = window
+        .active_pane()
+        .await
+        .expect("panes")
+        .expect("a window has a pane");
+
+    // Control mode attaches a real client. Without one there is nothing to
+    // ask, and a test against a detached fixture would pass against a method
+    // that always answered `None`.
+    let control = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches");
+
+    let client = server
+        .try_clients()
+        .await
+        .expect("clients")
+        .into_iter()
+        .next()
+        .expect("the control-mode client");
+
+    // Resolved through `#{session_id}` rather than `#{client_session}`, which
+    // is a name. The ids are what make these real handles.
+    assert_eq!(
+        client
+            .attached_session()
+            .await
+            .expect("session resolves")
+            .expect("it is attached")
+            .id(),
+        session.id(),
+    );
+    assert_eq!(
+        client
+            .attached_window()
+            .await
+            .expect("window resolves")
+            .expect("it is attached")
+            .id(),
+        window.id(),
+    );
+    assert_eq!(
+        client
+            .attached_pane()
+            .await
+            .expect("pane resolves")
+            .expect("it is attached")
+            .id(),
+        pane.id(),
+    );
+
+    // The same client is reachable by the name tmux gave it.
+    let by_name = server
+        .client(client.name().as_bytes())
+        .await
+        .expect("lookup")
+        .expect("the client is listed");
+    assert_eq!(by_name.name(), client.name());
+
+    control.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

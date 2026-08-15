@@ -249,6 +249,20 @@ pub enum Error {
         detail: String,
     },
 
+    /// tmux answered a format query with a value this crate cannot read.
+    ///
+    /// Reports a disagreement between the crate and the tmux that answered,
+    /// not a caller mistake: the crate asked for an ID and tmux returned
+    /// something that is not one. Worth reporting.
+    #[non_exhaustive]
+    #[error("tmux answered {format} with a value that is not an id: {detail}")]
+    UnreadableFormatValue {
+        /// The format the crate asked for.
+        format: &'static str,
+        /// What was wrong with the answer. Never retains the value.
+        detail: IdParseError,
+    },
+
     /// A session of this name already exists.
     ///
     /// Classified rather than left as a generic refusal because it is the one
@@ -705,7 +719,9 @@ impl Error {
             | Self::ExecutorShutdown { .. }
             | Self::DuplicateRequest { .. }
             | Self::SupervisorLost { .. } => ErrorKind::Transport,
-            Self::InvalidVersionOutput { .. } | Self::DecodeListing { .. } => ErrorKind::Decode,
+            Self::InvalidVersionOutput { .. }
+            | Self::DecodeListing { .. }
+            | Self::UnreadableFormatValue { .. } => ErrorKind::Decode,
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, .. } => match kind {
                 ControlModeErrorKind::UnrepresentableCommand => ErrorKind::InvalidInput,
@@ -977,6 +993,11 @@ impl fmt::Debug for Error {
                 .field("found", found)
                 .field("broken_in", broken_in)
                 .field("fixed_in", fixed_in)
+                .finish(),
+            Self::UnreadableFormatValue { format, detail } => formatter
+                .debug_struct("UnreadableFormatValue")
+                .field("format", format)
+                .field("detail", detail)
                 .finish(),
             Self::OptionRejected { kind, detail } => formatter
                 .debug_struct("OptionRejected")
