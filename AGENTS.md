@@ -1,9 +1,10 @@
 # AGENTS.md — the Rust workspace
 
-Path-specific rules for `rs/`. The repository root `AGENTS.md` still applies
-for commit format, changelog conventions, slop prevention, and the
-shipped-versus-branch-internal rule. **Its commands do not**: nothing here uses
-`uv`, `pytest`, `ruff`, or `mypy`.
+Rules for this workspace, which is the whole repository. It was extracted from
+the Python libtmux repository, and the commit format, changelog conventions,
+slop prevention, and shipped-versus-branch-internal rule it inherited from that
+repository's root `AGENTS.md` still apply. **Its commands do not**: nothing
+here uses `uv`, `pytest`, `ruff`, or `mypy`.
 
 ## Layout and commands
 
@@ -11,13 +12,18 @@ shipped-versus-branch-internal rule. **Its commands do not**: nothing here uses
 | --- | --- | --- |
 | `crates/libtmux` | yes | The async tmux client and object model |
 | `crates/libtmux-macros` | yes | `#[derive(Filterable)]`, for downstream structs |
-| `crates/tmux-mcp` | no | An MCP server, built to exercise the public API |
+| `crates/tmux-mcp` | yes | An MCP server, built to exercise the public API |
 | `crates/tmux-workspace` | no | A tmuxp-YAML builder, same purpose |
 
 `just` lists every recipe. `just check` runs what CI runs. Cargo is
 authoritative; the justfile only groups Cargo commands.
 
-The two unpublished crates exist to use the API from outside. When they need a
+`tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
+them, because it moves at its own pace and its dependencies need a compiler the
+libraries do not. Only `tmux-workspace` is unpublished, and `publish = false`
+is what says so.
+
+Both of those crates exist to use the API from outside. When they need a
 workaround, that is a finding about the API, not about them.
 
 ## Things that will bite
