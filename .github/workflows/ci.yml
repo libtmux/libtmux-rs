@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # tmux emits bytes rather than text, and the fixtures assert on wording.
+  LC_ALL: C.UTF-8
+
+jobs:
+  # Everything `just check` runs: formatting, Clippy, tests, doctests, docs,
+  # the feature powerset, cargo-deny, both MSRV floors, and packaging.
+  check:
+    name: just check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux
+          tmux -V
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # `just msrv` invokes these by exact name via `rustup run`. Two floors,
+      # because they are two promises: the libraries support 1.85, and
+      # tmux-mcp cannot, since its dependencies require 1.88.
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-hack,cargo-deny
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: just check
+
+  # The slow lane. tmux's output and error wording change between releases, so
+  # every supported one is built from source and runs the whole workspace.
+  compat:
+    name: tmux compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tmux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bison \
+            build-essential \
+            libevent-dev \
+            libncurses-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+
+      - run: just compat
