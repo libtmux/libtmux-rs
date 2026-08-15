@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::client::Client;
 use crate::formats::TmuxText;
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
+use crate::internal::environment;
 #[cfg(test)]
 use crate::internal::executor::Executor;
 use crate::internal::listing::{self, Pushdown as _};
@@ -21,9 +22,9 @@ use crate::session::Session;
 use crate::snapshot::{SessionFields, WindowFields};
 use crate::window::Window;
 use crate::{
-    Command, CommandChain, CommandResult, EngineCapabilities, Error, IndexedHooks, ObjectKind,
-    OptionValue, PaneId, ReleaseSuffix, ReleaseVersion, ReplaceMode, ServerConfigurationErrorKind,
-    ServerIdentity, SessionId, WindowId,
+    Command, CommandChain, CommandResult, EngineCapabilities, EnvironmentEntry, Error,
+    IndexedHooks, ObjectKind, OptionValue, PaneId, ReleaseSuffix, ReleaseVersion, ReplaceMode,
+    ServerConfigurationErrorKind, ServerIdentity, SessionId, WindowId,
 };
 
 /// The first tmux release that has a server access list.
@@ -833,6 +834,120 @@ impl Server {
             false,
         )
         .await
+    }
+
+    /// Set a variable in the server's own environment.
+    ///
+    /// tmux keeps this and each session's environment in separate stores, and
+    /// merges them only when it starts a process. So a name set here is
+    /// reported as an unknown variable by [`Session::environment`] -- reading
+    /// a session does not fall back to the server -- while a pane started
+    /// afterwards is handed it all the same.
+    ///
+    /// Where both hold a name, the session's value is the one the process
+    /// gets. [`Self::hide_environment`] removes the name from the merge
+    /// entirely.
+    ///
+    /// Panes already running keep the environment they were started with.
+    ///
+    /// The value is marked sensitive, since an environment carries tokens.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux rejects the name or value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::EnvironmentEntry;
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    ///
+    /// server.set_environment("EDITOR", "hx").await?;
+    /// assert!(matches!(
+    ///     server.environment("EDITOR").await?,
+    ///     Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"hx",
+    /// ));
+    ///
+    /// // Separate stores: the session has no entry of its own, and reading it
+    /// // does not fall back to the server. The value still reaches a process
+    /// // the session starts.
+    /// let session = server.new_session("separate").await?;
+    /// assert_eq!(session.environment("EDITOR").await?, None);
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn set_environment(
+        &self,
+        name: &str,
+        value: impl Into<OsString>,
+    ) -> Result<(), Error> {
+        environment::set(&self.core, environment::Scope::Global, name, value.into()).await
+    }
+
+    /// Read one variable from the server's environment.
+    ///
+    /// tmux keeps two different things under a name: a value, and a mark
+    /// saying a process started from it must not inherit the name at all.
+    /// [`EnvironmentEntry`] keeps them apart, because collapsing both to
+    /// absence would hide the second, which a caller sets deliberately with
+    /// [`Self::hide_environment`].
+    ///
+    /// `None` means tmux holds nothing under the name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached.
+    pub async fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
+        environment::get(&self.core, environment::Scope::Global, name).await
+    }
+
+    /// Read the server's whole environment.
+    ///
+    /// Costs one tmux command per variable, for the reason given on
+    /// [`Session::environment_all`]: a value containing a newline occupies
+    /// more than one line of the listing, and a continuation line holding an
+    /// `=` cannot be told from the next variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses the listing.
+    /// An empty map means the server holds nothing, never that the listing
+    /// failed.
+    pub async fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
+        environment::all(&self.core, environment::Scope::Global).await
+    }
+
+    /// Hide a variable from processes tmux starts.
+    ///
+    /// Different from [`Self::unset_environment`], which deletes the server's
+    /// own entry and lets whatever tmux was started with show through. This
+    /// keeps an entry and marks it, so a process started afterwards is handed
+    /// an environment with the name *absent* even though the tmux server was
+    /// started with one. It is what [`EnvironmentEntry::Removed`] reports.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux rejects the name.
+    pub async fn hide_environment(&self, name: &str) -> Result<(), Error> {
+        environment::hide(&self.core, environment::Scope::Global, name).await
+    }
+
+    /// Remove a variable from the server's environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux rejects the name.
+    pub async fn unset_environment(&self, name: &str) -> Result<(), Error> {
+        environment::unset(&self.core, environment::Scope::Global, name).await
     }
 
     /// Read one global window option.

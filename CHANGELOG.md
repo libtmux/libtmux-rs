@@ -18,6 +18,11 @@ While the version is `0.1.0-alpha.*`, any release may break the API.
   would not take an option: an unknown name, an ambiguous one, or a value the
   option will not hold. tmux exits 1 for all three and distinguishes them only
   in stderr, where it also spells a rejected value two ways.
+- `Server::set_environment`, `environment`, `environment_all`, `hide_environment`,
+  and `unset_environment`, so the server's own environment is reachable rather
+  than only each session's. tmux keeps the two in separate stores and merges
+  them when it starts a process: the session's value wins, a server-only name
+  still arrives, and a hidden one is absent rather than empty.
 - `ServerConfigurationErrorKind::NotInsideTmux` and `MalformedTmuxVariable`,
   separating "this process is not inside tmux", an ordinary state to branch on,
   from a `TMUX` variable that is present and does not say what tmux says.

@@ -1130,3 +1130,33 @@ mean the same thing and the ordering is tmux's to change.
 
 `real_tmux_compat_error_option_refusal_wording_is_recognized` pins all of it
 against whichever tmux the lane runs.
+
+### The server and session environments are two stores, merged late
+
+tmux does not layer the session environment over the server one, and it does
+not copy the server's into a session when the session is created. They stay
+separate for the session's whole life, and are merged only at the moment tmux
+starts a process.
+
+That is observable, and it is the opposite of what the obvious guess predicts:
+
+- `show-environment -t <session> NAME` reports `unknown variable` for a name
+  set with `set-environment -g`, whether the session was created before or
+  after the global entry existed. Reading a session is not a fallback.
+- A pane started in that session is nonetheless handed the value.
+- Where both stores hold a name, the process gets the session's.
+- A name marked with `-r` is *absent* from the process's environment, not
+  empty. This is why `EnvironmentEntry::Removed` is a state of its own rather
+  than being folded into absence: absence in the store and absence in the
+  merge are different things, and only the first is `None`.
+
+So the two accessors report what each store holds, and neither predicts what a
+pane will be handed. `a_started_process_gets_the_server_and_session_environments_merged`
+pins the merge itself, by reading the variables back out of a running process,
+because that is the only place the rules are visible.
+
+`Server` and `Session` therefore share `internal::environment`, parameterised by
+a `Scope` that is either `-g` or `-t <target>`. The part worth sharing is not
+the flag but the reading: a value containing a newline occupies more than one
+line of `show-environment`, and a continuation line holding an `=` cannot be
+told from the next variable, so every name is read back on its own.

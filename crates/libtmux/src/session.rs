@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
+use crate::internal::environment;
 use crate::internal::listing::{self, Pushdown as _};
 use crate::internal::options;
 use crate::pane::Pane;
@@ -1024,14 +1025,11 @@ impl Session {
         name: &str,
         value: impl Into<OsString>,
     ) -> Result<(), Error> {
-        listing::mutate(
+        environment::set(
             &self.core,
-            "set-environment",
-            Command::new("set-environment")
-                .arg("-t")
-                .arg(self.id().to_string())
-                .arg(OsString::from(name))
-                .sensitive_arg(value.into()),
+            environment::Scope::Session(&self.id().to_string()),
+            name,
+            value.into(),
         )
         .await
     }
@@ -1082,8 +1080,12 @@ impl Session {
     /// # }
     /// ```
     pub async fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
-        let target = self.id().to_string();
-        self.environment_entry(&target, name).await
+        environment::get(
+            &self.core,
+            environment::Scope::Session(&self.id().to_string()),
+            name,
+        )
+        .await
     }
 
     /// Read the session's whole environment.
@@ -1091,8 +1093,7 @@ impl Session {
     /// tmux distinguishes a variable it holds a value for from one it has
     /// marked for *removal*, so that a process started in the session does not
     /// inherit it. Both appear in the listing, and [`EnvironmentEntry`] keeps
-    /// them apart; [`Self::environment`] reports both as `None` because
-    /// neither yields a value.
+    /// them apart, exactly as [`Self::environment`] does for a single name.
     ///
     /// Costs one tmux command per variable. The listing alone cannot be
     /// trusted: a value containing a newline occupies more than one line, and
@@ -1135,74 +1136,11 @@ impl Session {
     /// # }
     /// ```
     pub async fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
-        let target = self.id().to_string();
-        let result = self
-            .core
-            .execute(Command::new("show-environment").arg("-t").arg(&target))
-            .await?;
-        if !result.success() {
-            return Err(Error::CommandFailed {
-                command: "show-environment",
-                exit_code: result.exit_code(),
-                stderr: result.stderr_lossy().into_owned(),
-            });
-        }
-
-        let candidates: Vec<String> = result
-            .stdout_lossy()
-            .lines()
-            .filter_map(|line| {
-                line.strip_prefix('-')
-                    .map_or_else(|| line.split_once('=').map(|(name, _)| name), Some)
-            })
-            .filter(|name| !name.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-
-        let mut environment = BTreeMap::new();
-        for name in candidates {
-            if let Some(entry) = self.environment_entry(&target, &name).await? {
-                environment.insert(name, entry);
-            }
-        }
-
-        Ok(environment)
-    }
-
-    /// Read one variable back, telling a removal from a value.
-    ///
-    /// `None` means tmux does not hold the name at all, which is how a
-    /// continuation line from a multi-line value is discarded.
-    async fn environment_entry(
-        &self,
-        target: &str,
-        name: &str,
-    ) -> Result<Option<EnvironmentEntry>, Error> {
-        let result = self
-            .core
-            .execute(
-                Command::new("show-environment")
-                    .arg("-t")
-                    .arg(target)
-                    .arg(OsString::from(name)),
-            )
-            .await?;
-        if !result.success() {
-            return Ok(None);
-        }
-
-        let stdout = result.stdout();
-        let line = stdout.strip_suffix(b"\n").unwrap_or(stdout);
-        if line.first() == Some(&b'-') {
-            return Ok(Some(EnvironmentEntry::Removed));
-        }
-        let Some(position) = line.iter().position(|byte| *byte == b'=') else {
-            return Ok(None);
-        };
-
-        Ok(Some(EnvironmentEntry::Set(TmuxText::from(
-            line[position + 1..].to_vec(),
-        ))))
+        environment::all(
+            &self.core,
+            environment::Scope::Session(&self.id().to_string()),
+        )
+        .await
     }
 
     /// Hide a variable from processes started in this session.
@@ -1241,14 +1179,10 @@ impl Session {
     /// # }
     /// ```
     pub async fn hide_environment(&self, name: &str) -> Result<(), Error> {
-        listing::mutate(
+        environment::hide(
             &self.core,
-            "set-environment",
-            Command::new("set-environment")
-                .arg("-t")
-                .arg(self.id().to_string())
-                .arg("-r")
-                .arg(OsString::from(name)),
+            environment::Scope::Session(&self.id().to_string()),
+            name,
         )
         .await
     }
@@ -1259,14 +1193,10 @@ impl Session {
     ///
     /// Returns an error when tmux rejects the name.
     pub async fn unset_environment(&self, name: &str) -> Result<(), Error> {
-        listing::mutate(
+        environment::unset(
             &self.core,
-            "set-environment",
-            Command::new("set-environment")
-                .arg("-t")
-                .arg(self.id().to_string())
-                .arg("-u")
-                .arg(OsString::from(name)),
+            environment::Scope::Session(&self.id().to_string()),
+            name,
         )
         .await
     }

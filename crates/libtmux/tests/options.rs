@@ -675,3 +675,126 @@ async fn tmux_refusing_an_option_says_which_of_three_things_went_wrong() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn the_server_environment_is_separate_from_every_session_one() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    server
+        .set_environment("SERVER_ONLY", "yes")
+        .await
+        .expect("a server value");
+
+    // Separate stores, not one layered over the other. Reading a session is
+    // not a fallback to the server, whenever the session was created: tmux
+    // merges the two only when it starts a process.
+    let before = server.new_session("before").await.expect("session");
+    let after = server.new_session("after").await.expect("session");
+    for (label, session) in [("before", &before), ("after", &after)] {
+        assert_eq!(
+            session.environment("SERVER_ONLY").await.expect("read"),
+            None,
+            "the {label} session has no entry of its own for a server variable",
+        );
+    }
+
+    // Setting it on one session does not reach back to the server.
+    after
+        .set_environment("SESSION_ONLY", "mine")
+        .await
+        .expect("a session value");
+    assert_eq!(
+        server.environment("SESSION_ONLY").await.expect("read"),
+        None
+    );
+
+    // The two halves of removal behave on the server as they do on a session.
+    server.hide_environment("HIDDEN").await.expect("a mark");
+    assert_eq!(
+        server.environment("HIDDEN").await.expect("read"),
+        Some(EnvironmentEntry::Removed),
+    );
+
+    let listing = server.environment_all().await.expect("listing");
+    assert!(matches!(
+        listing.get("SERVER_ONLY"),
+        Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"yes",
+    ));
+    assert_eq!(listing.get("HIDDEN"), Some(&EnvironmentEntry::Removed));
+    assert_eq!(listing.get("SESSION_ONLY"), None);
+
+    server
+        .unset_environment("SERVER_ONLY")
+        .await
+        .expect("removal");
+    assert_eq!(server.environment("SERVER_ONLY").await.expect("read"), None);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_started_process_gets_the_server_and_session_environments_merged() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    server
+        .set_environment("BOTH", "from_server")
+        .await
+        .expect("set");
+    server
+        .set_environment("ONLY_SERVER", "reaches")
+        .await
+        .expect("set");
+    server
+        .hide_environment("HIDDEN_GLOBALLY")
+        .await
+        .expect("mark");
+
+    let session = server.new_session("merged").await.expect("session");
+    session
+        .set_environment("BOTH", "from_session")
+        .await
+        .expect("set");
+
+    // The stores are separate right up until tmux starts something, so this is
+    // the only place the merge is observable. Reading the two stores back tells
+    // a caller nothing about what a pane will actually be handed.
+    let window = session
+        .new_window(
+            NewWindowOptions::new("merged")
+                .command("sh -c 'printf \"%s|%s|%s\" \"$BOTH\" \"$ONLY_SERVER\" \"${HIDDEN_GLOBALLY-absent}\"; sleep 30'"),
+        )
+        .await
+        .expect("window created");
+    let pane = window
+        .try_panes()
+        .await
+        .expect("panes")
+        .into_iter()
+        .next()
+        .expect("one pane");
+
+    let mut captured = String::new();
+    for _ in 0..50 {
+        let lines = pane.capture().await.expect("capture");
+        captured = lines
+            .iter()
+            .map(|line| line.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if captured.contains('|') {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    }
+
+    // The session's value wins, a server-only name still arrives, and a
+    // globally hidden name is missing rather than empty.
+    assert!(
+        captured.contains("from_session|reaches|absent"),
+        "merged environment, got {captured:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
