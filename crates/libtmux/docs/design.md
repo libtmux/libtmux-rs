@@ -893,13 +893,17 @@ counts as major, which permits everything -- a run today reports `0 checks,
 254 skip`. Forcing the comparison with `--release-type minor` across the
 commit that closed the hierarchy shapes reports all six correctly, so the tool
 does understand this crate; it simply has nothing to say until there is a
-release to compare against. Run `just semver` before publishing.
+release to compare against. There is no `semver` recipe while the crates are
+prerelease: `cargo-semver-checks` treats a prerelease-to-prerelease step as a
+major change and skips every lint, so it reported `0 checks` and then `no
+semver update required`, which reads like a clean bill of health and is not
+one.
 
 `deny.toml` gates the dependency tree through `cargo deny`: an allowlist of
 the permissive licences the tree actually carries, denial of yanked crates
 and unknown registries, and a wildcard ban that exempts intra-workspace path
-dependencies, which carry no version because the consumer crates are
-`publish = false`.
+dependencies. Those carry a version as well as a path, because every crate
+here publishes: a path-only dependency cannot be published at all.
 
 ## Compatibility lanes
 
