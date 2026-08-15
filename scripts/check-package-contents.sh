@@ -96,7 +96,7 @@ done
 # number there sends every reader of the new release to the old one, and no
 # amount of fixing it afterwards reaches them without another release.
 check_documented_version() {
-    local root="$1" name="$2" version="$3" doc found status=0
+    local root="$1" name="$2" doc line found_crate found status=0
 
     while IFS= read -r doc; do
         [[ -f "$root/$doc" ]] || continue
@@ -104,30 +104,42 @@ check_documented_version() {
             *.md) ;;
             *) continue ;;
         esac
-        # Only version strings attached to one of this workspace's own crates.
-        while IFS= read -r found; do
-            if [[ "$found" != "$version" ]]; then
-                printf '%s ships %s, which tells the reader to depend on %s, not %s\n' \
-                    "$name" "$doc" "$found" "$version" >&2
+        # Each reference is checked against the version of the crate it names,
+        # not against one crate's version. tmux-mcp carries its own, so a
+        # document that mentions both cannot be right about both otherwise.
+        while IFS= read -r line; do
+            found_crate="${line%% *}"
+            found="${line#* }"
+            if [[ "$found" != "${crate_versions[$found_crate]}" ]]; then
+                printf '%s ships %s, which tells the reader to depend on %s %s, not %s\n' \
+                    "$name" "$doc" "$found_crate" "$found" \
+                    "${crate_versions[$found_crate]}" >&2
                 status=1
             fi
-        done < <(grep -oP '\b(?:libtmux|libtmux-macros|tmux-mcp)\s*=\s*(?:\{[^}]*version\s*=\s*)?"\K[^"]+' \
-                     "$root/$doc" || true)
-    done <<< "$4"
+        done < <(grep -oP '\b(?:libtmux|libtmux-macros|tmux-mcp)\b(?=\s*=)\s*=\s*(?:\{[^}]*version\s*=\s*)?"[^"]+"' \
+                     "$root/$doc" \
+                     | sed -E 's/^([a-z-]+).*"([^"]+)"$/\1 \2/' || true)
+    done <<< "$3"
 
     return "$status"
 }
 
-workspace_version="$(cargo metadata --format-version 1 --no-deps \
-    | sed -n 's/.*"name":"libtmux","version":"\([^"]*\)".*/\1/p')"
-if [[ -z "$workspace_version" ]]; then
-    printf 'could not read the workspace version\n' >&2
-    exit 1
-fi
+declare -A crate_versions=()
+metadata="$(cargo metadata --format-version 1 --no-deps)"
+for crate in libtmux libtmux-macros tmux-mcp; do
+    crate_versions[$crate]="$(
+        printf '%s' "$metadata" \
+            | grep -oP "\"name\":\"$crate\",\"version\":\"\K[^\"]+"
+    )"
+    if [[ -z "${crate_versions[$crate]}" ]]; then
+        printf 'could not read the version of %s\n' "$crate" >&2
+        exit 1
+    fi
+done
 
-check_documented_version "$core_root" libtmux "$workspace_version" "$core_package"
-check_documented_version "$macros_root" libtmux-macros "$workspace_version" "$macros_package"
-check_documented_version "$mcp_root" tmux-mcp "$workspace_version" "$mcp_package"
+check_documented_version "$core_root" libtmux "$core_package"
+check_documented_version "$macros_root" libtmux-macros "$macros_package"
+check_documented_version "$mcp_root" tmux-mcp "$mcp_package"
 
 # A relative link in a shipped document has to point at something else that
 # ships. A file that exists in the working tree but is left out of `include`
@@ -150,7 +162,13 @@ check_relative_links() {
             target="${target%%#*}"
             [[ -n "$target" ]] || continue
 
-            resolved="$(cd "$root/$(dirname "$doc")" && realpath -m --relative-to="$root" "$target")"
+            # `-s` so a link is judged by the path it takes in the tarball
+            # rather than by where a symlink points in the working tree. The
+            # per-crate LICENSE files are symlinks to the pair at the
+            # repository root, and `cargo package` writes them out as real
+            # files, so the sibling path is the one that has to resolve.
+            resolved="$(cd "$root/$(dirname "$doc")" \
+                && realpath -m -s --relative-to="$root" "$target")"
             if ! contains_line "$package" "$resolved"; then
                 printf '%s ships %s, which links %s -> %s, which it does not ship\n' \
                     "$name" "$doc" "$target" "$resolved" >&2
