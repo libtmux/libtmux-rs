@@ -263,7 +263,7 @@ pub use error::{
     ServerConfigurationErrorKind,
 };
 pub use formats::TmuxText;
-pub use hooks::{IndexedHooks, ReplaceMode};
+pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 pub use options::{
     OptionKind, OptionSchema, OptionScope, OptionValue, names as option_names, option_schema,
 };

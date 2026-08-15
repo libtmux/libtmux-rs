@@ -798,3 +798,61 @@ async fn a_started_process_gets_the_server_and_session_environments_merged() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn an_array_option_keeps_the_gaps_tmux_leaves() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    // tmux ships defaults in the low indices of this option, so writing far
+    // above them keeps the test's own entries distinguishable.
+    server
+        .set_array_option("command-alias", 30, "thirty=display -p 30")
+        .await
+        .expect("index 30 is set");
+    server
+        .set_array_option("command-alias", 35, "five=display -p 35")
+        .await
+        .expect("index 35 is set");
+
+    let aliases = server.array_option("command-alias").await.expect("read");
+    assert_eq!(
+        bytes(aliases.get(30).cloned()),
+        b"thirty=display -p 30",
+        "the value is stored under the index asked for",
+    );
+    assert_eq!(aliases.get(31), None, "nothing was written between them");
+    assert!(
+        aliases.indices().any(|index| *index == 35),
+        "the higher index is listed: {:?}",
+        aliases.indices().collect::<Vec<_>>(),
+    );
+
+    // Appending extends that index's value rather than adding an entry.
+    let before = aliases.len();
+    server
+        .append_array_option("command-alias", 30, " extra")
+        .await
+        .expect("append");
+    let appended = server.array_option("command-alias").await.expect("read");
+    assert_eq!(appended.len(), before, "appending did not add an entry");
+    assert_eq!(
+        bytes(appended.get(30).cloned()),
+        b"thirty=display -p 30 extra",
+    );
+
+    // Removing one leaves the rest where they were: nothing renumbers.
+    server
+        .unset_array_option("command-alias", 35)
+        .await
+        .expect("unset");
+    let after = server.array_option("command-alias").await.expect("read");
+    assert_eq!(after.get(35), None, "the entry is gone");
+    assert_eq!(
+        bytes(after.get(30).cloned()),
+        b"thirty=display -p 30 extra",
+        "the entry below it did not move",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

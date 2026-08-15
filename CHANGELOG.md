@@ -28,6 +28,11 @@ full.
   than only each session's. tmux keeps the two in separate stores and merges
   them when it starts a process: the session's value wins, a server-only name
   still arrives, and a hidden one is absent rather than empty.
+- `SparseValues<T>`, the sparse `BTreeMap<u32, T>` behind every array option,
+  with `Server::array_option`, `set_array_option`, `append_array_option`, and
+  `unset_array_option`. `IndexedHooks` is now an alias for
+  `SparseValues<TmuxText>`, since a hook is an array option; the hook API is
+  unchanged.
 - `PaneDirection` and `Window::focus_direction`, for moving focus by where a
   pane sits rather than by its index. It returns the pane instead of an
   `Option` because tmux wraps at the edge: asking to go up from the topmost

@@ -4,18 +4,23 @@
 //! commands rather than a single command. The numbers are not a formality:
 //! removing the middle of a set leaves a gap, and tmux keeps it, so
 //! [`IndexedHooks`] is a sparse map rather than a list. A caller that only
-//! wants "the command" asks for [`IndexedHooks::first`].
+//! wants "the command" asks for [`SparseValues::first`].
+//!
+//! Hooks are not the only array option -- `command-alias` and
+//! `terminal-overrides` are the same shape -- so the container is
+//! [`SparseValues`] and [`IndexedHooks`] names the hook-shaped one.
 
 use std::collections::BTreeMap;
-use std::collections::btree_map::Iter;
+use std::collections::btree_map::{Iter, Keys, Values};
 
 use crate::formats::TmuxText;
 
-/// The commands one hook name holds, by the index tmux stores them under.
+/// The values one array option holds, by the index tmux stores them under.
 ///
-/// Indices are sparse. Setting a hook without an index writes slot `0`, and
-/// removing one slot of several leaves the rest where they were, so an
-/// [`IndexedHooks`] with two entries may hold them at `0` and `3`.
+/// Indices are sparse, and tmux means it. Setting a value without an index
+/// writes slot `0`, removing one slot of several leaves the rest where they
+/// were, and nothing renumbers, so a `SparseValues` with two entries may hold
+/// them at `0` and `30`. Iteration is by ascending index.
 ///
 /// # Examples
 ///
@@ -42,58 +47,88 @@ use crate::formats::TmuxText;
 /// # }
 /// ```
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct IndexedHooks {
-    entries: BTreeMap<u32, TmuxText>,
+pub struct SparseValues<T> {
+    entries: BTreeMap<u32, T>,
 }
 
-impl IndexedHooks {
-    pub(crate) fn from_entries(entries: BTreeMap<u32, TmuxText>) -> Self {
+/// The commands one hook name holds.
+///
+/// A hook is an array option whose values are tmux commands, so this is the
+/// [`SparseValues`] of that shape rather than a type of its own.
+pub type IndexedHooks = SparseValues<TmuxText>;
+
+impl<T> SparseValues<T> {
+    pub(crate) fn from_entries(entries: BTreeMap<u32, T>) -> Self {
         Self { entries }
     }
 
-    /// The command stored at one index.
+    /// The value stored at one index.
     #[must_use]
-    pub fn get(&self, index: u32) -> Option<&TmuxText> {
+    pub fn get(&self, index: u32) -> Option<&T> {
         self.entries.get(&index)
     }
 
-    /// The command at the lowest index, which is what a hook set without one
-    /// holds.
+    /// The value at the lowest index, which is what a write without one sets.
+    ///
+    /// The lowest index rather than index `0`, because a set whose slot `0`
+    /// was removed still has a first value.
     #[must_use]
-    pub fn first(&self) -> Option<&TmuxText> {
+    pub fn first(&self) -> Option<&T> {
         self.entries.values().next()
     }
 
-    /// How many commands this hook holds.
+    /// How many values this option holds.
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Whether this hook holds nothing.
+    /// Whether this option holds nothing.
     ///
-    /// A hook read back from tmux never does: a name holding nothing is
-    /// reported as absent rather than as an empty set.
+    /// One read back from tmux never does: a name holding nothing is reported
+    /// as absent rather than as an empty set.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// The commands and the indices they are stored under, lowest first.
-    pub fn iter(&self) -> Iter<'_, u32, TmuxText> {
+    /// The values and the indices they are stored under, lowest first.
+    pub fn iter(&self) -> Iter<'_, u32, T> {
         self.entries.iter()
+    }
+
+    /// The indices that hold a value, ascending.
+    ///
+    /// Worth reading rather than assuming: the gaps are tmux's, and writing
+    /// to `len()` would overwrite an entry whenever there is one.
+    pub fn indices(&self) -> Keys<'_, u32, T> {
+        self.entries.keys()
+    }
+
+    /// The values alone, by ascending index.
+    pub fn values(&self) -> Values<'_, u32, T> {
+        self.entries.values()
+    }
+
+    /// The values alone, owned, by ascending index.
+    ///
+    /// The list form, for a caller that has no use for the indices. It is
+    /// lossy about the gaps, which is why it is not how the values are held.
+    #[must_use]
+    pub fn into_values(self) -> Vec<T> {
+        self.entries.into_values().collect()
     }
 }
 
-impl From<BTreeMap<u32, TmuxText>> for IndexedHooks {
-    fn from(entries: BTreeMap<u32, TmuxText>) -> Self {
+impl<T> From<BTreeMap<u32, T>> for SparseValues<T> {
+    fn from(entries: BTreeMap<u32, T>) -> Self {
         Self::from_entries(entries)
     }
 }
 
-impl<'hooks> IntoIterator for &'hooks IndexedHooks {
-    type Item = (&'hooks u32, &'hooks TmuxText);
-    type IntoIter = Iter<'hooks, u32, TmuxText>;
+impl<'values, T> IntoIterator for &'values SparseValues<T> {
+    type Item = (&'values u32, &'values T);
+    type IntoIter = Iter<'values, u32, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()

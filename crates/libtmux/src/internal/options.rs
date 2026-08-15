@@ -266,6 +266,29 @@ pub(crate) async fn hooks(
         .collect())
 }
 
+/// Read every index one array option holds.
+///
+/// Values come back one slot at a time rather than from the listing, for the
+/// reason this module gives above: the listing renders a value through
+/// `args_escape`, and re-parsing that would be guesswork.
+pub(crate) async fn indexed(
+    core: &Core,
+    scope: Scope<'_>,
+    name: &str,
+) -> Result<BTreeMap<u32, TmuxText>, Error> {
+    let mut entries = BTreeMap::new();
+    for slot in slots_of(core, scope, name).await? {
+        let Some((_, index)) = split_slot(&slot) else {
+            continue;
+        };
+        if let Some(value) = get(core, scope, &slot).await? {
+            entries.insert(index, value);
+        }
+    }
+
+    Ok(entries)
+}
+
 /// List the slots one hook name holds, as `name[index]`.
 ///
 /// Asked for by name rather than taken from the full listing, because tmux

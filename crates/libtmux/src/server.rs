@@ -24,7 +24,7 @@ use crate::window::Window;
 use crate::{
     Command, CommandChain, CommandResult, EngineCapabilities, EnvironmentEntry, Error,
     IndexedHooks, ObjectKind, OptionValue, PaneId, ReleaseSuffix, ReleaseVersion, ReplaceMode,
-    ServerConfigurationErrorKind, ServerIdentity, SessionId, WindowId,
+    ServerConfigurationErrorKind, ServerIdentity, SessionId, SparseValues, WindowId,
 };
 
 /// The first tmux release that has a server access list.
@@ -948,6 +948,112 @@ impl Server {
     /// Returns an error when tmux rejects the name.
     pub async fn unset_environment(&self, name: &str) -> Result<(), Error> {
         environment::unset(&self.core, environment::Scope::Global, name).await
+    }
+
+    /// Read every value an array option holds, by index.
+    ///
+    /// Some tmux options hold a numbered set rather than one value:
+    /// `command-alias` and `terminal-overrides` are the common ones, and every
+    /// hook is one too. The indices are sparse and tmux keeps the gaps, so
+    /// this reports them rather than a list. An empty result means the option
+    /// holds nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux does not recognize the option name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    ///
+    /// // Written far apart on purpose: nothing renumbers, so the gap stays.
+    /// server.set_array_option("command-alias", 30, "thirty=display -p 30").await?;
+    /// server.set_array_option("command-alias", 35, "five=display -p 35").await?;
+    ///
+    /// let aliases = server.array_option("command-alias").await?;
+    /// assert_eq!(aliases.get(31), None, "the gap is tmux's, and it is kept");
+    /// assert_eq!(
+    ///     aliases.get(35).map(|value| value.to_string_lossy().into_owned()),
+    ///     Some("five=display -p 35".to_owned()),
+    /// );
+    ///
+    /// server.unset_array_option("command-alias", 35).await?;
+    /// assert_eq!(server.array_option("command-alias").await?.get(35), None);
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn array_option(&self, name: &str) -> Result<SparseValues<TmuxText>, Error> {
+        Ok(SparseValues::from(
+            options::indexed(&self.core, options::Scope::GlobalSession, name).await?,
+        ))
+    }
+
+    /// Write one index of an array option, leaving the others alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the option name or the value.
+    pub async fn set_array_option(
+        &self,
+        name: &str,
+        index: u32,
+        value: impl Into<OsString>,
+    ) -> Result<(), Error> {
+        options::set(
+            &self.core,
+            options::Scope::GlobalSession,
+            &format!("{name}[{index}]"),
+            value,
+            false,
+        )
+        .await
+    }
+
+    /// Extend the value already at one index of an array option.
+    ///
+    /// Appends to that index's value rather than adding an entry, which is
+    /// what tmux's `-a` does here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the option name or the value.
+    pub async fn append_array_option(
+        &self,
+        name: &str,
+        index: u32,
+        value: impl Into<OsString>,
+    ) -> Result<(), Error> {
+        options::set(
+            &self.core,
+            options::Scope::GlobalSession,
+            &format!("{name}[{index}]"),
+            value,
+            true,
+        )
+        .await
+    }
+
+    /// Remove one index of an array option, leaving a gap where it was.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the option name.
+    pub async fn unset_array_option(&self, name: &str, index: u32) -> Result<(), Error> {
+        options::unset(
+            &self.core,
+            options::Scope::GlobalSession,
+            &format!("{name}[{index}]"),
+        )
+        .await
     }
 
     /// Read one global window option.
