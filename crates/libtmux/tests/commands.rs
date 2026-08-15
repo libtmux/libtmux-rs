@@ -218,10 +218,23 @@ async fn shell_commands_run_through_tmux_and_report_their_output() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let lines = server
-        .run_shell("printf 'first\\nsecond\\n'")
-        .await
-        .expect("the shell command runs");
+    // tmux 3.3 through 3.4 route run-shell output into a pane's copy-mode
+    // buffer rather than to the client, and still exit zero. The crate refuses
+    // there rather than reporting an empty listing, which would be a wrong
+    // answer the caller could not tell from a command that printed nothing.
+    let outcome = server.run_shell("printf 'first\\nsecond\\n'").await;
+    let Ok(lines) = outcome else {
+        let error = outcome.expect_err("refused");
+        assert!(
+            matches!(&error, libtmux::Error::CapabilityDefective { capability, .. }
+                if *capability == "run-shell output"),
+            "an affected release refuses with the reason, got {error:?}",
+        );
+        assert_eq!(error.kind(), libtmux::ErrorKind::UnsupportedVersion);
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    };
+
     assert_eq!(
         lines
             .iter()

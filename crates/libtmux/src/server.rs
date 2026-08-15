@@ -1338,6 +1338,35 @@ impl Server {
         Ok(())
     }
 
+    /// Refuse when the running release is inside a range that gets it wrong.
+    ///
+    /// `require` cannot express this: it asks for a floor, and a floor would
+    /// refuse the older releases that work.
+    async fn refuse_if_defective(
+        &self,
+        capability: &'static str,
+        broken_in: ReleaseVersion,
+        fixed_in: ReleaseVersion,
+    ) -> Result<(), Error> {
+        let found = self.capabilities().await?.tmux_version();
+        // A development build carries no numbered release to place in the
+        // range, so it is taken at its word rather than refused, as in
+        // `require`.
+        if found
+            .behavior_release()
+            .is_some_and(|release| release >= broken_in && release < fixed_in)
+        {
+            return Err(Error::CapabilityDefective {
+                capability,
+                found: found.clone(),
+                broken_in,
+                fixed_in,
+            });
+        }
+
+        Ok(())
+    }
+
     /// The entries tmux remembers for one kind of prompt.
     ///
     /// tmux keeps a separate history per prompt kind, so the kind is required
@@ -1586,7 +1615,21 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command.
+    ///
+    /// Also refuses outright on tmux 3.3, 3.3a, and 3.4, with
+    /// [`Error::CapabilityDefective`]. Those releases send `run-shell` output
+    /// into a pane's copy-mode buffer instead of to the client, and still exit
+    /// zero, so the command appears to have produced nothing. Reporting an
+    /// empty listing there would be a wrong answer the caller could not
+    /// detect. 3.2a and 3.5 onwards are unaffected.
     pub async fn run_shell(&self, command: impl Into<OsString>) -> Result<Vec<TmuxText>, Error> {
+        self.refuse_if_defective(
+            "run-shell output",
+            ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL),
+            ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
+        )
+        .await?;
+
         let result = self
             .cmd(Command::new("run-shell").sensitive_arg(command.into()))
             .await?;

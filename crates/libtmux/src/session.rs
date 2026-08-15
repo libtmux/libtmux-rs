@@ -1027,7 +1027,7 @@ impl Session {
     ) -> Result<(), Error> {
         environment::set(
             &self.core,
-            environment::Scope::Session(&self.id().to_string()),
+            environment::Scope::Session(self.id().as_ref()),
             name,
             value.into(),
         )
@@ -1082,7 +1082,7 @@ impl Session {
     pub async fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
         environment::get(
             &self.core,
-            environment::Scope::Session(&self.id().to_string()),
+            environment::Scope::Session(self.id().as_ref()),
             name,
         )
         .await
@@ -1136,11 +1136,7 @@ impl Session {
     /// # }
     /// ```
     pub async fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
-        environment::all(
-            &self.core,
-            environment::Scope::Session(&self.id().to_string()),
-        )
-        .await
+        environment::all(&self.core, environment::Scope::Session(self.id().as_ref())).await
     }
 
     /// Hide a variable from processes started in this session.
@@ -1181,7 +1177,7 @@ impl Session {
     pub async fn hide_environment(&self, name: &str) -> Result<(), Error> {
         environment::hide(
             &self.core,
-            environment::Scope::Session(&self.id().to_string()),
+            environment::Scope::Session(self.id().as_ref()),
             name,
         )
         .await
@@ -1195,7 +1191,7 @@ impl Session {
     pub async fn unset_environment(&self, name: &str) -> Result<(), Error> {
         environment::unset(
             &self.core,
-            environment::Scope::Session(&self.id().to_string()),
+            environment::Scope::Session(self.id().as_ref()),
             name,
         )
         .await

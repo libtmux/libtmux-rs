@@ -23,6 +23,11 @@ While the version is `0.1.0-alpha.*`, any release may break the API.
   than only each session's. tmux keeps the two in separate stores and merges
   them when it starts a process: the session's value wins, a server-only name
   still arrives, and a hidden one is absent rather than empty.
+- `Error::CapabilityDefective`, for a capability the running release has and
+  gets wrong. `Server::run_shell` now raises it on tmux 3.3, 3.3a, and 3.4,
+  which send `run-shell` output to a pane's copy-mode buffer instead of the
+  client and still exit zero. It previously returned an empty listing there,
+  which a caller could not tell from a command that printed nothing.
 - `ServerConfigurationErrorKind::NotInsideTmux` and `MalformedTmuxVariable`,
   separating "this process is not inside tmux", an ordinary state to branch on,
   from a `TMUX` variable that is present and does not say what tmux says.

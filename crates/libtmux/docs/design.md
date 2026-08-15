@@ -1160,3 +1160,27 @@ a `Scope` that is either `-g` or `-t <target>`. The part worth sharing is not
 the flag but the reading: a value containing a newline occupies more than one
 line of `show-environment`, and a continuation line holding an `=` cannot be
 told from the next variable, so every name is read back on its own.
+
+### `run-shell` output goes nowhere on tmux 3.3 through 3.4
+
+`Server::run_shell` reads the command's output from the client's stdout,
+which tmux writes with `cmdq_print` when it has no pane to write into. Three
+releases do not: 3.3, 3.3a, and 3.4 replaced that branch in
+`cmd_run_shell_print` with one that finds a pane and appends to its copy-mode
+buffer instead. The command still runs, and tmux still exits zero, so the
+caller is handed an empty listing for a command that printed.
+
+The listing would be indistinguishable from a command that genuinely printed
+nothing, so the crate refuses instead, with `Error::CapabilityDefective`. That
+variant exists because `require` cannot describe this shape: it asks for a
+floor, and a floor would refuse 3.2a, which works. Both sides of the range are
+fine and only the middle is not, so the error names the range rather than a
+minimum.
+
+The range was read from the release tarballs of 3.2a, 3.3, 3.3a, 3.4, 3.5,
+3.5a, 3.6, and 3.7b, and confirmed by building 3.2a, 3.4, and 3.7b and running
+`run-shell` against each: 3.4 returns an empty stdout with status zero where
+the others return the output.
+
+CI found this, not the local gate -- the workspace's own tmux is unaffected,
+which is exactly what the compatibility lanes are for.

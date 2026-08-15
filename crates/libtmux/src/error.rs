@@ -278,6 +278,30 @@ pub enum Error {
         found: TmuxVersion,
     },
 
+    /// tmux has this capability and the running release gets it wrong.
+    ///
+    /// Distinct from [`Self::UnsupportedCapability`], which means the release
+    /// predates the feature and the answer is to upgrade. Here releases on
+    /// both sides work, so neither "upgrade" nor "the floor is too low" is
+    /// the fix: the caller has to leave a specific range.
+    ///
+    /// Raised rather than returning what the release reports, because what it
+    /// reports is wrong in a way the caller cannot see.
+    #[error(
+        "tmux {found} does not implement {capability} correctly; \
+         releases from {broken_in} up to but not including {fixed_in} are affected"
+    )]
+    CapabilityDefective {
+        /// What the caller asked for, named as a caller would say it.
+        capability: &'static str,
+        /// The release actually running.
+        found: TmuxVersion,
+        /// The first release that gets it wrong.
+        broken_in: ReleaseVersion,
+        /// The first release that gets it right again.
+        fixed_in: ReleaseVersion,
+    },
+
     /// The version probe process returned a non-zero status.
     #[non_exhaustive]
     #[error(
@@ -670,9 +694,9 @@ impl Error {
             // The call is wrong, not the environment: the same future awaited
             // directly would work.
             Self::RuntimeNested => ErrorKind::InvalidInput,
-            Self::UnsupportedTmuxVersion { .. } | Self::UnsupportedCapability { .. } => {
-                ErrorKind::UnsupportedVersion
-            }
+            Self::UnsupportedTmuxVersion { .. }
+            | Self::UnsupportedCapability { .. }
+            | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
             Self::InvalidCommandInput { .. } => ErrorKind::InvalidInput,
             Self::Spawn { .. }
             | Self::ReadOutput { .. }
@@ -941,6 +965,18 @@ impl fmt::Debug for Error {
                 .field("capability", capability)
                 .field("needs", needs)
                 .field("found", found)
+                .finish(),
+            Self::CapabilityDefective {
+                capability,
+                found,
+                broken_in,
+                fixed_in,
+            } => formatter
+                .debug_struct("CapabilityDefective")
+                .field("capability", capability)
+                .field("found", found)
+                .field("broken_in", broken_in)
+                .field("fixed_in", fixed_in)
                 .finish(),
             Self::OptionRejected { kind, detail } => formatter
                 .debug_struct("OptionRejected")
