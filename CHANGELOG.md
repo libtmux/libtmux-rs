@@ -8,7 +8,12 @@ Crates are versioned together except `tmux-mcp`, which moves at its own pace
 because its dependencies need a newer compiler than the libraries do.
 `tmux-workspace` is not published.
 
-While the version is `0.1.0-alpha.*`, any release may break the API.
+While the version is `0.1.0-alpha.*`, any release may break the API, and
+breaking changes are not called out as such: nothing here is stable yet. The
+prerelease suffix is load-bearing rather than decorative, because Cargo will
+not resolve a prerelease unless the requirement names one: a plain `0.1`
+requirement selects nothing, so a caller opts in by writing the version out in
+full.
 
 ## Unreleased
 

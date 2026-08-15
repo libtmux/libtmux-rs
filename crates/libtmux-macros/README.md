@@ -3,6 +3,12 @@
 Procedural macros for [`libtmux`](https://docs.rs/libtmux). It currently
 provides one derive, `Filterable`.
 
+> **Alpha.** The API changes between releases, including in ways that will not
+> be called out as breaking, because nothing here is stable yet. Cargo will not
+> resolve a prerelease unless the requirement names one, so a plain `0.1`
+> requirement does not pick this up: depend on the exact version below, and
+> expect to edit it.
+
 You do not need to depend on this crate. `libtmux` re-exports the macro behind
 its `derive` feature:
 

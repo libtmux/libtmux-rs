@@ -4,6 +4,12 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [tmux](https://github.com/tmux/tmux), built on
 [libtmux](https://docs.rs/libtmux).
 
+> **Alpha.** The API changes between releases, including in ways that will not
+> be called out as breaking, because nothing here is stable yet. Cargo will not
+> resolve a prerelease unless the requirement names one, so a plain `0.1`
+> requirement does not pick this up: depend on the exact version below, and
+> expect to edit it.
+
 > [!WARNING]
 > **Pre-alpha.** The tool surface may change. Feedback welcome.
 

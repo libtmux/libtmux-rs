@@ -3,6 +3,12 @@
 Drive tmux from Rust: typed, async control over servers, sessions, windows, and
 panes.
 
+> **Alpha.** The API changes between releases, including in ways that will not
+> be called out as breaking, because nothing here is stable yet. Cargo will not
+> resolve a prerelease unless the requirement names one, so a plain `0.1`
+> requirement does not pick this up: depend on the exact version below, and
+> expect to edit it.
+
 ```rust
 use libtmux::Server;
 

@@ -10,7 +10,7 @@ edition.workspace = true
 # crate cannot meet: rmcp and darling require 1.88, so inheriting 1.85 would
 # publish a version that does not build.
 rust-version = "1.88"
-description = "Model Context Protocol server exposing tmux through libtmux"
+description = "Model Context Protocol server exposing tmux through libtmux (alpha)"
 documentation = "https://docs.rs/tmux-mcp"
 repository.workspace = true
 readme = "README.md"

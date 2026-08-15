@@ -14,6 +14,12 @@ let pane = window.active_pane().await?.expect("a window has a pane");
 pane.send_keys("cargo test").await?;
 ```
 
+> **Alpha.** Every crate here is prerelease. The API changes between releases,
+> including in ways that will not be called out as breaking, because nothing is
+> stable yet. Cargo will not resolve a prerelease unless the requirement names
+> one, so a plain `0.1` requirement does not pick these up: depend on the exact
+> version, and expect to edit it.
+
 The crate documentation is in [`crates/libtmux/README.md`](crates/libtmux/README.md);
 this file describes the workspace.
 
