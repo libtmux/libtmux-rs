@@ -9,7 +9,7 @@ authors = ["libtmux contributors"]
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/tmux-python/libtmux"
+repository = "https://github.com/libtmux/libtmux-rs"
 
 # Shared dependency versions. A crate names the features it needs; the
 # version lives here so a bump is one edit rather than one per crate.
