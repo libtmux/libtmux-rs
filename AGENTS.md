@@ -91,6 +91,53 @@ against every supported release.
   workspace. Version-specific behaviour belongs in a `real_tmux_compat_` test,
   not in a comment.
 
+## Releasing
+
+Publishing is done by `.github/workflows/release.yml`, on a `v*` tag. There is
+no API token anywhere: the workflow mints a short-lived one from crates.io by
+exchanging a GitHub OIDC identity token, through
+`rust-lang/crates-io-auth-action`. Nothing in the repository can publish
+without a tag, because the `release` environment only accepts refs matching
+`v*`, and crates.io checks the environment as well as the workflow file.
+
+To cut a release:
+
+1. Bump `[workspace.package] version` and the `libtmux` pin in
+   `[workspace.dependencies]` together -- they are the same number, and a
+   published crate whose own dependency requirement points at the previous
+   version will not resolve. `tmux-mcp` carries its own version and is bumped
+   separately.
+2. Move the changelog's `Unreleased` entries under a dated heading.
+3. `just check`.
+4. Tag `vX.Y.Z` and push the tag.
+
+The workflow then runs the whole gate again on that exact commit, packages the
+crates, attests them, publishes, and attaches the `.crate` files to a GitHub
+release. It runs the gate rather than trusting the tag because a crates.io
+version is immutable: it is the one build that cannot be taken back.
+
+**Provenance is attached to the release, not to the registry.** crates.io does
+not host or display build attestations yet, and `cargo` does not verify them,
+so `actions/attest` signs the packaged `.crate` files and the attestation
+lives with the GitHub release. It is real -- Sigstore-signed and logged in
+Rekor -- and it covers the same bytes crates.io serves, because `cargo
+package` is byte-deterministic for a given tree, which was measured rather
+than assumed.
+
+**One step is not in this repository.** Each published crate has to name this
+workflow as a trusted publisher, once, in the crates.io UI under the crate's
+Settings. The values are:
+
+| Field | Value |
+| --- | --- |
+| Repository owner | `libtmux` |
+| Repository name | `libtmux-rs` |
+| Workflow filename | `release.yml` |
+| Environment | `release` |
+
+A crate has to have been published at least once by hand before it can be
+configured, which all three have been.
+
 ## Where the reasoning lives
 
 `crates/libtmux/docs/design.md` carries the rationale: transport, snapshot and
