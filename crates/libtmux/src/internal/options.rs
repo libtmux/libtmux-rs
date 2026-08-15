@@ -81,11 +81,12 @@ pub(crate) async fn get(
             return Ok(None);
         }
 
-        return Err(Error::CommandFailed {
-            command: "show-options",
-            exit_code: result.exit_code(),
-            stderr: result.stderr_lossy().into_owned(),
-        });
+        return Err(Error::refused(
+            "show-options",
+            result.exit_code(),
+            result.stderr_lossy().into_owned(),
+            None,
+        ));
     }
 
     let stdout = result.stdout();
@@ -106,11 +107,12 @@ pub(crate) async fn names(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, 
         .execute(scope.apply(Command::new("show-options")))
         .await?;
     if !result.success() {
-        return Err(Error::CommandFailed {
-            command: "show-options",
-            exit_code: result.exit_code(),
-            stderr: result.stderr_lossy().into_owned(),
-        });
+        return Err(Error::refused(
+            "show-options",
+            result.exit_code(),
+            result.stderr_lossy().into_owned(),
+            None,
+        ));
     }
 
     Ok(result
@@ -193,11 +195,12 @@ async fn run(core: &Core, command: Command) -> Result<(), Error> {
         return Ok(());
     }
 
-    Err(Error::CommandFailed {
-        command: "set-option",
-        exit_code: result.exit_code(),
-        stderr: result.stderr_lossy().into_owned(),
-    })
+    Err(Error::refused(
+        "set-option",
+        result.exit_code(),
+        result.stderr_lossy().into_owned(),
+        None,
+    ))
 }
 
 /// List the hook slots that are set at one scope, as `name[index]`.
@@ -211,11 +214,12 @@ pub(crate) async fn hook_slots(core: &Core, scope: Scope<'_>) -> Result<Vec<Stri
         .execute(scope.apply(Command::new("show-hooks")))
         .await?;
     if !result.success() {
-        return Err(Error::CommandFailed {
-            command: "show-hooks",
-            exit_code: result.exit_code(),
-            stderr: result.stderr_lossy().into_owned(),
-        });
+        return Err(Error::refused(
+            "show-hooks",
+            result.exit_code(),
+            result.stderr_lossy().into_owned(),
+            None,
+        ));
     }
 
     Ok(result
@@ -277,11 +281,12 @@ async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<Strin
         )
         .await?;
     if !result.success() {
-        return Err(Error::CommandFailed {
-            command: "show-options",
-            exit_code: result.exit_code(),
-            stderr: result.stderr_lossy().into_owned(),
-        });
+        return Err(Error::refused(
+            "show-options",
+            result.exit_code(),
+            result.stderr_lossy().into_owned(),
+            None,
+        ));
     }
 
     Ok(result
@@ -395,9 +400,10 @@ pub(crate) async fn set_hooks(
         return Ok(());
     }
 
-    Err(Error::CommandFailed {
-        command: "set-hook",
-        exit_code: result.exit_code(),
-        stderr: result.stderr_lossy().into_owned(),
-    })
+    Err(Error::refused(
+        "set-hook",
+        result.exit_code(),
+        result.stderr_lossy().into_owned(),
+        None,
+    ))
 }

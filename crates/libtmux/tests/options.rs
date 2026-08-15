@@ -64,7 +64,13 @@ async fn an_unknown_option_is_an_error_while_an_unset_one_is_absent() {
         .get_option("no-such-built-in")
         .await
         .expect_err("an unknown built-in name is refused");
-    assert!(matches!(error, libtmux::Error::CommandFailed { .. }));
+    assert!(matches!(
+        error,
+        libtmux::Error::OptionRejected {
+            kind: libtmux::OptionErrorKind::Unknown,
+            ..
+        },
+    ));
 
     // A known option with no value at this scope reports absence instead.
     assert!(
@@ -623,6 +629,49 @@ async fn writing_a_whole_hook_replaces_or_merges_as_asked() {
         [0, 3],
         "the sparse indices are kept and nothing else survives",
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn tmux_refusing_an_option_says_which_of_three_things_went_wrong() {
+    use libtmux::OptionErrorKind;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    // Three different fixes: a typo, a name that needs more of itself, and a
+    // value the option will not hold. Reading stderr to tell them apart also
+    // means knowing tmux says "bad value" for a flag and "value is invalid"
+    // for a number, which is not a distinction a caller should have to learn.
+    let cases = [
+        ("no-such-option", "x", OptionErrorKind::Unknown),
+        ("status-l", "x", OptionErrorKind::Ambiguous),
+        ("mouse", "notabool", OptionErrorKind::BadValue),
+        (
+            "status-left-length",
+            "notanumber",
+            OptionErrorKind::BadValue,
+        ),
+    ];
+
+    for (name, value, expected) in cases {
+        let error = server
+            .set_global_option(name, value)
+            .await
+            .expect_err("tmux refuses it");
+        assert!(
+            matches!(&error, libtmux::Error::OptionRejected { kind, .. } if *kind == expected),
+            "{name}={value} should be {expected:?}, got {error:?}",
+        );
+        assert_eq!(error.kind(), libtmux::ErrorKind::Refused);
+    }
+
+    // A name it does resolve is still accepted.
+    server
+        .set_global_option("status-left-length", "30")
+        .await
+        .expect("a valid option and value");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

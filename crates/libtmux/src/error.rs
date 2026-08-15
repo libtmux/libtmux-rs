@@ -84,6 +84,45 @@ pub(crate) const NO_SUCH_NEIGHBOUR: [&str; 4] = [
     "no last pane",
 ];
 
+/// Which way tmux would not accept an option.
+///
+/// # Examples
+///
+/// Each kind points at a different fix, so a caller can act instead of
+/// re-reading tmux's wording:
+///
+/// ```
+/// use libtmux::{Error, OptionErrorKind};
+///
+/// fn advise(error: &Error) -> &'static str {
+///     match error {
+///         Error::OptionRejected { kind, .. } => match kind {
+///             OptionErrorKind::Unknown => "check the spelling",
+///             OptionErrorKind::Ambiguous => "write more of the name",
+///             OptionErrorKind::BadValue => "the option will not hold that",
+///             _ => "tmux refused it",
+///         },
+///         _ => "not an option problem",
+///     }
+/// }
+///
+/// let refused = Error::OptionRejected {
+///     kind: OptionErrorKind::Ambiguous,
+///     detail: "status-l".to_owned(),
+/// };
+/// assert_eq!(advise(&refused), "write more of the name");
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OptionErrorKind {
+    /// No option goes by that name.
+    Unknown,
+    /// The name is a prefix of more than one option, so tmux will not guess.
+    Ambiguous,
+    /// The option exists and will not hold that value.
+    BadValue,
+}
+
 /// What tmux says when it has no client to act on.
 pub(crate) const NO_CURRENT_CLIENT: &str = "no current client";
 
@@ -193,6 +232,21 @@ pub enum Error {
         found: TmuxVersion,
         /// The minimum supported release.
         minimum: ReleaseVersion,
+    },
+
+    /// tmux would not accept an option name or value.
+    ///
+    /// Classified because the three answers call for different fixes: an
+    /// unknown name is a typo, an ambiguous one needs more of the name, and a
+    /// rejected value needs a different value. A caller reading stderr would
+    /// have to know that tmux says "bad value" for a flag and "value is
+    /// invalid" for a number.
+    #[error("tmux rejected the option: {detail}")]
+    OptionRejected {
+        /// Which of the three answers tmux gave.
+        kind: OptionErrorKind,
+        /// The name tmux could not resolve, or the value it would not take.
+        detail: String,
     },
 
     /// A session of this name already exists.
@@ -510,6 +564,29 @@ impl Error {
             ("can't find client:", ObjectKind::Client),
         ];
 
+        // tmux spells "no such option name" two ways. `set-option` and
+        // `show-options` resolve the name with `options_match` first, which
+        // says "invalid option"; the "unknown option" in `options_scope_from_name`
+        // sits behind that call and so is unreachable from the CLI on every
+        // supported release. Both mean the same thing, so both map to the same
+        // kind rather than leaving a hole if tmux ever reorders the two.
+        const OPTION: [(&str, OptionErrorKind); 5] = [
+            ("invalid option:", OptionErrorKind::Unknown),
+            ("unknown option:", OptionErrorKind::Unknown),
+            ("ambiguous option:", OptionErrorKind::Ambiguous),
+            ("bad value:", OptionErrorKind::BadValue),
+            ("value is invalid:", OptionErrorKind::BadValue),
+        ];
+
+        for (prefix, kind) in OPTION {
+            if let Some(detail) = stderr.trim_end().strip_prefix(prefix) {
+                return Self::OptionRejected {
+                    kind,
+                    detail: detail.trim().to_owned(),
+                };
+            }
+        }
+
         if let Some(name) = stderr.trim_end().strip_prefix("duplicate session:") {
             return Self::SessionExists {
                 name: name.trim().to_owned(),
@@ -583,7 +660,9 @@ impl Error {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::ObjectGone { .. } => ErrorKind::ObjectGone,
-            Self::CommandFailed { .. } | Self::SessionExists { .. } => ErrorKind::Refused,
+            Self::CommandFailed { .. }
+            | Self::SessionExists { .. }
+            | Self::OptionRejected { .. } => ErrorKind::Refused,
             Self::Timeout { .. } => ErrorKind::Timeout,
             Self::ExecutableNotFound { .. }
             | Self::InvalidServerConfiguration { .. }
@@ -863,6 +942,11 @@ impl fmt::Debug for Error {
                 .field("needs", needs)
                 .field("found", found)
                 .finish(),
+            Self::OptionRejected { kind, detail } => formatter
+                .debug_struct("OptionRejected")
+                .field("kind", kind)
+                .field("detail", detail)
+                .finish(),
             Self::SessionExists { name } => formatter
                 .debug_struct("SessionExists")
                 .field("name", name)
@@ -1008,6 +1092,50 @@ impl fmt::Debug for Error {
 
 #[cfg(test)]
 mod compat_tests {
+
+    /// Pin the tmux wording that says how an option was refused.
+    ///
+    /// The three answers need three different fixes, and tmux distinguishes
+    /// them only in stderr: every one of these exits 1. It also spells a
+    /// rejected value two ways, "bad value" for a flag and "value is invalid"
+    /// for a number, which is why the kind exists rather than the text.
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn real_tmux_compat_error_option_refusal_wording_is_recognized() {
+        use crate::test::TestServer;
+        use crate::{Error, ErrorKind, OptionErrorKind};
+
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let server = guard.server();
+
+        for (name, value, expected) in [
+            ("no-such-option", "x", OptionErrorKind::Unknown),
+            // A prefix of `status-left`, `status-left-length`, and
+            // `status-left-style` on every supported release, so tmux will not
+            // choose. A release that left only one of them would turn this
+            // answer into a different kind, which is the point of pinning it.
+            ("status-l", "x", OptionErrorKind::Ambiguous),
+            ("mouse", "notabool", OptionErrorKind::BadValue),
+            (
+                "status-left-length",
+                "notanumber",
+                OptionErrorKind::BadValue,
+            ),
+        ] {
+            let error = server
+                .set_global_option(name, value)
+                .await
+                .expect_err("tmux refuses it");
+            assert!(
+                matches!(&error, Error::OptionRejected { kind, .. } if *kind == expected),
+                "{name}={value} should be {expected:?}, got {error:?}",
+            );
+            assert_eq!(error.kind(), ErrorKind::Refused);
+            assert!(!error.is_object_gone(), "a refusal is not a missing object");
+        }
+
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
 
     /// Pin the tmux wording that separates a missing target from a refusal.
     ///

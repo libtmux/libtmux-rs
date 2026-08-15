@@ -259,7 +259,8 @@ pub use command::{Command, CommandChain, CommandResult, CommandSummary};
 #[cfg(feature = "control-mode")]
 pub use error::ControlModeErrorKind;
 pub use error::{
-    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, ServerConfigurationErrorKind,
+    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind,
+    ServerConfigurationErrorKind,
 };
 pub use formats::TmuxText;
 pub use hooks::{IndexedHooks, ReplaceMode};

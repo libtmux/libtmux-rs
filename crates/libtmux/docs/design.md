@@ -1109,3 +1109,24 @@ The crate is complete only when:
   findings;
 - no shipped file contains spike code, local paths, private data, unstable
   source links, AI signatures, or unowned scaffolding.
+
+### An option refusal has three answers, not four
+
+tmux exits 1 for every way an option can be refused, so the classification
+reads stderr. It carries four distinct strings, which is what Python libtmux's
+`handle_option_error` matches on, but they reduce to three answers: `invalid
+option` and `unknown option` both mean no option goes by that name, `ambiguous
+option` means the name is a prefix of several, and `bad value` (a flag) and
+`value is invalid` (a number) both mean the option will not hold the value.
+
+Python raises a separate `UnknownOption` for `unknown option`. Reading 3.2a,
+3.4, 3.5a, 3.6, and 3.7b, that branch is unreachable: `cmd-set-option.c` and
+`cmd-show-options.c` both call `options_match` first, which either fails with
+`invalid option`/`ambiguous option` or returns the canonical table name. Only
+then do they call `options_scope_from_name`, whose own table walk is where
+`unknown option` lives -- and it is being handed a name that walk just found.
+The prefix is still matched, mapped to the same kind, because the two spellings
+mean the same thing and the ordering is tmux's to change.
+
+`real_tmux_compat_error_option_refusal_wording_is_recognized` pins all of it
+against whichever tmux the lane runs.
