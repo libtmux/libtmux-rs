@@ -4,10 +4,23 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Build tmux workspaces from tmuxp-style YAML using libtmux"
+description = "Build tmux workspaces from tmuxp-style YAML using libtmux (alpha)"
+documentation = "https://docs.rs/tmux-workspace"
 repository.workspace = true
+readme = "README.md"
 license.workspace = true
 publish = false
+keywords = ["tmux", "tmuxp", "workspace", "yaml", "terminal"]
+categories = ["command-line-utilities", "config", "os::unix-apis"]
+include = [
+    "/Cargo.toml",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+    "/README.md",
+    "/docs/*.md",
+    "/src/**/*.rs",
+    "/tests/**/*.rs",
+]
 
 [dependencies]
 libtmux = { workspace = true, features = ["plan"] }
@@ -18,6 +31,10 @@ yaml-rust2 = "0.11.0"
 libtmux = { workspace = true, features = ["derive", "test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true

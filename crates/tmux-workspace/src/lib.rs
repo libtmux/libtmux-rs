@@ -343,5 +343,5 @@ impl<'server> WorkspaceBuilder<'server> {
 /// `libtmux` is an ordinary dependency under its own name, which is the one
 /// case a reader of that README is actually in.
 #[cfg(doctest)]
-#[doc = include_str!("../../libtmux-macros/README.md")]
+#[doc = include_str!("../docs/libtmux-macros-README.md")]
 pub struct MacrosReadme;
