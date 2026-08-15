@@ -1,0 +1,23 @@
+# Build output. Everything Cargo generates lives here and is reproducible
+# from the sources, so none of it belongs in history.
+/target/
+**/*.rs.bk
+
+# Cargo.lock is committed, not ignored: this workspace ships binaries
+# (tmux-mcp), and a lock file is what makes their builds reproducible.
+
+# Coverage and profiling artefacts.
+*.profraw
+*.profdata
+/lcov.info
+
+# Editor and OS noise.
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Local-only tool state.
+/.direnv/
+/.envrc.local
