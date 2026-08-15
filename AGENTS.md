@@ -93,12 +93,20 @@ against every supported release.
 
 ## Releasing
 
-Publishing is done by `.github/workflows/release.yml`, on a `v*` tag. There is
-no API token anywhere: the workflow mints a short-lived one from crates.io by
-exchanging a GitHub OIDC identity token, through
-`rust-lang/crates-io-auth-action`. Nothing in the repository can publish
-without a tag, because the `release` environment only accepts refs matching
-`v*`, and crates.io checks the environment as well as the workflow file.
+Publishing is done by `.github/workflows/release.yml`, on a
+`<crate>@v<version>` tag. There is no API token anywhere: the workflow mints a
+short-lived one from crates.io by exchanging a GitHub OIDC identity token,
+through `rust-lang/crates-io-auth-action`. Nothing in the repository can
+publish without such a tag, because the `release` environment only accepts refs
+matching `*@v*`, and crates.io checks the environment as well as the workflow
+file.
+
+**One tag names one crate.** The crates do not share a version -- `tmux-mcp`
+moves at its own pace -- so a workspace-wide tag could not say what was being
+released. The tag also orders the work: publishing a crate before the `libtmux`
+it requires simply fails, because cargo resolves that dependency from the
+registry rather than from the tree. Tags therefore go out leaves-first, and
+each waits for the previous to appear on crates.io.
 
 To cut a release:
 
@@ -109,12 +117,14 @@ To cut a release:
    separately.
 2. Move the changelog's `Unreleased` entries under a dated heading.
 3. `just check`.
-4. Tag `vX.Y.Z` and push the tag.
+4. Push one tag per crate, in dependency order, waiting for each to land:
+   `libtmux-macros@vX.Y.Z`, then `libtmux@vX.Y.Z`, then `tmux-mcp@vA.B.C`.
 
-The workflow then runs the whole gate again on that exact commit, packages the
-crates, attests them, publishes, and attaches the `.crate` files to a GitHub
-release. It runs the gate rather than trusting the tag because a crates.io
-version is immutable: it is the one build that cannot be taken back.
+The workflow checks that the version in the tag is the version in the
+manifest, then runs the whole gate on that exact commit, packages the crate,
+attests it, publishes, and attaches the `.crate` to a GitHub release. It runs
+the gate rather than trusting the tag because a crates.io version is
+immutable: it is the one build that cannot be taken back.
 
 **Provenance is attached to the release, not to the registry.** crates.io does
 not host or display build attestations yet, and `cargo` does not verify them,

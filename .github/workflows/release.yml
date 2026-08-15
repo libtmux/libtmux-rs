@@ -1,11 +1,16 @@
 name: Release
 
-# Publishing is driven by a tag, and the tag is the only thing that starts it.
-# `workflow_dispatch` exists so a failed publish can be retried without
-# inventing a second tag.
+# One tag names one crate: `libtmux@v0.1.0-alpha.4`. The crates do not share a
+# version -- `tmux-mcp` moves at its own pace -- so a single workspace-wide tag
+# could not say what was being released.
+#
+# It also orders the work. Publishing `tmux-mcp` before the `libtmux` it
+# requires simply fails, because cargo resolves the dependency from the
+# registry, so the tags have to go out leaves-first and each one waits for the
+# previous to land.
 on:
   push:
-    tags: ['v*']
+    tags: ['*@v*']
   workflow_dispatch:
 
 # Nothing is granted by default; each job asks for exactly what it uses.
@@ -18,8 +23,8 @@ env:
 
 jobs:
   # A tag is not evidence. The same gate CI runs has to pass on the exact
-  # commit being published, because a release is the one build nobody can
-  # take back: crates.io versions are immutable.
+  # commit being published, because a release is the one build nobody can take
+  # back: a crates.io version is immutable.
   verify:
     name: just check
     runs-on: ubuntu-latest
@@ -56,15 +61,15 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Trusted publishing names an environment as well as a workflow, so this
-    # is load-bearing rather than decorative: a workflow running outside it
-    # cannot mint a token, whatever else it can reach.
+    # Trusted publishing names an environment as well as a workflow, so this is
+    # load-bearing rather than decorative: a workflow running outside it cannot
+    # mint a token, whatever else it can reach.
     environment: release
     permissions:
       # Mint the OIDC token crates.io exchanges for a short-lived publish
       # token. No API token is stored anywhere.
       id-token: write
-      # Attach the packaged crates and their provenance to a GitHub release.
+      # Attach the packaged crate and its provenance to a GitHub release.
       contents: write
       # Persist the SLSA build provenance attestation.
       attestations: write
@@ -80,47 +85,88 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # Package first, so the artifacts that get attested are built once and
-      # are the ones a reader can check. `--workspace` skips `tmux-workspace`,
-      # which is `publish = false`, and orders the rest by dependency.
+      # The tag is an assertion about the tree, and an assertion is worth
+      # checking: a tag naming a version the manifest does not carry would
+      # otherwise publish whatever the manifest happens to say.
+      - name: Read the crate and version out of the tag
+        id: target
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            *@v*) ;;
+            *) printf 'tag %s is not <crate>@v<version>\n' "$TAG" >&2; exit 1 ;;
+          esac
+          package="${TAG%@v*}"
+          version="${TAG##*@v}"
+
+          manifest="$(
+            cargo metadata --format-version 1 --no-deps \
+              | jq -r --arg p "$package" '.packages[] | select(.name == $p) | .version'
+          )"
+          if [ -z "$manifest" ]; then
+            printf 'no workspace member is called %s\n' "$package" >&2
+            exit 1
+          fi
+          if [ "$manifest" != "$version" ]; then
+            printf '%s is %s in the manifest, but the tag says %s\n' \
+              "$package" "$manifest" "$version" >&2
+            exit 1
+          fi
+
+          printf 'package=%s\n' "$package" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'crate_file=target/package/%s-%s.crate\n' "$package" "$version" >> "$GITHUB_OUTPUT"
+
+      # Package first, so the artifact that gets attested is built once and is
+      # the one a reader can check.
       - name: Package
-        run: cargo package --workspace --locked
+        env:
+          PACKAGE: ${{ steps.target.outputs.package }}
+        run: cargo package --package "$PACKAGE" --locked
 
       # crates.io does not host or verify provenance yet, and cargo does not
-      # check it, so this attests the packaged `.crate` files on the release
-      # instead. It is real, verifiable provenance -- Sigstore-signed, logged
-      # in Rekor -- just not surfaced by the registry.
+      # check it, so this attests the packaged `.crate` on the release instead.
+      # It is real -- Sigstore-signed, logged in Rekor -- just not surfaced by
+      # the registry. It covers the bytes crates.io serves, because
+      # `cargo package` is byte-deterministic for a given tree.
       - name: Attest build provenance
         uses: actions/attest@v4
         with:
-          subject-path: target/package/*.crate
+          subject-path: ${{ steps.target.outputs.crate_file }}
 
       - name: Authenticate with crates.io
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish
-        run: cargo publish --workspace --locked --no-verify
         env:
+          PACKAGE: ${{ steps.target.outputs.package }}
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --package "$PACKAGE" --locked --no-verify
 
-      - name: Attach artifacts to the release
+      - name: Attach the crate to a release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          PACKAGE: ${{ steps.target.outputs.package }}
+          VERSION: ${{ steps.target.outputs.version }}
+          CRATE_FILE: ${{ steps.target.outputs.crate_file }}
         # Idempotent, because `workflow_dispatch` exists to retry a publish
-        # that failed partway, and a release created by the first attempt
-        # would otherwise stop the second before it uploaded anything.
+        # that failed partway, and a release created by the first attempt would
+        # otherwise stop the second before it uploaded anything.
         run: |
+          set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$TAG" target/package/*.crate \
+            gh release upload "$TAG" "$CRATE_FILE" \
               --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "$TAG" \
-              --notes "See CHANGELOG.md for what changed. Every crate here is a prerelease." \
+              --title "$PACKAGE $VERSION" \
+              --notes "\`$PACKAGE\` $VERSION. See CHANGELOG.md for what changed. This is a prerelease." \
               --prerelease \
               --verify-tag \
-              target/package/*.crate
+              "$CRATE_FILE"
           fi
