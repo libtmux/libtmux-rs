@@ -1006,11 +1006,12 @@ is `Copy`, so joining them allocates nothing per object.
 ## Toolchain and packaging
 
 MSRV is a promise about the published crates. `libtmux` and `libtmux-macros`
-build and test on 1.85. The consumer crates, `tmux-mcp` and
-`tmux-workspace`, are `publish = false` and exist to exercise the public API
-from outside, so they track current stable and their dependency trees do not
-constrain the library. The MSRV and packaging gates name the published crates
-rather than the workspace for that reason.
+build and test on 1.85. The consumer crates, `tmux-mcp` and `tmux-workspace`,
+exist to exercise the public API from outside. `tmux-mcp` carries its own MSRV
+of 1.88, because its dependencies need a compiler the libraries do not, and is
+tested on its own lane. All four crates publish; being published is part of
+the consumers' job rather than beside it, since a crate built only inside its
+own workspace never proves its dependency requirements resolve.
 
 The consumers also prove the dependency edge runs one way: `libtmux` names
 neither of them, and `cargo tree -p libtmux` lists only caseless, regex,
