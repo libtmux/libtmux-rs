@@ -7,12 +7,14 @@ workspace_root="$(cd "$script_dir/.." && pwd -P)"
 core_root="$workspace_root/crates/libtmux"
 macros_root="$workspace_root/crates/libtmux-macros"
 mcp_root="$workspace_root/crates/tmux-mcp"
+workspace_crate_root="$workspace_root/crates/tmux-workspace"
 
 cd "$workspace_root"
 
 core_package="$(cargo package --locked --allow-dirty --package libtmux --list)"
 macros_package="$(cargo package --locked --allow-dirty --package libtmux-macros --list)"
 mcp_package="$(cargo package --locked --allow-dirty --package tmux-mcp --list)"
+workspace_crate_package="$(cargo package --locked --allow-dirty --package tmux-workspace --list)"
 
 contains_line() {
     local lines="$1"
@@ -71,10 +73,20 @@ mcp_files=(
     "$mcp_root"/README.md
     "$mcp_root"/examples/*.rs
 )
+# `docs/libtmux-macros-README.md` is a symlink to the copy that crate owns,
+# and the doctest verifying it reads that path. It has to ship, or
+# `cargo test --doc` fails for anyone using the published crate.
+workspace_crate_files=(
+    "$workspace_crate_root"/LICENSE-APACHE
+    "$workspace_crate_root"/LICENSE-MIT
+    "$workspace_crate_root"/README.md
+    "$workspace_crate_root"/libtmux-macros-README.md
+)
 
 # nullglob is on, so an empty list would make every check below vacuous.
 # These files are the reason this script exists; none of them is optional.
-if (( ${#core_files[@]} == 0 || ${#macros_files[@]} == 0 || ${#mcp_files[@]} == 0 )); then
+if (( ${#core_files[@]} == 0 || ${#macros_files[@]} == 0 || ${#mcp_files[@]} == 0 \
+      || ${#workspace_crate_files[@]} == 0 )); then
     printf 'expected packaged files are missing from the working tree\n' >&2
     exit 1
 fi
@@ -89,6 +101,11 @@ done
 
 for file in "${mcp_files[@]}"; do
     require_line "$mcp_package" "${file#"$mcp_root"/}" "tmux-mcp"
+done
+
+for file in "${workspace_crate_files[@]}"; do
+    require_line "$workspace_crate_package" \
+        "${file#"$workspace_crate_root"/}" "tmux-workspace"
 done
 
 # A shipped document that tells the reader which version to depend on has to
@@ -126,7 +143,7 @@ check_documented_version() {
 
 declare -A crate_versions=()
 metadata="$(cargo metadata --format-version 1 --no-deps)"
-for crate in libtmux libtmux-macros tmux-mcp; do
+for crate in libtmux libtmux-macros tmux-mcp tmux-workspace; do
     crate_versions[$crate]="$(
         printf '%s' "$metadata" \
             | grep -oP "\"name\":\"$crate\",\"version\":\"\K[^\"]+"
@@ -140,6 +157,7 @@ done
 check_documented_version "$core_root" libtmux "$core_package"
 check_documented_version "$macros_root" libtmux-macros "$macros_package"
 check_documented_version "$mcp_root" tmux-mcp "$mcp_package"
+check_documented_version "$workspace_crate_root" tmux-workspace "$workspace_crate_package"
 
 # A relative link in a shipped document has to point at something else that
 # ships. A file that exists in the working tree but is left out of `include`
@@ -183,6 +201,7 @@ check_relative_links() {
 check_relative_links "$core_package" "$core_root" libtmux
 check_relative_links "$macros_package" "$macros_root" libtmux-macros
 check_relative_links "$mcp_package" "$mcp_root" tmux-mcp
+check_relative_links "$workspace_crate_package" "$workspace_crate_root" tmux-workspace
 
 while IFS= read -r entry; do
     case "$entry" in

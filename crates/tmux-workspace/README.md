@@ -3,9 +3,11 @@
 Build tmux workspaces from [tmuxp](https://tmuxp.git-pull.com/)-style YAML,
 using [libtmux](https://docs.rs/libtmux).
 
-> **Alpha, and not published.** This crate is `publish = false` on purpose —
-> see [Why this is not on crates.io](#why-this-is-not-on-cratesio). Use it by
-> path, or read it as a worked example of the `libtmux` API.
+> **Alpha.** The API changes between releases, including in ways that will not
+> be called out as breaking, because nothing here is stable yet. Cargo will not
+> resolve a prerelease unless the requirement names one, so a plain `0.1`
+> requirement does not pick this up: depend on the exact version below, and
+> expect to edit it.
 
 Describe the workspace:
 
@@ -87,18 +89,24 @@ windows:
 }
 ```
 
-## Use it
+## Install
 
-Not on crates.io, so depend on it by path:
+```console
+$ cargo add tmux-workspace@0.1.0-alpha.4
+```
+
+<details>
+<summary>Cargo.toml</summary>
 
 ```toml
 [dependencies]
-tmux-workspace = { path = "crates/tmux-workspace" }
+tmux-workspace = "0.1.0-alpha.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
-## Why this is not on crates.io
+</details>
 
-`publish = false` is the point of this crate rather than an oversight.
+## Why this crate exists
 
 It exists to drive the `libtmux` public API from outside the crate that
 defines it. Tests written inside `libtmux` can reach `pub(crate)` items and
@@ -109,10 +117,11 @@ published consumer can see. An API that is awkward to use from here is
 awkward for everyone, and that shows up as a compile error rather than as a
 review comment.
 
-That job does not need a crates.io listing, so it does not have one. The
-publishing metadata the sibling crates carry — keywords, categories, an
-`include` list, a docs.rs section — is deliberately absent, because none of it
-would mean anything for a crate that is never uploaded.
+Being published is part of that rather than beside it. A crate that is only
+ever built inside its own workspace never proves its dependency requirements
+resolve, and this one could not have been published at all until `libtmux`
+shipped the `plan` feature it asks for — which is exactly the kind of thing
+that is invisible from inside the tree.
 
 ## Development
 

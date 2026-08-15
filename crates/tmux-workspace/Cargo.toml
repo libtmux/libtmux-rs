@@ -9,7 +9,6 @@ documentation = "https://docs.rs/tmux-workspace"
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
-publish = false
 keywords = ["tmux", "tmuxp", "workspace", "yaml", "terminal"]
 categories = ["command-line-utilities", "config", "os::unix-apis"]
 include = [
@@ -17,7 +16,7 @@ include = [
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
     "/README.md",
-    "/docs/*.md",
+    "/libtmux-macros-README.md",
     "/src/**/*.rs",
     "/tests/**/*.rs",
 ]

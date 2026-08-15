@@ -13,18 +13,21 @@ here uses `uv`, `pytest`, `ruff`, or `mypy`.
 | `crates/libtmux` | yes | The async tmux client and object model |
 | `crates/libtmux-macros` | yes | `#[derive(Filterable)]`, for downstream structs |
 | `crates/tmux-mcp` | yes | An MCP server, built to exercise the public API |
-| `crates/tmux-workspace` | no | A tmuxp-YAML builder, same purpose |
+| `crates/tmux-workspace` | yes | A tmuxp-YAML builder, same purpose |
 
 `just` lists every recipe. `just check` runs what CI runs. Cargo is
 authoritative; the justfile only groups Cargo commands.
 
 `tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
 them, because it moves at its own pace and its dependencies need a compiler the
-libraries do not. Only `tmux-workspace` is unpublished, and `publish = false`
-is what says so.
+libraries do not. Every crate here is published.
 
-Both of those crates exist to use the API from outside. When they need a
-workaround, that is a finding about the API, not about them.
+The last two exist to use the API from outside. When they need a workaround,
+that is a finding about the API, not about them, and being genuinely published
+is part of the job: a crate built only inside its own workspace never proves
+its dependency requirements resolve. `tmux-workspace` could not be published
+at all until `libtmux` shipped the `plan` feature it asks for, which is not
+visible from inside the tree.
 
 ## Things that will bite
 

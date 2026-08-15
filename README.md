@@ -230,10 +230,12 @@ command's output instead of returning it.
 | [`libtmux`](crates/libtmux) | [![libtmux]][libtmux-crate] | The async tmux client and object model |
 | [`libtmux-macros`](crates/libtmux-macros) | [![libtmux-macros]][macros-crate] | `#[derive(Filterable)]`, for your own structs |
 | [`tmux-mcp`](crates/tmux-mcp) | [![tmux-mcp]][mcp-crate] | A Model Context Protocol server over tmux |
-| [`tmux-workspace`](crates/tmux-workspace) | not published | A tmuxp-style YAML builder |
+| [`tmux-workspace`](crates/tmux-workspace) | [![tmux-workspace]][workspace-crate] | A tmuxp-style YAML builder |
 
 [libtmux-macros]: https://img.shields.io/crates/v/libtmux-macros.svg?label=libtmux-macros
 [macros-crate]: https://crates.io/crates/libtmux-macros
+[tmux-workspace]: https://img.shields.io/crates/v/tmux-workspace.svg?label=tmux-workspace
+[workspace-crate]: https://crates.io/crates/tmux-workspace
 
 `libtmux` does not require proc macros: its own `Filterable` implementations
 are hand-written, and the derive exists for structs outside this workspace.
