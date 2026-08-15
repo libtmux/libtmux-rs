@@ -8,7 +8,7 @@ version = "0.1.0-alpha.3"
 authors = ["libtmux contributors"]
 edition = "2024"
 rust-version = "1.85"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/tmux-python/libtmux"
 
 # Shared dependency versions. A crate names the features it needs; the

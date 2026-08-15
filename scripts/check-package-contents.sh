@@ -44,7 +44,8 @@ shopt -s nullglob
 # The crate's front page links docs/design.md and names the examples, so both
 # ship or those references break for anyone reading the packaged crate.
 core_files=(
-    "$core_root"/LICENSE
+    "$core_root"/LICENSE-APACHE
+    "$core_root"/LICENSE-MIT
     "$core_root"/README.md
     "$core_root"/docs/design.md
     "$core_root"/docs/parity.md
@@ -54,7 +55,8 @@ core_files=(
     "$core_root"/tests/fixtures/dialect-v1/*.json
 )
 macros_files=(
-    "$macros_root"/LICENSE
+    "$macros_root"/LICENSE-APACHE
+    "$macros_root"/LICENSE-MIT
     "$macros_root"/README.md
     "$macros_root"/tests/ui/pass/*.rs
     "$macros_root"/tests/ui/fail/*.rs
@@ -64,7 +66,8 @@ macros_files=(
 # break. Its planning notes under docs/ deliberately do not: they are working
 # material for this repository, not something an integrator needs in a tarball.
 mcp_files=(
-    "$mcp_root"/LICENSE
+    "$mcp_root"/LICENSE-APACHE
+    "$mcp_root"/LICENSE-MIT
     "$mcp_root"/README.md
     "$mcp_root"/examples/*.rs
 )

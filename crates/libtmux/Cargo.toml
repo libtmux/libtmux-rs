@@ -13,7 +13,8 @@ keywords = ["tmux", "terminal", "multiplexer", "async", "tokio"]
 categories = ["api-bindings", "asynchronous", "os::unix-apis"]
 include = [
     "/Cargo.toml",
-    "/LICENSE",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
     "/README.md",
     "/docs/design.md",
     "/docs/parity.md",
