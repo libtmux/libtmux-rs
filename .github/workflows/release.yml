@@ -1,0 +1,126 @@
+name: Release
+
+# Publishing is driven by a tag, and the tag is the only thing that starts it.
+# `workflow_dispatch` exists so a failed publish can be retried without
+# inventing a second tag.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# Nothing is granted by default; each job asks for exactly what it uses.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  # tmux emits bytes rather than text, and the fixtures assert on wording.
+  LC_ALL: C.UTF-8
+
+jobs:
+  # A tag is not evidence. The same gate CI runs has to pass on the exact
+  # commit being published, because a release is the one build nobody can
+  # take back: crates.io versions are immutable.
+  verify:
+    name: just check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux
+          tmux -V
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # `just msrv` reaches for these by exact name through `rustup run`.
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-hack,cargo-deny
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: just check
+
+  publish:
+    name: crates.io
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Trusted publishing names an environment as well as a workflow, so this
+    # is load-bearing rather than decorative: a workflow running outside it
+    # cannot mint a token, whatever else it can reach.
+    environment: release
+    permissions:
+      # Mint the OIDC token crates.io exchanges for a short-lived publish
+      # token. No API token is stored anywhere.
+      id-token: write
+      # Attach the packaged crates and their provenance to a GitHub release.
+      contents: write
+      # Persist the SLSA build provenance attestation.
+      attestations: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux
+          tmux -V
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Package first, so the artifacts that get attested are built once and
+      # are the ones a reader can check. `--workspace` skips `tmux-workspace`,
+      # which is `publish = false`, and orders the rest by dependency.
+      - name: Package
+        run: cargo package --workspace --locked
+
+      # crates.io does not host or verify provenance yet, and cargo does not
+      # check it, so this attests the packaged `.crate` files on the release
+      # instead. It is real, verifiable provenance -- Sigstore-signed, logged
+      # in Rekor -- just not surfaced by the registry.
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: target/package/*.crate
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish
+        run: cargo publish --workspace --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Attach artifacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        # Idempotent, because `workflow_dispatch` exists to retry a publish
+        # that failed partway, and a release created by the first attempt
+        # would otherwise stop the second before it uploaded anything.
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" target/package/*.crate \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --notes "See CHANGELOG.md for what changed. Every crate here is a prerelease." \
+              --prerelease \
+              --verify-tag \
+              target/package/*.crate
+          fi
