@@ -491,7 +491,7 @@ mod linux {
             let mut command = Command::new("sh");
             command
                 .arg("-c")
-                .arg("printf ready; trap '' TERM; while :; do :; done")
+                .arg("printf ready; trap '' TERM; sleep 86400 & wait")
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null());
@@ -701,7 +701,7 @@ mod linux {
             let mut command = Command::new("sh");
             command
                 .arg("-c")
-                .arg("while :; do :; done")
+                .arg("exec sleep 86400")
                 .env(super::OWNER_ENV, &containment.marker)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())

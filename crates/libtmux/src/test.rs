@@ -1345,7 +1345,7 @@ mod tests {
              if [ \"${{1-}}\" = '__libtmux_fixture_ready__' ]; then exit 0; fi\n\
              for argument in \"$@\"; do\n\
                if [ \"$argument\" = '-D' ]; then\n\
-                 (trap '' TERM; while :; do :; done) &\n\
+                 (trap '' TERM; sleep 86400 & wait) &\n\
                  helper=$!\n\
                  printf '%s\\n%s\\n' \"$$\" \"$helper\" > {quoted_pids}.new\n\
                  mv {quoted_pids}.new {quoted_pids}\n\
@@ -1435,7 +1435,7 @@ mod tests {
             child
                 .arg("-c")
                 .arg(
-                    "(trap '' TERM; while :; do :; done) &\n\
+                    "(trap '' TERM; sleep 86400 & wait) &\n\
                      helper=$!\n\
                      printf '%s\\n%s\\n' \"$$\" \"$helper\" > \"$PIDS.new\"\n\
                      mv \"$PIDS.new\" \"$PIDS\"\n\
@@ -1567,10 +1567,7 @@ mod tests {
     fn final_wait_disarms_lifecycle_before_drop() {
         let files = OwnedFiles::create().expect("owned files are created");
         let mut command = ProcessCommand::new("sh");
-        command
-            .arg("-c")
-            .arg("while :; do :; done")
-            .process_group(0);
+        command.arg("-c").arg("exec sleep 86400").process_group(0);
         let child = command.spawn().expect("child starts in its own group");
         let mut lifecycle = Lifecycle::new(child, files);
 
@@ -1597,7 +1594,7 @@ mod tests {
         let mut leader = ProcessCommand::new("sh");
         leader
             .arg("-c")
-            .arg("while :; do :; done")
+            .arg("exec sleep 86400")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1607,7 +1604,7 @@ mod tests {
         let mut helper = ProcessCommand::new("sh");
         helper
             .arg("-c")
-            .arg("while :; do :; done")
+            .arg("exec sleep 86400")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1698,10 +1695,7 @@ mod tests {
             .to_path_buf();
         let config = files.config_path.clone();
         let mut command = ProcessCommand::new("sh");
-        command
-            .arg("-c")
-            .arg("while :; do :; done")
-            .process_group(0);
+        command.arg("-c").arg("exec sleep 86400").process_group(0);
         let child = command.spawn().expect("child starts in its own group");
         let leader = Pid::from_child(&child);
         let mut lifecycle = Lifecycle::new(child, files);

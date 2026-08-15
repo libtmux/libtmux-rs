@@ -1208,3 +1208,31 @@ daemon that exits is noticed when it exits, not when the timeout expires.
 
 The general rule: a test's deadline should bound the thing it is *not*
 testing, by enough that it never becomes the thing it measures.
+
+### An idle fixture process must idle the right way
+
+The process fixtures held a process open with `while :; do :; done`. Nineteen
+sites, each burning a core for the length of its test, and the suite runs them
+beside tests that measure how long a child takes to start. On a developer
+machine with twenty cores that is invisible; on a four-core runner it is what
+makes those measurements miss.
+
+Replacing it is not a substitution, because two different things were relying
+on the spin:
+
+- **A shell only runs traps between commands.** One blocked in `sleep` defers
+  a TERM until the sleep ends, so the fixtures that assert on signal delivery
+  broke when the spin became `while :; do sleep 30; done`. `sleep 86400 & wait`
+  keeps the prompt handling, because a signal with a trap interrupts `wait`.
+- **`exec` takes the trap with it.** `exec sleep 86400` is a single process
+  and burns nothing, but it replaces the shell, so any fixture that installed
+  a trap first lost it.
+
+So the shape follows the fixture. Helpers that hold a trap use
+`sleep 86400 & wait`. Helpers that only have to outlive an assertion use
+`exec sleep 86400`, which matters where the helper carries an environment
+marker: a `sleep` child inherits it, and a scan that counts marker-bearing
+processes then finds two where the test means one.
+
+Measured by pinning the lib suite to two cores at eight test threads: one
+failure in six runs before, twelve clean runs after.

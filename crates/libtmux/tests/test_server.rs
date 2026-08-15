@@ -745,7 +745,7 @@ async fn exposed_no_start_clients_use_the_isolated_environment_inner() {
                mv {pid}.new {pid}\n\
                : > \"$socket\"\n\
                trap '' TERM\n\
-               while :; do :; done\n\
+               sleep 86400 & wait\n\
              fi\n\
              test \"${{TERM:-}}\" = xterm-256color || exit 41\n\
              test -z \"${{TMUX:-}}\" || exit 42\n\
@@ -837,7 +837,7 @@ async fn startup_rollback_reports_descriptor_cleanup_failure() {
                printf '%s' \"$socket\" > {socket}.new\n\
                mv {socket}.new {socket}\n\
                trap '' TERM\n\
-               while :; do :; done\n\
+               sleep 86400 & wait\n\
              fi\n\
              while [ ! -s {pid} ] || [ ! -s {socket} ]; do :; done\n\
              printf '4294967295\\n'\n",
@@ -883,7 +883,7 @@ async fn exited_construction_leader_still_cleans_its_same_group_descendant() {
             "#!/bin/sh\n\
              for argument in \"$@\"; do\n\
                if [ \"$argument\" = '-D' ]; then\n\
-                 (trap '' TERM; while :; do :; done) &\n\
+                 (trap '' TERM; sleep 86400 & wait) &\n\
                  helper=$!\n\
                  printf '%s\\n%s\\n' \"$$\" \"$helper\" > {pids}.new\n\
                  mv {pids}.new {pids}\n\
@@ -1083,13 +1083,13 @@ async fn pending_readiness_timeout_reports_an_exited_leader() {
                printf '%s' \"$$\" > {pid}.new\n\
                mv {pid}.new {pid}\n\
                : > \"$socket\"\n\
-               while :; do :; done\n\
+               sleep 86400 & wait\n\
              fi\n\
              while [ ! -s {pid} ]; do :; done\n\
              kill -TERM \"$(cat {pid})\"\n\
              printf ready > {ready}.new\n\
              mv {ready}.new {ready}\n\
-             while :; do :; done\n",
+             sleep 86400 & wait\n",
             pid = shell_literal(&pid_file),
             ready = shell_literal(&client_ready),
         ),
@@ -1148,12 +1148,12 @@ async fn externally_reaped_daemon_reports_shutdown_failed_and_retains_root() {
                printf '%s' \"$socket\" > {socket}.new\n\
                mv {socket}.new {socket}\n\
                : > \"$socket\"\n\
-               while :; do :; done\n\
+               sleep 86400 & wait\n\
              fi\n\
              while [ ! -s {pid} ]; do :; done\n\
              printf ready > {ready}.new\n\
              mv {ready}.new {ready}\n\
-             while :; do :; done\n",
+             sleep 86400 & wait\n",
             pid = shell_literal(&pid_file),
             socket = shell_literal(&socket_file),
             ready = shell_literal(&client_ready),
@@ -1181,7 +1181,7 @@ async fn externally_reaped_daemon_reports_shutdown_failed_and_retains_root() {
     let mut helper = ProcessCommand::new("sh");
     helper
         .arg("-c")
-        .arg("while :; do :; done")
+        .arg("exec sleep 86400")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1244,7 +1244,7 @@ async fn aborting_shutdown_leaves_an_unabortable_waiter_owning_cleanup() {
             None,
             Some(&term_marker),
             "",
-            "while :; do :; done",
+            "sleep 86400 & wait",
         ),
     );
     let guard = TestServer::builder()
@@ -1502,7 +1502,7 @@ async fn graceful_shutdown_signals_only_the_retained_pid_before_forced_group_cle
             None,
             Some(&daemon_term),
             "",
-            "while :; do :; done",
+            "sleep 86400 & wait",
         ),
     );
     let guard = TestServer::builder()
@@ -1518,7 +1518,7 @@ async fn graceful_shutdown_signals_only_the_retained_pid_before_forced_group_cle
     let helper_script = format!(
         "trap 'printf term > {term}.new; mv {term}.new {term}' TERM; \
          printf ready > {ready}.new; mv {ready}.new {ready}; \
-         while :; do :; done",
+         sleep 86400 & wait",
         ready = shell_literal(&ready),
         term = shell_literal(&term),
     );
