@@ -1,10 +1,10 @@
 # AGENTS.md — the Rust workspace
 
 Rules for this workspace, which is the whole repository. It was extracted from
-the Python libtmux repository, and the commit format, changelog conventions,
-slop prevention, and shipped-versus-branch-internal rule it inherited from that
-repository's root `AGENTS.md` still apply. **Its commands do not**: nothing
-here uses `uv`, `pytest`, `ruff`, or `mypy`.
+the Python libtmux repository, and the changelog conventions, slop prevention,
+and shipped-versus-branch-internal rule it inherited from that repository's
+root `AGENTS.md` still apply; the commit format is written down below. **Its
+commands do not apply**: nothing here uses `uv`, `pytest`, `ruff`, or `mypy`.
 
 ## Layout and commands
 
@@ -210,3 +210,100 @@ configured, which all three have been.
 format boundary, query grammar, control mode, test architecture, compatibility
 lanes, and the lint and dependency gates. `crates/libtmux/docs/parity.md` is
 the capability ledger against Python libtmux.
+
+## Git Commit Standards
+
+Format commit messages as:
+```
+Scope(type[detail]): concise description
+
+why: Explanation of necessity or impact.
+
+what:
+- Specific technical changes made
+- Focused on a single topic
+```
+
+Keep the subject ≤50 chars (excluding any trailing `(#NN)` PR ref); wrap
+body lines at ≤72 chars. Separate the `why:` and `what:` blocks with a
+blank line.
+
+Common commit types:
+- **feat**: New features or enhancements
+- **fix**: Bug fixes
+- **refactor**: Code restructuring without functional change
+- **docs**: Documentation updates
+- **chore**: Maintenance (dependencies, tooling, config)
+- **test**: Test-related updates
+- **style**: Code style and formatting
+- **rs(deps)**: Dependencies
+- **rs(deps[dev])**: Dev Dependencies
+- **ai(rules[AGENTS])**: AI rule updates
+
+Example:
+```
+Pane(feat[send_keys]): Add support for a literal flag
+
+why: Send characters without tmux interpreting them.
+
+what:
+- Add a literal field to SendKeysOptions
+- Pass -l when it is set
+```
+
+### Release commits
+
+Never create tags. Never push tags. The user handles tagging and tag
+pushes (tags trigger the CI publish workflow).
+
+Release commit subjects are plain and short: `Tag v<version>`. Put
+the detailed why/what in the commit body. Don't use the
+`Scope(type[detail]):` format for releases -- don't bury the lede.
+
+For multi-line commits, use heredoc to preserve formatting:
+```bash
+git commit -m "$(cat <<'EOF'
+Scope(feat[detail]): Concise description
+
+why: Explanation of the change.
+
+what:
+- First change
+- Second change
+EOF
+)"
+```
+
+## Code Blocks
+
+Code blocks are paste-and-run units: pasting one block runs exactly one
+intended action. Doctests and other executed examples are exempt -- the test
+suite runs them, nobody pastes them.
+
+- **One command per block.** Multiple steps may share a block only when
+  explicitly chained with `&&`, `;`, or `\` continuations -- the chain is
+  then one logical command.
+- **Explanations go in prose above the block**, never as `#` comments inside it.
+- **Command menus are per-command blocks with prose lead-ins**, not tables.
+- **Shell commands use the `console` tag with a `$ ` prefix.** This separates
+  interactive commands from scripts and enables prompt-aware copy.
+- **Split long commands with `\`** -- one flag or flag+value pair per indented
+  continuation line, positional arguments last.
+
+Good:
+
+Show the last ten commits as a graph:
+
+```console
+$ git log \
+    --max-count=10 \
+    --graph \
+    --oneline
+```
+
+Bad:
+
+```console
+# Show the last ten commits as a graph
+$ git log --max-count=10 --graph --oneline
+```
