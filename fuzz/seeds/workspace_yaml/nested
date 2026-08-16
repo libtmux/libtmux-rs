@@ -1,0 +1,6 @@
+session_name: s
+windows:
+  - focus: true
+    panes:
+      - shell_command: ls
+        enter: false

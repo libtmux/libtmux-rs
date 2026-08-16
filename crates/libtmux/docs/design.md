@@ -1463,3 +1463,34 @@ So the names swapped. `sessions()` returns `Result`, and a caller who wants
 the old behaviour writes `sessions_or_empty()`, which says what it does. The
 breaking change is cheap now and would not be later, which is the argument for
 doing it during an alpha rather than after one.
+
+### Fuzzing the parsers that read from outside
+
+Three surfaces take bytes this crate did not write, and each is fuzzed:
+
+- the control-mode line parser, which reads from a tmux that keeps running, so
+  a malformed line is not a command that failed but bytes it has to survive;
+- the versioned filter-expression wire format, which can arrive from a config
+  file, a CLI argument, or an MCP tool call;
+- the tmuxp-style workspace loader, which walks a hand-written nested document
+  deciding what each value means.
+
+`fuzz/` is not a workspace member. It needs nightly and a sanitizer, and
+`just check` has to stay runnable on stable, so it is excluded and reached
+through `just fuzz <target>`.
+
+The seeds are the part worth explaining. Random bytes almost never produce a
+line beginning with `%`, so an unseeded control-mode target spends its entire
+budget establishing that arbitrary input is text and never reaches `%begin`,
+`%output`, or the block-number parsing that correlates a result with its
+command. `fuzz/seeds/` carries those shapes -- including a line that is not
+UTF-8, because pane output is not required to be. What the fuzzer discovers
+from them is not checked in; the seeds are.
+
+`__fuzz_parse_control_line` exists because the parser is private and should
+stay private. It is behind `unstable-fuzzing`, which is not in `full` and
+which nothing but `fuzz/` turns on.
+
+CI runs them weekly rather than per-push. This kind of testing finds things by
+running for a long time, so a schedule is worth more than a gate nobody can
+wait for, and a crash is uploaded as an artifact rather than left in a log.

@@ -803,6 +803,19 @@ fn unescape_output(source: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// Parse one control-mode protocol line, for fuzzing only.
+///
+/// The parser is the crate's most exposed surface: it reads bytes from a
+/// process that keeps running, and every other decoder sits behind a tmux
+/// command that ended. Nothing here is a supported API -- it exists so a
+/// fuzzer can reach `Line::parse` without it becoming public -- and it is
+/// gated behind a feature no release turns on.
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub fn __fuzz_parse_control_line(line: &[u8]) {
+    let _ = Line::parse(line);
+}
+
 #[cfg(test)]
 mod tests {
 

@@ -74,6 +74,9 @@ default = ["query"]
 # list. `test-support` is deliberately absent: it belongs to a dev-dependency,
 # not to a build of the library.
 full = ["blocking", "control-mode", "derive", "plan", "query", "serde", "tracing"]
+# Exposes internal parsers to a fuzzer. Not a supported API, not in
+# `full`, and nothing but `fuzz/` turns it on.
+unstable-fuzzing = ["control-mode", "query", "serde"]
 blocking = ["tokio/rt"]
 control-mode = ["dep:futures-core", "tokio/io-util", "tokio/process", "tokio/sync"]
 # The derive writes `impl Filterable`, which does not exist without `query`.

@@ -1,0 +1,1 @@
+{"version":1,"target":"pane","expr":{"and":[{"field":"pane_index","op":"gt","value":1}]}}

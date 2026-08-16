@@ -95,6 +95,14 @@ against every supported release.
   workspace. Version-specific behaviour belongs in a `real_tmux_compat_` test,
   not in a comment.
 
+**Parsers that read from outside are fuzzed.** The control-mode line parser,
+the filter-expression wire format, and the workspace YAML loader each have a
+target under `fuzz/`, reached with `just fuzz <target>`. It is not a workspace
+member and not part of `just check`: it needs nightly and a sanitizer, and the
+gate has to stay runnable on stable. Add a target when adding a parser that
+reads bytes this crate did not write, and seed it -- an unseeded target proves
+only that arbitrary input is not valid input.
+
 ## Releasing
 
 Publishing is done by `.github/workflows/release.yml`, on a

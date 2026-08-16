@@ -1,0 +1,39 @@
+# Excluded from the workspace on purpose: it needs nightly and a linker flag
+# the rest of the build does not, and `just check` must stay runnable on
+# stable. Run it with `just fuzz <target>`.
+[package]
+name = "libtmux-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.85"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+libtmux = { path = "../crates/libtmux", features = ["unstable-fuzzing"] }
+tmux-workspace = { path = "../crates/tmux-workspace" }
+
+[[bin]]
+name = "control_line"
+path = "fuzz_targets/control_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "filter_expr_json"
+path = "fuzz_targets/filter_expr_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "workspace_yaml"
+path = "fuzz_targets/workspace_yaml.rs"
+test = false
+doc = false
+bench = false

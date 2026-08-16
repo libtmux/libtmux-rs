@@ -19,6 +19,10 @@ full.
 
 ### Added
 
+- Fuzz targets for the three parsers that read bytes this crate did not
+  write: the control-mode line parser, the filter-expression wire format, and
+  the workspace YAML loader. Run with `just fuzz <target>`; CI runs them
+  weekly.
 - `ControlLimits` and `ControlMode::attach_with_limits`, with
   `Error::ControlModeFrameTooLarge`. A control-mode line or response block
   could grow without bound, because unlike a subprocess dispatch the

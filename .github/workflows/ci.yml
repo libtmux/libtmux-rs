@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  # The fuzz lane is the only scheduled work. A parser is worth re-fuzzing
+  # because the corpus grows, not because the code changed.
+  schedule:
+    - cron: "37 4 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -73,6 +77,41 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo test --locked --workspace --all-targets --all-features
+
+  # A short fuzz pass over the parsers that read from outside the process. Kept
+  # brief and off the pull-request path: this finds things by running for a
+  # long time, so a weekly schedule is worth more than a gate nobody can wait
+  # for.
+  fuzz:
+    name: fuzz parsers
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [control_line, filter_expr_json, workspace_yaml]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cargo fuzz run "$TARGET" "fuzz/seeds/$TARGET" \
+            -- -max_total_time=300 -rss_limit_mb=4096
+      - name: Keep any crash that was found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
 
   # The slow lane. tmux's output and error wording change between releases, so
   # every supported one is built from source and runs the whole workspace.

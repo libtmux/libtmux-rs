@@ -48,6 +48,22 @@ swap-test *args:
 compat:
     bash scripts/test-tmux-format-compat.sh
 
+# Nightly and a sanitizer, so `fuzz/` is not a workspace member and this is not
+# part of `just check`. The seeds matter: random bytes rarely produce a line
+# beginning with `%`, so without them the control-mode target spends its whole
+# budget proving that arbitrary input is text.
+#
+# Fuzz one parser, seeded with the shapes it actually sees
+[group: 'test']
+fuzz target="control_line" seconds="60":
+    cargo +nightly fuzz run {{ target }} fuzz/corpus/{{ target }} fuzz/seeds/{{ target }} \
+        -- -max_total_time={{ seconds }} -rss_limit_mb=4096
+
+# List the fuzz targets
+[group: 'test']
+fuzz-list:
+    cargo +nightly fuzz list
+
 # Watch files and run tests on change (requires entr)
 [group: 'test']
 watch-test:

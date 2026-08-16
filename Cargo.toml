@@ -1,5 +1,7 @@
 [workspace]
 members = ["crates/*"]
+# Nightly-only and needs a sanitizer linker flag, so it is not a member.
+exclude = ["fuzz"]
 default-members = ["crates/*"]
 resolver = "3"
 
