@@ -1287,3 +1287,38 @@ client reports is the session's current window: every client attached to that
 session reports the same one, and one client changing it changes it for all of
 them. The pane follows from the window, because tmux keeps no per-client
 focus.
+
+### A socket path does not identify a tmux server
+
+`ServerIdentity` is a normalized socket path, and object equality includes it,
+so `%0` on two different sockets are two different panes. That is necessary and
+not sufficient: the same socket can host more than one server over time, and
+the crate could not tell them apart.
+
+Three tmux behaviours combine into a hazard rather than an inconvenience:
+
+- the socket file outlives the daemon -- it is still on disk after
+  `kill-server`, and a replacement binds the same path;
+- a replacement reissues ids from the start, so its first pane is `%0` too;
+- neither the path nor the id carries any mark of which daemon it belongs to.
+
+So a handle held across a restart resolves. It names a real object, and not
+the one it meant. A stale *read* is harmless; a stale `kill-pane` or
+`send-keys` lands on whatever now wears that id.
+
+`ServerGeneration` is `(pid, start_time)`, read with one `display-message`.
+The start time is what makes it a generation rather than a guess: a
+replacement daemon can be handed the pid of the one it replaced. Both are
+server-scoped -- `start_time` is identical across every session of one daemon,
+unlike `session_created` -- and both have been in the format catalog since
+3.2a with `ListScope::All`, so a later change can project them into every
+listing row and give each snapshot its generation at no extra round trip.
+
+Detection is deliberately explicit rather than automatic. Verifying on every
+dispatch would double the command count for a hazard that only exists when a
+caller holds a handle across a restart, so `require_generation` is something
+the caller reaches for around work that must not be misapplied.
+
+A cheaper token was ruled out by measurement rather than reasoning: the socket
+*inode* is unchanged across a restart, because tmux reuses the file rather
+than recreating it.

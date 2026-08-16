@@ -279,8 +279,8 @@ pub use snapshot::PaneProgressState;
 #[cfg(feature = "query")]
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{
-    PaneId, PaneTarget, ServerIdentity, SessionId, SessionName, SessionNameError, SessionTarget,
-    WindowId, WindowTarget,
+    PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName, SessionNameError,
+    SessionTarget, WindowId, WindowTarget,
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
 pub use window::{

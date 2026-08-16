@@ -263,6 +263,20 @@ pub enum Error {
         detail: IdParseError,
     },
 
+    /// A different tmux daemon now holds this endpoint.
+    ///
+    /// The socket path is unchanged, so nothing about the address says the
+    /// server was replaced. Ids are reissued from the start by the
+    /// replacement, so a handle held across the restart names an object that
+    /// exists and is not the one it meant.
+    #[error("the tmux server was replaced: expected {expected}, found {found}")]
+    ServerGenerationChanged {
+        /// The daemon the caller captured.
+        expected: crate::ServerGeneration,
+        /// The daemon answering now.
+        found: crate::ServerGeneration,
+    },
+
     /// A session of this name already exists.
     ///
     /// Classified rather than left as a generic refusal because it is the one
@@ -700,7 +714,8 @@ impl Error {
             Self::ObjectGone { .. } => ErrorKind::ObjectGone,
             Self::CommandFailed { .. }
             | Self::SessionExists { .. }
-            | Self::OptionRejected { .. } => ErrorKind::Refused,
+            | Self::OptionRejected { .. }
+            | Self::ServerGenerationChanged { .. } => ErrorKind::Refused,
             Self::Timeout { .. } => ErrorKind::Timeout,
             Self::ExecutableNotFound { .. }
             | Self::InvalidServerConfiguration { .. }
@@ -998,6 +1013,11 @@ impl fmt::Debug for Error {
                 .debug_struct("UnreadableFormatValue")
                 .field("format", format)
                 .field("detail", detail)
+                .finish(),
+            Self::ServerGenerationChanged { expected, found } => formatter
+                .debug_struct("ServerGenerationChanged")
+                .field("expected", expected)
+                .field("found", found)
                 .finish(),
             Self::OptionRejected { kind, detail } => formatter
                 .debug_struct("OptionRejected")

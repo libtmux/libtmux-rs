@@ -19,6 +19,11 @@ full.
 
 ### Added
 
+- `ServerGeneration`, `Server::generation`, `Server::require_generation`, and
+  `Error::ServerGenerationChanged`. A socket path does not identify a tmux
+  server: the socket outlives the daemon, a replacement binds the same path
+  and reissues ids from zero, so a handle held across a restart resolves to a
+  real object that is not the one it meant.
 - `Client::attached_session`, `attached_window`, and `attached_pane`, plus
   `Error::UnreadableFormatValue` for the case where tmux answers an id query
   with something that is not an id. The window and pane are the session's

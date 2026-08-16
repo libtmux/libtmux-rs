@@ -24,7 +24,8 @@ use crate::window::Window;
 use crate::{
     Command, CommandChain, CommandResult, EngineCapabilities, EnvironmentEntry, Error,
     IndexedHooks, ObjectKind, OptionValue, PaneId, ReleaseSuffix, ReleaseVersion, ReplaceMode,
-    ServerConfigurationErrorKind, ServerIdentity, SessionId, SparseValues, WindowId,
+    ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, SessionId, SparseValues,
+    WindowId,
 };
 
 /// The first tmux release that has a server access list.
@@ -2026,6 +2027,82 @@ impl Server {
             .await?
             .into_iter()
             .find(|session| session.name() == name))
+    }
+
+    /// Which tmux daemon is answering on this endpoint.
+    ///
+    /// A socket path does not identify a daemon. tmux reuses the socket file
+    /// across restarts -- it survives `kill-server`, and a replacement daemon
+    /// binds the same inode -- so an endpoint that looks unchanged can be a
+    /// different server holding different objects under the same ids. A pane
+    /// handle for `%0` taken before a restart addresses the *replacement's*
+    /// `%0` afterwards, which for a mutation is the wrong object rather than a
+    /// missing one.
+    ///
+    /// Capture this before work that must not be misapplied, and check it with
+    /// [`Self::require_generation`] before acting on a handle that has been
+    /// held across time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached, or answers with something
+    /// that is not a pid and a start time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    /// server.new_session("work").await?;
+    ///
+    /// let generation = server.generation().await?;
+    /// // Unchanged while the daemon is the same one.
+    /// server.require_generation(generation).await?;
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn generation(&self) -> Result<ServerGeneration, Error> {
+        // Both are server-scoped and available in every list profile since
+        // 3.2a. The start time is what defeats pid reuse: a replacement daemon
+        // can be handed the pid of the one it replaced.
+        let answer = self.format(None, "#{pid} #{start_time}").await?;
+        let text = answer.to_string_lossy();
+        let mut parts = text.split_whitespace();
+        let parsed = parts
+            .next()
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .zip(parts.next().and_then(|start| start.parse::<i64>().ok()));
+
+        let Some((pid, start_time)) = parsed else {
+            return Err(Error::UnreadableFormatValue {
+                format: "#{pid} #{start_time}",
+                detail: crate::IdParseError::new('#'),
+            });
+        };
+
+        Ok(ServerGeneration { pid, start_time })
+    }
+
+    /// Fail unless the daemon answering is still the one that was captured.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ServerGenerationChanged`] when a different daemon now
+    /// holds this endpoint, or a transport error when tmux cannot be reached.
+    pub async fn require_generation(&self, expected: ServerGeneration) -> Result<(), Error> {
+        let found = self.generation().await?;
+        if found == expected {
+            return Ok(());
+        }
+
+        Err(Error::ServerGenerationChanged { expected, found })
     }
 
     /// Find the session with this id.

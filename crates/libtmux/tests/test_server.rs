@@ -20,7 +20,9 @@ use std::process::{self, Child, Command as ProcessCommand, Stdio};
 use std::time::{Duration, Instant};
 
 use libtmux::Command;
-use libtmux::test::{TestServer, TestServerBuilder, TestServerError, TestServerErrorKind};
+use libtmux::test::{
+    TestServer, TestServerBuilder, TestServerError, TestServerErrorKind, retry_until,
+};
 use rustix::io::Errno;
 use rustix::process::{
     Pid, Signal, WaitOptions, getpgid, getpgrp, kill_process, test_kill_process, waitpid,
@@ -2073,5 +2075,87 @@ async fn a_sweep_reaps_a_fixture_whose_owner_is_gone() {
     assert!(
         !abandoned.exists(),
         "a fixture whose owner is gone does not survive a sweep",
+    );
+}
+
+/// A replacement daemon on the same socket is a different server, and saying
+/// so is the only thing standing between a stale handle and the wrong object.
+///
+/// tmux makes this easy to get wrong: the socket file survives `kill-server`,
+/// a replacement binds the same path, and ids restart from zero, so `%0`
+/// resolves in both daemons and names different panes.
+///
+/// This runs two daemons in turn on one socket, so it owns the directory
+/// rather than using `TestServer`, whose shutdown takes its fixture directory
+/// with it and would leave the second daemon nowhere to bind.
+#[tokio::test]
+async fn a_replacement_daemon_on_the_same_socket_is_a_different_generation() {
+    let root = Path::new("/tmp/libtmux-rs-test").join("generation-reuse");
+    fs::create_dir_all(&root).expect("the fixture root is writable");
+    let socket = root.join("s");
+    let _ = fs::remove_file(&socket);
+
+    let server = libtmux::Server::builder()
+        .socket_path(&socket)
+        .build()
+        .expect("a server on this socket");
+
+    let outcome = async {
+        server.new_session("first").await?;
+        let first = server.generation().await?;
+
+        // Same daemon: the check is a no-op.
+        server.require_generation(first).await?;
+        let first_pane = server
+            .try_panes()
+            .await?
+            .first()
+            .map(|pane| pane.id().to_string());
+
+        server.kill().await?;
+        retry_until(Duration::from_secs(5), async || !server.is_alive().await)
+            .await
+            .expect("the first daemon goes away");
+
+        server.new_session("second").await?;
+        let second = server.generation().await?;
+        let second_pane = server
+            .try_panes()
+            .await?
+            .first()
+            .map(|pane| pane.id().to_string());
+
+        Ok::<_, libtmux::Error>((
+            first,
+            second,
+            first_pane,
+            second_pane,
+            server.require_generation(first).await,
+        ))
+    }
+    .await;
+
+    let _ = server.kill().await;
+    let _ = fs::remove_dir_all(&root);
+
+    let (first, second, first_pane, second_pane, checked) =
+        outcome.expect("both daemons run on the same socket");
+
+    // The hazard this guards: the id is identical across the replacement, so
+    // an id alone cannot tell a caller it is addressing a different object.
+    assert_eq!(
+        first_pane, second_pane,
+        "both daemons issue the same first pane id, which is why the id is not enough",
+    );
+    assert_ne!(
+        first, second,
+        "a replacement daemon is a different generation"
+    );
+
+    let error = checked.expect_err("the replacement is not the captured daemon");
+    assert!(
+        matches!(&error, libtmux::Error::ServerGenerationChanged { expected, found }
+            if *expected == first && *found == second),
+        "the error names both daemons, got {error:?}",
     );
 }

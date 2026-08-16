@@ -206,6 +206,46 @@ define_target!(
 /// The structural identity of one tmux server endpoint.
 ///
 /// Equality and hashing use the captured absolute socket path. Debug output
+/// Which tmux daemon is answering on an endpoint.
+///
+/// [`ServerIdentity`] answers "where", and that is not enough to answer
+/// "which": tmux reuses the socket file across restarts, so a replacement
+/// daemon is indistinguishable from the one it replaced by path alone. It also
+/// reissues ids from the start, so the replacement's first pane is `%0` too.
+///
+/// Holding a handle across a possible restart is therefore a correctness
+/// question rather than a liveness one. A stale read fails harmlessly; a stale
+/// *mutation* lands on whatever now wears that id.
+///
+/// The pid alone would not do. A replacement daemon can be handed the pid of
+/// the one it replaced, so the start time is what makes this a generation
+/// rather than a guess.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ServerGeneration {
+    pub(crate) pid: u32,
+    pub(crate) start_time: i64,
+}
+
+impl ServerGeneration {
+    /// The tmux server process id.
+    #[must_use]
+    pub const fn pid(self) -> u32 {
+        self.pid
+    }
+
+    /// When that server started, as tmux reports it.
+    #[must_use]
+    pub const fn start_time(self) -> i64 {
+        self.start_time
+    }
+}
+
+impl fmt::Display for ServerGeneration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "pid {} started {}", self.pid, self.start_time)
+    }
+}
+
 /// redacts that path so diagnostics do not disclose local filesystem details.
 #[derive(Clone)]
 pub struct ServerIdentity {
