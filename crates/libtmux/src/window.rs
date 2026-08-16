@@ -61,6 +61,29 @@ impl PaneDirection {
 }
 
 /// [`Window::index`] and [`Window::is_active`], read the link.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::SplitDirection;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+///
+/// // Splitting is detached by default, so focus stays where it was.
+/// window.split(SplitDirection::Below).await?;
+/// assert_eq!(window.panes().await?.len(), 2);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct Window {
     core: Arc<Core>,
@@ -1511,6 +1534,33 @@ impl ResizeDirection {
 ///
 /// A bare [`SplitDirection`] is accepted wherever this is:
 /// `window.split(SplitDirection::Below)`.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{SplitDirection, SplitOptions};
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("split").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+///
+/// // Splitting leaves focus where it was unless asked otherwise, so a caller
+/// // that wants the new pane selected says so.
+/// let pane = window
+///     .split(SplitOptions::new(SplitDirection::Right).select())
+///     .await?;
+/// assert_eq!(window.active_pane().await?.map(|active| active.id().to_string()),
+///            Some(pane.id().to_string()));
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[must_use = "options describe a split but do not perform one"]
 #[derive(Clone, Debug)]
 pub struct SplitOptions {

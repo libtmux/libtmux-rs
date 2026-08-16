@@ -186,6 +186,29 @@ impl PromptKind {
 /// [`find_window`]: Server::find_window
 /// [`display_panes`]: Server::display_panes
 /// [`cmd`]: Server::cmd
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::test::TestServer;
+///
+/// // In your own code this is `libtmux::Server::new()?`; the fixture keeps
+/// // the example off whichever tmux you are actually using.
+/// let guard = TestServer::new().await?;
+/// let server = guard.server();
+///
+/// server.new_session("work").await?;
+/// assert_eq!(server.sessions().await?.len(), 1);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct Server {
     core: Arc<Core>,
@@ -2720,6 +2743,31 @@ mod tests {
 ///
 /// A bare name is accepted wherever this is, so the common case stays short:
 /// `server.new_session("work")`.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::NewSessionOptions;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let server = guard.server();
+///
+/// let session = server
+///     .new_session(NewSessionOptions::new("work").window_name("editor"))
+///     .await?;
+///
+/// let window = session.active_window().await?.expect("a session has a window");
+/// assert_eq!(window.name().to_string_lossy(), "editor");
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[must_use = "options describe a session but do not create one"]
 #[derive(Clone, Debug)]
 pub struct NewSessionOptions {

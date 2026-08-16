@@ -24,6 +24,31 @@ use crate::{Command, CommandResult, Error, IndexedHooks, ObjectKind, OptionValue
 /// A pane belongs to exactly one window, but that window can be linked into
 /// several sessions. The handle retains the link it was discovered through so
 /// traversal back up the hierarchy lands where the caller came from.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+/// let pane = window.active_pane().await?.expect("a window has a pane");
+///
+/// pane.send_keys("echo hello").await?;
+/// pane.send_key_names(["Enter"]).await?;
+///
+/// // Capture returns `TmuxText`, because a pane can print any bytes.
+/// let lines = pane.capture().await?;
+/// assert!(!lines.is_empty());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct Pane {
     core: Arc<Core>,
@@ -1252,6 +1277,32 @@ impl fmt::Display for Pane {
 ///
 /// Line numbers follow tmux: zero is the top of the visible screen, negative
 /// numbers are scrollback, and positive numbers run down the screen.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::CaptureOptions;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("capture").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+/// let pane = window.active_pane().await?.expect("a window has a pane");
+///
+/// // The constructors name the two questions people actually ask, rather
+/// // than making a caller remember that zero is the top of the screen.
+/// let visible = pane.capture_with(CaptureOptions::visible()).await?;
+/// let everything = pane.capture_with(CaptureOptions::history()).await?;
+/// assert!(everything.len() >= visible.len());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[must_use = "options describe a capture but do not perform one"]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct CaptureOptions {

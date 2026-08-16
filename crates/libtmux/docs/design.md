@@ -1534,3 +1534,27 @@ bounded queue rather than a fork bomb.
 An agent is the caller most able to ask for too much at once and the least
 able to notice that it did, which is the argument for the limits being on by
 default here rather than something an operator remembers to set.
+
+### Example coverage is measured, because the gap is invisible
+
+"Every public item has a runnable example" was stated as a goal and never
+counted. Counting it found 15 of the 67 types a caller reaches through
+`use libtmux::X` had no example of their own -- including `Server`, `Session`,
+`Window`, `Pane`, and `Error`, which are the pages someone arriving from a
+search lands on first.
+
+A type whose *methods* are well documented still leaves that person with
+nothing to copy, which is why the measure is per type rather than per item:
+`Pane::id` inherits the example on `Pane`, and counting accessors separately
+would drown the signal in items nobody needs an example for.
+
+`just example-coverage` reports it. The number is 24 of 67 and is expected to
+keep moving, which is the point of having it.
+
+Writing them was worth more than the count suggests. Three doctests failed on
+first run and each was a belief this crate held wrongly: `split` is detached by
+default, so an example that assumed focus followed the new pane was wrong; a
+new session does not copy the server environment; and `status` is not a flag,
+because tmux accepts `on`, `off`, and `2` through `5` for it. That last one is
+the argument for generating the option schema from tmux's own table rather
+than inferring a type from the value, and the example now says so.

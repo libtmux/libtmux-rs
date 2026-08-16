@@ -26,6 +26,41 @@ use crate::{Command, CommandResult, Error, IndexedHooks, ObjectKind, OptionValue
 /// tmux keeps two different things under a name: a value, and a mark saying a
 /// process started here must *not* inherit the name at all. They are not the
 /// same as absence, and they are not the same as each other.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::EnvironmentEntry;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("env").await?;
+///
+/// session.set_environment("EDITOR", "hx").await?;
+/// assert!(matches!(
+///     session.environment("EDITOR").await?,
+///     Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"hx",
+/// ));
+///
+/// // Hiding a name is not unsetting it: a process started here is handed the
+/// // name *absent*, which tmux still records and reports.
+/// session.hide_environment("EDITOR").await?;
+/// assert_eq!(
+///     session.environment("EDITOR").await?,
+///     Some(EnvironmentEntry::Removed),
+/// );
+///
+/// // Never set at all is the third thing, and the only one that is `None`.
+/// assert_eq!(session.environment("NEVER_SET").await?, None);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EnvironmentEntry {
     /// tmux holds this value, exactly as stored.
@@ -45,6 +80,27 @@ pub enum EnvironmentEntry {
 /// consults tmux is `async`.
 ///
 /// [`Server`]: crate::Server
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+///
+/// // The name is read from the snapshot this handle owns, so it costs
+/// // nothing; asking tmux for the windows is `async` because it does.
+/// assert_eq!(session.name().to_string_lossy(), "work");
+/// assert_eq!(session.windows().await?.len(), 1);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct Session {
     core: Arc<Core>,

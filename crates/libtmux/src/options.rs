@@ -115,6 +115,36 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
 /// This is what [`crate::Server::typed_option`] and its per-object siblings
 /// return, so a caller reading `status` gets a flag without deciding for
 /// itself that `on` means one.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::OptionValue;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let server = guard.server();
+/// server.new_session("typed").await?;
+///
+/// // `mouse` is a flag, so `on` arrives as one.
+/// let mouse = server.typed_global_option("mouse").await?.expect("mouse is set");
+/// assert!(matches!(mouse, OptionValue::Flag(false)));
+///
+/// // `status` also reads `on`, and is *not* a flag: tmux accepts `on`, `off`,
+/// // and `2` through `5`. Inferring the type from the value would call this a
+/// // boolean and then fail on a value that is not one, which is why the
+/// // schema is generated from tmux's own option table instead.
+/// let status = server.typed_global_option("status").await?.expect("status is set");
+/// assert!(matches!(status, OptionValue::Text(_)));
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OptionValue {

@@ -48,6 +48,17 @@ swap-test *args:
 compat:
     bash scripts/test-tmux-format-compat.sh
 
+# A type with well-documented methods and no example of its own still leaves
+# someone who arrived from a search with nothing to copy, and that gap is
+# invisible unless it is counted.
+#
+# Report which crate-root types lack a runnable example
+[group: 'docs']
+example-coverage:
+    cargo +nightly rustdoc -p libtmux --all-features \
+        -- -Zunstable-options --output-format json > /dev/null
+    python3 scripts/example-coverage.py target/doc/libtmux.json
+
 # Regenerate the recorded public API surface
 #
 # Needs nightly for rustdoc's JSON output, so it is not part of `just check`.

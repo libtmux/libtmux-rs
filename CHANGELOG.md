@@ -19,6 +19,10 @@ full.
 
 ### Added
 
+- Runnable examples on `Server`, `Session`, `Window`, `Pane`, `OptionValue`,
+  `EnvironmentEntry`, `SplitOptions`, `NewSessionOptions`, and
+  `CaptureOptions`, plus `just example-coverage` to report which crate-root
+  types still lack one.
 - `tmux-mcp` bounds the tmux side of an agent's fan-out: four dispatches in
   flight and an output budget on the `Server` it builds. Its existing caps
   bound what it returns, which does not unspend memory the core already
