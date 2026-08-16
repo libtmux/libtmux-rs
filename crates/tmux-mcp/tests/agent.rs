@@ -2139,10 +2139,66 @@ async fn real_tmux_compat_capturing_the_last_command_says_whether_it_could() {
                 "the answer is shorter than the history it was cut from",
             );
         }
-        // Below tmux 3.7 there is no `capture-pane -F` to ask.
-        "unsupported" => assert!(last["lines"].as_u64().expect("lines") > 0),
+        // Below tmux 3.7 there is no `capture-pane -F` to ask, and a pane
+        // whose shell marks nothing has no run to find. Either way the answer
+        // must stay bounded: falling back to the history would return
+        // everything the pane ever wrote.
+        "unsupported" | "absent" => assert!(
+            last["lines"].as_u64().expect("lines") < whole["lines"].as_u64().expect("lines"),
+            "the fallback is the screen, not the history: {last:?}",
+        ),
         other => panic!("unexpected marks {other:?}"),
     }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane whose shell marks nothing must not answer a request for one
+/// command with everything it ever wrote. Found by watching a real agent ask
+/// for the last command and receive two thousand lines.
+#[tokio::test]
+async fn an_unmarked_pane_falls_back_to_the_screen_not_the_history() {
+    let (guard, tools, pane) = typing_fixture("unmarked").await;
+
+    tools
+        .run_command(
+            args(serde_json::json!({
+                "pane": pane,
+                "command": "seq 1 2000",
+                "seconds": 30,
+            })),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("the command runs");
+
+    let last = json(
+        tools
+            .capture_pane(args(
+                serde_json::json!({"pane": pane, "last_command": true}),
+            ))
+            .await
+            .expect("the capture runs"),
+    );
+    let history = json(
+        tools
+            .capture_pane(args(serde_json::json!({"pane": pane, "history": true})))
+            .await
+            .expect("the capture runs"),
+    );
+
+    // A default shell emits no OSC 133, so this is the fallback path.
+    assert_eq!(last["marks"], "absent");
+    let lines = last["lines"].as_u64().expect("lines");
+    assert!(
+        lines < history["lines"].as_u64().expect("lines"),
+        "the fallback returned {lines} lines against a history of {}",
+        history["lines"],
+    );
+    assert!(
+        lines <= 200,
+        "the fallback is a screen, so it is bounded: {lines} lines",
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

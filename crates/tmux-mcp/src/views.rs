@@ -162,7 +162,8 @@ pub enum Marks {
     Present,
     /// tmux has the marks but this pane has none, because its shell does not
     /// emit OSC 133. fish does; bash and zsh need shell integration. The
-    /// whole history came back instead.
+    /// visible screen came back instead -- not the history, which would
+    /// answer a request for one command with everything the pane ever wrote.
     Absent,
     /// This tmux predates `capture-pane -F`, which arrived in 3.7. The
     /// visible screen came back instead.

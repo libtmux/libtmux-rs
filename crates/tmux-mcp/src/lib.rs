@@ -1189,10 +1189,10 @@ pub struct CapturePaneArgs {
     /// Return only the last command's output, when the shell marks its
     /// prompts.
     ///
-    /// Answers far less than the screen or the history, because it starts
-    /// where the last command's output began. Reports `marks: "absent"` and
-    /// falls back when the pane's shell does not mark its prompts, which is
-    /// the common case outside fish.
+    /// Answers far less than the history, because it starts where the last
+    /// command's output began. When the pane's shell does not mark its
+    /// prompts -- fish does, bash and zsh do not -- this reports
+    /// `marks: "absent"` and returns the visible screen instead.
     #[serde(default)]
     pub last_command: bool,
     /// Start at this line. Zero is the top of the screen, negative is
@@ -1804,10 +1804,17 @@ impl TmuxTools {
                         Marks::Present,
                     )
                 }
+                // Falling back to the history would answer a request for one
+                // command's output with everything the pane ever printed,
+                // which is the most expensive answer available. The visible
+                // screen is the bounded approximation.
                 None => (
-                    lines
+                    target
+                        .capture_with(CaptureOptions::visible())
+                        .await
+                        .map_err(|e| tmux_error(&e))?
                         .iter()
-                        .map(|line| line.text.to_string_lossy().into_owned())
+                        .map(|line| line.to_string_lossy().into_owned())
                         .collect(),
                     Marks::Absent,
                 ),
