@@ -53,6 +53,11 @@ full.
   `tools/list`. That budget is why adding a tool is a decision.
 - `what_changed`, reporting which windows have written since the timestamp it
   handed back, so re-orienting costs one call rather than a capture per pane.
+- `run_command`, `wait_for_text` and `wait_for_idle` report progress every
+  five seconds to a client that asked for it. Measured before it was built:
+  Codex sends a `progressToken` on every `tools/call`, so this is consumed
+  rather than merely published. A client that sends no token pays nothing.
+
 - `Window::last_activity`. tmux stamps it on every byte a pane writes, unlike
   `has_activity`, which needs `monitor-activity` and is off by default.
 

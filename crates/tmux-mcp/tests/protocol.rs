@@ -1311,3 +1311,108 @@ async fn an_option_value_may_be_written_as_a_number_or_a_flag() {
     wire.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// A long call must say it is still going, or a client cannot tell it from a
+/// server that has stopped answering. MCP sends progress only to a request
+/// that asked for it, so the test asks and then requires it.
+#[tokio::test]
+async fn a_long_wait_reports_progress_to_a_client_that_asked() {
+    use std::sync::{Arc, Mutex};
+
+    use rmcp::model::RequestParamsMeta as _;
+    use rmcp::model::{ClientInfo, ProgressToken};
+
+    /// A client that records the progress notifications it is sent.
+    #[derive(Clone, Default)]
+    struct Watcher {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl rmcp::ClientHandler for Watcher {
+        fn get_info(&self) -> ClientInfo {
+            ClientInfo::default()
+        }
+
+        async fn on_progress(
+            &self,
+            params: rmcp::model::ProgressNotificationParam,
+            _: rmcp::service::NotificationContext<RoleClient>,
+        ) {
+            if let Some(message) = params.message {
+                self.seen.lock().expect("the lock holds").push(message);
+            }
+        }
+    }
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = TmuxTools::builder(guard.server().clone()).build();
+
+    let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
+    let server = tokio::spawn(async move {
+        let service = serve_server(tools, server_transport)
+            .await
+            .expect("server starts");
+        let _ = service.waiting().await;
+    });
+    let watcher = Watcher::default();
+    let client = watcher
+        .clone()
+        .serve(client_transport)
+        .await
+        .expect("client connects");
+
+    let session = client
+        .call_tool({
+            let mut params = CallToolRequestParams::default();
+            params.name = "create_session".into();
+            params.arguments = json!({"name": "progress"}).as_object().cloned();
+            params
+        })
+        .await
+        .expect("session is created");
+    let _ = session;
+
+    let panes = client
+        .call_tool({
+            let mut params = CallToolRequestParams::default();
+            params.name = "list_panes".into();
+            params.arguments = json!({}).as_object().cloned();
+            params
+        })
+        .await
+        .expect("panes are listed");
+    let listed: Value = serde_json::to_value(panes.structured_content).expect("json");
+    let pane = listed["panes"][0]["id"]
+        .as_str()
+        .expect("a pane id")
+        .to_owned();
+
+    // A wait for something that never comes, long enough to tick twice.
+    let mut params = CallToolRequestParams::default();
+    params.name = "wait_for_text".into();
+    params.arguments = json!({
+        "pane": pane,
+        "patterns": ["this-never-appears"],
+        "seconds": 12,
+    })
+    .as_object()
+    .cloned();
+    params.set_progress_token(ProgressToken(rmcp::model::NumberOrString::Number(1)));
+
+    let answer = client.call_tool(params).await.expect("the wait answers");
+    assert!(answer.is_error != Some(true), "the wait itself succeeded");
+
+    let seen = watcher.seen.lock().expect("the lock holds").clone();
+    assert!(
+        seen.len() >= 2,
+        "a twelve-second wait ticked more than once: {seen:?}",
+    );
+    assert!(
+        seen.iter().all(|line| line.contains("still watching")),
+        "each tick says what it is still doing: {seen:?}",
+    );
+
+    let _ = client.cancel().await;
+    server.abort();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

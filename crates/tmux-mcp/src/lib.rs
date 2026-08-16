@@ -91,6 +91,7 @@ pub use exec::{IdleOutcome, IdleView, RunOutcome, RunView, WaitOutcome, WaitView
 pub use tail::Cursor;
 pub use views::*;
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -495,6 +496,102 @@ impl TmuxTools {
         )]
     }
 }
+
+/// Reports how a long call is getting on, when the client asked to be told.
+///
+/// MCP sends progress only to a request that carried a `progressToken`, so a
+/// client that did not ask pays nothing: there is no token, and the notifier
+/// does not exist. Without this a sixty-second wait is indistinguishable from
+/// a server that has stopped answering.
+#[derive(Clone, Debug)]
+struct Progress {
+    peer: rmcp::service::Peer<rmcp::RoleServer>,
+    token: rmcp::model::ProgressToken,
+}
+
+/// Whoever asked to be told how a long call is getting on.
+///
+/// Extracted from the request rather than passed, so a tool declares that it
+/// reports progress by taking one. It is empty unless the client sent a
+/// progress token, and an empty one can be built directly -- which is what
+/// lets these tools be driven without a live client.
+#[derive(Clone, Debug, Default)]
+pub struct Reporter(Option<Progress>);
+
+impl Reporter {
+    /// A reporter with nobody to report to.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self(None)
+    }
+}
+
+impl<C> rmcp::handler::server::common::FromContextPart<C> for Reporter
+where
+    C: rmcp::handler::server::common::AsRequestContext,
+{
+    fn from_context_part(context: &mut C) -> Result<Self, ErrorData> {
+        let context = context.as_request_context();
+        Ok(Self(context.meta.get_progress_token().map(|token| {
+            Progress {
+                peer: context.peer.clone(),
+                token,
+            }
+        })))
+    }
+}
+
+impl Progress {
+    /// Say what is happening now.
+    ///
+    /// `so_far` is seconds elapsed, because the protocol asks for a number
+    /// that rises every time and a wait has no other measure of its own
+    /// progress: it does not know how long it will take.
+    ///
+    /// Best-effort: a client that has gone away is the caller's problem to
+    /// notice through its own request, not this notification's to report.
+    async fn say(&self, so_far: f64, message: impl Into<String>) {
+        let mut param = rmcp::model::ProgressNotificationParam::new(self.token.clone(), so_far);
+        param.message = Some(message.into());
+        let _ = self.peer.notify_progress(param).await;
+    }
+}
+
+/// Report progress every so often while a future runs.
+///
+/// Wraps rather than threads a reporter through each primitive: the useful
+/// thing to say about a wait is that it is still waiting, and how long for,
+/// which needs nothing from inside it.
+async fn reporting<T>(reporter: Reporter, what: &str, work: impl Future<Output = T>) -> T {
+    let Some(progress) = reporter.0 else {
+        return work.await;
+    };
+
+    let began = tokio::time::Instant::now();
+    let ticker = async {
+        let mut every = tokio::time::interval(PROGRESS_EVERY);
+        // The first tick is immediate, and "0 seconds in" says nothing.
+        every.tick().await;
+        loop {
+            every.tick().await;
+            let elapsed = began.elapsed().as_secs();
+            progress
+                .say(
+                    f64::from(u32::try_from(elapsed).unwrap_or(u32::MAX)),
+                    format!("{what}, {elapsed}s so far"),
+                )
+                .await;
+        }
+    };
+
+    tokio::select! {
+        outcome = work => outcome,
+        () = ticker => unreachable!("the ticker loops forever"),
+    }
+}
+
+/// How often a long call says it is still going.
+const PROGRESS_EVERY: Duration = Duration::from_secs(5);
 
 /// Report a job id this server does not hold.
 ///
@@ -2708,6 +2805,7 @@ impl TmuxTools {
             suppress_history,
         }): Parameters<RunCommandArgs>,
         cancelled: tokio_util::sync::CancellationToken,
+        reporter: Reporter,
     ) -> Result<Json<RunView>, ErrorData> {
         let target = self.find_pane(&pane).await?;
         // A pane in copy mode does not pass keys to the shell, so the command
@@ -2719,12 +2817,16 @@ impl TmuxTools {
                      reaching the shell. Leave it first."
             )));
         }
-        let view = exec::run_command(
-            &target,
-            &command,
-            Self::budget(seconds),
-            suppress_history,
-            &cancelled,
+        let view = reporting(
+            reporter,
+            "still running",
+            exec::run_command(
+                &target,
+                &command,
+                Self::budget(seconds),
+                suppress_history,
+                &cancelled,
+            ),
         )
         .await
         .map_err(|e| tmux_error(&e))?;
@@ -3370,6 +3472,7 @@ impl TmuxTools {
             seconds,
         }): Parameters<WaitForIdleArgs>,
         cancelled: tokio_util::sync::CancellationToken,
+        reporter: Reporter,
     ) -> Result<Json<IdleView>, ErrorData> {
         let target = self.find_pane(&pane).await?;
         // Clamped against the total, because quiet longer than the deadline
@@ -3377,9 +3480,13 @@ impl TmuxTools {
         let budget = Self::budget(seconds);
         let quiet = Duration::from_secs(quiet_seconds.unwrap_or(2).max(1)).min(budget);
 
-        let view = exec::wait_for_idle(&target, quiet, budget, &cancelled)
-            .await
-            .map_err(|e| tmux_error(&e))?;
+        let view = reporting(
+            reporter,
+            "still waiting for the pane to go quiet",
+            exec::wait_for_idle(&target, quiet, budget, &cancelled),
+        )
+        .await
+        .map_err(|e| tmux_error(&e))?;
 
         Ok(Json(view))
     }
@@ -3410,6 +3517,7 @@ impl TmuxTools {
             seconds,
         }): Parameters<WaitForTextArgs>,
         cancelled: tokio_util::sync::CancellationToken,
+        reporter: Reporter,
     ) -> Result<Json<WaitView>, ErrorData> {
         let compile = |sources: Vec<String>| {
             Patterns::compile(&sources, regex, match_case).map_err(|(source, reason)| {
@@ -3420,9 +3528,13 @@ impl TmuxTools {
         let stops = compile(stop.unwrap_or_default())?;
 
         let target = self.find_pane(&pane).await?;
-        let view = exec::wait_for_text(&target, &wanted, &stops, Self::budget(seconds), &cancelled)
-            .await
-            .map_err(|e| tmux_error(&e))?;
+        let view = reporting(
+            reporter,
+            "still watching for the pattern",
+            exec::wait_for_text(&target, &wanted, &stops, Self::budget(seconds), &cancelled),
+        )
+        .await
+        .map_err(|e| tmux_error(&e))?;
 
         Ok(Json(view))
     }

@@ -393,6 +393,7 @@ async fn running_a_command_reports_its_output_and_status() {
                     "seconds": 20
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the command runs"),
@@ -428,6 +429,7 @@ async fn a_failing_command_reports_its_status_rather_than_an_error() {
                     "seconds": 20
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("a failing command is still an answer"),
@@ -446,6 +448,7 @@ async fn a_failing_command_reports_its_status_rather_than_an_error() {
                     "seconds": 20
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the shell is still there"),
@@ -478,6 +481,7 @@ async fn a_command_that_outlives_its_deadline_says_so() {
                     "seconds": 4
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the deadline is an answer, not a failure"),
@@ -506,6 +510,7 @@ async fn a_deadline_stops_the_waiting_rather_than_the_command() {
                     "seconds": 4
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the deadline is an answer"),
@@ -524,6 +529,7 @@ async fn a_deadline_stops_the_waiting_rather_than_the_command() {
                     "seconds": 3
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("a busy pane is an answer, not a failure"),
@@ -572,6 +578,7 @@ async fn a_deadline_stops_the_waiting_rather_than_the_command() {
                     "seconds": 25
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the pane comes back"),
@@ -598,6 +605,7 @@ async fn waiting_for_text_sees_what_a_pane_writes() {
                         "seconds": 20
                     })),
                     CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
                 )
                 .await
         })
@@ -638,6 +646,7 @@ async fn a_stop_pattern_ends_a_wait_early() {
                         "seconds": 20
                     })),
                     CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
                 )
                 .await
         })
@@ -671,6 +680,7 @@ async fn a_wait_says_when_its_pattern_was_already_on_screen() {
                 "seconds": 20
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .expect("the command runs");
@@ -684,6 +694,7 @@ async fn a_wait_says_when_its_pattern_was_already_on_screen() {
                     "seconds": 1
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("a result"),
@@ -714,6 +725,7 @@ async fn a_regular_expression_wait_compiles_or_explains_itself() {
                 "seconds": 1
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .map(|_| ())
@@ -751,6 +763,7 @@ async fn capture_since_returns_only_what_is_new() {
                 "seconds": 20
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .expect("the command runs");
@@ -1084,6 +1097,7 @@ async fn searching_finds_which_pane_is_showing_something() {
                 "seconds": 20
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .expect("the command runs");
@@ -1132,6 +1146,7 @@ async fn a_snapshot_carries_the_state_a_capture_leaves_out() {
                 "seconds": 20
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .expect("the command runs");
@@ -1374,6 +1389,7 @@ async fn abandoning_a_wait_closes_the_connection_it_opened() {
                         "seconds": 600
                     })),
                     CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
                 )
                 .await
         })
@@ -1405,6 +1421,7 @@ async fn abandoning_a_wait_closes_the_connection_it_opened() {
                     "seconds": 20
                 })),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the pane still answers"),
@@ -1432,6 +1449,7 @@ async fn abandoning_a_run_closes_the_connection_it_opened() {
                         "seconds": 600
                     })),
                     CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
                 )
                 .await
         })
@@ -1822,6 +1840,7 @@ async fn waiting_for_quiet_distinguishes_a_settled_pane_from_a_busy_one() {
             .wait_for_idle(
                 args(serde_json::json!({"pane": pane, "quiet_seconds": 1, "seconds": 20})),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the wait runs"),
@@ -1844,6 +1863,7 @@ async fn waiting_for_quiet_distinguishes_a_settled_pane_from_a_busy_one() {
             .wait_for_idle(
                 args(serde_json::json!({"pane": pane, "quiet_seconds": 2, "seconds": 5})),
                 CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
             )
             .await
             .expect("the wait runs"),
@@ -2014,6 +2034,7 @@ async fn clearing_a_pane_shrinks_what_the_next_capture_returns() {
                 "seconds": 20,
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .expect("the command runs");
@@ -2095,6 +2116,7 @@ async fn real_tmux_compat_capturing_the_last_command_says_whether_it_could() {
                 "seconds": 20,
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .expect("the first command runs");
@@ -2168,6 +2190,7 @@ async fn an_unmarked_pane_falls_back_to_the_screen_not_the_history() {
                 "seconds": 30,
             })),
             CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
         )
         .await
         .expect("the command runs");
