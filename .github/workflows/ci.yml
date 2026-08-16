@@ -78,6 +78,25 @@ jobs:
 
       - run: cargo test --locked --workspace --all-targets --all-features
 
+  # There is no automated semver gate while every version is a prerelease:
+  # `cargo-semver-checks` skips every lint on a prerelease-to-prerelease step
+  # and then reports success. This does not judge whether a change is allowed,
+  # it says one happened, which is what review needs.
+  api:
+    name: public API surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+      - run: just api-check
+
   # A short fuzz pass over the parsers that read from outside the process. Kept
   # brief and off the pull-request path: this finds things by running for a
   # long time, so a weekly schedule is worth more than a gate nobody can wait

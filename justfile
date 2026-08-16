@@ -48,6 +48,34 @@ swap-test *args:
 compat:
     bash scripts/test-tmux-format-compat.sh
 
+# Regenerate the recorded public API surface
+#
+# Needs nightly for rustdoc's JSON output, so it is not part of `just check`.
+[group: 'release']
+api:
+    cargo +nightly rustdoc -p libtmux --all-features \
+        -- -Zunstable-options --output-format json
+    python3 scripts/public-api.py target/doc/libtmux.json \
+        > crates/libtmux/docs/public-api.txt
+
+# There is no automated semver gate while every version is a prerelease, so
+# this is what makes a change to the surface visible. It does not judge whether
+# a change is allowed; it says one happened.
+#
+# Report any change to the public API surface
+[group: 'release']
+api-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo +nightly rustdoc -p libtmux --all-features \
+        -- -Zunstable-options --output-format json > /dev/null
+    python3 scripts/public-api.py target/doc/libtmux.json > /tmp/libtmux-api-now.txt
+    if ! diff -u crates/libtmux/docs/public-api.txt /tmp/libtmux-api-now.txt; then
+        printf '\npublic API changed. Run `just api` and commit the result.\n' >&2
+        exit 1
+    fi
+    printf 'public API unchanged\n'
+
 # Nightly and a sanitizer, so `fuzz/` is not a workspace member and this is not
 # part of `just check`. The seeds matter: random bytes rarely produce a line
 # beginning with `%`, so without them the control-mode target spends its whole

@@ -1494,3 +1494,25 @@ which nothing but `fuzz/` turns on.
 CI runs them weekly rather than per-push. This kind of testing finds things by
 running for a long time, so a schedule is worth more than a gate nobody can
 wait for, and a crash is uploaded as an artifact rather than left in a log.
+
+### The public surface is recorded, because nothing else reports drift
+
+Dropping the `semver` recipe left no mechanical account of what the API does
+between releases. `cargo-semver-checks` could not provide one -- it skips every
+lint on a prerelease-to-prerelease step and then reports success -- and human
+review does not reliably notice a method that quietly changed shape.
+
+`crates/libtmux/docs/public-api.txt` records every public item, one per line,
+generated from rustdoc's JSON by `scripts/public-api.py`. `just api`
+regenerates it and `just api-check` fails when the tree and the record
+disagree, naming what moved.
+
+It is deliberately not a semver oracle. It says a change happened, and leaves
+whether that change is allowed to the person reading the diff -- which is the
+right division while the answer is "yes, it is an alpha".
+
+Built from rustdoc rather than a separate tool because the only thing it then
+needs is the nightly the fuzz targets already require. Methods, fields, and
+variants have no standalone path in that JSON, so they are attributed to the
+type that owns them: an unqualified `sessions` would say nothing about which
+handle it belongs to, and a move between types would not show at all.

@@ -95,6 +95,12 @@ against every supported release.
   workspace. Version-specific behaviour belongs in a `real_tmux_compat_` test,
   not in a comment.
 
+**The public surface is recorded.** `crates/libtmux/docs/public-api.txt`
+lists every public item. `just api` regenerates it; `just api-check` fails
+when the tree disagrees. Adding or changing public API means committing the
+regenerated file, and the diff is the review artefact -- there is no semver
+gate while the crates are prerelease.
+
 **Parsers that read from outside are fuzzed.** The control-mode line parser,
 the filter-expression wire format, and the workspace YAML loader each have a
 target under `fuzz/`, reached with `just fuzz <target>`. It is not a workspace

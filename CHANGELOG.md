@@ -19,6 +19,10 @@ full.
 
 ### Added
 
+- A recorded public API surface at `crates/libtmux/docs/public-api.txt`,
+  with `just api` to regenerate and `just api-check` to fail on drift.
+  Dropping the vacuous `semver` recipe left nothing reporting what the API
+  does between releases.
 - Fuzz targets for the three parsers that read bytes this crate did not
   write: the control-mode line parser, the filter-expression wire format, and
   the workspace YAML loader. Run with `just fuzz <target>`; CI runs them
