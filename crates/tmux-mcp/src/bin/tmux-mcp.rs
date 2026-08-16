@@ -2,11 +2,28 @@
 
 use std::process::ExitCode;
 
-use libtmux::Server;
+use libtmux::{DispatchLimits, OutputLimits, Server};
 use rmcp::ServiceExt as _;
 use rmcp::transport::stdio;
 use tmux_mcp::cli::{HELP, Options, Stop};
 use tmux_mcp::{Safety, TmuxTools};
+
+/// How many tmux commands this server runs at once.
+///
+/// Small on purpose. tmux serializes commands on its own thread, so more
+/// clients buy queueing rather than throughput, and an agent that fans out
+/// should meet a bounded queue rather than a fork bomb.
+const MAX_IN_FLIGHT: usize = 4;
+
+/// How many bytes one tool's tmux command may read.
+///
+/// Well above any answer a tool returns -- the tool layer caps its own
+/// responses far lower -- and far below the point where reading it is the
+/// problem.
+const MAX_TOOL_STDOUT_BYTES: usize = 8 * 1024 * 1024;
+
+/// How many bytes of tmux's diagnostics one command may read.
+const MAX_TOOL_STDERR_BYTES: usize = 256 * 1024;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -40,7 +57,21 @@ async fn main() -> ExitCode {
 
 /// Build the server the options describe, and run it until stdin closes.
 async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
-    let mut builder = Server::builder();
+    // An agent is the caller most able to ask for too much at once, and the
+    // least able to notice it did. These bound the tmux side of that: how many
+    // client processes may run at once, and how many bytes one command may
+    // read before the answer stops being useful anyway.
+    //
+    // The tool layer's own caps do not cover this. Truncating a response after
+    // the fact does not unspend the memory the core already allocated to read
+    // it.
+    let mut builder = Server::builder()
+        .dispatch_limits(DispatchLimits::default().max_in_flight(MAX_IN_FLIGHT))
+        .output_limits(
+            OutputLimits::default()
+                .max_stdout_bytes(MAX_TOOL_STDOUT_BYTES)
+                .max_stderr_bytes(MAX_TOOL_STDERR_BYTES),
+        );
     if let Some(path) = options.socket_path {
         builder = builder.socket_path(path);
     }

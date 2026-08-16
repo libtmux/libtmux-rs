@@ -1516,3 +1516,21 @@ needs is the nightly the fuzz targets already require. Methods, fields, and
 variants have no standalone path in that JSON, so they are attributed to the
 type that owns them: an unqualified `sessions` would say nothing about which
 handle it belongs to, and a move between types would not show at all.
+
+### The MCP server bounds the tmux side, not just its own answers
+
+`tmux-mcp` already capped what it returns: 256 KiB of captured output, eight
+concurrent tails. Those bound the response and nothing else. An agent that
+fans out still turned into as many tmux client processes as it had questions,
+and truncating a response after the fact does not unspend the memory the core
+already allocated to read it.
+
+So the binary now configures the `Server` it builds with a dispatch limit of
+four and an output budget, which is where those costs are actually incurred.
+Four because tmux serializes commands on its own thread: past that, more
+clients buy queueing rather than throughput, and an agent should meet a
+bounded queue rather than a fork bomb.
+
+An agent is the caller most able to ask for too much at once and the least
+able to notice that it did, which is the argument for the limits being on by
+default here rather than something an operator remembers to set.

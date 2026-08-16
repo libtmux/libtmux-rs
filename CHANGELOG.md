@@ -19,6 +19,10 @@ full.
 
 ### Added
 
+- `tmux-mcp` bounds the tmux side of an agent's fan-out: four dispatches in
+  flight and an output budget on the `Server` it builds. Its existing caps
+  bound what it returns, which does not unspend memory the core already
+  allocated to read a reply.
 - A recorded public API surface at `crates/libtmux/docs/public-api.txt`,
   with `just api` to regenerate and `just api-check` to fail on drift.
   Dropping the vacuous `semver` recipe left nothing reporting what the API
