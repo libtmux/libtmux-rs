@@ -6,7 +6,17 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{Command, NewWindowOptions, Server, SplitDirection, SplitOptions};
+use libtmux::{Client, Command, NewWindowOptions, Pane, Server, Session};
+use libtmux::{SplitDirection, SplitOptions, Window};
+use static_assertions::assert_impl_all;
+
+// roadmap.md promises public handles are concrete, cheap to clone, and
+// `Send + Sync`. Every peripheral type had this pinned and the four headline
+// handles did not.
+assert_impl_all!(Session: Clone, std::fmt::Debug, Eq, std::hash::Hash, Send, Sync);
+assert_impl_all!(Window: Clone, std::fmt::Debug, Eq, std::hash::Hash, Send, Sync);
+assert_impl_all!(Pane: Clone, std::fmt::Debug, Eq, std::hash::Hash, Send, Sync);
+assert_impl_all!(Client: Clone, std::fmt::Debug, Eq, std::hash::Hash, Send, Sync);
 
 /// Run a setup command and require it to succeed.
 async fn run(server: &Server, command: Command) {
