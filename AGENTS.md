@@ -132,21 +132,86 @@ only that arbitrary input is not valid input.
 
 ## Comments earn their maintenance cost
 
-Keep an implementation comment only when losing it would force a future
-maintainer to rediscover a consequential, non-obvious fact that the code,
-types, assertions, and tests do not already communicate. It states a durable
-truth about the shipped system rather than the author's reasoning, and it does
-not restate a value or a fact that can change without it -- a comment that
-duplicates either goes stale silently. Write it as tersely as a mature,
-long-lived library would.
+A comment ships only if it passes all three gates. Fail any: delete or rewrite.
+Borderline: delete -- borderline means the information is reconstructible, which
+is what makes deletion cheap.
 
-Delete comments that narrate, restate, speculate, excuse, or preserve
-development history, and prefer deletion in the borderline case. What survives
-is what a reader could not recover from the code.
+**Loss.** Three years from now, would losing this cost a maintainer real time
+rediscovering intent, an invariant, a constraint, or a failure mode the code and
+tests do not already make obvious?
 
-Rustdoc on the public surface -- item summaries, parameter descriptions, and
-doc examples -- is judged on the other axis: what it is worth to a caller, not
-whether it is non-obvious. It stays precise, succinct, and maintainable.
+**Elite.** Would SQLite, Redis, the Go standard library, or CPython write this
+comment, at this length? Those projects state the constraint and stop. They do
+not argue with an imagined objector.
+
+**Upkeep.** Will it stay true without maintenance? A comment that hand-syncs a
+value the code owns -- a count, an offset, a line reference, a duplicated
+constant -- is false the first time that value moves.
+
+### Ceiling
+
+One or two lines. A comment reaching four is either carrying several facts, in
+which case split it, or arguing, in which case cut it to the fact.
+
+Rationale, alternatives weighed, and the story of how the code got here belong
+in the commit message: timestamped, attached to the exact diff, and free to
+maintain.
+
+A comment often holds both a constraint and the deliberation that found it. Keep
+the constraint, cut the deliberation. "Runs at most once per second" survives;
+"this is the right trade for now" does not.
+
+### Keep
+
+- Why over how: upstream quirks, protocol and compatibility constraints,
+  performance tradeoffs still part of the contract.
+- Invariants, preconditions, ordering, lifetime, and concurrency requirements
+  that types and tests cannot express.
+- Code that looks wrong but is not, so a later cleanup does not reintroduce the
+  bug.
+- A high-level sketch of an algorithm whose local operations do not reveal the
+  whole.
+
+### Delete
+
+- Narration of the next lines; code translated into English.
+- Restated names, types, defaults, or control flow.
+- Values duplicated from the code and hand-synced.
+- Justification, hedging, or apology for a choice.
+- Speculation about future requirements.
+- History version control already holds, including commented-out code.
+- Ticket and issue numbers. They say nothing to a reader without tracker access,
+  and they rot when the tracker moves. Unfinished work goes in the tracker, not
+  the source.
+- Transient observations -- "currently", "for now", "the latest release" --
+  that go stale with no nearby edit.
+
+### The upkeep gate in practice
+
+It reaches values that track our own code. It does not reach frozen external
+facts.
+
+Bad (Delete):
+
+```rust
+// There are 321 tests to complete for servers.
+```
+
+Good (Keep):
+
+```rust
+// tmux < 3.2 reports the pane ID only after the command completes,
+// so this query must stay separate.
+```
+
+### Documentation exception
+
+Doctests, minimal usage examples, and param, return, and raises lines on public
+API are exempt from the loss gate -- they serve the caller, not the maintainer.
+They are exempt from nothing else. Ceiling: a good man page entry.
+
+Rustdoc `///` comments and `# Examples` doctests fall under this exception -- a
+rustdoc example is compiled and run.
 
 ## Releasing
 
