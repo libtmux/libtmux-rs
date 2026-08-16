@@ -102,17 +102,17 @@ regenerated file, and the diff is the review artefact -- there is no semver
 gate while the crates are prerelease.
 
 **Every crate-root type has a runnable example, and that is enforced.**
-`just example-coverage-check` fails on a type added without one. Write the
-example against a real `TestServer` where behaviour is the point; three
-examples added this way failed on first run and each had encoded a wrong
-belief about tmux, so the verification is the value, not the prose.
+`just example-coverage-check` fails on a type added without one. Write it
+against a real `TestServer` where behaviour is the point: an example that runs
+is the only kind that catches a wrong belief about tmux, which is what they
+keep catching.
 
 **Doc comments are checked for splits.** `just doc-blocks` fails when a doc
 comment opens mid-sentence. rustdoc treats a doc comment as an attribute and
 never checks that the prose describes the item it precedes, so a block
-inserted one line too high silently hands a type its neighbour's summary --
-which has shipped twice. Never insert a doc block without landing above the
-whole of the previous item's comment.
+inserted one line too high silently hands a type its neighbour's summary.
+Never insert a doc block without landing above the whole of the previous
+item's comment.
 
 **Parsers that read from outside are fuzzed.** The control-mode line parser,
 the filter-expression wire format, and the workspace YAML loader each have a
