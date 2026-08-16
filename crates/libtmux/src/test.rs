@@ -72,6 +72,18 @@ const FIXTURE_CONFIG: &str = "\
 set -g default-shell /bin/sh\n\
 set -g default-command /bin/sh\n";
 const CONTAINMENT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a blocking wait sleeps before looking again.
+///
+/// Sleeping rather than yielding, for the reason [design.md] gives about the
+/// async poll loops and which applies with more force here: this runs inside
+/// `spawn_blocking` while waiting for a *process* to exit, so a spin holds a
+/// core the daemon needs to handle the signal it was just sent. On a machine
+/// with fewer cores than the suite has concurrent fixtures, that is the
+/// difference between a clean shutdown and a grace window that expires.
+///
+/// [design.md]: ../docs/design.md
+pub(crate) const CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
 #[cfg(any(
     target_os = "cygwin",
     target_os = "horizon",
@@ -1019,7 +1031,7 @@ impl Lifecycle {
             match self.observe_leader() {
                 LeaderObservation::ExitedUnreaped => break,
                 LeaderObservation::Running | LeaderObservation::Unavailable => {
-                    std::thread::yield_now();
+                    std::thread::sleep(CLEANUP_POLL_INTERVAL);
                 }
                 LeaderObservation::ExternallyReaped | LeaderObservation::Failed => {
                     lifecycle_ok = false;
@@ -1434,7 +1446,7 @@ mod tests {
                     if error.raw_os_error() == Some(Errno::TXTBSY.raw_os_error())
                         && Instant::now() < executable_deadline =>
                 {
-                    std::thread::yield_now();
+                    std::thread::sleep(super::CLEANUP_POLL_INTERVAL);
                 }
                 Err(error) => panic!("fake executable readiness failed: {error}"),
             }
@@ -1473,7 +1485,7 @@ mod tests {
                     Instant::now() < deadline,
                     "fallback process survives cleanup"
                 );
-                std::thread::yield_now();
+                std::thread::sleep(super::CLEANUP_POLL_INTERVAL);
             }
         }
     }
@@ -1513,7 +1525,7 @@ mod tests {
                     Instant::now() < deadline,
                     "fallback leader exits before the observation deadline"
                 );
-                std::thread::yield_now();
+                std::thread::sleep(super::CLEANUP_POLL_INTERVAL);
             }
             let published = fs::read_to_string(&pids_path)
                 .expect("fallback leader atomically publishes both PIDs");
@@ -1546,7 +1558,7 @@ mod tests {
                         Instant::now() < deadline,
                         "fallback process survives terminal group cleanup"
                     );
-                    std::thread::yield_now();
+                    std::thread::sleep(super::CLEANUP_POLL_INTERVAL);
                 }
             }
         }
@@ -1685,7 +1697,7 @@ mod tests {
             match waitpid(Some(leader), WaitOptions::NOHANG) {
                 Ok(Some((_pid, _status))) => break,
                 Ok(None) | Err(Errno::INTR) if Instant::now() < deadline => {
-                    std::thread::yield_now();
+                    std::thread::sleep(super::CLEANUP_POLL_INTERVAL);
                 }
                 outcome => panic!("external owner could not reap the leader: {outcome:?}"),
             }

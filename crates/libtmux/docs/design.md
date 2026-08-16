@@ -1220,6 +1220,14 @@ binary takes longer on a CI runner than on a developer machine, which is why
 only CI saw it. Shrinking the deadline to 1ms reproduces it exactly, which is
 how the mechanism was confirmed rather than guessed.
 
+**The same rule applies to blocking waits, and harder.** The fixture's
+shutdown polls for a daemon to exit from inside `spawn_blocking`, and it did
+so with `std::thread::yield_now`. That spin holds a core the daemon needs to
+handle the `SIGTERM` it was just sent, so on a machine with fewer cores than
+the suite has concurrent fixtures the grace window expires and cleanup reports
+that the daemon did not exit. It was invisible on a twenty-core developer
+machine and failed six tests on a macOS runner.
+
 The general rule: a test's deadline should bound the thing it is *not*
 testing, by enough that it never becomes the thing it measures.
 

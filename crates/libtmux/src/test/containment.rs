@@ -228,7 +228,7 @@ mod linux {
             if timed_out(started, timeout) {
                 return Err(SweepFailure::DiscoveryDeadline);
             }
-            std::thread::yield_now();
+            std::thread::sleep(crate::test::CLEANUP_POLL_INTERVAL);
         }
 
         let mut signaled = true;
@@ -276,7 +276,7 @@ mod linux {
             if timed_out(started, timeout) {
                 return Err(SweepFailure::TerminationDeadline);
             }
-            std::thread::yield_now();
+            std::thread::sleep(crate::test::CLEANUP_POLL_INTERVAL);
         }
     }
 
@@ -473,7 +473,9 @@ mod linux {
                 loop {
                     match self.child.try_wait() {
                         Ok(Some(_)) => return true,
-                        Ok(None) if Instant::now() < deadline => std::thread::yield_now(),
+                        Ok(None) if Instant::now() < deadline => {
+                            std::thread::sleep(crate::test::CLEANUP_POLL_INTERVAL);
+                        }
                         Ok(None) | Err(_) => return false,
                     }
                 }
