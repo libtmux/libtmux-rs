@@ -1415,3 +1415,33 @@ groups, Unix sockets, `waitid`, and temporary paths. The lane runs the test
 suite rather than the whole gate, and on master rather than every push,
 because a macOS runner bills at ten times a Linux one while the lints it would
 re-run are platform-independent.
+
+### What the first macOS lane found
+
+Adding the lane failed nine tests immediately, which is the argument for
+having added it. Three causes, and finding the third took three rounds of
+instrumenting rather than guessing.
+
+**`/var` is `/private/var`.** Three tests compared a resolved path against the
+raw temporary one. The library is right to canonicalize -- that is what makes
+two selectors for one endpoint compare equal -- so the expectations were the
+Linux-shaped part.
+
+**A blocking poll loop must sleep too.** The fixture's shutdown waited for the
+daemon with `std::thread::yield_now` from inside `spawn_blocking`, holding a
+core the daemon needed to handle the signal it had just been sent. This was
+the same defect fixed earlier in the async loops, in the one place nobody
+looked. It was not the cause of the remaining failures, but it was a real one.
+
+**`killpg` returns `EPERM` on macOS.** The forced sweep of the leader's own
+process group fails with "Operation not permitted" once the leader has exited,
+on every fixture shutdown, while the leader itself is killed and reaped
+successfully in the same cleanup. The daemon is gone; only the sweep
+disagrees. There is nothing further to do about a group the kernel will not
+let the caller signal, so that errno is accepted away from Linux -- and only
+away from Linux, where the same result would be a real permission bug.
+
+Getting there needed the failure to say more than `ShutdownFailed`, which
+named four different problems. `TestServerError` now carries the step that
+produced it, which is how a fixture on a machine the author does not have is
+debugged at all.

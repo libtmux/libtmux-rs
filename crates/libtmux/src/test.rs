@@ -1084,7 +1084,7 @@ impl Lifecycle {
         if matches!(self.leader_state, LeaderState::Waitable) {
             if self.numeric_phase_is_safe() {
                 let outcome = kill_process_group(self.pid, Signal::KILL);
-                if !signal_result(outcome) {
+                if !group_signal_result(outcome) {
                     *lifecycle_ok = false;
                     self.failure = Some(format!("KILL group: {outcome:?}"));
                 }
@@ -1351,6 +1351,30 @@ async fn readiness_with_timeout(
 
 fn signal_result(result: rustix::io::Result<()>) -> bool {
     matches!(result, Ok(()) | Err(Errno::SRCH))
+}
+
+/// Whether a sweep of the leader's process group did all it could.
+///
+/// `ESRCH` means the group is already gone, which is the outcome this is
+/// trying to reach.
+///
+/// `EPERM` is accepted only away from Linux, and only here. macOS returns it
+/// for the leader's own group once the leader has exited -- observed on every
+/// fixture shutdown in CI, with the leader killed and reaped successfully in
+/// the same cleanup, so the daemon is gone and only this sweep disagrees.
+/// There is nothing further a caller can do about a group the kernel will not
+/// let it signal, and the leader is handled separately either way. On Linux
+/// the same errno would be a real permission bug worth failing on, so it is
+/// not accepted there.
+fn group_signal_result(result: rustix::io::Result<()>) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        signal_result(result)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        matches!(result, Ok(()) | Err(Errno::SRCH) | Err(Errno::PERM))
+    }
 }
 
 fn child_kill_result(result: std::io::Result<()>) -> bool {
