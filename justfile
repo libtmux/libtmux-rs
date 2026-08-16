@@ -90,8 +90,11 @@ api-check:
     set -euo pipefail
     cargo +nightly rustdoc -p libtmux --all-features \
         -- -Zunstable-options --output-format json > /dev/null
-    python3 scripts/public-api.py target/doc/libtmux.json > /tmp/libtmux-api-now.txt
-    if ! diff -u crates/libtmux/docs/public-api.txt /tmp/libtmux-api-now.txt; then
+    # A fixed path in /tmp is one file shared between checkouts.
+    current="$(mktemp -t libtmux-api-XXXXXX)"
+    trap 'rm -f "$current"' EXIT
+    python3 scripts/public-api.py target/doc/libtmux.json > "$current"
+    if ! diff -u crates/libtmux/docs/public-api.txt "$current"; then
         printf '\npublic API changed. Run `just api` and commit the result.\n' >&2
         exit 1
     fi
