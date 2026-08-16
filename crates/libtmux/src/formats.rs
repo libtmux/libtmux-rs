@@ -577,6 +577,7 @@ macro_rules! format_catalog {
                     (PANE_TITLE, pane_title, "pane_title", Pane, Pane, All, V3_2A, Text, Available),
                     (PANE_TOP, pane_top, "pane_top", Pane, Pane, All, V3_2A, I32, Required),
                     (PANE_TTY, pane_tty, "pane_tty", Pane, Pane, All, V3_2A, Text, Required),
+                    (PANE_UNSEEN_CHANGES, pane_unseen_changes, "pane_unseen_changes", Pane, Pane, All, V3_4, Bool, Required),
                     (PANE_WIDTH, pane_width, "pane_width", Pane, Pane, All, V3_2A, U32, Required),
                     (PANE_X, pane_x, "pane_x", Pane, Pane, All, V3_7, I32, Required),
                     (PANE_Y, pane_y, "pane_y", Pane, Pane, All, V3_7, I32, Required),
@@ -711,6 +712,9 @@ macro_rules! catalog_floor {
     (V3_3) => {
         ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL)
     };
+    (V3_4) => {
+        ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL)
+    };
     (V3_7) => {
         ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL)
     };
@@ -805,7 +809,7 @@ format_catalog!(define_format_catalog);
     dead_code,
     reason = "catalog-only metadata is verified by the checked parity fixture"
 )]
-static CATALOG: [&FormatDescriptor; 178] = [
+static CATALOG: [&FormatDescriptor; 179] = [
     &ACTIVE_WINDOW_INDEX,
     &ALTERNATE_SAVED_X,
     &ALTERNATE_SAVED_Y,
@@ -908,6 +912,7 @@ static CATALOG: [&FormatDescriptor; 178] = [
     &PANE_TITLE,
     &PANE_TOP,
     &PANE_TTY,
+    &PANE_UNSEEN_CHANGES,
     &PANE_WIDTH,
     &PANE_X,
     &PANE_Y,
@@ -3133,7 +3138,7 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        assert_eq!(rows.len(), 178);
+        assert_eq!(rows.len(), 179);
         rows
     }
 
@@ -3193,6 +3198,8 @@ mod tests {
             "3.2a"
         } else if minimum == ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL) {
             "3.3"
+        } else if minimum == ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL) {
+            "3.4"
         } else if minimum == ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL) {
             "3.7"
         } else {
@@ -3288,8 +3295,8 @@ mod tests {
     #[test]
     fn format_catalog_checked_parity_is_an_exact_sorted_bijection() {
         let rows = checked_catalog_rows();
-        assert_eq!(CATALOG.len(), 178);
-        assert_eq!(GROUPED_CATALOG.len(), 178);
+        assert_eq!(CATALOG.len(), 179);
+        assert_eq!(GROUPED_CATALOG.len(), 179);
 
         let mut names = std::collections::BTreeSet::new();
         let mut pointers = std::collections::BTreeSet::new();
@@ -3313,7 +3320,7 @@ mod tests {
             .iter()
             .map(|descriptor| descriptor_address(descriptor))
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(grouped_pointers.len(), 178);
+        assert_eq!(grouped_pointers.len(), 179);
         assert_eq!(grouped_pointers, pointers);
     }
 
@@ -3326,18 +3333,18 @@ mod tests {
         let rows = checked_catalog_rows();
         assert_eq!(
             count_tokens(rows.iter().map(|row| row.minimum)),
-            std::collections::BTreeMap::from([("3.2a", 159), ("3.3", 8), ("3.7", 11)])
+            std::collections::BTreeMap::from([("3.2a", 159), ("3.3", 8), ("3.4", 1), ("3.7", 11)])
         );
         assert_eq!(
             count_tokens(rows.iter().map(|row| row.profiles)),
-            std::collections::BTreeMap::from([("all", 134), ("clients", 27), ("none", 17)])
+            std::collections::BTreeMap::from([("all", 135), ("clients", 27), ("none", 17)])
         );
         assert_eq!(
             count_tokens(rows.iter().map(|row| row.empty)),
             std::collections::BTreeMap::from([
                 ("absent", 30),
                 ("available", 25),
-                ("required", 123),
+                ("required", 124),
             ])
         );
         assert_eq!(
@@ -3345,7 +3352,7 @@ mod tests {
             std::collections::BTreeMap::from([
                 ("catalog-only", 68),
                 ("client-info", 22),
-                ("pane-info", 68),
+                ("pane-info", 69),
                 ("session-info", 9),
                 ("window-info", 11),
             ])
@@ -3353,7 +3360,7 @@ mod tests {
         assert_eq!(
             count_tokens(rows.iter().map(|row| row.decoder)),
             std::collections::BTreeMap::from([
-                ("bool", 49),
+                ("bool", 50),
                 ("i32", 14),
                 ("pane-id", 1),
                 ("pane-progress", 1),
@@ -3378,7 +3385,7 @@ mod tests {
                 ("format-type", 3),
                 ("list-row", 1),
                 ("none", 9),
-                ("pane", 69),
+                ("pane", 70),
                 ("session", 22),
                 ("window", 11),
                 ("window-link", 19),
@@ -3424,10 +3431,13 @@ mod tests {
                 "synchronized_output_flag",
             ]
         );
-        assert!(
-            rows.iter()
-                .all(|row| !matches!(row.minimum, "3.4" | "3.5" | "3.6"))
-        );
+        let fields_3_4 = rows
+            .iter()
+            .filter(|row| row.minimum == "3.4")
+            .map(|row| row.field)
+            .collect::<Vec<_>>();
+        assert_eq!(fields_3_4, ["pane_unseen_changes"]);
+        assert!(rows.iter().all(|row| !matches!(row.minimum, "3.5" | "3.6")));
         assert!(
             rows.iter()
                 .filter(|row| row.profiles == "none")
@@ -3499,9 +3509,9 @@ mod tests {
         let versions = [
             (b"tmux 3.2a\n".as_slice(), [9, 11, 54, 20]),
             (b"tmux 3.3\n".as_slice(), [9, 11, 57, 22]),
-            (b"tmux 3.6\n".as_slice(), [9, 11, 57, 22]),
-            (b"tmux 3.7\n".as_slice(), [9, 11, 68, 22]),
-            (b"tmux 3.8\n".as_slice(), [9, 11, 68, 22]),
+            (b"tmux 3.6\n".as_slice(), [9, 11, 58, 22]),
+            (b"tmux 3.7\n".as_slice(), [9, 11, 69, 22]),
+            (b"tmux 3.8\n".as_slice(), [9, 11, 69, 22]),
             (b"tmux master\n".as_slice(), [9, 11, 54, 20]),
             (b"tmux next-3.8\n".as_slice(), [9, 11, 54, 20]),
         ];
@@ -3554,6 +3564,7 @@ mod tests {
     fn format_catalog_numbered_and_development_availability_is_exact() {
         let version_3_2a = parse_version(b"tmux 3.2a\n");
         let version_3_3 = parse_version(b"tmux 3.3\n");
+        let version_3_4 = parse_version(b"tmux 3.4\n");
         let version_3_6 = parse_version(b"tmux 3.6\n");
         let version_3_7 = parse_version(b"tmux 3.7\n");
         let development = [
@@ -3583,6 +3594,10 @@ mod tests {
                 == ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL)
             {
                 (&version_3_2a, &version_3_3)
+            } else if descriptor.minimum_release()
+                == ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL)
+            {
+                (&version_3_2a, &version_3_4)
             } else {
                 (&version_3_6, &version_3_7)
             };
@@ -3675,7 +3690,7 @@ mod tests {
                     .count()
             })
             .sum::<usize>();
-            assert_eq!(unproven, 16);
+            assert_eq!(unproven, 17);
         }
     }
 

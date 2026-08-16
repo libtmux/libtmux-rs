@@ -364,6 +364,7 @@ returns the global `window_client_mode.default_format`.
 | `pane_title` | pane | pane | all | 3.2a | text | available | pane-info |
 | `pane_top` | pane | pane | all | 3.2a | i32 | required | pane-info |
 | `pane_tty` | pane | pane | all | 3.2a | text | required | pane-info |
+| `pane_unseen_changes` | pane | pane | all | 3.4 | bool | required | pane-info |
 | `pane_width` | pane | pane | all | 3.2a | u32 | required | pane-info |
 | `pane_x` | pane | pane | all | 3.7 | i32 | required | pane-info |
 | `pane_y` | pane | pane | all | 3.7 | i32 | required | pane-info |

@@ -688,3 +688,79 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Prompt marks come from the shell, so a shell that emits none is the case
+/// most callers meet: bash and zsh do not without shell integration, fish
+/// does. An unmarked capture is an answer about the shell, not a failure.
+#[tokio::test]
+async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_them() {
+    use libtmux::{CaptureOptions, since};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("prompts").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    let supported = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .meets(&since::CAPTURE_LINE_FLAGS);
+
+    if !supported {
+        // Below 3.7 tmux accepts no `-F`, and saying so beats an empty answer.
+        let refused = pane.capture_lines(CaptureOptions::visible()).await;
+        assert!(
+            matches!(
+                refused.as_ref().map_err(libtmux::Error::kind),
+                Err(libtmux::ErrorKind::UnsupportedVersion),
+            ),
+            "an older tmux reports the version rather than returning nothing: {refused:?}",
+        );
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    }
+
+    // Standing in for shell integration: the sequences a shell would emit
+    // around its prompt and before its output.
+    pane.send_keys(
+        r"printf '\033]133;A\007'; echo THE-PROMPT; printf '\033]133;C\007'; echo the-output",
+    )
+    .await
+    .expect("keys are sent");
+    pane.send_key_names(["Enter"]).await.expect("Enter is sent");
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+
+    let lines = pane
+        .capture_lines(CaptureOptions::history())
+        .await
+        .expect("the capture succeeds");
+
+    let prompt = lines
+        .iter()
+        .position(|line| line.starts_prompt)
+        .expect("the prompt mark is reported");
+    let output = lines
+        .iter()
+        .position(|line| line.starts_output)
+        .expect("the output mark is reported");
+
+    assert!(prompt < output, "the prompt precedes its output");
+    assert_eq!(
+        lines[prompt].text.to_string_lossy().trim(),
+        "THE-PROMPT",
+        "the mark lands on the line the shell was drawing",
+    );
+    assert_eq!(lines[output].text.to_string_lossy().trim(), "the-output");
+
+    // The flags are stripped rather than left at the front of the text.
+    assert!(
+        lines
+            .iter()
+            .all(|line| !line.text.to_string_lossy().starts_with("- ")),
+        "no line keeps tmux's flag column in its text",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

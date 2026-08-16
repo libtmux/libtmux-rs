@@ -576,3 +576,41 @@ fn parse_output_frame(output: &[u8]) -> Option<&str> {
     }
     str::from_utf8(version).ok()
 }
+
+/// The tmux release each version-gated capability arrived in.
+///
+/// Every method that can answer [`crate::Error::UnsupportedCapability`] names
+/// its floor here, so a caller can ask before it calls rather than learning
+/// from the failure. Compare with [`TmuxVersion::meets`].
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let version = guard.server().capabilities().await?.tmux_version().clone();
+///
+/// if version.meets(&libtmux::since::SERVER_ACCESS) {
+///     assert_eq!(guard.server().access_rules().await?.len(), 1);
+/// }
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+pub mod since {
+    use super::{ReleaseSuffix, ReleaseVersion};
+
+    /// `server-access`, and so [`crate::Server::access_rules`].
+    pub const SERVER_ACCESS: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    /// The prompt history, and so [`crate::Server::prompt_history`].
+    pub const PROMPT_HISTORY: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    /// `capture-pane -F`, and so [`crate::Pane::capture_lines`].
+    pub const CAPTURE_LINE_FLAGS: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+}

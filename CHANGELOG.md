@@ -27,6 +27,14 @@ full.
   `resume_pane`. tmux sends a control client every pane on the server; one
   neighbouring `yes` moves more than 20 MB in two seconds.
 - `Event::Exit` carries the reason tmux gave, such as `too far behind`.
+- `Pane::capture_lines` and `CapturedLine`, which report where a shell prompt
+  and its output begin. tmux records these from OSC 133; fish emits it, bash
+  and zsh do not without shell integration, so an unmarked capture is the
+  common case and is an answer rather than a failure. Needs tmux 3.7.
+- `libtmux::since`, naming the release each version-gated capability arrived
+  in, so a caller can ask before it calls rather than learning from the error.
+- `pane_unseen_changes`, closing a `missing` row in the format ledger. tmux
+  3.4 and newer.
 
 ### Fixed
 
@@ -49,6 +57,8 @@ full.
 - `just doc-blocks` now also fails when a doc comment sits below a non-doc
   attribute, which is the shape a split leaves when it lands on a sentence
   boundary. It found the two above on its first run.
+- Three doctests exercised tmux 3.3 capabilities without guarding on the
+  version, so the whole doc suite failed on tmux 3.2a -- a lane CI runs.
 
 ## 0.1.0-alpha.5 - 2026-08-16
 

@@ -627,6 +627,62 @@ impl Pane {
             .collect())
     }
 
+    /// Capture with the per-line flags tmux records, marking shell prompts.
+    ///
+    /// tmux records where a prompt and its output begin from the OSC 133
+    /// sequences a shell emits, and keeps those marks as lines scroll into
+    /// history. That is what answers "show me the last command's output"
+    /// exactly, rather than by guessing at a prompt's shape.
+    ///
+    /// Every [`CapturedLine::starts_prompt`] is `false` when the pane's shell
+    /// does not emit OSC 133, which is the common case: fish does, bash and
+    /// zsh do not without shell integration installed. An empty result is a
+    /// real answer about the shell, not a failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedCapability`] below tmux 3.7, which is where
+    /// `capture-pane -F` arrived, and an error when tmux refuses the capture.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::CaptureOptions;
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    /// let session = server.new_session("prompts").await?;
+    /// let pane = session.panes().await?.remove(0);
+    ///
+    /// if server.capabilities().await?.tmux_version().meets(&libtmux::since::CAPTURE_LINE_FLAGS) {
+    ///     let lines = pane.capture_lines(CaptureOptions::history()).await?;
+    ///     // Without shell integration nothing is marked, which is an answer.
+    ///     let prompts = lines.iter().filter(|line| line.starts_prompt).count();
+    ///     assert!(prompts <= lines.len());
+    /// }
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn capture_lines(&self, options: CaptureOptions) -> Result<Vec<CapturedLine>, Error> {
+        crate::Server::from_core(Arc::clone(&self.core))
+            .require("capture-pane -F", crate::version::since::CAPTURE_LINE_FLAGS)
+            .await?;
+
+        Ok(self
+            .capture_with(options.line_flags())
+            .await?
+            .into_iter()
+            .map(|row| CapturedLine::parse(&row))
+            .collect())
+    }
+
     /// Make this pane active in its window.
     ///
     /// # Errors
@@ -1318,6 +1374,7 @@ pub struct CaptureOptions {
     end: Option<CaptureBound>,
     escape_sequences: bool,
     join_wrapped: bool,
+    line_flags: bool,
 }
 
 impl CaptureOptions {
@@ -1328,6 +1385,7 @@ impl CaptureOptions {
             end: None,
             escape_sequences: false,
             join_wrapped: false,
+            line_flags: false,
         }
     }
 
@@ -1357,6 +1415,15 @@ impl CaptureOptions {
         self
     }
 
+    /// Ask tmux for the per-line flags, which mark where prompts begin.
+    ///
+    /// Only [`Pane::capture_lines`] reads these; a plain capture would carry
+    /// them as text at the front of every line.
+    const fn line_flags(mut self) -> Self {
+        self.line_flags = true;
+        self
+    }
+
     /// Return a wrapped line as one line rather than as the rows it occupies.
     pub const fn join_wrapped(mut self) -> Self {
         self.join_wrapped = true;
@@ -1371,6 +1438,9 @@ impl CaptureOptions {
         }
         if let Some(end) = self.end {
             command = command.arg("-E").arg(end.to_string());
+        }
+        if self.line_flags {
+            command = command.arg("-F");
         }
         if self.escape_sequences {
             command = command.arg("-e");
@@ -1389,6 +1459,72 @@ enum CaptureBound {
     Limit,
     /// A line number.
     Line(i32),
+}
+
+/// One line of a capture, with what tmux knows about it.
+///
+/// Built by [`Pane::capture_lines`]. The marks come from the OSC 133 sequences
+/// a shell emits around its prompt, so they are present only when the pane's
+/// shell emits them.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{CaptureOptions, CapturedLine};
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let server = guard.server();
+/// let session = server.new_session("marked").await?;
+/// let pane = session.panes().await?.remove(0);
+///
+/// if server.capabilities().await?.tmux_version().meets(&libtmux::since::CAPTURE_LINE_FLAGS) {
+///     let lines: Vec<CapturedLine> = pane.capture_lines(CaptureOptions::visible()).await?;
+///     assert!(lines.iter().all(|line| !line.starts_output || !line.starts_prompt));
+/// }
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub struct CapturedLine {
+    /// The line's text, without the flags tmux prefixed to it.
+    pub text: TmuxText,
+    /// Whether a shell prompt begins on this line.
+    pub starts_prompt: bool,
+    /// Whether a command's output begins on this line.
+    pub starts_output: bool,
+    /// Whether the line continues onto the next row rather than ending.
+    pub wrapped: bool,
+}
+
+impl CapturedLine {
+    /// Split one `capture-pane -F` row into its flags and its text.
+    ///
+    /// tmux writes the flags, then a space, then the line, and writes `-` when
+    /// a line has none, so the separator is always present.
+    fn parse(row: &TmuxText) -> Self {
+        let bytes = row.as_bytes();
+        let (flags, text) = bytes
+            .iter()
+            .position(|byte| *byte == b' ')
+            .map_or((bytes, [].as_slice()), |index| {
+                (&bytes[..index], &bytes[index + 1..])
+            });
+
+        Self {
+            starts_prompt: flags.contains(&b'P'),
+            starts_output: flags.contains(&b'O'),
+            wrapped: flags.contains(&b'W'),
+            text: TmuxText::from_bytes(text),
+        }
+    }
 }
 
 impl fmt::Display for CaptureBound {

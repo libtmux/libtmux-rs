@@ -241,6 +241,9 @@ constant libtmux::options::generated::names::WINDOW_UNLINKED
 constant libtmux::options::generated::names::WORD_SEPARATORS
 constant libtmux::options::generated::names::WRAP_SEARCH
 constant libtmux::options::generated::names::XTERM_KEYS
+constant libtmux::version::since::CAPTURE_LINE_FLAGS
+constant libtmux::version::since::PROMPT_HISTORY
+constant libtmux::version::since::SERVER_ACCESS
 enum libtmux::control::Event
 enum libtmux::error::ControlModeErrorKind
 enum libtmux::error::Error
@@ -417,6 +420,7 @@ function libtmux::pane::CaptureOptions::visible
 function libtmux::pane::Pane::append_option
 function libtmux::pane::Pane::break_out
 function libtmux::pane::Pane::capture
+function libtmux::pane::Pane::capture_lines
 function libtmux::pane::Pane::capture_with
 function libtmux::pane::Pane::clear_history
 function libtmux::pane::Pane::clock_mode
@@ -878,6 +882,7 @@ struct libtmux::limits::DispatchLimits
 struct libtmux::limits::OutputLimits
 struct libtmux::options::OptionSchema
 struct libtmux::pane::CaptureOptions
+struct libtmux::pane::CapturedLine
 struct libtmux::pane::Pane
 struct libtmux::plan::Effects
 struct libtmux::plan::PaneSlot
@@ -960,6 +965,10 @@ struct_field index
 struct_field input
 struct_field kind
 struct_field layout
+struct_field libtmux::pane::CapturedLine::starts_output
+struct_field libtmux::pane::CapturedLine::starts_prompt
+struct_field libtmux::pane::CapturedLine::text
+struct_field libtmux::pane::CapturedLine::wrapped
 struct_field libtmux::plan::Effects::creates
 struct_field libtmux::plan::Effects::destructive
 struct_field libtmux::plan::Effects::idempotent
@@ -1054,6 +1063,7 @@ struct_field libtmux::snapshot::PaneFields::pane_tabs
 struct_field libtmux::snapshot::PaneFields::pane_title
 struct_field libtmux::snapshot::PaneFields::pane_top
 struct_field libtmux::snapshot::PaneFields::pane_tty
+struct_field libtmux::snapshot::PaneFields::pane_unseen_changes
 struct_field libtmux::snapshot::PaneFields::pane_width
 struct_field libtmux::snapshot::PaneFields::pane_x
 struct_field libtmux::snapshot::PaneFields::pane_y

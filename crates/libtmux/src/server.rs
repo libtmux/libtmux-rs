@@ -29,7 +29,7 @@ use crate::{
 };
 
 /// The first tmux release that has a server access list.
-const SERVER_ACCESS_SINCE: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+use crate::version::since::SERVER_ACCESS as SERVER_ACCESS_SINCE;
 
 /// How much a user on the server's access list may do.
 ///
@@ -97,7 +97,7 @@ impl AccessRule {
 }
 
 /// The first tmux release that remembers prompt history.
-const PROMPT_HISTORY_SINCE: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
 
 /// Which prompt tmux is remembering answers for.
 ///
@@ -110,11 +110,14 @@ const PROMPT_HISTORY_SINCE: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSu
 /// use libtmux::PromptKind;
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
+/// let version = guard.server().capabilities().await?.tmux_version().clone();
 ///
 /// // tmux keeps a separate history per prompt kind, so a command typed at the
 /// // `:` prompt is not offered when searching.
-/// assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
-/// assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
+/// if version.meets(&libtmux::since::PROMPT_HISTORY) {
+///     assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
+///     assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
+/// }
 ///
 /// guard.shutdown().await?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1509,7 +1512,11 @@ impl Server {
     /// Checked rather than left to tmux, which usually accepts an unknown
     /// flag and ignores it: without this, "your tmux is too old" arrives as
     /// "the command did nothing".
-    async fn require(&self, capability: &'static str, needs: ReleaseVersion) -> Result<(), Error> {
+    pub(crate) async fn require(
+        &self,
+        capability: &'static str,
+        needs: ReleaseVersion,
+    ) -> Result<(), Error> {
         let found = self.capabilities().await?.tmux_version();
         // A development build carries no numbered release to compare, so it
         // is taken at its word rather than refused.
@@ -1577,9 +1584,12 @@ impl Server {
     ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let server = guard.server();
+    /// let version = server.capabilities().await?.tmux_version().clone();
     ///
     /// // A fresh server has answered no prompts.
-    /// assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
+    /// if version.meets(&libtmux::since::PROMPT_HISTORY) {
+    ///     assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
+    /// }
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1653,11 +1663,14 @@ impl Server {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux::test::TestServer::new().await?;
-    /// let rules = guard.server().access_rules().await?;
+    /// let version = guard.server().capabilities().await?.tmux_version().clone();
     ///
     /// // Whoever started the server owns it and may act.
-    /// assert_eq!(rules.len(), 1);
-    /// assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
+    /// if version.meets(&libtmux::since::SERVER_ACCESS) {
+    ///     let rules = guard.server().access_rules().await?;
+    ///     assert_eq!(rules.len(), 1);
+    ///     assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
+    /// }
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())

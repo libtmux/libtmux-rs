@@ -2270,6 +2270,7 @@ mod tests {
             [
                 bracket_paste_flag,
                 pane_floating_flag,
+                pane_unseen_changes,
                 pane_zoomed_flag,
                 synchronized_output_flag
             ]
@@ -2456,6 +2457,7 @@ mod tests {
                 pane_title,
                 pane_top,
                 pane_tty,
+                pane_unseen_changes,
                 pane_width,
                 pane_x,
                 pane_y,
@@ -2700,6 +2702,7 @@ mod tests {
                 pane_marked,
                 pane_pipe,
                 pane_synchronized,
+                pane_unseen_changes,
                 pane_zoomed_flag,
                 synchronized_output_flag,
                 wrap_flag,
@@ -3936,12 +3939,12 @@ mod tests {
     #[test]
     fn snapshot_projection_plans_have_exact_order_state_and_templates() {
         let cases = [
-            (b"tmux 3.2a\n".as_slice(), 57, 14, 0),
-            (b"tmux 3.3\n".as_slice(), 60, 11, 0),
-            (b"tmux 3.6\n".as_slice(), 60, 11, 0),
-            (b"tmux 3.7\n".as_slice(), 71, 0, 0),
-            (b"tmux master\n".as_slice(), 57, 0, 14),
-            (b"tmux next-3.8\n".as_slice(), 57, 0, 14),
+            (b"tmux 3.2a\n".as_slice(), 57, 15, 0),
+            (b"tmux 3.3\n".as_slice(), 60, 12, 0),
+            (b"tmux 3.6\n".as_slice(), 61, 11, 0),
+            (b"tmux 3.7\n".as_slice(), 72, 0, 0),
+            (b"tmux master\n".as_slice(), 57, 0, 15),
+            (b"tmux next-3.8\n".as_slice(), 57, 0, 15),
         ];
         let expected_window: Vec<_> = WINDOW_INFO_DESCRIPTORS
             .iter()
@@ -3985,7 +3988,7 @@ mod tests {
                 .collect();
             assert_eq!(pane_plan.profile(), ListProfile::Panes);
             assert_eq!(pane_plan.purpose(), PlanPurpose::Projection);
-            assert_eq!(pane_plan.planned().len(), 71);
+            assert_eq!(pane_plan.planned().len(), 72);
             assert_eq!(pane_plan.descriptors_for_test().len(), pane_selected);
             assert_descriptor_sequence(pane_plan.descriptors_for_test(), &expected_selected);
             assert_eq!(
@@ -4598,12 +4601,12 @@ mod tests {
             &row,
         ));
 
-        assert_eq!(trailing.planned().len(), 72);
-        assert_eq!(trailing.descriptors_for_test().len(), 72);
+        assert_eq!(trailing.planned().len(), 73);
+        assert_eq!(trailing.descriptors_for_test().len(), 73);
         assert_eq!(error.kind(), FormatCodecErrorKind::PlanRowMismatch);
         assert_eq!(error.phase(), FormatCodecPhase::Decode);
         assert_eq!(error.row(), Some(0));
-        assert_eq!(error.field(), Some(71));
+        assert_eq!(error.field(), Some(72));
         assert_eq!(error.field_name(), Some("client_mode_format"));
         assert_eq!(error.expected(), None);
         assert_eq!(error.offset(), None);

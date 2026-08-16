@@ -164,7 +164,7 @@ pane_tabs catalogued
 pane_title catalogued
 pane_top catalogued
 pane_tty catalogued
-pane_unseen_changes missing: pane
+pane_unseen_changes catalogued
 pane_width catalogued
 pane_x catalogued
 pane_y catalogued
