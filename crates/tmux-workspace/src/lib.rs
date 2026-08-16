@@ -31,8 +31,10 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod freeze;
 
 pub use config::{ConfigError, PaneConfig, WindowConfig, Workspace};
+pub use freeze::freeze;
 
 use std::path::Path;
 

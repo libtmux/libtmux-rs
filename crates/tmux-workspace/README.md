@@ -20,6 +20,20 @@ windows:
       - htop
 ```
 
+Freeze a session someone built by hand back into one:
+
+```rust
+# async fn example(session: &libtmux::Session) -> Result<(), libtmux::Error> {
+let workspace = tmux_workspace::freeze(session).await?;
+std::fs::write("dev.yaml", workspace.to_yaml()).ok();
+# Ok(())
+# }
+```
+
+What freezing recovers is the shape -- windows, panes, working directories,
+which is focused. What it cannot is history: tmux remembers what a pane is
+running, not the command someone typed to start it.
+
 Build it:
 
 ```rust

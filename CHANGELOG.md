@@ -62,6 +62,10 @@ full.
   destructive and refuse when the client cannot ask. Measured first: Codex
   declares `elicitation`, so this is a question something can answer.
 
+- `tmux_workspace::freeze` and `Workspace::to_yaml`, which turn a session
+  someone built by hand back into a file. The two directions are tested
+  against each other: build, freeze, render, parse, rebuild.
+
 - `Window::last_activity`. tmux stamps it on every byte a pane writes, unlike
   `has_activity`, which needs `monitor-activity` and is off by default.
 

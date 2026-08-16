@@ -512,3 +512,78 @@ fn a_present_but_invalid_value_is_refused_rather_than_defaulted() {
         .expect("an absent value defaults");
     assert!(!workspace.windows[0].focus);
 }
+
+/// The two directions have to meet: a session built from a file, frozen back
+/// to a workspace, and built again must produce the same shape. Anything the
+/// freeze cannot recover shows up here as a difference.
+#[tokio::test]
+async fn a_session_freezes_back_into_a_workspace_that_rebuilds_it() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: original
+windows:
+  - window_name: editor
+    panes:
+      - sleep 400
+      - sleep 401
+  - window_name: logs
+    panes:
+      - sleep 402
+",
+    )
+    .expect("the workspace parses");
+
+    let built = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    let frozen = tmux_workspace::freeze(&built)
+        .await
+        .expect("the session freezes");
+
+    assert_eq!(frozen.session_name, "original");
+    assert_eq!(frozen.windows.len(), 2);
+    assert_eq!(
+        frozen
+            .windows
+            .iter()
+            .map(|window| window.panes.len())
+            .collect::<Vec<_>>(),
+        vec![2, 1],
+    );
+    // Exactly one window and one pane per window are focused, because that is
+    // what tmux tracks and what a rebuild needs to reproduce.
+    assert_eq!(
+        frozen.windows.iter().filter(|window| window.focus).count(),
+        1,
+    );
+
+    // The file it renders is a file this crate reads.
+    let yaml = frozen.to_yaml();
+    let reparsed = Workspace::from_yaml(&yaml).expect("the rendered YAML parses");
+    assert_eq!(reparsed, frozen, "rendering and parsing are inverses");
+
+    // And building from it gives the same shape back.
+    let rebuilt_config = Workspace {
+        session_name: "rebuilt".to_owned(),
+        ..reparsed
+    };
+    let rebuilt = WorkspaceBuilder::new(server)
+        .build(&rebuilt_config)
+        .await
+        .expect("the frozen workspace rebuilds");
+
+    let rebuilt_windows = rebuilt.windows().await.expect("windows");
+    assert_eq!(rebuilt_windows.len(), 2);
+    let mut counts = Vec::new();
+    for window in &rebuilt_windows {
+        counts.push(window.panes().await.expect("panes").len());
+    }
+    assert_eq!(counts, vec![2, 1], "the rebuilt session has the same shape");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

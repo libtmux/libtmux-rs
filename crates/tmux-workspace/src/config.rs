@@ -1,5 +1,6 @@
 //! Parsing tmuxp-style workspace YAML.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use yaml_rust2::{Yaml, YamlLoader};
@@ -427,4 +428,209 @@ fn optional_bool(value: &Yaml, path: &str) -> Result<Option<bool>, ConfigError> 
 /// Read a boolean that defaults to false when absent, and fails when wrong.
 fn is_true(value: &Yaml, path: &str) -> Result<bool, ConfigError> {
     Ok(optional_bool(value, path)?.unwrap_or(false))
+}
+
+impl Workspace {
+    /// Render this workspace as tmuxp-style YAML.
+    ///
+    /// Emits the keys this crate acts on and nothing else, so a document that
+    /// came from [`Self::from_yaml`] and back may be shorter than it started:
+    /// what is dropped is what `unsupported_keys` already named.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tmux_workspace::Workspace;
+    ///
+    /// let workspace = Workspace::from_yaml(
+    ///     "
+    /// session_name: demo
+    /// windows:
+    ///   - window_name: editor
+    ///     panes: [htop]
+    /// ",
+    /// )?;
+    ///
+    /// // What it writes, it can read.
+    /// assert_eq!(Workspace::from_yaml(&workspace.to_yaml())?, workspace);
+    /// # Ok::<(), tmux_workspace::ConfigError>(())
+    /// ```
+    #[must_use]
+    pub fn to_yaml(&self) -> String {
+        let mut out = String::new();
+        let _ = writeln!(out, "session_name: {}", quoted(&self.session_name));
+        if let Some(directory) = &self.start_directory {
+            let _ = writeln!(out, "start_directory: {}", path(directory));
+        }
+        if self.suppress_history {
+            out.push_str("suppress_history: true\n");
+        }
+        write_pairs(&mut out, Some("environment"), &self.environment, 2);
+        write_pairs(&mut out, Some("options"), &self.options, 2);
+        write_pairs(&mut out, Some("global_options"), &self.global_options, 2);
+        write_list(
+            &mut out,
+            Some("shell_command_before"),
+            &self.shell_command_before,
+            2,
+        );
+
+        out.push_str("windows:\n");
+        for window in &self.windows {
+            window.write_yaml(&mut out);
+        }
+
+        out
+    }
+}
+
+/// Writes the keys of one sequence entry, indenting all but the first.
+///
+/// A YAML sequence entry marks only its first line with `-`, so which line
+/// that is has to be tracked rather than decided per key.
+struct Entry {
+    marker: &'static str,
+    indent: &'static str,
+    first: bool,
+}
+
+impl Entry {
+    const fn new(marker: &'static str, indent: &'static str) -> Self {
+        Self {
+            marker,
+            indent,
+            first: true,
+        }
+    }
+
+    fn key(&mut self, out: &mut String, line: &str) {
+        out.push_str(if self.first { self.marker } else { self.indent });
+        self.first = false;
+        out.push_str(line);
+        out.push('\n');
+    }
+}
+
+impl WindowConfig {
+    /// Write this window as one entry of a `windows:` sequence.
+    fn write_yaml(&self, out: &mut String) {
+        let mut entry = Entry::new("  - ", "    ");
+
+        if let Some(name) = &self.window_name {
+            entry.key(out, &format!("window_name: {}", quoted(name)));
+        }
+        if let Some(index) = self.window_index {
+            entry.key(out, &format!("window_index: {index}"));
+        }
+        if let Some(shell) = &self.window_shell {
+            entry.key(out, &format!("window_shell: {}", quoted(shell)));
+        }
+        if let Some(layout) = &self.layout {
+            entry.key(out, &format!("layout: {}", quoted(layout)));
+        }
+        if let Some(directory) = &self.start_directory {
+            entry.key(out, &format!("start_directory: {}", path(directory)));
+        }
+        if self.focus {
+            entry.key(out, "focus: true");
+        }
+        if let Some(suppress) = self.suppress_history {
+            entry.key(out, &format!("suppress_history: {suppress}"));
+        }
+        if !self.environment.is_empty() {
+            entry.key(out, "environment:");
+            write_pairs(out, None, &self.environment, 6);
+        }
+        if !self.options.is_empty() {
+            entry.key(out, "options:");
+            write_pairs(out, None, &self.options, 6);
+        }
+        if !self.shell_command_before.is_empty() {
+            entry.key(out, "shell_command_before:");
+            write_list(out, None, &self.shell_command_before, 6);
+        }
+
+        // Always written, even when empty: an entry with no keys at all is
+        // not a mapping, and `panes` is the one key every window has.
+        entry.key(out, "panes:");
+        for pane in &self.panes {
+            pane.write_yaml(out);
+        }
+    }
+}
+
+impl PaneConfig {
+    /// Write this pane as one entry of a `panes:` sequence.
+    fn write_yaml(&self, out: &mut String) {
+        let mut entry = Entry::new("      - ", "        ");
+
+        if let [only] = self.shell_commands.as_slice() {
+            entry.key(out, &format!("shell_command: {}", quoted(only)));
+        } else if !self.shell_commands.is_empty() {
+            entry.key(out, "shell_command:");
+            write_list(out, None, &self.shell_commands, 10);
+        }
+        if let Some(directory) = &self.start_directory {
+            entry.key(out, &format!("start_directory: {}", path(directory)));
+        }
+        if self.focus {
+            entry.key(out, "focus: true");
+        }
+        if !self.enter {
+            entry.key(out, "enter: false");
+        }
+        if let Some(suppress) = self.suppress_history {
+            entry.key(out, &format!("suppress_history: {suppress}"));
+        }
+        if !self.environment.is_empty() {
+            entry.key(out, "environment:");
+            write_pairs(out, None, &self.environment, 10);
+        }
+        if entry.first {
+            // Nothing distinguished this pane, so it is the empty mapping a
+            // reader turns back into a default pane.
+            out.push_str("      - {}\n");
+        }
+    }
+}
+
+/// Write a mapping of name to value, indented.
+fn write_pairs(out: &mut String, name: Option<&str>, values: &[(String, String)], indent: usize) {
+    if values.is_empty() {
+        return;
+    }
+    if let Some(name) = name {
+        let _ = writeln!(out, "{name}:");
+    }
+    for (key, value) in values {
+        let _ = writeln!(out, "{:indent$}{}: {}", "", quoted(key), quoted(value));
+    }
+}
+
+/// Write a sequence of strings, indented.
+fn write_list(out: &mut String, name: Option<&str>, values: &[String], indent: usize) {
+    if values.is_empty() {
+        return;
+    }
+    if let Some(name) = name {
+        let _ = writeln!(out, "{name}:");
+    }
+    for value in values {
+        let _ = writeln!(out, "{:indent$}- {}", "", quoted(value));
+    }
+}
+
+/// Quote a path the way a scalar is quoted.
+fn path(value: &std::path::Path) -> String {
+    quoted(&value.display().to_string())
+}
+
+/// Quote a scalar so YAML reads it back as the string it started as.
+///
+/// Always quoted rather than only when necessary: a command is arbitrary
+/// shell, and deciding which of YAML's bare-scalar rules it trips is a larger
+/// job than quoting everything.
+fn quoted(value: &str) -> String {
+    let escaped = value.replace('\\', r"\\").replace('"', r#"\""#);
+    format!("\"{escaped}\"")
 }
