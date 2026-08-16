@@ -62,8 +62,27 @@ full.
   current ones rather than a per-client view, because tmux keeps no per-client
   focus.
 
+- `missing_debug_implementations` and `elided_lifetimes_in_paths`, which the
+  Rust API guidelines ask for. The first immediately found seven more public
+  types without `Debug` -- `IntegerKind`, `Predicate`, `SessionTreeFields`,
+  `WindowTreeFields`, `WorkspaceBuilder`, `TmuxTools`, and `Builder` -- the
+  same omission a hand audit had already had to find once. `Predicate` and
+  `TmuxTools` redact rather than derive, because one holds values a caller
+  filtered on and the other a resolved socket path.
+- A test that handle equality and hashing separate two servers. The contract
+  was stated in `roadmap.md` and implemented on all four handles with nothing
+  exercising it; two servers each issue `$0`, so the ids collide and only the
+  server identity tells the handles apart.
+
 ### Fixed
 
+- Twelve parity rows were `planned` after shipping, including atomic
+  `refresh`/`refreshed`, `Server::hierarchy`, handle equality over server
+  identity, sensitive-value classification, and `SparseValues`. The ledger is
+  the stated definition of done, so understating it misdirects; the row for
+  hierarchy listings also still described a `try_*` naming the crate did not
+  adopt. Rows without focused evidence -- `Error::UnsupportedCapability`,
+  `Client` equality, and `Drop` behaviour -- stay `planned`.
 - `ServerGeneration` and `PaneDirection` rendered with the summary of the type
   above them. Both doc blocks had been inserted into the middle of a
   neighbour's, splitting one sentence across two items: `ServerIdentity` and
