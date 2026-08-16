@@ -51,6 +51,10 @@ full.
   and `paste_text`.
 - `cargo run --example budget`, measuring what a client downloads at
   `tools/list`. That budget is why adding a tool is a decision.
+- `what_changed`, reporting which windows have written since the timestamp it
+  handed back, so re-orienting costs one call rather than a capture per pane.
+- `Window::last_activity`. tmux stamps it on every byte a pane writes, unlike
+  `has_activity`, which needs `monitor-activity` and is off by default.
 
 - `capture_pane` takes `last_command`, returning only what the last command
   printed instead of the screen or the whole history. It reports `marks` --

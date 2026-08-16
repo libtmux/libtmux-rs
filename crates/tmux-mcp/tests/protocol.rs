@@ -298,6 +298,7 @@ fn every_call(
             json!({"pane": pane, "command": "sleep 30"}),
         ),
         ("list_servers", json!({})),
+        ("what_changed", json!({"since": 0})),
         (
             "expand_format",
             json!({"format": "#{pane_id}", "pane": pane}),
@@ -443,6 +444,7 @@ const READING: &[&str] = &[
     "expand_format",
     "show_environment",
     "show_hooks",
+    "what_changed",
 ];
 
 /// The tools that destroy work.

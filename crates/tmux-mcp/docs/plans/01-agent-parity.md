@@ -212,26 +212,26 @@ than shipping a capability nothing asks for.
 
 ## What was left out
 
-**Resources.** The protocol offers a browsable URI space alongside tools, and
-the Python server publishes one: `tmux://sessions`, `tmux://sessions/{name}`,
-`tmux://panes/{id}/content`, and so on. It is not built here.
-
-The data is identical to what `describe`, `list_windows`, `list_panes` and
-`capture_pane` already return, so a resource space is a second path to the same
-answers — the thing the surface is meant to stay clear of. What resources add
-over tools is that a *person* can attach one to a conversation, and that is
-exactly where tmux is a poor fit: attaching `tmux://panes/%1/content` pins what
-a pane showed at the moment it was attached, and a pane's whole value is being
-current. An agent that wants to know what a pane holds should call a tool and
-get the answer as of now.
-
-Worth revisiting if a client appears that subscribes to resources and re-reads
-them, since that turns the staleness argument around.
-
 **A `search_tools` meta-tool.** The Python server has one; it is for servers
-whose schema list is too large to browse. Measured here, `tools/list` is around
-25 KB across 31 tools. The three `alwaysLoad` anchors address the same problem
-more directly, and at this size an index would cost more than it saves.
+whose schema list is too large to browse. The three `alwaysLoad` anchors
+address the same problem more directly, and an index would have to be read
+before it could save anything.
+
+The budget it would be paid from is measured rather than guessed at:
+`cargo run --example budget` reports what a client downloads at `tools/list`,
+per tier and per tool. That number is what makes adding a tool a decision.
+
+**`what_changed` at pane granularity.** tmux has no signal for it. The two
+that look like one are not:
+
+- `window_activity_flag` is an alert, and `monitor-activity` defaults to off
+  (`options-table.c`), so on a default tmux it is always false.
+- `pane_unseen_changes` is set only while a pane is in a mode (`input.c`),
+  so it means "wrote while you were scrolled back in copy mode".
+
+`window_activity` is the one that works: tmux stamps it on every byte a pane
+writes, whatever the options say. So the tool answers at window granularity
+and says so, rather than answering per pane and being wrong.
 
 ## Where tmux disagrees with itself
 
@@ -264,3 +264,58 @@ the next call that uses it.
 `pane_left`/`pane_right`/`pane_top`/`pane_bottom` coordinates are already
 filter fields on the pane target, so "the bottom-right pane" is one
 `find_panes` expression and needs no tool of its own.
+
+## Commands that outlive the call
+
+`run_command` holds the caller's turn until the command ends or the deadline
+does. For a build that is wrong twice over: an agent can do nothing else
+meanwhile, and a client that gives up first leaves the pane busy with no way
+to ask about it again. Two things at once was not possible at all.
+
+A job is the same sentinel-bracketed run reading in a task of its own, so the
+answer is collected whether or not anyone waits. The two share one `Scanner`;
+what differs is who decides when to stop reading.
+
+Polling is cheap because `job_status` answers from a cursor, the contract
+`capture_since` already uses. The alternative -- returning the whole output
+each poll -- costs the caller its own output again on every look, which is the
+cost the tool exists to avoid.
+
+`cancel_job` interrupts the pane, not the command, because tmux offers nothing
+finer: the job is a foreground process in a pane and `C-c` is what stops one.
+The answer says which pane was interrupted so a caller knows what else it hit.
+
+## Where a fallback has to be bounded
+
+`capture_pane last_command` was measured against a real agent before it was
+believed. In a bash pane it answered with 2,014 lines: the shell marks no
+prompts, so there was no run to find, and falling back to the history returned
+everything the pane had ever written -- the most expensive answer available,
+from the request that exists to be the cheapest.
+
+The visible screen is the bounded approximation, and the same probe then
+returned 24 lines. The lesson generalises: a fallback for a
+cost-reducing feature has to be cheaper than the thing it replaces, or it
+inverts the feature.
+
+`marks` is reported for the same reason. An answer that fell back looks
+exactly like a command that printed a great deal, and an agent cannot tell
+those apart from the text.
+
+## What shell integration actually costs
+
+OSC 133 is what tmux reads to know where a prompt begins, and it was measured
+across the shells rather than assumed:
+
+| Shell | Marks prompts by default |
+| --- | --- |
+| fish | yes |
+| bash | no |
+| zsh | no |
+
+So prompt-aware capture is exact where it applies and absent for most panes.
+It is shipped because it costs one flag and is strictly better where it works,
+and because the answer says which case it is. Installing shell integration
+into a live pane would widen it, and is not done here: it means typing into a
+shell that may not be at a prompt, which is the failure `run_command` already
+reports as `no_shell`.

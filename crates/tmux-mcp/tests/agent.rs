@@ -2202,3 +2202,70 @@ async fn an_unmarked_pane_falls_back_to_the_screen_not_the_history() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Re-orienting on a busy machine should cost one call, not one capture per
+/// pane. The timestamp comes from tmux itself, so a caller passing it back
+/// hears only about what happened next.
+#[tokio::test]
+async fn what_changed_reports_windows_that_wrote_since_the_last_look() {
+    let (guard, tools) = fixture("changes").await;
+
+    let quiet = json(
+        tools
+            .what_changed(args(serde_json::json!({})))
+            .await
+            .expect("changes are reported"),
+    );
+    assert!(
+        quiet["windows_checked"].as_u64().expect("a count") >= 1,
+        "the listing considered the session's window",
+    );
+    let mark = quiet["now"].as_i64().expect("a timestamp");
+
+    // Nothing has happened since, so nothing is reported.
+    let nothing = json(
+        tools
+            .what_changed(args(serde_json::json!({"since": mark})))
+            .await
+            .expect("changes are reported"),
+    );
+    assert!(
+        nothing["windows"].as_array().expect("a listing").is_empty(),
+        "a quiet server reports nothing: {nothing:?}",
+    );
+
+    // tmux stamps activity in whole seconds, so a change inside the same
+    // second as `mark` is indistinguishable from one before it.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let pane = panes(&tools).await[0]["id"]
+        .as_str()
+        .expect("a pane id")
+        .to_owned();
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo something-happened",
+            "enter": true,
+        })))
+        .await
+        .expect("keys are sent");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    let after = json(
+        tools
+            .what_changed(args(serde_json::json!({"since": mark})))
+            .await
+            .expect("changes are reported"),
+    );
+    let reported = after["windows"].as_array().expect("a listing");
+    assert!(
+        !reported.is_empty(),
+        "the window that wrote is reported: {after:?}",
+    );
+    assert!(
+        reported[0]["activity"].as_i64().expect("a timestamp") > mark,
+        "and it wrote after the mark",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

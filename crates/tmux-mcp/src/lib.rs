@@ -911,6 +911,16 @@ pub struct CancelJobArgs {
     pub job: String,
 }
 
+/// Arguments for asking which windows have written lately.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WhatChangedArgs {
+    /// Report only windows that wrote after this time.
+    ///
+    /// Pass back the `now` from the previous call. Omit it to see every
+    /// window ordered by how recently it wrote.
+    pub since: Option<i64>,
+}
+
 /// Arguments for expanding a tmux format.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FormatArgs {
@@ -2951,6 +2961,60 @@ impl TmuxTools {
         servers.sort_by_key(|listing| !listing.current);
 
         Ok(Json(ServerListings { servers, searched }))
+    }
+
+    /// Report which windows have produced output.
+    #[tool(
+        description = "Report which windows have written output, most recent first, and a \
+                       timestamp to pass back next time. This is the cheap way to re-orient \
+                       on a busy machine: one call instead of capturing every pane to find \
+                       out which one is doing something. It answers at window granularity, \
+                       so follow up with list_window_panes and capture_since. tmux stamps \
+                       this on every byte a pane writes, so it needs no tmux options set.",
+        title = "Report What Has Been Busy",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn what_changed(
+        &self,
+        Parameters(WhatChangedArgs { since }): Parameters<WhatChangedArgs>,
+    ) -> Result<Json<Changes>, ErrorData> {
+        let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
+        let checked = windows.len();
+
+        let mut busy: Vec<_> = windows
+            .iter()
+            .filter(|window| since.is_none_or(|since| window.last_activity() > since))
+            .map(|window| Busy {
+                id: window.id().to_string(),
+                session_id: window.session_id().to_string(),
+                name: lossy(window.name()),
+                activity: window.last_activity(),
+                panes: window.pane_count(),
+                active: window.is_active(),
+            })
+            .collect();
+        busy.sort_by_key(|window| std::cmp::Reverse(window.activity));
+
+        // The latest activity seen, rather than a clock reading. Comparing a
+        // caller's value against timestamps tmux wrote means both have to come
+        // from tmux, and this needs no second source to agree with.
+        let now = windows
+            .iter()
+            .map(libtmux::Window::last_activity)
+            .max()
+            .unwrap_or_default()
+            .max(since.unwrap_or_default());
+
+        Ok(Json(Changes {
+            windows: busy,
+            now,
+            windows_checked: checked,
+        }))
     }
 
     /// Expand a tmux format string.

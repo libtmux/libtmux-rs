@@ -477,3 +477,31 @@ pub struct Pasted {
     /// How many bytes were delivered.
     pub bytes: usize,
 }
+
+/// One window that has produced output.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Busy {
+    /// The `@`-prefixed window identity.
+    pub id: String,
+    /// The session it was reached through.
+    pub session_id: String,
+    /// The window name.
+    pub name: String,
+    /// When it last wrote, in seconds since the Unix epoch.
+    pub activity: i64,
+    /// How many panes it holds.
+    pub panes: u32,
+    /// Whether it is its session's active window.
+    pub active: bool,
+}
+
+/// Which windows have written, and when to ask from next time.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Changes {
+    /// The windows that wrote, most recent first.
+    pub windows: Vec<Busy>,
+    /// Pass this back as `since` to hear only about what happens next.
+    pub now: i64,
+    /// How many windows were considered.
+    pub windows_checked: usize,
+}

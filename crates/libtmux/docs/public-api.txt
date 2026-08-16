@@ -815,6 +815,7 @@ function libtmux::window::Window::is_active
 function libtmux::window::Window::is_linked
 function libtmux::window::Window::is_zoomed
 function libtmux::window::Window::kill
+function libtmux::window::Window::last_activity
 function libtmux::window::Window::last_pane
 function libtmux::window::Window::layout
 function libtmux::window::Window::link_to

@@ -248,6 +248,38 @@ impl Window {
         self.projection.link().has_bell()
     }
 
+    /// Return when the window last produced output, in seconds since the
+    /// Unix epoch.
+    ///
+    /// tmux stamps this on every byte a pane in the window writes, whatever
+    /// the window options say. That is what separates it from
+    /// [`Self::has_activity`], which is an alert and stays false unless
+    /// `monitor-activity` was turned on -- and it is off by default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("busy").await?;
+    /// let window = session.active_window().await?.expect("a window");
+    ///
+    /// // A window that has just been made has already produced output.
+    /// assert!(window.last_activity() > 0);
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn last_activity(&self) -> i64 {
+        *self.projection.window().window_activity()
+    }
+
     /// Report whether one of the window's panes is zoomed to fill it.
     ///
     /// This is the window's own flag rather than the pane's, because tmux
