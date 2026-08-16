@@ -189,6 +189,7 @@ fn every_call(
     pane: &str,
     window: &str,
     spare: &str,
+    spare_live: &str,
     doomed_window: &str,
 ) -> Vec<(&'static str, Value)> {
     // Every tool, called as a client calls it. The point is the arguments:
@@ -296,6 +297,28 @@ fn every_call(
             "start_command",
             json!({"pane": pane, "command": "sleep 30"}),
         ),
+        ("list_servers", json!({})),
+        (
+            "expand_format",
+            json!({"format": "#{pane_id}", "pane": pane}),
+        ),
+        ("show_environment", json!({})),
+        (
+            "set_environment",
+            json!({"name": "WIRE_VAR", "value": "wire-value"}),
+        ),
+        ("show_hooks", json!({})),
+        ("pipe_pane", json!({"pane": pane})),
+        (
+            "select_layout",
+            json!({"window": window, "layout": "even-vertical"}),
+        ),
+        ("clear_pane", json!({"pane": pane})),
+        (
+            "respawn_pane",
+            json!({"pane": spare_live, "command": "sleep 60", "kill_first": true}),
+        ),
+        ("paste_text", json!({"pane": pane, "text": "pasted"})),
         ("job_status", json!({"job": job, "cursor": 0, "seconds": 0})),
         ("list_jobs", json!({})),
         ("cancel_job", json!({"job": job})),
@@ -342,6 +365,12 @@ async fn every_tool_accepts_the_arguments_its_schema_describes() {
         .to_owned();
     wire.json("create_session", json!({"name": "spare-session"}))
         .await;
+    let spare_live = wire
+        .json("split_pane", json!({"pane": pane, "direction": "below"}))
+        .await["id"]
+        .as_str()
+        .expect("a pane to respawn")
+        .to_owned();
 
     // Started here rather than in the list, because the job tools need an id
     // that exists and the list is built before any of it runs.
@@ -355,7 +384,7 @@ async fn every_tool_accepts_the_arguments_its_schema_describes() {
         .expect("a job id")
         .to_owned();
 
-    let calls = every_call(&job, &pane, &window, &spare, &doomed_window);
+    let calls = every_call(&job, &pane, &window, &spare, &spare_live, &doomed_window);
 
     // A list of calls rots the moment a tool is added without one, and a
     // rotted list looks exactly like a passing test. So the list is checked
@@ -410,13 +439,24 @@ const READING: &[&str] = &[
     "wait_for_channel",
     "job_status",
     "list_jobs",
+    "list_servers",
+    "expand_format",
+    "show_environment",
+    "show_hooks",
 ];
 
 /// The tools that destroy work.
 const DESTRUCTIVE: &[&str] = &["kill_pane", "kill_window", "kill_session", "kill_server"];
 
 /// The tools that put the caller's own payload into a live terminal.
-const OPEN_WORLD: &[&str] = &["send_keys", "run_command", "start_command"];
+const OPEN_WORLD: &[&str] = &[
+    "send_keys",
+    "run_command",
+    "start_command",
+    "pipe_pane",
+    "respawn_pane",
+    "paste_text",
+];
 
 #[tokio::test]
 async fn every_tool_declares_what_it_does_to_the_server() {

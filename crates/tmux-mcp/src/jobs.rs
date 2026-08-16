@@ -20,7 +20,7 @@ use libtmux::{Error, Pane};
 use serde::Serialize;
 use tokio::sync::Notify;
 
-use crate::exec::{self, Outcome, RunView};
+use crate::exec::{self, RunOutcome, RunView};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
 fn hold<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -342,9 +342,13 @@ impl Jobs {
 /// Translate a finished run into the two fields a job records.
 pub(crate) const fn ended(view: &RunView) -> (JobState, Option<i32>) {
     match view.outcome {
-        Outcome::Completed => (JobState::Finished, view.exit_status),
-        Outcome::PaneClosed => (JobState::PaneClosed, None),
-        _ => (JobState::NoShell, None),
+        RunOutcome::Completed => (JobState::Finished, view.exit_status),
+        RunOutcome::PaneClosed => (JobState::PaneClosed, None),
+        // A job reads until the command ends, so it has no deadline of its
+        // own to reach and is never cancelled by a withdrawn request.
+        RunOutcome::Deadline | RunOutcome::Cancelled | RunOutcome::NoShell => {
+            (JobState::NoShell, None)
+        }
     }
 }
 

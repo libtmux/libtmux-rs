@@ -206,18 +206,19 @@ you want the tools that destroy work; see below.
 
 ## What it offers
 
-Thirty-seven tools. Each says what it does to the server, so a client can
+Forty-seven tools. Each says what it does to the server, so a client can
 decide what to run unattended and what to put in front of you.
 
 | | Tools |
 |---|---|
-| **Look** | `list_sessions`, `list_windows`, `list_panes`, `list_session_windows`, `list_window_panes`, `describe` |
+| **Look** | `list_sessions`, `list_windows`, `list_panes`, `list_session_windows`, `list_window_panes`, `describe`, `list_servers`, `expand_format` |
 | **Read a pane** | `capture_pane`, `snapshot_pane`, `capture_since`, `watch_pane`, `search_panes` |
 | **Find** | `find_panes`, `find_sessions` |
 | **Run and wait** | `run_command`, `send_keys`, `wait_for_text`, `wait_for_idle`, `wait_for_channel`, `signal_channel` |
 | **Run in the background** | `start_command`, `job_status`, `list_jobs`, `cancel_job` |
-| **Arrange** | `create_session`, `new_window`, `split_pane`, `select_pane`, `select_window`, `resize_pane`, `rename` |
-| **Configure** | `show_option`, `set_option` |
+| **Arrange** | `create_session`, `new_window`, `split_pane`, `select_pane`, `select_window`, `resize_pane`, `rename`, `select_layout`, `respawn_pane` |
+| **Move text** | `paste_text`, `pipe_pane`, `clear_pane` |
+| **Configure** | `show_option`, `set_option`, `show_environment`, `set_environment`, `show_hooks` |
 | **Destroy** | `kill_pane`, `kill_window`, `kill_session`, `kill_server` |
 
 And three prompts — `run_and_wait`, `interrupt_gracefully`, `diagnose_pane` —
@@ -258,7 +259,7 @@ Three tiers, also settable with `TMUX_MCP_SAFETY`:
 
 | Tier | Offers |
 |---|---|
-| `readonly` | The 19 tools that change nothing |
+| `readonly` | The 23 tools that change nothing |
 | `mutating` | The default: everything except the four that destroy work |
 | `destructive` | Everything |
 
@@ -331,6 +332,11 @@ anything was dropped.
 once and reports the pane and line. The listing tools will not: they read
 names and commands, not what a terminal is showing.
 
+**Asking tmux something no tool covers.** `expand_format` evaluates any tmux
+format, so a field with no tool of its own — `#{pane_unseen_changes}`,
+`#{window_activity_flag}`, `#{client_termname}` — is one call away rather than
+unreachable.
+
 **Asking about layout.** `find_panes` takes a filter expression over a pane's
 own tmux format fields, so "the bottom-right pane" is one call:
 
@@ -379,6 +385,13 @@ $ cargo run --example surface
 
 `readonly` serves a read-only server; `surface` prints what each tier offers
 and what each tool answers with, without starting one.
+
+```console
+$ cargo run --example budget
+```
+
+`budget` measures what a client downloads at `tools/list`, which is the
+constraint that decides whether a tool earns its place.
 
 ## Development
 

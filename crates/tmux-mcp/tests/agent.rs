@@ -1859,3 +1859,221 @@ async fn waiting_for_quiet_distinguishes_a_settled_pane_from_a_busy_one() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// The format tool is the escape hatch for every field tmux publishes and no
+/// tool here carries, so the test uses one of exactly that kind.
+#[tokio::test]
+async fn a_format_expands_against_the_pane_it_names() {
+    let (guard, tools, pane) = typing_fixture("formats").await;
+
+    let expanded = json(
+        tools
+            .expand_format(args(serde_json::json!({
+                "format": "#{pane_id}",
+                "pane": pane,
+            })))
+            .await
+            .expect("the format expands"),
+    );
+    assert_eq!(expanded["value"], pane.as_str());
+    assert_eq!(expanded["pane"], pane.as_str());
+
+    // A field with no tool of its own, which is the reason this exists.
+    let width = json(
+        tools
+            .expand_format(args(serde_json::json!({
+                "format": "#{pane_width}",
+                "pane": pane,
+            })))
+            .await
+            .expect("the format expands"),
+    );
+    assert!(
+        width["value"]
+            .as_str()
+            .expect("a width")
+            .parse::<u32>()
+            .is_ok(),
+        "pane_width came back as a number: {width:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The environment tmux hands out is not the environment of anything already
+/// running, and the test says so by checking a pane started earlier.
+#[tokio::test]
+async fn the_environment_is_read_and_written_at_the_scope_named() {
+    let (guard, tools) = fixture("environment").await;
+
+    let written = json(
+        tools
+            .set_environment(args(serde_json::json!({
+                "name": "TMUX_MCP_PROBE",
+                "value": "set-by-the-test",
+            })))
+            .await
+            .expect("the variable is written"),
+    );
+    assert_eq!(written["removed"], false);
+
+    let shown = json(
+        tools
+            .show_environment(args(serde_json::json!({})))
+            .await
+            .expect("the environment is read"),
+    );
+    let found = shown["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["name"] == "TMUX_MCP_PROBE")
+        .expect("the variable is listed");
+    assert_eq!(found["value"], "set-by-the-test");
+
+    // Omitting the value marks it for removal rather than setting it empty.
+    let removed = json(
+        tools
+            .set_environment(args(serde_json::json!({"name": "TMUX_MCP_PROBE"})))
+            .await
+            .expect("the variable is removed"),
+    );
+    assert_eq!(removed["removed"], true);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Pasting exists because typing is not the same thing: the text arrives as
+/// one block rather than as keystrokes a program can react to one at a time.
+#[tokio::test]
+async fn pasted_text_reaches_the_pane_and_leaves_no_buffer_behind() {
+    let (guard, tools, pane) = typing_fixture("pasting").await;
+
+    let pasted = json(
+        tools
+            .paste_text(args(serde_json::json!({
+                "pane": pane,
+                "text": "echo pasted-marker",
+            })))
+            .await
+            .expect("the text pastes"),
+    );
+    assert_eq!(pasted["pane"], pane.as_str());
+    assert_eq!(pasted["bytes"], 18);
+
+    // Asserted on the pane rather than through a wait: the text is delivered
+    // by the paste itself, and a wait attached afterwards races the output it
+    // is looking for.
+    let mut shown = String::new();
+    for _ in 0..40 {
+        shown = json(
+            tools
+                .capture_pane(args(serde_json::json!({"pane": pane})))
+                .await
+                .expect("the capture runs"),
+        )["text"]
+            .as_str()
+            .expect("text")
+            .to_owned();
+        if shown.contains("echo pasted-marker") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        shown.contains("echo pasted-marker"),
+        "the pasted text reached the pane: {shown:?}",
+    );
+
+    // The buffer this created is gone, so it cannot be pasted again by
+    // accident or read by whoever looks at the buffer list next.
+    let buffers = guard
+        .server()
+        .buffer_names()
+        .await
+        .expect("buffers are listed");
+    assert!(
+        buffers.is_empty(),
+        "the paste buffer was deleted afterwards: {buffers:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Clearing scrollback is what makes the next capture cheap, so the test
+/// measures exactly that: many lines before, few after.
+#[tokio::test]
+async fn clearing_a_pane_shrinks_what_the_next_capture_returns() {
+    let (guard, tools, pane) = typing_fixture("clearing").await;
+
+    tools
+        .run_command(
+            args(serde_json::json!({
+                "pane": pane,
+                "command": "seq 1 500",
+                "seconds": 20,
+            })),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("the command runs");
+
+    let before = json(
+        tools
+            .capture_pane(args(serde_json::json!({"pane": pane, "history": true})))
+            .await
+            .expect("the capture runs"),
+    )["lines"]
+        .as_u64()
+        .expect("a line count");
+    assert!(before > 100, "the scrollback holds the run: {before} lines");
+
+    tools
+        .clear_pane(args(serde_json::json!({"pane": pane})))
+        .await
+        .expect("the pane clears");
+
+    let after = json(
+        tools
+            .capture_pane(args(serde_json::json!({"pane": pane, "history": true})))
+            .await
+            .expect("the capture runs"),
+    )["lines"]
+        .as_u64()
+        .expect("a line count");
+    assert!(
+        after < before,
+        "clearing left less to read: {after} against {before}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Discovery has to name the server these tools are bound to, because a pane
+/// id means nothing without knowing which server it belongs to.
+#[tokio::test]
+async fn listing_servers_marks_the_one_these_tools_are_bound_to() {
+    let (guard, tools) = fixture("discovery").await;
+
+    let listed = json(tools.list_servers().await.expect("servers are listed"));
+    let servers = listed["servers"].as_array().expect("a listing");
+
+    let current: Vec<_> = servers
+        .iter()
+        .filter(|server| server["current"] == true)
+        .collect();
+    assert_eq!(current.len(), 1, "exactly one server is the bound one");
+    assert!(
+        current[0]["sessions"].as_u64().expect("a session count") >= 1,
+        "the bound server answered about itself",
+    );
+    assert!(
+        !listed["searched"]
+            .as_array()
+            .expect("searched paths")
+            .is_empty(),
+        "the answer says where it looked",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

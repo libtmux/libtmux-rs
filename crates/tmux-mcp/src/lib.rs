@@ -87,7 +87,7 @@ mod text;
 mod views;
 
 pub use caller::{CallerIdentity, Relation};
-pub use exec::{Outcome, RunView, WaitView};
+pub use exec::{IdleOutcome, IdleView, RunOutcome, RunView, WaitOutcome, WaitView};
 pub use tail::Cursor;
 pub use views::*;
 
@@ -219,10 +219,11 @@ const INSTRUCTIONS: &str = concat!(
      worth repeating unchanged.",
     // Absences, so an agent stops hunting for them. These are server-shaped:
     // whole families that are missing rather than one tool's caveat.
-    "\n\nNOT HERE: copy mode, paste buffers, hooks, layouts and pipe-pane have \
-     no tools. Leave copy mode by sending the key q with send_keys. Anything \
-     else tmux can do is reachable by running the tmux command itself with \
-     run_command.",
+    "\n\nNOT HERE: copy mode has no tools; leave it by sending the key q with \
+     send_keys. Hooks are read-only, because one set from here would vanish \
+     with this process. For any field tmux publishes that no tool carries, \
+     use expand_format. Anything else tmux can do is reachable by running the \
+     tmux command itself with run_command.",
 );
 
 /// The environment variable naming how much of the surface is offered.
@@ -908,6 +909,91 @@ pub struct JobStatusArgs {
 pub struct CancelJobArgs {
     /// The job id `start_command` returned.
     pub job: String,
+}
+
+/// Arguments for expanding a tmux format.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FormatArgs {
+    /// The tmux format to expand, such as `#{pane_unseen_changes}`.
+    pub format: String,
+    /// The `%`-prefixed pane to expand it against.
+    ///
+    /// Pane, window and session formats all need one, because tmux resolves
+    /// the window and session from the pane.
+    pub pane: Option<String>,
+}
+
+/// Arguments for reading a tmux environment.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ShowEnvironmentArgs {
+    /// The session whose environment to read. Omit for the server's own.
+    pub session: Option<String>,
+}
+
+/// Arguments for writing a tmux environment.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetEnvironmentArgs {
+    /// The variable name.
+    pub name: String,
+    /// The value to store. Omit to mark the variable for removal.
+    pub value: Option<String>,
+    /// The session to write it for. Omit for the server's own.
+    pub session: Option<String>,
+}
+
+/// Arguments for reading the hooks set at a scope.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ShowHooksArgs {
+    /// The session whose hooks to read. Omit for the server's own.
+    pub session: Option<String>,
+}
+
+/// Arguments for piping a pane somewhere.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PipePaneArgs {
+    /// The `%`-prefixed pane to pipe.
+    pub pane: String,
+    /// The shell command to feed the pane's output to.
+    ///
+    /// Omit to stop piping. tmux runs this itself, so it outlives this
+    /// server: a pipe left on keeps writing after the agent has gone.
+    pub command: Option<String>,
+}
+
+/// Arguments for arranging a window's panes.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SelectLayoutArgs {
+    /// The `@`-prefixed window to arrange.
+    pub window: String,
+    /// A named layout, or a layout string tmux produced earlier.
+    ///
+    /// The names are `even-horizontal`, `even-vertical`, `main-horizontal`,
+    /// `main-vertical` and `tiled`.
+    pub layout: String,
+}
+
+/// Arguments for restarting what a pane runs.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RespawnPaneArgs {
+    /// The `%`-prefixed pane to restart.
+    pub pane: String,
+    /// The command to run in it. Omit to rerun the one it started with.
+    pub command: Option<String>,
+    /// Restart even when the pane's process is still alive.
+    ///
+    /// Without this a live pane is left alone, which is what keeps a
+    /// mistyped id from destroying work.
+    #[serde(default)]
+    pub kill_first: bool,
+}
+
+/// Arguments for putting text into a pane without typing it.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PasteTextArgs {
+    /// The `%`-prefixed pane to paste into.
+    pub pane: String,
+    /// The text to deliver.
+    pub text: String,
 }
 
 /// Arguments for waiting until a pane goes quiet.
@@ -2674,6 +2760,433 @@ impl TmuxTools {
         }))
     }
 
+    /// Find the tmux servers running on this machine.
+    #[tool(
+        description = "Find every tmux server on this machine, by looking where tmux puts its \
+                       sockets. These tools are bound to one server for their whole life, so \
+                       this is the only way to learn that another exists; acting on one means \
+                       starting a server pointed at its socket. A pane id means nothing \
+                       across servers: %1 names a different pane on each.",
+        title = "List tmux Servers",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn list_servers(&self) -> Result<Json<ServerListings>, ErrorData> {
+        let bound = self.socket().await.map(Path::to_path_buf);
+        let mut searched = Vec::new();
+        let mut found: Vec<PathBuf> = Vec::new();
+
+        // tmux puts its sockets in `$TMUX_TMPDIR/tmux-<uid>`, defaulting to
+        // /tmp. The directory is per-user, so this never reaches another
+        // user's servers even when /tmp is shared. The uid comes from tmux
+        // rather than from this process, because it is tmux's own choice of
+        // directory that is being predicted.
+        let mut roots = Vec::new();
+        if let Ok(uid) = self.server.format(None, "#{uid}").await {
+            roots.push(
+                std::env::var_os("TMUX_TMPDIR")
+                    .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
+                    .join(format!("tmux-{}", lossy(&uid).trim())),
+            );
+        }
+        // A server reached through --socket sits wherever it was put, and its
+        // neighbours are worth finding too.
+        if let Some(parent) = bound.as_deref().and_then(Path::parent) {
+            let parent = parent.to_path_buf();
+            if !roots.contains(&parent) {
+                roots.push(parent);
+            }
+        }
+
+        for root in roots {
+            searched.push(root.display().to_string());
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if std::fs::metadata(&path)
+                    .is_ok_and(|meta| std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type()))
+                    && !found.contains(&path)
+                {
+                    found.push(path);
+                }
+            }
+        }
+
+        // The bound server may sit outside that directory, which is exactly
+        // what --socket is for, so it is added rather than searched for.
+        if let Some(bound) = bound.as_ref()
+            && !found.contains(bound)
+        {
+            found.push(bound.clone());
+        }
+        found.sort();
+
+        let mut servers = Vec::with_capacity(found.len());
+        for socket in found {
+            let current = bound.as_ref() == Some(&socket);
+            let (sessions, unreachable) = match Server::builder()
+                .socket_path(&socket)
+                .build()
+                .map_err(|error| error.to_string())
+            {
+                Ok(server) => match server.sessions().await {
+                    Ok(sessions) => (u32::try_from(sessions.len()).ok(), None),
+                    Err(error) => (None, Some(error.to_string())),
+                },
+                Err(error) => (None, Some(error)),
+            };
+
+            servers.push(ServerListing {
+                name: socket
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned()),
+                socket: socket.display().to_string(),
+                sessions,
+                current,
+                unreachable,
+            });
+        }
+        servers.sort_by_key(|listing| !listing.current);
+
+        Ok(Json(ServerListings { servers, searched }))
+    }
+
+    /// Expand a tmux format string.
+    #[tool(
+        description = "Expand a tmux format such as #{pane_unseen_changes} or \
+                       #{window_activity_flag} and return what it evaluates to. This reaches \
+                       every field tmux publishes, including ones no tool here has of its \
+                       own, so use it for questions the listings cannot answer. Name a pane \
+                       for anything pane, window or session shaped: tmux resolves the window \
+                       and session from it.",
+        title = "Expand A tmux Format",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn expand_format(
+        &self,
+        Parameters(FormatArgs { format, pane }): Parameters<FormatArgs>,
+    ) -> Result<Json<Formatted>, ErrorData> {
+        let target = match pane.as_deref() {
+            Some(pane) => Some(self.find_pane(pane).await?),
+            None => None,
+        };
+
+        let value = self
+            .server
+            .format(target.as_ref(), &format)
+            .await
+            .map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(Formatted {
+            format,
+            value: lossy(&value),
+            pane,
+        }))
+    }
+
+    /// Read a tmux environment.
+    #[tool(
+        description = "Read the environment tmux hands to processes it starts, for the server \
+                       or for one session. This is not the environment of anything already \
+                       running: a pane started before a change keeps what it was given.",
+        title = "Show tmux Environment",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn show_environment(
+        &self,
+        Parameters(ShowEnvironmentArgs { session }): Parameters<ShowEnvironmentArgs>,
+    ) -> Result<Json<Environment>, ErrorData> {
+        let entries = match session.as_deref() {
+            Some(name) => self.find_session(name).await?.environment_all().await,
+            None => self.server.environment_all().await,
+        }
+        .map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(Environment {
+            entries: entries
+                .into_iter()
+                .map(|(name, entry)| EnvironmentEntry {
+                    name,
+                    value: match entry {
+                        libtmux::EnvironmentEntry::Set(value) => Some(lossy(&value)),
+                        libtmux::EnvironmentEntry::Removed => None,
+                    },
+                })
+                .collect(),
+            session,
+        }))
+    }
+
+    /// Write a tmux environment variable.
+    #[tool(
+        description = "Set or remove a variable in the environment tmux hands to processes it \
+                       starts. Panes created afterwards see it; panes already running do not.",
+        title = "Set tmux Environment Variable",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn set_environment(
+        &self,
+        Parameters(SetEnvironmentArgs {
+            name,
+            value,
+            session,
+        }): Parameters<SetEnvironmentArgs>,
+    ) -> Result<Json<EnvironmentSet>, ErrorData> {
+        let removed = value.is_none();
+        match (session.as_deref(), value) {
+            (Some(target), Some(value)) => {
+                self.find_session(target)
+                    .await?
+                    .set_environment(&name, value)
+                    .await
+            }
+            (Some(target), None) => {
+                self.find_session(target)
+                    .await?
+                    .unset_environment(&name)
+                    .await
+            }
+            (None, Some(value)) => self.server.set_environment(&name, value).await,
+            (None, None) => self.server.unset_environment(&name).await,
+        }
+        .map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(EnvironmentSet {
+            name,
+            session,
+            removed,
+        }))
+    }
+
+    /// Read the hooks tmux runs on its own events.
+    #[tool(
+        description = "List the hooks tmux runs when something happens on the server, such as \
+                       a pane exiting. Read-only: a hook set from here would vanish with this \
+                       process, so hooks belong in a tmux config file. Reach for this when \
+                       tmux does something no tool here asked for.",
+        title = "Show tmux Hooks",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn show_hooks(
+        &self,
+        Parameters(ShowHooksArgs { session }): Parameters<ShowHooksArgs>,
+    ) -> Result<Json<Hooks>, ErrorData> {
+        let found = match session.as_deref() {
+            Some(name) => self.find_session(name).await?.hooks().await,
+            None => self.server.hooks().await,
+        }
+        .map_err(|e| tmux_error(&e))?;
+
+        let mut hooks = Vec::new();
+        for (name, indexed) in found {
+            for (index, command) in &indexed {
+                hooks.push(Hook {
+                    name: name.clone(),
+                    // tmux numbers an array hook and leaves a single one bare.
+                    index: (indexed.len() > 1).then_some(*index),
+                    command: lossy(command),
+                });
+            }
+        }
+
+        Ok(Json(Hooks { hooks }))
+    }
+
+    /// Send a pane's output to a command as it arrives.
+    #[tool(
+        description = "Feed everything a pane writes to a shell command, such as tee to a \
+                       file, until told to stop. tmux runs the command itself, so the pipe \
+                       outlives this server: one left on keeps writing after the agent has \
+                       gone. Prefer capture_since for reading a pane yourself; this is for \
+                       handing the stream to something else.",
+        title = "Pipe A Pane Elsewhere",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    pub async fn pipe_pane(
+        &self,
+        Parameters(PipePaneArgs { pane, command }): Parameters<PipePaneArgs>,
+    ) -> Result<Json<Piped>, ErrorData> {
+        let target = self.find_pane(&pane).await?;
+        let piping = command.is_some();
+        target.pipe(command).await.map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(Piped {
+            pane: target.id().to_string(),
+            piping,
+        }))
+    }
+
+    /// Arrange a window's panes.
+    #[tool(
+        description = "Rearrange a window's panes into a named layout, or into a layout \
+                       string tmux gave you earlier. Use even-horizontal, even-vertical, \
+                       main-horizontal, main-vertical or tiled.",
+        title = "Arrange Window Panes",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn select_layout(
+        &self,
+        Parameters(SelectLayoutArgs { window, layout }): Parameters<SelectLayoutArgs>,
+    ) -> Result<Json<Layout>, ErrorData> {
+        let target = self.find_window(&window).await?;
+        self.server
+            .cmd(
+                Command::new("select-layout")
+                    .arg("-t")
+                    .arg(target.id().to_string())
+                    .arg(layout.clone()),
+            )
+            .await
+            .map_err(|e| tmux_error(&e))
+            .and_then(|result| {
+                result.success().then_some(()).ok_or_else(|| {
+                    bad_input(format!(
+                        "tmux refused the layout {layout:?}: {}",
+                        result.stderr_lossy().trim()
+                    ))
+                })
+            })?;
+
+        Ok(Json(Layout {
+            window: target.id().to_string(),
+            layout,
+        }))
+    }
+
+    /// Empty a pane's scrollback.
+    #[tool(
+        description = "Discard a pane's scrollback, so the next capture_pane returns only \
+                       what happens next. Use this before running something whose output you \
+                       want to read cleanly: it is far cheaper than reading past the old \
+                       output every time. The visible screen is left alone.",
+        title = "Clear Pane History",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn clear_pane(
+        &self,
+        Parameters(PaneArgs { pane }): Parameters<PaneArgs>,
+    ) -> Result<Json<PaneChanged>, ErrorData> {
+        let target = self.find_pane(&pane).await?;
+        target.clear_history().await.map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(PaneChanged {
+            pane: target.id().to_string(),
+        }))
+    }
+
+    /// Restart what a pane runs.
+    #[tool(
+        description = "Run a command in an existing pane again, keeping the pane and its \
+                       place in the layout. This is how a dead pane is brought back without \
+                       killing and re-splitting. A pane whose process is still alive is left \
+                       alone unless kill_first is set.",
+        title = "Restart A Pane",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    pub async fn respawn_pane(
+        &self,
+        Parameters(RespawnPaneArgs {
+            pane,
+            command,
+            kill_first,
+        }): Parameters<RespawnPaneArgs>,
+    ) -> Result<Json<PaneChanged>, ErrorData> {
+        let mut target = self.find_pane(&pane).await?;
+        target
+            .respawn(command, kill_first)
+            .await
+            .map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(PaneChanged {
+            pane: target.id().to_string(),
+        }))
+    }
+
+    /// Deliver text to a pane without typing it.
+    #[tool(
+        description = "Put text into a pane through a tmux paste buffer instead of typing it \
+                       key by key. Use this for anything long or awkward: send_keys types the \
+                       text, so a shell reading it can react to each character, and a \
+                       bracketed-paste aware program treats a paste as one block. The buffer \
+                       is deleted afterwards.",
+        title = "Paste Text Into Pane",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    pub async fn paste_text(
+        &self,
+        Parameters(PasteTextArgs { pane, text }): Parameters<PasteTextArgs>,
+    ) -> Result<Json<Pasted>, ErrorData> {
+        let target = self.find_pane(&pane).await?;
+        let bytes = text.len();
+        // Named after this process so two servers cannot collide, and deleted
+        // below so a buffer this created does not outlive the paste.
+        let buffer = format!("tmux-mcp-{}", std::process::id());
+
+        self.server
+            .set_buffer(Some(&buffer), std::ffi::OsString::from(text))
+            .await
+            .map_err(|e| tmux_error(&e))?;
+        let pasted = target.paste_buffer(Some(&buffer)).await;
+        let _ = self.server.delete_buffer(&buffer).await;
+        pasted.map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(Pasted {
+            pane: target.id().to_string(),
+            bytes,
+        }))
+    }
+
     /// Wait until a pane stops writing.
     #[tool(
         description = "Wait until a pane has written nothing for a few seconds. Use this when \
@@ -2697,7 +3210,7 @@ impl TmuxTools {
             seconds,
         }): Parameters<WaitForIdleArgs>,
         cancelled: tokio_util::sync::CancellationToken,
-    ) -> Result<Json<exec::IdleView>, ErrorData> {
+    ) -> Result<Json<IdleView>, ErrorData> {
         let target = self.find_pane(&pane).await?;
         // Clamped against the total, because quiet longer than the deadline
         // could never be observed and would always answer `deadline`.

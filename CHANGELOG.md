@@ -43,6 +43,22 @@ full.
 - `tmux-mcp` gains `wait_for_idle`, for when a caller cannot name what success
   looks like -- a TUI settling, a prompt glyph no regex predicts.
 
+- `tmux-mcp` gains ten tools that reach what nothing else could:
+  `list_servers` (these tools bind one socket for life, so nothing else could
+  learn another exists), `expand_format` (any tmux format, so a field with no
+  tool of its own is one call away), `show_environment`, `set_environment`,
+  `show_hooks`, `pipe_pane`, `select_layout`, `clear_pane`, `respawn_pane`
+  and `paste_text`.
+- `cargo run --example budget`, measuring what a client downloads at
+  `tools/list`. That budget is why adding a tool is a decision.
+
+### Changed
+
+- `run_command`, `wait_for_text` and `wait_for_idle` each answer with their
+  own outcome vocabulary instead of a shared one. Every wait used to advertise
+  `no_shell` and every run `matched`, which are answers they cannot give;
+  `tools/list` also lost 2.8 KB.
+
 ### Fixed
 
 - `Pane::stream_output` read and discarded every other pane's output. It now

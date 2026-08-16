@@ -29,33 +29,26 @@ const OUTPUT_LIMIT: usize = 256 * 1024;
 /// already unmistakable in the stream because it carries a real escape byte.
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// How a run or a wait finished.
+/// How a run finished.
+///
+/// Split from the wait outcomes rather than shared with them: a run cannot
+/// match a pattern and a wait cannot report a missing shell, and a vocabulary
+/// carrying both would have an agent checking for answers that never come.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum Outcome {
+pub enum RunOutcome {
     /// The command ran to completion and reported its status.
     Completed,
-    /// A pattern matched.
-    Matched,
-    /// A stop pattern matched, so the wait ended early.
-    Stopped,
     /// The time the caller allowed ran out.
     ///
-    /// For a run this ends the waiting, not the command. The pane keeps
-    /// working, so the next thing typed at it lands in the running command
-    /// rather than at a prompt.
+    /// This ends the waiting, not the command. The pane keeps working, so the
+    /// next thing typed at it lands in the running command rather than at a
+    /// prompt.
     Deadline,
     /// The pane stopped writing for good.
     PaneClosed,
-    /// The client withdrew the request while the wait was still running.
-    ///
-    /// Nobody is waiting for this answer, so it exists to name why the wait
-    /// stopped rather than to be read. What matters is the effect: the
-    /// control-mode connection is released here instead of being held for
-    /// the rest of the caller's deadline.
+    /// The client withdrew the request while the run was still going.
     Cancelled,
-    /// The pane went quiet for as long as the caller asked.
-    Idle,
     /// The pane never acknowledged the command.
     ///
     /// The keys were sent but the opening sentinel never came back. That is
@@ -70,13 +63,43 @@ pub enum Outcome {
     NoShell,
 }
 
+/// How a wait for text finished.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitOutcome {
+    /// A pattern matched.
+    Matched,
+    /// A stop pattern matched, so the wait ended early.
+    Stopped,
+    /// The time the caller allowed ran out.
+    Deadline,
+    /// The pane stopped writing for good.
+    PaneClosed,
+    /// The client withdrew the request while the wait was still running.
+    Cancelled,
+}
+
+/// How a wait for quiet finished.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IdleOutcome {
+    /// The pane went quiet for as long as the caller asked.
+    Idle,
+    /// The time the caller allowed ran out with the pane still writing.
+    Deadline,
+    /// The pane stopped writing for good.
+    PaneClosed,
+    /// The client withdrew the request while the wait was still running.
+    Cancelled,
+}
+
 /// What a command did.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct RunView {
     /// The pane the command ran in.
     pub pane: String,
     /// How the run finished.
-    pub outcome: Outcome,
+    pub outcome: RunOutcome,
     /// The command's exit status, when it completed.
     ///
     /// Absent when the run did not complete, and when the command was killed
@@ -97,7 +120,7 @@ pub struct WaitView {
     /// The pane that was watched.
     pub pane: String,
     /// How the wait finished.
-    pub outcome: Outcome,
+    pub outcome: WaitOutcome,
     /// Which pattern matched, indexed into the list it came from.
     pub matched_index: Option<usize>,
     /// The pattern that matched, as it was given.
@@ -120,7 +143,7 @@ pub struct IdleView {
     /// The pane that was watched.
     pub pane: String,
     /// How the wait finished.
-    pub outcome: Outcome,
+    pub outcome: IdleOutcome,
     /// How long the pane was quiet for, in seconds.
     ///
     /// Equal to what was asked for when the outcome is `idle`, and how long
@@ -207,7 +230,7 @@ pub(crate) async fn run_command(
 ) -> Result<RunView, Error> {
     let mut run = start_run(pane, command, suppress_history).await?;
     let deadline = tokio::time::Instant::now() + timeout;
-    let mut outcome = Outcome::Deadline;
+    let mut outcome = RunOutcome::Deadline;
 
     loop {
         let chunk = tokio::select! {
@@ -215,7 +238,7 @@ pub(crate) async fn run_command(
             // Checked first so a request cancelled while output is already
             // waiting still stops, rather than reading one more chunk.
             () = cancelled.cancelled() => {
-                outcome = Outcome::Cancelled;
+                outcome = RunOutcome::Cancelled;
                 break;
             }
             chunk = tokio::time::timeout_at(deadline, run.output.next_chunk()) => chunk,
@@ -232,7 +255,7 @@ pub(crate) async fn run_command(
                 }
             }
             Ok(None) => {
-                outcome = Outcome::PaneClosed;
+                outcome = RunOutcome::PaneClosed;
                 break;
             }
             Err(_) => break,
@@ -318,7 +341,7 @@ impl Run {
 
         let view = self
             .scanner
-            .unfinished(Outcome::PaneClosed, self.pane.clone());
+            .unfinished(RunOutcome::PaneClosed, self.pane.clone());
         let _ = self.output.shutdown().await;
         view
     }
@@ -345,7 +368,7 @@ pub(crate) async fn wait_for_idle(
     let mut filter = TextFilter::new();
     let mut text: Vec<u8> = Vec::new();
     let mut bytes = 0usize;
-    let mut outcome = Outcome::Deadline;
+    let mut outcome = IdleOutcome::Deadline;
     let deadline = tokio::time::Instant::now() + timeout;
     let mut last_wrote = tokio::time::Instant::now();
 
@@ -358,7 +381,7 @@ pub(crate) async fn wait_for_idle(
         let chunk = tokio::select! {
             biased;
             () = cancelled.cancelled() => {
-                outcome = Outcome::Cancelled;
+                outcome = IdleOutcome::Cancelled;
                 break;
             }
             chunk = tokio::time::timeout_at(until, output.next_chunk()) => chunk,
@@ -375,14 +398,14 @@ pub(crate) async fn wait_for_idle(
                 }
             }
             Ok(None) => {
-                outcome = Outcome::PaneClosed;
+                outcome = IdleOutcome::PaneClosed;
                 break;
             }
             // Nothing arrived before `until`. Which deadline that was decides
             // whether the pane went quiet or the caller ran out of time.
             Err(_) => {
                 if quiet_at <= deadline {
-                    outcome = Outcome::Idle;
+                    outcome = IdleOutcome::Idle;
                 }
                 break;
             }
@@ -502,12 +525,12 @@ impl Scanner {
     }
 
     /// Report a run that stopped without completing.
-    fn unfinished(&self, outcome: Outcome, pane: String) -> RunView {
+    fn unfinished(&self, outcome: RunOutcome, pane: String) -> RunView {
         // Nothing came back at all: the keys went somewhere that is not a
         // shell prompt. Worth its own answer, because retrying will not help.
         let outcome =
-            if outcome == Outcome::Deadline && find(&self.collected, &self.opened).is_none() {
-                Outcome::NoShell
+            if outcome == RunOutcome::Deadline && find(&self.collected, &self.opened).is_none() {
+                RunOutcome::NoShell
             } else {
                 outcome
             };
@@ -550,7 +573,7 @@ fn finished(collected: &[u8], at: usize, opened: &[u8], closed: &[u8]) -> Option
     Some(RunView {
         // Filled in by the caller, which is what holds the connection.
         pane: String::new(),
-        outcome: Outcome::Completed,
+        outcome: RunOutcome::Completed,
         exit_status: status,
         output: readable(body),
         bytes: 0,
@@ -593,7 +616,7 @@ pub(crate) async fn wait_for_text(
     let mut filter = TextFilter::new();
     let mut text: Vec<u8> = Vec::new();
     let mut bytes = 0usize;
-    let mut outcome = Outcome::Deadline;
+    let mut outcome = WaitOutcome::Deadline;
     let mut matched_index = None;
     let mut matched_pattern = None;
     let deadline = tokio::time::Instant::now() + timeout;
@@ -604,7 +627,7 @@ pub(crate) async fn wait_for_text(
             // Checked first so a request cancelled while output is already
             // waiting still stops, rather than reading one more chunk.
             () = cancelled.cancelled() => {
-                outcome = Outcome::Cancelled;
+                outcome = WaitOutcome::Cancelled;
                 break;
             }
             chunk = tokio::time::timeout_at(deadline, output.next_chunk()) => chunk,
@@ -615,7 +638,7 @@ pub(crate) async fn wait_for_text(
                 filter.push(&chunk, &mut text);
 
                 if let Some((index, source)) = stops.first_match(&text) {
-                    outcome = Outcome::Stopped;
+                    outcome = WaitOutcome::Stopped;
                     matched_index = Some(index);
                     matched_pattern = Some(source.to_owned());
                     break;
@@ -624,11 +647,11 @@ pub(crate) async fn wait_for_text(
                 // output satisfies.
                 if patterns.is_empty() {
                     if !text.is_empty() {
-                        outcome = Outcome::Matched;
+                        outcome = WaitOutcome::Matched;
                         break;
                     }
                 } else if let Some((index, source)) = patterns.first_match(&text) {
-                    outcome = Outcome::Matched;
+                    outcome = WaitOutcome::Matched;
                     matched_index = Some(index);
                     matched_pattern = Some(source.to_owned());
                     break;
@@ -640,7 +663,7 @@ pub(crate) async fn wait_for_text(
                 }
             }
             Ok(None) => {
-                outcome = Outcome::PaneClosed;
+                outcome = WaitOutcome::PaneClosed;
                 break;
             }
             Err(_) => break,
@@ -809,9 +832,9 @@ mod tests {
         let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());
         assert!(scanner.push(b"some editor drew a screen").is_none());
 
-        let view = scanner.unfinished(Outcome::Deadline, "%0".to_owned());
+        let view = scanner.unfinished(RunOutcome::Deadline, "%0".to_owned());
 
-        assert_eq!(view.outcome, Outcome::NoShell);
+        assert_eq!(view.outcome, RunOutcome::NoShell);
         assert!(view.exit_status.is_none());
     }
 
@@ -820,11 +843,11 @@ mod tests {
         let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());
         assert!(scanner.push(b"\x1b_Ns\x1b\\working").is_none());
 
-        let view = scanner.unfinished(Outcome::Deadline, "%0".to_owned());
+        let view = scanner.unfinished(RunOutcome::Deadline, "%0".to_owned());
 
         assert_eq!(
             view.outcome,
-            Outcome::Deadline,
+            RunOutcome::Deadline,
             "the shell answered, so the command is merely slow"
         );
     }

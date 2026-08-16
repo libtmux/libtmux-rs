@@ -338,3 +338,119 @@ pub struct JobCancelled {
     /// Whether an interrupt was sent, which it is not for a finished job.
     pub interrupted: bool,
 }
+
+/// One tmux server found on this machine.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ServerListing {
+    /// The socket path, which is what names the server.
+    pub socket: String,
+    /// The socket's bare name, as `-L` would take it.
+    pub name: Option<String>,
+    /// How many sessions it holds, when it answered.
+    pub sessions: Option<u32>,
+    /// Whether this is the server these tools are bound to.
+    pub current: bool,
+    /// Why the server could not be described, when it could not.
+    pub unreachable: Option<String>,
+}
+
+/// Every tmux server this machine appears to be running.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ServerListings {
+    /// The servers, the bound one first.
+    pub servers: Vec<ServerListing>,
+    /// The directories that were searched.
+    pub searched: Vec<String>,
+}
+
+/// What a tmux format expanded to.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Formatted {
+    /// The format as it was given.
+    pub format: String,
+    /// What tmux expanded it to.
+    pub value: String,
+    /// The pane it was expanded against, when one was named.
+    pub pane: Option<String>,
+}
+
+/// One tmux environment entry.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct EnvironmentEntry {
+    /// The variable name.
+    pub name: String,
+    /// Its value, absent when the variable is marked for removal.
+    pub value: Option<String>,
+}
+
+/// A tmux environment, server-wide or for one session.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Environment {
+    /// The entries, in tmux's own order.
+    pub entries: Vec<EnvironmentEntry>,
+    /// The session the environment belongs to, or absent for the server's.
+    pub session: Option<String>,
+}
+
+/// A variable that was written.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct EnvironmentSet {
+    /// The variable name.
+    pub name: String,
+    /// The session it was written for, or absent for the server's.
+    pub session: Option<String>,
+    /// Whether the variable was removed rather than set.
+    pub removed: bool,
+}
+
+/// One tmux hook.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Hook {
+    /// The hook name, such as `pane-exited`.
+    pub name: String,
+    /// Its index, when the hook is an array.
+    pub index: Option<u32>,
+    /// The command tmux runs.
+    pub command: String,
+}
+
+/// The hooks set at one scope.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Hooks {
+    /// The hooks, in tmux's own order.
+    pub hooks: Vec<Hook>,
+}
+
+/// A pane that is now being piped somewhere.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Piped {
+    /// The pane that was piped.
+    pub pane: String,
+    /// Whether piping is now on.
+    pub piping: bool,
+}
+
+/// A window whose layout was set.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Layout {
+    /// The window that was arranged.
+    pub window: String,
+    /// The layout it now has, in tmux's own syntax.
+    pub layout: String,
+}
+
+/// A pane that was cleared, respawned, or retitled.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct PaneChanged {
+    /// The pane that changed.
+    pub pane: String,
+}
+
+/// Text that was pasted into a pane.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Pasted {
+    /// The pane it went into.
+    pub pane: String,
+    /// How many bytes were delivered.
+    pub bytes: usize,
+}
