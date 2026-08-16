@@ -1055,3 +1055,54 @@ fn public_types_are_printable_without_disclosing_paths() {
         assert!(fields.starts_with("PaneFields"), "got {fields}");
     }
 }
+
+#[tokio::test]
+async fn handle_equality_and_hashing_separate_two_servers() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn digest<T: Hash>(value: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    let first = TestServer::builder().start().await.expect("tmux starts");
+    let second = TestServer::builder().start().await.expect("tmux starts");
+
+    // The same name on two servers, which is what makes the ids collide: each
+    // server issues them from zero, so both sessions are `$0`.
+    new_session(first.server(), "work").await;
+    new_session(second.server(), "work").await;
+
+    let left = first.server().sessions().await.expect("one session");
+    let right = second.server().sessions().await.expect("one session");
+    let (left, right) = (&left[0], &right[0]);
+    assert_eq!(
+        left.id(),
+        right.id(),
+        "the ids collide, or this proves nothing"
+    );
+
+    assert_ne!(left, right, "equality has to separate the two servers");
+    assert_ne!(digest(left), digest(right), "and so does hashing");
+
+    // Two handles to one object stay equal, and hash alike, so either can key
+    // a map.
+    let again = first.server().sessions().await.expect("one session");
+    assert_eq!(left, &again[0]);
+    assert_eq!(digest(left), digest(&again[0]));
+
+    let windows = first.server().windows().await.expect("one window");
+    let other_windows = second.server().windows().await.expect("one window");
+    assert_ne!(&windows[0], &other_windows[0]);
+    assert_ne!(digest(&windows[0]), digest(&other_windows[0]));
+
+    let panes = first.server().panes().await.expect("one pane");
+    let other_panes = second.server().panes().await.expect("one pane");
+    assert_ne!(&panes[0], &other_panes[0]);
+    assert_ne!(digest(&panes[0]), digest(&other_panes[0]));
+
+    first.shutdown().await.expect("first server stops");
+    second.shutdown().await.expect("second server stops");
+}
