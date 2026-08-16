@@ -22,10 +22,14 @@ full.
 - `Debug` on the seven public types that lacked it, which the Rust API
   guidelines ask for. `ServerBuilder`'s redacts the socket and config paths,
   as `ServerIdentity`'s already did.
-- Runnable examples on `Server`, `Session`, `Window`, `Pane`, `OptionValue`,
-  `EnvironmentEntry`, `SplitOptions`, `NewSessionOptions`, and
-  `CaptureOptions`, plus `just example-coverage` to report which crate-root
-  types still lack one.
+- Runnable examples on every crate-root type, taking `just example-coverage`
+  from 36% to 67 of 67. `just example-coverage-check` now fails on a type
+  added without one, so the number cannot quietly slip; CI runs it beside
+  `api-check`, which already needs the same nightly rustdoc JSON.
+- `just doc-blocks`, part of `just check`, failing when a doc comment opens
+  mid-sentence. rustdoc attaches prose to whatever item follows it and never
+  checks the two match, so a block inserted one line too high silently gives
+  a type its neighbour's summary and nothing complains.
 - `tmux-mcp` bounds the tmux side of an agent's fan-out: four dispatches in
   flight and an output budget on the `Server` it builds. Its existing caps
   bound what it returns, which does not unspend memory the core already
@@ -57,6 +61,17 @@ full.
   with something that is not an id. The window and pane are the session's
   current ones rather than a per-client view, because tmux keeps no per-client
   focus.
+
+### Fixed
+
+- `ServerGeneration` and `PaneDirection` rendered with the summary of the type
+  above them. Both doc blocks had been inserted into the middle of a
+  neighbour's, splitting one sentence across two items: `ServerIdentity` and
+  `Window` were left opening mid-clause, and the two new types wore prose
+  describing something else. `CommandSummary` had likewise lost its summary
+  line and opened on a detail.
+- `just api-check` wrote its comparison to a fixed path in `/tmp`, which two
+  checkouts on one machine share.
 
 ### Removed
 

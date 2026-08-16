@@ -17,6 +17,30 @@ enum SuffixKind {
 ///
 /// Release candidates sort before a final release, while lowercase patch
 /// letters sort after it.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{ReleaseSuffix, ReleaseVersion};
+///
+/// // tmux's two suffix shapes order differently: a patch letter comes *after*
+/// // the plain release, and a release candidate comes before it.
+/// let plain = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
+/// let patched = ReleaseVersion::new(3, 5, ReleaseSuffix::patch('a').expect("a patch letter"));
+/// let candidate = ReleaseVersion::new(
+///     3,
+///     5,
+///     ReleaseSuffix::release_candidate(1).expect("one is nonzero"),
+/// );
+///
+/// assert!(candidate < plain);
+/// assert!(plain < patched);
+///
+/// // Only those two shapes exist, so anything else is rejected rather than
+/// // guessed at.
+/// assert_eq!(ReleaseSuffix::patch('B'), None);
+/// assert_eq!(ReleaseSuffix::release_candidate(0), None);
+/// ```
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ReleaseSuffix(SuffixKind);
 
@@ -173,6 +197,17 @@ impl fmt::Display for ReleaseSuffix {
 }
 
 /// A numbered tmux release.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{ReleaseSuffix, ReleaseVersion};
+///
+/// // tmux numbers a patch with a letter, so `3.5a` is later than `3.5`.
+/// let plain = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
+/// let patched = ReleaseVersion::new(3, 5, ReleaseSuffix::patch('a').expect("a patch letter"));
+/// assert!(patched > plain);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ReleaseVersion {
     major: u16,
@@ -257,6 +292,27 @@ impl fmt::Display for ReleaseVersion {
 /// Numbered releases expose an ordered [`ReleaseVersion`]. Development
 /// identifiers preserve their token and remain unordered relative to numbered
 /// releases.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let version = guard.server().capabilities().await?.tmux_version().clone();
+///
+/// // A development build carries no numbered release, so a caller asks
+/// // `meets` rather than comparing the text tmux printed.
+/// assert!(version.release().is_some() || version.is_development());
+/// assert!(!version.raw().is_empty());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 pub struct TmuxVersion {
     raw: Box<str>,

@@ -21,20 +21,35 @@ use crate::snapshot::{WindowFields, WindowInfo};
 use crate::target::{ServerIdentity, SessionId, WindowId};
 use crate::{Command, CommandResult, Error, IndexedHooks, ObjectKind, OptionValue, ReplaceMode};
 
-/// One tmux window, as reached through one session that links it.
-///
-/// A window is not owned by a single session. `link-window` makes the same
-/// underlying window appear in several sessions at once, so discovery returns
-/// one `Window` per link rather than per window. Two handles for the same
-/// window reached through different sessions are **not** equal: they describe
-/// different places in the hierarchy.
-///
-/// Getters that describe the window itself, such as [`Window::name`], read the
-/// window. Getters that describe its place in a session, such as
 /// Which way to move focus among a window's panes.
 ///
 /// tmux decides what is "up" from a pane's position on screen rather than
 /// from its index, so these follow the layout rather than the pane order.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{PaneDirection, SplitDirection};
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+/// let lower = window.split(SplitDirection::Below).await?;
+///
+/// // Focus follows the layout, and tmux wraps at the edge rather than
+/// // refusing, so this always names a pane.
+/// let focused = window.focus_direction(PaneDirection::Below).await?;
+/// assert_eq!(focused.id(), lower.id());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum PaneDirection {
@@ -60,6 +75,16 @@ impl PaneDirection {
     }
 }
 
+/// One tmux window, as reached through one session that links it.
+///
+/// A window is not owned by a single session. `link-window` makes the same
+/// underlying window appear in several sessions at once, so discovery returns
+/// one `Window` per link rather than per window. Two handles for the same
+/// window reached through different sessions are **not** equal: they describe
+/// different places in the hierarchy.
+///
+/// Getters that describe the window itself, such as [`Window::name`], read the
+/// window. Getters that describe its place in a session, such as
 /// [`Window::index`] and [`Window::is_active`], read the link.
 ///
 /// # Examples
@@ -1444,6 +1469,31 @@ impl Filterable for Window {
 /// tmux spells these `-v`, `-v -b`, `-h`, and `-h -b`, where "horizontal"
 /// means side by side. Naming the resulting position instead removes a
 /// question every tmux user has asked at least once.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{Rotation, SplitDirection};
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+/// window.split(SplitDirection::Below).await?;
+///
+/// // Rotating moves panes between positions; it does not create or destroy any.
+/// let before = window.panes().await?.len();
+/// window.rotate(Rotation::Down).await?;
+/// assert_eq!(window.panes().await?.len(), before);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Rotation {
     /// Move each pane to the position before it, so the first becomes last.
@@ -1463,6 +1513,30 @@ impl Rotation {
 }
 
 /// Where a split puts the pane it makes.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::SplitDirection;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+///
+/// // The direction names where the *new* pane lands, not which edge moves.
+/// window.split(SplitDirection::Right).await?;
+/// window.split(SplitDirection::Below).await?;
+/// assert_eq!(window.panes().await?.len(), 3);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SplitDirection {
     /// Above the pane being divided.
@@ -1488,6 +1562,34 @@ impl SplitDirection {
 }
 
 /// How much space a new pane gets.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{PaneSize, SplitDirection, SplitOptions};
+///
+/// // A size renders as tmux's own `-l` argument, cells bare and shares suffixed.
+/// assert_eq!(PaneSize::Cells(20).to_string(), "20");
+/// assert_eq!(PaneSize::Percent(25).to_string(), "25%");
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+///
+/// let pane = window
+///     .split(SplitOptions::new(SplitDirection::Below).size(PaneSize::Percent(25)))
+///     .await?;
+/// assert!(pane.height() > 0);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PaneSize {
     /// A number of rows or columns, depending on the split direction.
@@ -1506,6 +1608,31 @@ impl fmt::Display for PaneSize {
 }
 
 /// Which edge a resize moves.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::ResizeDirection;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let mut window = session.active_window().await?.expect("a session has a window");
+///
+/// // The direction names the edge that moves, so `Down` makes a window taller
+/// // rather than shorter.
+/// let before = window.height();
+/// window.resize_by(ResizeDirection::Down, 3).await?;
+/// assert!(window.height() >= before);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ResizeDirection {
     /// Move the top edge up, making it taller.

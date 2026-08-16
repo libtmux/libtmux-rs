@@ -96,6 +96,9 @@ jobs:
           tool: just
       - uses: Swatinem/rust-cache@v2
       - run: just api-check
+      # Same toolchain and the same rustdoc JSON, so it rides along here
+      # rather than paying for a second nightly build.
+      - run: just example-coverage-check
 
   # A short fuzz pass over the parsers that read from outside the process. Kept
   # brief and off the pull-request path: this finds things by running for a

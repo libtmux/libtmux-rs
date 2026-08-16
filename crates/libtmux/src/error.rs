@@ -10,6 +10,32 @@ use crate::version::{ReleaseVersion, TmuxVersion};
 /// The category of an invalid [`crate::ServerBuilder`] configuration.
 ///
 /// Rejected path and environment bytes are never retained by this value.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{Error, ServerConfigurationErrorKind};
+///
+/// // A socket name and a socket path are two ways to say the same thing, and
+/// // tmux has no rule for which wins, so the builder refuses rather than picks.
+/// let failure = libtmux::Server::builder()
+///     .socket_name("named")
+///     .socket_path("/tmp/libtmux-rs-dev/explicit")
+///     .build()
+///     .expect_err("two socket selectors");
+///
+/// assert!(matches!(
+///     failure,
+///     Error::InvalidServerConfiguration {
+///         kind: ServerConfigurationErrorKind::ConflictingSocketSelectors,
+///         ..
+///     },
+/// ));
+///
+/// // The rejected bytes are not carried in the error, so logging it cannot
+/// // disclose a path.
+/// assert!(!failure.to_string().contains("/tmp/"));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ServerConfigurationErrorKind {
@@ -47,6 +73,34 @@ pub enum ServerConfigurationErrorKind {
 /// The distinction matters to a caller: a connection that never opened is a
 /// setup problem, whereas one that closed mid-command may simply mean the
 /// session it was attached to has ended.
+///
+/// # Examples
+///
+// Gate the doc attribute: a `#[cfg]` inside a doctest reads the doctest's own
+// crate, which has no features, so the example would pass vacuously.
+#[cfg_attr(
+    feature = "control-mode",
+    doc = r#"```
+use libtmux::{ControlModeErrorKind, Error};
+
+// `Closed` means the far side ended, often just the session going away. The
+// rest mean the connection never worked. The variant is `#[non_exhaustive]`,
+// so a caller matches it rather than building one.
+fn session_ended(failure: &Error) -> bool {
+    matches!(
+        failure,
+        Error::ControlMode { kind: ControlModeErrorKind::Closed, .. },
+    )
+}
+
+let unrelated = libtmux::Server::builder()
+    .socket_name("named")
+    .socket_path("/tmp/libtmux-rs-dev/explicit")
+    .build()
+    .expect_err("two socket selectors");
+assert!(!session_ended(&unrelated));
+```"#
+)]
 #[cfg(feature = "control-mode")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -133,6 +187,19 @@ pub(crate) const NO_CURRENT_CLIENT: &str = "no current client";
 /// there are error variants.
 ///
 /// New kinds may be added, so match with a `_` arm.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::ErrorKind;
+///
+/// fn retryable(kind: ErrorKind) -> bool {
+///     matches!(kind, ErrorKind::Timeout | ErrorKind::Transport)
+/// }
+///
+/// assert!(retryable(ErrorKind::Transport));
+/// assert!(!retryable(ErrorKind::ObjectGone));
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
@@ -159,6 +226,17 @@ pub enum ErrorKind {
 /// An invalid scope-specific tmux object ID.
 ///
 /// The error records the expected sigil but never retains the rejected input.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::SessionId;
+///
+/// // The sigil is the whole difference between the id types, so a mistake
+/// // names the one that was expected.
+/// let error = "@1".parse::<SessionId>().expect_err("@ denotes a window");
+/// assert_eq!(error.expected_sigil(), '$');
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct IdParseError {
@@ -207,6 +285,33 @@ impl std::error::Error for IdParseError {}
 /// allocating Core; independently constructed servers do not share its scope.
 /// The identity is not globally unique, a process ID, an internal attempt ID,
 /// or a control-mode protocol-block ID.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::ErrorKind;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let doomed = guard.server().new_session("doomed").await?;
+/// let mut stale = doomed.clone();
+/// guard.server().new_session("survivor").await?;
+/// doomed.kill().await?;
+///
+/// // A handle outliving its object is the normal way this fails, so
+/// // `is_object_gone` is the branch most callers write.
+/// let failure = stale.rename("renamed").await.expect_err("the session is gone");
+/// assert!(failure.is_object_gone());
+/// assert_eq!(failure.kind(), ErrorKind::ObjectGone);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -581,6 +686,16 @@ pub enum Error {
 }
 
 /// The kind of tmux object a failure refers to.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::ObjectKind;
+///
+/// // Carried by `Error::ObjectGone` so a caller can say what disappeared
+/// // without parsing the message.
+/// assert_eq!(ObjectKind::Pane.to_string(), "pane");
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ObjectKind {
@@ -609,6 +724,35 @@ impl fmt::Display for ObjectKind {
 ///
 /// This never retains row bytes, snapshot text, or decoded values, so it is
 /// safe to log wherever the rest of [`Error`] is.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use libtmux::Error;
+///
+/// // Reached through the one variant that carries it. Both accessors are
+/// // optional because tmux does not always give enough to locate the row.
+/// fn locate(failure: &Error) -> Option<(&'static str, Option<usize>)> {
+///     match failure {
+///         Error::DecodeListing { list_command, detail, .. } => {
+///             Some((*list_command, detail.row()))
+///         }
+///         _ => None,
+///     }
+/// }
+///
+/// // The payload is metadata only: no tmux bytes are retained, so logging it
+/// // cannot leak a pane's contents.
+/// let other = libtmux::Server::builder()
+///     .socket_name("named")
+///     .socket_path("/tmp/libtmux-rs-dev/explicit")
+///     .build()
+///     .expect_err("two socket selectors");
+/// assert_eq!(locate(&other), None);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ListingDecodeError {
     inner: crate::formats::FormatCodecError,

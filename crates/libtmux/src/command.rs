@@ -475,8 +475,47 @@ fn render_control_mode_token(value: &OsStr) -> Option<String> {
     Some(rendered)
 }
 
+/// A rendering of a dispatched command that is safe to log.
+///
 /// Every public token is ASCII escaped. Sensitive arguments are represented by
 /// a fixed marker that discloses neither their bytes nor their length.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::Command;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let result = guard
+///     .server()
+///     .cmd(
+///         Command::new("set-environment")
+///             .arg("-g")
+///             .arg("TOKEN")
+///             .sensitive_arg("hunter2"),
+///     )
+///     .await?;
+///
+/// // The subcommand is not an argument, so this counts `-g`, `TOKEN`, and
+/// // the secret.
+/// let summary = result.command();
+/// assert_eq!(summary.argument_count(), 3);
+/// assert_eq!(summary.public_argument_count(), 2);
+///
+/// // The secret is neither shown nor measurable from what is shown.
+/// let rendered = summary.to_string();
+/// assert!(!rendered.contains("hunter2"), "{rendered}");
+/// assert!(!format!("{summary:?}").contains("hunter2"));
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Eq, PartialEq)]
 pub struct CommandSummary {
     subcommand: String,
@@ -748,6 +787,34 @@ impl ProcessStatus {
 ///
 /// A non-zero exit status is returned as data. Output bytes are never trimmed,
 /// decoded, or mirrored between streams.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::Command;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// guard.server().new_session("work").await?;
+///
+/// let result = guard
+///     .server()
+///     .cmd(Command::new("list-sessions").arg("-F").arg("#{session_name}"))
+///     .await?;
+///
+/// // The exact bytes tmux emitted are kept until a caller asks for text, because
+/// // a session name need not be UTF-8.
+/// assert_eq!(result.stdout(), b"work\n");
+/// assert_eq!(result.stdout_utf8()?, "work\n");
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct CommandResult {
     request_id: RequestId,
     command: CommandSummary,

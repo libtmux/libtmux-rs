@@ -203,9 +203,6 @@ define_target!(
     PaneId
 );
 
-/// The structural identity of one tmux server endpoint.
-///
-/// Equality and hashing use the captured absolute socket path. Debug output
 /// Which tmux daemon is answering on an endpoint.
 ///
 /// [`ServerIdentity`] answers "where", and that is not enough to answer
@@ -220,6 +217,31 @@ define_target!(
 /// The pid alone would not do. A replacement daemon can be handed the pid of
 /// the one it replaced, so the start time is what makes this a generation
 /// rather than a guess.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let server = guard.server();
+///
+/// // Capture the generation beside whatever ids are being held.
+/// let generation = server.generation().await?;
+/// let session = server.new_session("work").await?;
+///
+/// // Before acting on those ids later, confirm the daemon has not been
+/// // replaced underneath them.
+/// assert_eq!(server.generation().await?, generation);
+/// let _ = session;
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ServerGeneration {
     pub(crate) pid: u32,
@@ -246,7 +268,39 @@ impl fmt::Display for ServerGeneration {
     }
 }
 
+/// The structural identity of one tmux server endpoint.
+///
+/// Equality and hashing use the captured absolute socket path. Debug output
 /// redacts that path so diagnostics do not disclose local filesystem details.
+///
+/// This is what makes two handles to the same server compare equal, and it is
+/// deliberately *not* enough to say the daemon behind them is the same one --
+/// see [`ServerGeneration`] for that.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let server = guard.server();
+///
+/// // Two handles to one endpoint share an identity, so they can key a map.
+/// let second = server.clone();
+/// assert_eq!(server.identity(), second.identity());
+///
+/// // The socket path never reaches diagnostics.
+/// let rendered = format!("{:?}", server.identity());
+/// assert!(rendered.contains("<redacted>"), "{rendered}");
+/// assert!(!rendered.contains("/tmp/"), "{rendered}");
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct ServerIdentity {
     socket_path: PathBuf,
@@ -1106,6 +1160,21 @@ impl From<SessionName> for OsString {
 }
 
 /// Why a session name is one tmux could not address.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{SessionName, SessionNameError};
+///
+/// // tmux splits a target on `:` and `.`, so a name holding either would not be
+/// // addressable by name afterwards.
+/// assert!(matches!(
+///     SessionName::new("build:release"),
+///     Err(SessionNameError::Separator { separator: ':' }),
+/// ));
+/// assert!(matches!(SessionName::new(""), Err(SessionNameError::Empty)));
+/// assert!(SessionName::new("build-release").is_ok());
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SessionNameError {

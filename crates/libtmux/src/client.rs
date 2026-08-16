@@ -21,6 +21,26 @@ use crate::{Command, Error, ObjectKind};
 ///
 /// Clients have no `$`-style id. tmux identifies them by the terminal they
 /// occupy, so [`Client::name`] is the identity and is always present.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// guard.server().new_session("work").await?;
+///
+/// // A session created without attaching has no client, which is the usual
+/// // shape under test and under automation.
+/// assert!(guard.server().clients().await?.is_empty());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct Client {
     core: Arc<Core>,

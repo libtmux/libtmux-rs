@@ -88,6 +88,23 @@ impl<T: Copy> Availability<&T> {
 ///
 /// This is public because [`crate::PaneFields`] exposes a typed handle for the
 /// field, so callers name these variants when filtering.
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "query")] {
+/// use libtmux::query::Filterable as _;
+/// use libtmux::PaneProgressState;
+///
+/// // Reached as a filter field rather than a getter: tmux only reports it from
+/// // 3.7, so asking for it is a query a caller opts into.
+/// let fields = libtmux::Pane::filter_fields();
+/// let stuck = fields
+///     .pane_pb_state
+///     .is_in([PaneProgressState::Error, PaneProgressState::Paused]);
+/// # let _ = stuck;
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PaneProgressState {
@@ -795,7 +812,7 @@ macro_rules! match_stored {
 
 macro_rules! define_snapshot_info {
     (
-        $info:ident, $fields:ident, $hydrate:ident, $hydrate_inner:ident, $target:literal,
+        $info:ident, $fields:ident, $handle:ident, $hydrate:ident, $hydrate_inner:ident, $target:literal,
         $placement:ident,
         ($baseline_static:ident, $baseline_field:ident, $baseline_name:literal, $baseline_owner:ident, $baseline_context:ident, $baseline_profiles:ident, $baseline_floor:ident, $baseline_decoder:ident, $baseline_empty:ident),
         [$(($static:ident, $field:ident, $name:literal, $owner:ident, $context:ident, $profiles:ident, $floor:ident, $decoder:ident, $empty:ident)),* $(,)?]
@@ -841,6 +858,33 @@ macro_rules! define_snapshot_info {
         /// The type parameter names what an expression built from these
         /// handles matches, so a listing returns the same type its
         /// expressions filter.
+        ///
+        /// Every field is named after the tmux format it reads, so an
+        /// expression reads like the `-F` string it replaces. A field's type
+        /// decides which operations exist, which is what makes a mismatched
+        /// comparison a compile error rather than a predicate that is always
+        /// false.
+        ///
+        /// # Examples
+        ///
+        #[doc = concat!(
+            "```\n",
+            "# #[cfg(feature = \"query\")] {\n",
+            "use libtmux::query::Filterable as _;\n",
+            "\n",
+            "let fields = libtmux::", stringify!($handle), "::filter_fields();\n",
+            "\n",
+            "// Every handle set carries its target's identity, here `",
+            $baseline_name, "`.\n",
+            "let expression = fields.", stringify!($baseline_field), ".eq(\"\");\n",
+            "\n",
+            "// The handles are zero-sized names, so `Debug` reports which set\n",
+            "// is being held rather than listing a page of nothing.\n",
+            "assert_eq!(format!(\"{fields:?}\"), \"", stringify!($fields), " { .. }\");\n",
+            "# let _ = expression;\n",
+            "# }\n",
+            "```",
+        )]
         #[cfg(feature = "query")]
         pub struct $fields<Target> {
             #[doc = concat!("The `", $baseline_name, "` field.")]
@@ -985,6 +1029,7 @@ macro_rules! define_snapshots {
         define_snapshot_info!(
             SessionInfo,
             SessionFields,
+            Session,
             hydrate_session_info,
             decode_session_info_inner,
             $session_target,
@@ -995,6 +1040,7 @@ macro_rules! define_snapshots {
         define_snapshot_info!(
             WindowInfo,
             WindowFields,
+            Window,
             hydrate_window_info,
             decode_window_info_inner,
             $window_target,
@@ -1005,6 +1051,7 @@ macro_rules! define_snapshots {
         define_snapshot_info!(
             PaneInfo,
             PaneFields,
+            Pane,
             hydrate_pane_info,
             decode_pane_info_inner,
             $pane_target,
@@ -1015,6 +1062,7 @@ macro_rules! define_snapshots {
         define_snapshot_info!(
             ClientInfo,
             ClientFields,
+            Client,
             hydrate_client_info,
             decode_client_info_inner,
             $client_target,

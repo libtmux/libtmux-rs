@@ -1372,6 +1372,33 @@ impl Filterable for Session {
 /// Options for creating a window in a session.
 ///
 /// A bare name is accepted wherever this is: `session.new_window("editor")`.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::NewWindowOptions;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+///
+/// let window = session
+///     .new_window(NewWindowOptions::new("editor").environment("EDITOR", "vi"))
+///     .await?;
+/// assert_eq!(window.name().to_string_lossy(), "editor");
+///
+/// // A bare name works too, because `new_window` takes anything that converts.
+/// session.new_window("logs").await?;
+/// assert_eq!(session.windows().await?.len(), 3);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[must_use = "options describe a window but do not create one"]
 #[derive(Clone, Debug)]
 pub struct NewWindowOptions {
@@ -1388,6 +1415,36 @@ pub struct NewWindowOptions {
 /// Where a new window goes, relative to the index it is given.
 ///
 /// Without one, tmux takes the first free index.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{NewWindowOptions, WindowPlacement};
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let first = session.active_window().await?.expect("a session has a window");
+///
+/// // Inserting before an index shifts the windows already at or after it, so
+/// // the index a caller holds is only good until the next insert.
+/// let inserted = session
+///     .new_window(
+///         NewWindowOptions::new("inserted")
+///             .index(first.index())
+///             .placement(WindowPlacement::Before),
+///     )
+///     .await?;
+/// assert!(inserted.index() <= first.index());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum WindowPlacement {
     /// Insert before the target index, shifting later windows along.

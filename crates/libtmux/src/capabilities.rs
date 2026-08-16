@@ -6,6 +6,25 @@ use crate::TmuxVersion;
 ///
 /// Successful detection is shared by every clone of the owning
 /// [`crate::Server`].
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+///
+/// // Detected once and cached, so asking twice does not run tmux twice.
+/// let capabilities = guard.server().capabilities().await?;
+/// assert!(!capabilities.tmux_version().raw().is_empty());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EngineCapabilities {
     tmux_version: TmuxVersion,

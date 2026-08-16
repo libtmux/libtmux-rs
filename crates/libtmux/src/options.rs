@@ -13,6 +13,20 @@ pub use generated::names;
 use crate::formats::TmuxText;
 
 /// What kind of value an option holds.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{OptionKind, option_schema};
+///
+/// // `mouse` is a real flag: on or off.
+/// assert_eq!(option_schema("mouse").map(OptionSchema::kind), Some(OptionKind::Flag));
+///
+/// // `status` looks like one and is not: it also accepts a count of status
+/// // lines, so reading it as a boolean discards those values.
+/// assert_eq!(option_schema("status").map(OptionSchema::kind), Some(OptionKind::Choice));
+/// # use libtmux::OptionSchema;
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OptionKind {
@@ -33,6 +47,21 @@ pub enum OptionKind {
 }
 
 /// Which table an option primarily lives in.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{OptionSchema, OptionScope, option_schema};
+///
+/// // The scope says which handle can set an option, which is not guessable from
+/// // the name: `mouse` is per-session, and `exit-empty` is server-wide.
+/// assert_eq!(option_schema("mouse").map(OptionSchema::scope), Some(OptionScope::Session));
+/// assert_eq!(option_schema("exit-empty").map(OptionSchema::scope), Some(OptionScope::Server));
+/// assert_eq!(
+///     option_schema("automatic-rename").map(OptionSchema::scope),
+///     Some(OptionScope::Window),
+/// );
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum OptionScope {
@@ -47,6 +76,21 @@ pub enum OptionScope {
 }
 
 /// What tmux declares about one option.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{OptionKind, OptionScope, option_schema};
+///
+/// let schema = option_schema("history-limit").expect("a documented option");
+/// assert_eq!(schema.name(), "history-limit");
+/// assert_eq!(schema.kind(), OptionKind::Number);
+/// assert_eq!(schema.scope(), OptionScope::Session);
+///
+/// // An option tmux does not have has no schema, which catches a typo before it
+/// // reaches the server.
+/// assert!(option_schema("history-limits").is_none());
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OptionSchema {
     name: &'static str,

@@ -59,6 +59,16 @@ example-coverage:
         -- -Zunstable-options --output-format json > /dev/null
     python3 scripts/example-coverage.py target/doc/libtmux.json
 
+# Needs nightly for rustdoc's JSON output, so it runs beside `api-check`
+# rather than in `just check`.
+#
+# Fail when any crate-root type lacks a runnable example
+[group: 'docs']
+example-coverage-check:
+    cargo +nightly rustdoc -p libtmux --all-features \
+        -- -Zunstable-options --output-format json > /dev/null
+    python3 scripts/example-coverage.py --require-all target/doc/libtmux.json
+
 # Regenerate the recorded public API surface
 #
 # Needs nightly for rustdoc's JSON output, so it is not part of `just check`.
@@ -158,6 +168,15 @@ watch-clippy:
 docs:
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 
+# rustdoc attaches prose to whatever item follows it and never checks that the
+# two match, so a block inserted one line too high gives a type its
+# neighbour's summary. Pure text, no toolchain, so it is part of `just check`.
+#
+# Report doc comments that were split across two items
+[group: 'docs']
+doc-blocks:
+    python3 scripts/check-doc-blocks.py crates
+
 # Build documentation including dependencies, so intra-doc links resolve
 [group: 'docs']
 docs-full:
@@ -191,7 +210,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test doctest docs features deny msrv package
+check: fmt-check clippy test doctest docs doc-blocks features deny msrv package
 
 [private]
 _entr-warn:

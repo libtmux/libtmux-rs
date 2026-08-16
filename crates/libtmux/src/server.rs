@@ -35,6 +35,23 @@ const SERVER_ACCESS_SINCE: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuf
 ///
 /// An enum rather than two flags because tmux's `-r` and `-w` are exclusive:
 /// passing both is a contradiction the type makes unrepresentable.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// use libtmux::AccessMode;
+///
+/// // Server access control is tmux 3.3 and later. `ReadOnly` lets another user
+/// // watch without being able to send keys.
+/// server.grant_access("observer", AccessMode::ReadOnly).await?;
+/// server.grant_access("pair", AccessMode::Write).await?;
+///
+/// let rules = server.access_rules().await?;
+/// assert_eq!(rules.len(), 2);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccessMode {
     /// May attach and watch, but not act.
@@ -44,6 +61,21 @@ pub enum AccessMode {
 }
 
 /// One entry of the server's access list.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// use libtmux::AccessMode;
+///
+/// for rule in server.access_rules().await? {
+///     if rule.mode() == AccessMode::Write {
+///         println!("{} can type", rule.user());
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessRule {
     user: String,
@@ -68,6 +100,28 @@ impl AccessRule {
 const PROMPT_HISTORY_SINCE: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
 
 /// Which prompt tmux is remembering answers for.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::PromptKind;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+///
+/// // tmux keeps a separate history per prompt kind, so a command typed at the
+/// // `:` prompt is not offered when searching.
+/// assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
+/// assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PromptKind {
     /// The `:` command prompt.
@@ -2420,6 +2474,28 @@ impl fmt::Debug for Server {
 }
 
 /// A consuming builder for one inert [`Server`] handle.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use libtmux::{DispatchLimits, OutputLimits, Server};
+/// use std::time::Duration;
+///
+/// // Naming a socket and a budget is the whole of the configuration; everything
+/// // else is per-command.
+/// let server = Server::builder()
+///     .socket_name("builder-example")
+///     .default_timeout(Duration::from_secs(5))
+///     .output_limits(OutputLimits::default().max_stdout_bytes(1024 * 1024))
+///     .dispatch_limits(DispatchLimits::default().max_in_flight(4))
+///     .build()?;
+///
+/// // Building does not start tmux, so this has not touched the machine yet.
+/// let _ = server.identity();
+/// # Ok(())
+/// # }
+/// ```
 #[must_use = "a server builder has no effect until build is called"]
 pub struct ServerBuilder {
     socket_name: Option<OsString>,
@@ -2888,6 +2964,20 @@ impl<T: Into<OsString>> From<T> for NewSessionOptions {
 ///
 /// Each opens a mode on a client and returns as soon as tmux accepts it; the
 /// user's eventual choice is not reported back here.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// use libtmux::Chooser;
+///
+/// // A chooser draws in an attached client's terminal, so this needs one; with
+/// // no client tmux has nowhere to put it.
+/// let client = server.clients().await?.into_iter().next();
+/// server.choose(Chooser::Tree, client.as_ref()).await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Chooser {
@@ -2914,6 +3004,32 @@ impl Chooser {
 }
 
 /// One session and everything under it, from [`Server::hierarchy`].
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// session.new_window("editor").await?;
+///
+/// // One round of listings for the whole hierarchy, rather than one call per
+/// // session and another per window.
+/// let tree = guard.server().hierarchy().await?;
+/// let found = tree
+///     .iter()
+///     .find(|branch| branch.session.name().to_string_lossy() == "work")
+///     .expect("the session just created");
+/// assert_eq!(found.windows.len(), 2);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SessionTree {
@@ -2925,6 +3041,34 @@ pub struct SessionTree {
 }
 
 /// One window and its panes, from [`Server::hierarchy`].
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::SplitDirection;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("work").await?;
+/// let window = session.active_window().await?.expect("a session has a window");
+/// window.split(SplitDirection::Below).await?;
+///
+/// let tree = guard.server().hierarchy().await?;
+/// let panes: usize = tree
+///     .iter()
+///     .flat_map(|branch| branch.windows.iter())
+///     .map(|branch| branch.panes.len())
+///     .sum();
+/// assert_eq!(panes, 2);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct WindowTree {
@@ -2941,6 +3085,27 @@ pub struct WindowTree {
 ///
 /// [`session`]: SessionTreeFields::session
 /// [`windows`]: SessionTreeFields::windows
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "query")] {
+/// use libtmux::query::Filterable as _;
+/// use libtmux::{SessionTree, WindowTree};
+///
+/// let sessions = SessionTree::filter_fields();
+/// let windows = WindowTree::filter_fields();
+///
+/// // The session's own fields sit beside the relation rather than behind it, so
+/// // a question about the session and a question about what it contains compose.
+/// let building = sessions
+///     .session
+///     .session_name
+///     .starts_with("build")
+///     .and(sessions.windows.any(windows.window.window_name.eq("editor")));
+/// # let _ = building;
+/// # }
+/// ```
 #[cfg(feature = "query")]
 #[non_exhaustive]
 pub struct SessionTreeFields {
@@ -2951,6 +3116,23 @@ pub struct SessionTreeFields {
 }
 
 /// Typed filter handles for [`WindowTree`].
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "query")] {
+/// use libtmux::query::Filterable as _;
+/// use libtmux::{Pane, WindowTree};
+///
+/// let windows = WindowTree::filter_fields();
+/// let panes = Pane::filter_fields();
+///
+/// // `any` asks whether some pane matches, which is not the same question as
+/// // filtering the panes themselves: this keeps whole windows.
+/// let has_dead_pane = windows.panes.any(panes.pane_dead.eq(true));
+/// # let _ = has_dead_pane;
+/// # }
+/// ```
 #[cfg(feature = "query")]
 #[non_exhaustive]
 pub struct WindowTreeFields {

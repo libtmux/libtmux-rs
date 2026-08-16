@@ -69,8 +69,38 @@ def main(path: str) -> int:
     return 0
 
 
+def main_strict(path: str) -> int:
+    """As `main`, but a missing example is a failure rather than a number."""
+    outcome = main(path)
+    if outcome != 0:
+        return outcome
+    with open(path, encoding="utf-8") as handle:
+        doc = json.load(handle)
+    index = doc["index"]
+    for identifier in exported_ids(doc):
+        item = index.get(identifier)
+        if not item:
+            continue
+        if next(iter(item.get("inner") or {}), None) not in TYPES:
+            continue
+        if "```" not in (item.get("docs") or ""):
+            print(
+                "\nevery crate-root type needs a runnable example. Add one, or "
+                "make the type private if it is not part of the surface.",
+                file=sys.stderr,
+            )
+            return 1
+    return 0
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: example-coverage.py <rustdoc.json>", file=sys.stderr)
+    arguments = sys.argv[1:]
+    strict = "--require-all" in arguments
+    paths = [value for value in arguments if value != "--require-all"]
+    if len(paths) != 1:
+        print(
+            "usage: example-coverage.py [--require-all] <rustdoc.json>",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
-    raise SystemExit(main(sys.argv[1]))
+    raise SystemExit(main_strict(paths[0]) if strict else main(paths[0]))
