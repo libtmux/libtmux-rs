@@ -92,7 +92,7 @@ windows:
 ## Install
 
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.4
+$ cargo add tmux-workspace@0.1.0-alpha.5
 ```
 
 <details>
@@ -100,7 +100,7 @@ $ cargo add tmux-workspace@0.1.0-alpha.4
 
 ```toml
 [dependencies]
-tmux-workspace = "0.1.0-alpha.4"
+tmux-workspace = "0.1.0-alpha.5"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

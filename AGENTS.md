@@ -240,7 +240,9 @@ To cut a release:
 2. Move the changelog's `Unreleased` entries under a dated heading.
 3. `just check`.
 4. Push one tag per crate, in dependency order, waiting for each to land:
-   `libtmux-macros@vX.Y.Z`, then `libtmux@vX.Y.Z`, then `tmux-mcp@vA.B.C`.
+   `libtmux-macros@vX.Y.Z`, then `libtmux@vX.Y.Z`, then `tmux-workspace@vX.Y.Z`
+   and `tmux-mcp@vA.B.C`. `tmux-workspace` inherits the workspace version, so
+   skipping it leaves it pinned to a `libtmux` that is no longer current.
 
 The workflow checks that the version in the tag is the version in the
 manifest, then runs the whole gate on that exact commit, packages the crate,
@@ -275,7 +277,7 @@ Settings. The values are:
 | Environment | `release` |
 
 A crate has to have been published at least once by hand before it can be
-configured, which all three have been.
+configured, which all four have been.
 
 ## Where the reasoning lives
 

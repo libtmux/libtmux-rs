@@ -25,7 +25,7 @@ tmux 3.2a or newer, on `$PATH`. Rust 1.88 to build.
 ## Install
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.5
+$ cargo install tmux-mcp --version 0.1.0-alpha.6
 ```
 
 That puts a `tmux-mcp` binary on your path. It speaks MCP on stdin and stdout,

@@ -6,7 +6,6 @@ Notable changes to the workspace. The format follows
 
 Crates are versioned together except `tmux-mcp`, which moves at its own pace
 because its dependencies need a newer compiler than the libraries do.
-`tmux-workspace` is not published.
 
 While the version is `0.1.0-alpha.*`, any release may break the API, and
 breaking changes are not called out as such: nothing here is stable yet. The
@@ -16,6 +15,11 @@ requirement selects nothing, so a caller opts in by writing the version out in
 full.
 
 ## Unreleased
+
+## 0.1.0-alpha.5 - 2026-08-16
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.5;
+`tmux-mcp` is 0.1.0-alpha.6, because it was already at alpha.5.
 
 ### Added
 
