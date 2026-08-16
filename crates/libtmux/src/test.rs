@@ -662,8 +662,11 @@ impl TestServer {
             ));
         };
         let timeout = self.lifecycle_timeout;
-        let waiter = tokio::task::spawn_blocking(move || lifecycle.cleanup(timeout));
-        let Ok(cleanup) = waiter.await else {
+        let waiter = tokio::task::spawn_blocking(move || {
+            let outcome = lifecycle.cleanup(timeout);
+            (outcome, lifecycle.failure())
+        });
+        let Ok((cleanup, detail)) = waiter.await else {
             return Err(TestServerError::at(
                 TestServerErrorKind::ShutdownFailed,
                 "cleanup task",
@@ -677,14 +680,12 @@ impl TestServer {
         }
         match cleanup {
             CleanupOutcome::Complete => Ok(()),
-            CleanupOutcome::LifecycleFailed => Err(TestServerError::at(
-                TestServerErrorKind::ShutdownFailed,
-                "daemon did not exit",
-            )),
-            CleanupOutcome::LifecycleAndFilesystemFailed => Err(TestServerError::at(
-                TestServerErrorKind::ShutdownFailed,
-                "daemon did not exit, files remain",
-            )),
+            CleanupOutcome::LifecycleFailed | CleanupOutcome::LifecycleAndFilesystemFailed => {
+                Err(TestServerError::at(
+                    TestServerErrorKind::ShutdownFailed,
+                    detail.unwrap_or("daemon did not exit"),
+                ))
+            }
             CleanupOutcome::FilesystemFailed => Err(TestServerError::at(
                 TestServerErrorKind::CleanupFailed,
                 "files remain",
@@ -898,6 +899,11 @@ struct Lifecycle {
     fallback_grace_ceiling: Option<Duration>,
     leader_state: LeaderState,
     cleanup_pending: bool,
+    /// Which sub-condition failed, for a cleanup that did.
+    ///
+    /// A fixture failing on a machine the author does not have is debugged
+    /// from this alone, and "shutdown failed" names four different problems.
+    failure: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -941,6 +947,7 @@ impl Lifecycle {
             fallback_grace_ceiling,
             leader_state: LeaderState::Waitable,
             cleanup_pending: true,
+            failure: None,
         }
     }
 
@@ -1088,14 +1095,33 @@ impl Lifecycle {
         &mut self,
         mut lifecycle_ok: bool,
     ) -> (Option<std::process::ExitStatus>, bool) {
-        lifecycle_ok &= matches!(self.leader_state, LeaderState::Reaped(_));
-        lifecycle_ok &= self
+        if !lifecycle_ok && self.failure.is_none() {
+            self.failure = Some("signal or wait");
+        }
+        if !matches!(self.leader_state, LeaderState::Reaped(_)) {
+            lifecycle_ok = false;
+            self.failure = Some(match self.leader_state {
+                LeaderState::Waitable => "leader still waitable",
+                LeaderState::Lost => "leader lost",
+                LeaderState::Reaped(_) => unreachable!(),
+            });
+        }
+        if !self
             .files
             .containment
             .terminate_all(CONTAINMENT_TIMEOUT)
-            .is_success();
+            .is_success()
+        {
+            lifecycle_ok = false;
+            self.failure = Some("containment sweep");
+        }
         self.cleanup_pending = false;
         (self.reaped_status(), lifecycle_ok)
+    }
+
+    /// Why the last cleanup failed, when it did.
+    const fn failure(&self) -> Option<&'static str> {
+        self.failure
     }
 }
 
