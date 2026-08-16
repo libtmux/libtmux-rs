@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # fuzz is excluded from the workspace, so the root lockfile does not cover it.
+  - package-ecosystem: "cargo"
+    directories:
+      - "/"
+      - "/fuzz"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo:
+        patterns: ["*"]
+    # The trailing space stops Dependabot appending a colon.
+    commit-message:
+      prefix: "rs(deps) "
+    # Time enough for a compromised release to be reported.
+    cooldown:
+      default-days: 7
+
+  # A rustup proxy reads this ahead of the toolchain the job installed. It is
+  # not the MSRV floor, which is rust-version per crate.
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "rs(deps[toolchain]) "
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # Selected by branch, not tag: stable, nightly, and the MSRV floors
+    # `just msrv` invokes by exact name.
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci(deps) "
+    cooldown:
+      default-days: 7
