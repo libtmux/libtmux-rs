@@ -16,6 +16,40 @@ full.
 
 ## Unreleased
 
+### Added
+
+- Typed control-mode events. `Event` now names every notification tmux
+  publishes -- windows, sessions, clients, buffers, layout, subscriptions,
+  flow control -- instead of collapsing all but three into `Event::Other`.
+  `Event::invalidates_listings`, `may_have_added_a_pane`, `pane` and `window`
+  reduce them to the decisions a caller actually makes.
+- `ControlSender::watch_only`, `mute_pane`, `unmute_pane`, `pause_after` and
+  `resume_pane`. tmux sends a control client every pane on the server; one
+  neighbouring `yes` moves more than 20 MB in two seconds.
+- `Event::Exit` carries the reason tmux gave, such as `too far behind`.
+
+### Fixed
+
+- `Pane::stream_output` read and discarded every other pane's output. It now
+  tells tmux to send only the pane asked for, and repeats that when
+  `%layout-change` says a pane may have appeared -- measured at 20 MB versus
+  about 100 bytes over two seconds against a flooding neighbour, on every
+  supported tmux.
+- Command output whose lines begin with `%` was parsed as notifications and
+  dropped from the result. `list-panes -F '#{pane_id}'` returned nothing and
+  reported events that never happened. tmux queues notifications while a block
+  is open, so inside one every line but its terminator is now output.
+- A control-mode argument starting with `%` that is not a bare pane id is a
+  tmux syntax error, not a quoting nicety. `refresh-client -A %1:off` was
+  rejected by tmux and the command silently did nothing.
+- `Error::control_mode_unrepresentable` wore a doc comment left behind by
+  `control_mode_closed`.
+- `Command::arg` and `Command::target` had swapped doc comments, and
+  `control_mode_line`'s was spliced between them.
+- `just doc-blocks` now also fails when a doc comment sits below a non-doc
+  attribute, which is the shape a split leaves when it lands on a sentence
+  boundary. It found the two above on its first run.
+
 ## 0.1.0-alpha.5 - 2026-08-16
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.5;

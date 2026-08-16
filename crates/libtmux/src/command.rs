@@ -148,10 +148,11 @@ impl Command {
     /// assert_eq!(command.summary().public_argument_count(), 1);
     /// ```
     #[must_use = "use the returned command to retain the appended argument"]
-    /// Render this command as one control-mode line.
-    ///
-    /// Returns `None` when a token is not valid UTF-8, because control mode
-    /// is a text protocol and no escaping in it can carry those bytes.
+    pub fn arg(mut self, argument: impl Into<OsString>) -> Self {
+        self.arguments.push(CommandArg::public(argument.into()));
+        self
+    }
+
     /// Return the value of the command's `-t` flag, when it has one.
     ///
     /// Used to name the object in a failure. tmux does not always repeat the
@@ -172,6 +173,10 @@ impl Command {
         None
     }
 
+    /// Render this command as one control-mode line.
+    ///
+    /// Returns `None` when a token is not valid UTF-8, because control mode
+    /// is a text protocol and no escaping in it can carry those bytes.
     #[cfg(feature = "control-mode")]
     pub(crate) fn control_mode_line(&self) -> Option<String> {
         let mut line = render_control_mode_token(&self.subcommand.value)?;
@@ -181,12 +186,6 @@ impl Command {
         }
 
         Some(line)
-    }
-
-    /// Append one public argument.
-    pub fn arg(mut self, argument: impl Into<OsString>) -> Self {
-        self.arguments.push(CommandArg::public(argument.into()));
-        self
     }
 
     /// Append one sensitive logical argument.
@@ -457,7 +456,8 @@ fn render_control_mode_token(value: &OsStr) -> Option<String> {
     let safe = !text.is_empty()
         && text
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./=@%:,+".contains(&byte));
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_./=@%:,+".contains(&byte))
+        && !opens_a_condition(text);
     if safe {
         return Some(text.to_owned());
     }
@@ -473,6 +473,21 @@ fn render_control_mode_token(value: &OsStr) -> Option<String> {
     rendered.push('"');
 
     Some(rendered)
+}
+
+/// Report whether tmux's command parser would read this word as a directive.
+///
+/// `cmd-parse.y` treats a word starting with `%` as a condition -- `%if`,
+/// `%endif` and friends -- unless every character after it is a `%` or a
+/// digit, which is what makes a bare pane id a token. Anything else beginning
+/// with `%` is a syntax error, so `refresh-client -A %1:off` must be quoted
+/// while `list-panes -t %1` must not be.
+#[cfg(feature = "control-mode")]
+fn opens_a_condition(text: &str) -> bool {
+    text.starts_with('%')
+        && !text
+            .bytes()
+            .all(|byte| byte == b'%' || byte.is_ascii_digit())
 }
 
 /// A rendering of a dispatched command that is safe to log.
@@ -1567,5 +1582,37 @@ mod tests {
         assert!(escaped_debug.contains("\\xff"));
         assert!(bounded_debug.contains("<truncated>"));
         assert!(bounded_debug.len() < 256);
+    }
+
+    /// tmux answers `parse error: syntax error` and runs nothing, so the cases
+    /// come from `cmd-parse.y`: a word starting with `%` is a condition unless
+    /// it is all `%` and digits.
+    #[cfg(feature = "control-mode")]
+    #[test]
+    fn a_percent_token_is_quoted_unless_tmux_reads_it_as_a_pane_id() {
+        let line = |command: Command| command.control_mode_line().expect("renders");
+
+        // All digits after the percent: a pane id, and tmux wants it bare.
+        assert_eq!(
+            line(Command::new("list-panes").arg("-t").arg("%1")),
+            "list-panes -t %1",
+        );
+
+        // Anything else beginning with a percent opens a condition, so it has
+        // to be quoted or tmux refuses the whole line.
+        assert_eq!(
+            line(Command::new("refresh-client").arg("-A").arg("%1:off")),
+            r#"refresh-client -A "%1:off""#,
+        );
+        assert_eq!(
+            line(Command::new("display-message").arg("%if")),
+            r#"display-message "%if""#,
+        );
+
+        // A percent that does not start the word was never a condition.
+        assert_eq!(
+            line(Command::new("display-message").arg("x%1:off")),
+            "display-message x%1:off",
+        );
     }
 }

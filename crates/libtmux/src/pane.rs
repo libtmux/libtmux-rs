@@ -366,11 +366,19 @@ impl Pane {
     #[cfg(feature = "control-mode")]
     pub async fn stream_output(&self) -> Result<crate::control::PaneOutput, Error> {
         let server = crate::Server::from_core(Arc::clone(&self.core));
-        let (_, events) = crate::control::ControlMode::attach(&server, self.session_id())
+        let (sender, events) = crate::control::ControlMode::attach(&server, self.session_id())
             .await?
             .split();
 
-        Ok(crate::control::PaneOutput::new(self.id().clone(), events))
+        // tmux sends a control client every pane on the server, so narrowing
+        // happens before the caller reads rather than after the bytes arrive.
+        sender.watch_only(std::slice::from_ref(self.id())).await?;
+
+        Ok(crate::control::PaneOutput::new(
+            self.id().clone(),
+            events,
+            sender,
+        ))
     }
 
     /// Split this pane, putting a new one beside it.

@@ -986,8 +986,6 @@ impl Error {
         }
     }
 
-    /// tmux closed the connection before answering.
-    #[cfg(feature = "control-mode")]
     /// A command carries an argument no control-mode line can express.
     #[cfg(feature = "control-mode")]
     pub(crate) const fn control_mode_unrepresentable() -> Self {

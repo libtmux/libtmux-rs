@@ -21,7 +21,7 @@
 //! while let Some(event) = events.next_event().await {
 //!     match event {
 //!         Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
-//!         Event::Exit => break,
+//!         Event::Exit { .. } => break,
 //!         // Reacting to an event by sending a command is the whole point,
 //!         // and works here because the sender is not borrowed by the loop.
 //!         Event::SessionChanged { .. } => {
@@ -38,7 +38,10 @@
 
 use std::collections::VecDeque;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures_core::Stream;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -46,13 +49,19 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::limits::ControlLimits;
-use crate::{Command, Error, PaneId, Server, SessionId, TmuxText};
+use crate::{Command, Error, PaneId, Server, SessionId, TmuxText, WindowId};
 
 /// Something tmux reported that no command asked for.
 ///
-/// Control mode names many notifications and adds more between releases, so
-/// [`Event::Other`] keeps an unrecognized one rather than dropping it. Its
-/// name is the tmux notification without the leading `%`.
+/// The variants cover every notification tmux publishes across the supported
+/// releases. [`Event::Other`] keeps an unrecognized one rather than dropping
+/// it, because tmux adds notifications between releases; its name is the tmux
+/// notification without the leading `%`.
+///
+/// Four of these are newer than the oldest tmux this crate supports:
+/// `%config-error`, `%message`, `%paste-buffer-changed` and
+/// `%paste-buffer-deleted` are never emitted by 3.2a. Nothing else in the
+/// vocabulary is version-dependent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Event {
@@ -68,13 +77,172 @@ pub enum Event {
         /// The output bytes.
         bytes: Vec<u8>,
     },
+    /// A pane produced output, and tmux said how far behind it is.
+    ///
+    /// Replaces [`Event::Output`] for the whole connection once a client asks
+    /// for `pause-after`, so a caller that sets that flag must handle both.
+    ExtendedOutput {
+        /// The pane that produced it.
+        pane: PaneId,
+        /// How long this output sat before tmux sent it.
+        age: Duration,
+        /// The output bytes.
+        bytes: Vec<u8>,
+    },
+    /// tmux stopped sending a pane's output because this client fell behind.
+    ///
+    /// Only ever sent to a client that asked for `pause-after`. Resume with
+    /// [`ControlSender::resume_pane`].
+    Paused {
+        /// The pane that was paused.
+        pane: PaneId,
+    },
+    /// tmux resumed a pane it had paused.
+    Continued {
+        /// The pane that resumed.
+        pane: PaneId,
+    },
     /// The attached session changed.
     SessionChanged {
         /// The session now attached.
         session: SessionId,
     },
+    /// A session was renamed.
+    SessionRenamed {
+        /// The session that was renamed.
+        session: SessionId,
+        /// Its new name.
+        name: TmuxText,
+    },
+    /// A session's active window changed.
+    SessionWindowChanged {
+        /// The session whose active window changed.
+        session: SessionId,
+        /// The window now active in it.
+        window: WindowId,
+    },
+    /// A session was created or destroyed, so the session list is now wrong.
+    ///
+    /// tmux says only that the set changed, not which session it was.
+    SessionsChanged,
+    /// A window was linked into the attached session.
+    WindowAdded {
+        /// The window that appeared.
+        window: WindowId,
+    },
+    /// A window in the attached session closed.
+    WindowClosed {
+        /// The window that closed.
+        window: WindowId,
+    },
+    /// A window in the attached session was renamed.
+    WindowRenamed {
+        /// The window that was renamed.
+        window: WindowId,
+        /// Its new name.
+        name: TmuxText,
+    },
+    /// A window's active pane changed.
+    WindowPaneChanged {
+        /// The window whose active pane changed.
+        window: WindowId,
+        /// The pane now active in it.
+        pane: PaneId,
+    },
+    /// A window appeared that the attached session does not link.
+    UnlinkedWindowAdded {
+        /// The window that appeared.
+        window: WindowId,
+    },
+    /// A window the attached session does not link closed.
+    UnlinkedWindowClosed {
+        /// The window that closed.
+        window: WindowId,
+    },
+    /// A window the attached session does not link was renamed.
+    UnlinkedWindowRenamed {
+        /// The window that was renamed.
+        window: WindowId,
+        /// Its new name.
+        name: TmuxText,
+    },
+    /// A window's panes were rearranged, added to, or removed from.
+    ///
+    /// tmux has no notification for a pane appearing, so this is the one that
+    /// reports it: every split changes the layout, including a detached split
+    /// that leaves the active pane alone and reports nothing else.
+    LayoutChanged {
+        /// The window whose layout changed.
+        window: WindowId,
+        /// The new layout, in tmux's own layout syntax.
+        layout: TmuxText,
+        /// The layout as displayed, which differs when a pane is zoomed.
+        visible_layout: TmuxText,
+        /// The window's flags, such as `*` for active.
+        flags: TmuxText,
+    },
+    /// A pane entered or left a mode, such as copy mode.
+    ///
+    /// tmux says the pane changed mode, not which mode it is now; read
+    /// `pane_mode` to learn that.
+    PaneModeChanged {
+        /// The pane whose mode changed.
+        pane: PaneId,
+    },
+    /// A client detached from the server.
+    ClientDetached {
+        /// The client that left.
+        client: TmuxText,
+    },
+    /// A client switched to a different session.
+    ClientSessionChanged {
+        /// The client that switched.
+        client: TmuxText,
+        /// The session it switched to.
+        session: SessionId,
+        /// That session's name.
+        name: TmuxText,
+    },
+    /// A paste buffer was created or replaced.
+    PasteBufferChanged {
+        /// The buffer's name.
+        name: TmuxText,
+    },
+    /// A paste buffer was deleted.
+    PasteBufferDeleted {
+        /// The buffer's name.
+        name: TmuxText,
+    },
+    /// A format this client subscribed to with `refresh-client -B` changed.
+    SubscriptionChanged {
+        /// The subscription name the caller chose.
+        name: TmuxText,
+        /// The session it is about.
+        session: SessionId,
+        /// The window it is about, when the subscription names one.
+        window: Option<WindowId>,
+        /// That window's index, when the subscription names one.
+        index: Option<u32>,
+        /// The pane it is about, when the subscription names one.
+        pane: Option<PaneId>,
+        /// The format's new value.
+        value: TmuxText,
+    },
+    /// tmux could not read part of its configuration.
+    ConfigError {
+        /// What tmux said was wrong.
+        message: TmuxText,
+    },
+    /// A message tmux was asked to display, by `display-message` or a hook.
+    Message {
+        /// The message text.
+        message: TmuxText,
+    },
     /// The server is going away, so no further events will arrive.
-    Exit,
+    Exit {
+        /// Why, when tmux gave a reason. `None` is an ordinary shutdown.
+        reason: Option<TmuxText>,
+    },
     /// A notification this crate does not model.
     Other {
         /// The notification name, without its `%`.
@@ -82,6 +250,79 @@ pub enum Event {
         /// The rest of the line.
         rest: TmuxText,
     },
+}
+
+impl Event {
+    /// Report whether a listing taken before this event may now be wrong.
+    ///
+    /// Output and the flow-control events say nothing about the shape of the
+    /// server. [`Event::Other`] counts as invalidating, because an unmodelled
+    /// notification is one whose meaning is not known here.
+    #[must_use]
+    pub const fn invalidates_listings(&self) -> bool {
+        !matches!(
+            self,
+            Self::Output { .. }
+                | Self::ExtendedOutput { .. }
+                | Self::Paused { .. }
+                | Self::Continued { .. }
+                | Self::SubscriptionChanged { .. }
+                | Self::ConfigError { .. }
+                | Self::Message { .. }
+        )
+    }
+
+    /// Report whether a pane may have appeared since the last look.
+    ///
+    /// tmux publishes no notification for a pane being created, so this is a
+    /// conservative union of the events that can accompany one. A caller that
+    /// narrowed with [`ControlSender::watch_only`] must repeat it when this
+    /// answers `true`.
+    #[must_use]
+    pub const fn may_have_added_a_pane(&self) -> bool {
+        matches!(
+            self,
+            Self::LayoutChanged { .. }
+                | Self::WindowAdded { .. }
+                | Self::UnlinkedWindowAdded { .. }
+                | Self::SessionsChanged
+                | Self::SessionChanged { .. }
+                | Self::Other { .. }
+        )
+    }
+
+    /// Return the pane this event is about, when it is about one.
+    #[must_use]
+    pub const fn pane(&self) -> Option<&PaneId> {
+        match self {
+            Self::Output { pane, .. }
+            | Self::ExtendedOutput { pane, .. }
+            | Self::Paused { pane }
+            | Self::Continued { pane }
+            | Self::PaneModeChanged { pane }
+            | Self::WindowPaneChanged { pane, .. } => Some(pane),
+            Self::SubscriptionChanged { pane, .. } => pane.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Return the window this event is about, when it is about one.
+    #[must_use]
+    pub const fn window(&self) -> Option<&WindowId> {
+        match self {
+            Self::WindowAdded { window }
+            | Self::WindowClosed { window }
+            | Self::WindowRenamed { window, .. }
+            | Self::WindowPaneChanged { window, .. }
+            | Self::UnlinkedWindowAdded { window }
+            | Self::UnlinkedWindowClosed { window }
+            | Self::UnlinkedWindowRenamed { window, .. }
+            | Self::LayoutChanged { window, .. }
+            | Self::SessionWindowChanged { window, .. } => Some(window),
+            Self::SubscriptionChanged { window, .. } => window.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 /// The outcome of one command sent over control mode.
@@ -277,6 +518,114 @@ impl ControlSender {
         answer.await.map_err(|_| Error::control_mode_closed())?
     }
 
+    /// Stop tmux sending this connection what a pane writes.
+    ///
+    /// A control client is sent the output of *every* pane on the server. One
+    /// pane running `yes` moves more than 20 MB in two seconds, and a client
+    /// tmux judges five minutes behind is disconnected with `too far behind`,
+    /// so discarding the unwanted panes on arrival is not enough.
+    ///
+    /// Muting a pane that does not exist is not an error; tmux ignores an
+    /// unresolvable id here.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection has closed.
+    pub async fn mute_pane(&self, pane: &PaneId) -> Result<(), Error> {
+        self.set_pane_stream(pane, "off").await
+    }
+
+    /// Resume sending what a pane writes, after [`Self::mute_pane`].
+    ///
+    /// tmux resumes from the pane's current output rather than replaying what
+    /// was skipped, so a caller unmuting a pane has a gap, not a backlog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection has closed.
+    pub async fn unmute_pane(&self, pane: &PaneId) -> Result<(), Error> {
+        self.set_pane_stream(pane, "on").await
+    }
+
+    /// Resume a pane tmux paused because this connection fell behind.
+    ///
+    /// Pairs with [`Event::Paused`], which only arrives once a caller has
+    /// asked for pausing with [`Self::pause_after`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection has closed.
+    pub async fn resume_pane(&self, pane: &PaneId) -> Result<(), Error> {
+        self.set_pane_stream(pane, "continue").await
+    }
+
+    /// Have tmux pause a pane rather than let this connection fall behind.
+    ///
+    /// Without this, tmux disconnects a control client that falls more than
+    /// five minutes behind, losing everything the connection was for. With it,
+    /// tmux instead reports [`Event::Paused`] for the offending pane and keeps
+    /// the connection, and every [`Event::Output`] becomes an
+    /// [`Event::ExtendedOutput`] carrying how far behind it was.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection has closed.
+    pub async fn pause_after(&self, behind: Duration) -> Result<(), Error> {
+        self.send(
+            Command::new("refresh-client")
+                .arg("-f")
+                .arg(format!("pause-after={}", behind.as_secs())),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Receive output from these panes and no others.
+    ///
+    /// Lists panes over this same connection, so the answer cannot disagree
+    /// with the connection it configures, then mutes every pane not named.
+    /// See [`Self::mute_pane`] for why this beats filtering what arrives.
+    ///
+    /// A pane created after this call is not muted, because tmux publishes no
+    /// notification for a pane appearing. Repeat this whenever
+    /// [`Event::may_have_added_a_pane`] answers `true`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection has closed, or tmux would not list
+    /// its panes.
+    pub async fn watch_only(&self, panes: &[PaneId]) -> Result<(), Error> {
+        let listed = self
+            .send(
+                Command::new("list-panes")
+                    .arg("-a")
+                    .arg("-F")
+                    .arg("#{pane_id}"),
+            )
+            .await?;
+
+        for line in listed.output() {
+            let Some(found) = line.as_str().ok().and_then(|id| id.parse::<PaneId>().ok()) else {
+                continue;
+            };
+            if !panes.contains(&found) {
+                self.mute_pane(&found).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn set_pane_stream(&self, pane: &PaneId, state: &str) -> Result<(), Error> {
+        self.send(
+            Command::new("refresh-client")
+                .arg("-A")
+                .arg(format!("{pane}:{state}")),
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Report whether the connection has closed.
     #[must_use]
     pub fn is_closed(&self) -> bool {
@@ -349,20 +698,60 @@ const EVENT_QUEUE: usize = 256;
 /// What one pane writes, as it writes it.
 ///
 /// Built by [`crate::Pane::stream_output`]. This is a [`Stream`] of the bytes
-/// that pane produced, in order, with everything the connection reports about
-/// other panes filtered out.
+/// that pane produced, in order.
+///
+/// tmux is told to send this connection nothing but the watched pane. A
+/// neighbouring pane running `yes` otherwise moves tens of megabytes a second
+/// through it, and the watched pane's output queues behind that.
 ///
 /// Each of these owns a control-mode connection, so a caller watching many
-/// panes at once is better served by [`ControlEvents`] and one connection.
+/// panes at once is better served by [`ControlEvents`] and one connection,
+/// narrowed with [`ControlSender::watch_only`].
 #[derive(Debug)]
 pub struct PaneOutput {
     pane: PaneId,
     events: ControlEvents,
+    /// Kept to re-narrow the subscription, not to send a caller's commands.
+    ///
+    /// tmux has no notification for a pane being created, so a pane that
+    /// appears after the attach arrives unmuted; the event loop below repairs
+    /// that when an event says the set of panes may have grown.
+    sender: ControlSender,
+    /// Whether a re-narrow is already in flight.
+    ///
+    /// Each one costs a `list-panes` round trip, and a burst of splits reports
+    /// an event apiece.
+    narrowing: Arc<AtomicBool>,
 }
 
 impl PaneOutput {
-    pub(crate) const fn new(pane: PaneId, events: ControlEvents) -> Self {
-        Self { pane, events }
+    pub(crate) fn new(pane: PaneId, events: ControlEvents, sender: ControlSender) -> Self {
+        Self {
+            pane,
+            events,
+            sender,
+            narrowing: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Tell tmux again to send only this pane.
+    ///
+    /// Detached rather than awaited so [`Stream::poll_next`], which cannot
+    /// await, repairs the subscription the same way [`Self::next_chunk`] does.
+    /// A failure leaves the caller its own pane alongside noise, so it does
+    /// not end the stream.
+    fn narrow(&self) {
+        if self.narrowing.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        let sender = self.sender.clone();
+        let pane = self.pane.clone();
+        let narrowing = Arc::clone(&self.narrowing);
+        tokio::spawn(async move {
+            let _ = sender.watch_only(&[pane]).await;
+            narrowing.store(false, Ordering::Release);
+        });
     }
 
     /// Return the pane being watched.
@@ -377,9 +766,15 @@ impl PaneOutput {
     /// not a fixed size. Callers wanting lines should buffer.
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
         loop {
-            match self.events.next_event().await? {
-                Event::Output { pane, bytes } if pane == self.pane => return Some(bytes),
-                Event::Exit => return None,
+            let event = self.events.next_event().await?;
+            match event {
+                Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. }
+                    if pane == self.pane =>
+                {
+                    return Some(bytes);
+                }
+                Event::Exit { .. } => return None,
+                event if event.may_have_added_a_pane() => self.narrow(),
                 _ => {}
             }
         }
@@ -391,6 +786,7 @@ impl PaneOutput {
     ///
     /// Returns an error when the connection failed before it was closed.
     pub async fn shutdown(self) -> Result<(), Error> {
+        drop(self.sender);
         self.events.shutdown().await
     }
 }
@@ -401,11 +797,17 @@ impl Stream for PaneOutput {
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
         loop {
             match std::task::ready!(self.events.events.poll_recv(context)) {
-                Some(Event::Output { pane, bytes }) if pane == self.pane => {
+                Some(Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. })
+                    if pane == self.pane =>
+                {
                     return Poll::Ready(Some(bytes));
                 }
-                Some(Event::Exit) | None => return Poll::Ready(None),
-                Some(_) => {}
+                Some(Event::Exit { .. }) | None => return Poll::Ready(None),
+                Some(event) => {
+                    if event.may_have_added_a_pane() {
+                        self.narrow();
+                    }
+                }
             }
         }
     }
@@ -546,8 +948,8 @@ impl Connection {
                     self.read_block(number).await?;
                     return Ok(true);
                 }
-                Some(Line::Event(Event::Exit)) => {
-                    self.report(Event::Exit).await;
+                Some(Line::Event(exit @ Event::Exit { .. })) => {
+                    self.report(exit).await;
                     return Ok(false);
                 }
                 Some(Line::Event(event)) => self.report(event).await,
@@ -567,8 +969,8 @@ impl Connection {
                 }
                 Ok(true)
             }
-            Line::Event(Event::Exit) => {
-                self.report(Event::Exit).await;
+            Line::Event(exit @ Event::Exit { .. }) => {
+                self.report(exit).await;
                 Ok(false)
             }
             Line::Event(event) => {
@@ -593,7 +995,14 @@ impl Connection {
         let mut output = Vec::new();
         let mut accumulated = 0usize;
         loop {
-            match read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes).await? {
+            match read_line_within(
+                &mut self.stdout,
+                &mut self.line,
+                self.limits.max_line_bytes,
+                Some(number),
+            )
+            .await?
+            {
                 Some(Line::BlockEnd {
                     number: end,
                     succeeded,
@@ -616,9 +1025,9 @@ impl Connection {
                     }
                     output.push(text);
                 }
-                Some(Line::Event(event)) => self.report(event).await,
-                // Blocks do not nest, so anything else here is not this one.
-                Some(Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
+                // Inside a block every other line is output, so reaching a
+                // reply never waits on a caller draining events.
+                Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
                 None => return Err(Error::control_mode_closed()),
             }
         }
@@ -635,6 +1044,22 @@ async fn read_line(
     stdout: &mut BufReader<ChildStdout>,
     pending: &mut Vec<u8>,
     limit: usize,
+) -> Result<Option<Line>, Error> {
+    read_line_within(stdout, pending, limit, None).await
+}
+
+/// Read one line, classifying it for the block it arrived in.
+///
+/// `within` names the open block, if any. tmux queues a notification raised
+/// while a block is open and writes it after the `%end` (`control.c`,
+/// `control_write`), so inside a block every line but its own terminator is
+/// command output -- including one that looks like a notification, which is
+/// what `list-panes -F '#{pane_id}'` produces for every row.
+async fn read_line_within(
+    stdout: &mut BufReader<ChildStdout>,
+    pending: &mut Vec<u8>,
+    limit: usize,
+    within: Option<u64>,
 ) -> Result<Option<Line>, Error> {
     let read = stdout
         .read_until(b'\n', pending)
@@ -653,7 +1078,11 @@ async fn read_line(
 
     // read_until stops at the newline or at end of input, so what is left
     // without one is the last line tmux managed to write.
-    let line = Line::parse(pending.strip_suffix(b"\n").unwrap_or(pending));
+    let bytes = pending.strip_suffix(b"\n").unwrap_or(pending);
+    let line = match within {
+        Some(number) => Line::parse_within_block(bytes, number),
+        None => Line::parse(bytes),
+    };
     pending.clear();
 
     Ok(Some(line))
@@ -681,6 +1110,20 @@ enum Line {
 }
 
 impl Line {
+    /// Classify a line arriving inside the block numbered `number`.
+    ///
+    /// Only that block's own terminator is structure. Everything else is
+    /// output, however much it resembles a notification.
+    fn parse_within_block(line: &[u8], number: u64) -> Self {
+        if let Self::BlockEnd { number: end, .. } = Self::parse(line)
+            && end == number
+        {
+            return Self::parse(line);
+        }
+
+        Self::Text(TmuxText::from_bytes(line))
+    }
+
     fn parse(line: &[u8]) -> Self {
         let text = || Self::Text(TmuxText::from_bytes(line));
 
@@ -694,56 +1137,279 @@ impl Line {
             return text();
         };
 
-        match name {
-            // `%begin`, `%end`, and `%error` carry a timestamp, a number, and
-            // flags. The number is what correlates a result with its command.
-            "begin" | "end" | "error" => {
-                let number = std::str::from_utf8(arguments).ok().and_then(|arguments| {
-                    arguments
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|value| value.parse().ok())
-                });
+        // A recognized notification that will not parse answers `Text` rather
+        // than falling through, so a malformed line is never reported as an
+        // unmodelled one.
+        Self::framing(name, arguments, line)
+            .or_else(|| Self::about_output(name, arguments, line))
+            .or_else(|| Self::about_a_session(name, arguments, line))
+            .or_else(|| Self::about_a_window(name, arguments, line))
+            .or_else(|| Self::about_the_server(name, arguments, line))
+            .unwrap_or_else(|| {
+                Self::Event(Event::Other {
+                    name: name.to_owned(),
+                    rest: TmuxText::from_bytes(arguments),
+                })
+            })
+    }
 
-                match (name, number) {
-                    ("begin", Some(number)) => Self::BlockStart(number),
-                    (_, Some(number)) => Self::BlockEnd {
-                        number,
-                        succeeded: name == "end",
-                    },
-                    // A malformed header is text: guessing a number would
-                    // correlate a result with the wrong command.
-                    (_, None) => text(),
-                }
-            }
+    /// `%begin`, `%end` and `%error`, which bracket a command's result.
+    ///
+    /// Each carries a timestamp, a number, and flags. The number correlates a
+    /// result with its command; a header without one is text, because guessing
+    /// would hand the result to the wrong caller.
+    fn framing(name: &str, arguments: &[u8], line: &[u8]) -> Option<Self> {
+        if !matches!(name, "begin" | "end" | "error") {
+            return None;
+        }
+
+        let number = std::str::from_utf8(arguments).ok().and_then(|arguments| {
+            arguments
+                .split_whitespace()
+                .nth(1)
+                .and_then(|value| value.parse().ok())
+        });
+
+        Some(match (name, number) {
+            ("begin", Some(number)) => Self::BlockStart(number),
+            (_, Some(number)) => Self::BlockEnd {
+                number,
+                succeeded: name == "end",
+            },
+            (_, None) => Self::Text(TmuxText::from_bytes(line)),
+        })
+    }
+
+    /// What a pane wrote, and the flow control around it.
+    fn about_output(name: &str, arguments: &[u8], line: &[u8]) -> Option<Self> {
+        let text = || Self::Text(TmuxText::from_bytes(line));
+
+        Some(match name {
             "output" => {
                 let (pane, bytes) = split_once(arguments, b' ');
-                std::str::from_utf8(pane)
-                    .ok()
-                    .and_then(|pane| pane.parse().ok())
-                    .map_or_else(text, |pane| {
-                        Self::Event(Event::Output {
-                            pane,
-                            bytes: unescape_output(bytes),
-                        })
+                parsed(pane).map_or_else(text, |pane| {
+                    Self::Event(Event::Output {
+                        pane,
+                        bytes: unescape_output(bytes),
                     })
+                })
             }
+            // `%extended-output %1 42 : data`. The `:` separator is tmux's,
+            // not a delimiter that could occur inside the age.
+            "extended-output" => {
+                let (pane, rest) = split_once(arguments, b' ');
+                let (age, rest) = split_once(rest, b' ');
+                let bytes = rest.strip_prefix(b": ").unwrap_or(rest);
+                match (parsed(pane), parsed::<u64>(age)) {
+                    (Some(pane), Some(age)) => Self::Event(Event::ExtendedOutput {
+                        pane,
+                        age: Duration::from_millis(age),
+                        bytes: unescape_output(bytes),
+                    }),
+                    _ => text(),
+                }
+            }
+            "pause" => pane_event(arguments, text, |pane| Event::Paused { pane }),
+            "continue" => pane_event(arguments, text, |pane| Event::Continued { pane }),
+            "pane-mode-changed" => {
+                pane_event(arguments, text, |pane| Event::PaneModeChanged { pane })
+            }
+            _ => return None,
+        })
+    }
+
+    /// Notifications naming a session.
+    fn about_a_session(name: &str, arguments: &[u8], line: &[u8]) -> Option<Self> {
+        let text = || Self::Text(TmuxText::from_bytes(line));
+
+        Some(match name {
             "session-changed" => {
                 let (session, _) = split_once(arguments, b' ');
-                std::str::from_utf8(session)
-                    .ok()
-                    .and_then(|session| session.parse().ok())
-                    .map_or_else(text, |session| {
-                        Self::Event(Event::SessionChanged { session })
-                    })
+                parsed(session).map_or_else(text, |session| {
+                    Self::Event(Event::SessionChanged { session })
+                })
             }
-            "exit" => Self::Event(Event::Exit),
-            _ => Self::Event(Event::Other {
-                name: name.to_owned(),
-                rest: TmuxText::from_bytes(arguments),
-            }),
-        }
+            "session-renamed" => {
+                let (session, new_name) = split_once(arguments, b' ');
+                parsed(session).map_or_else(text, |session| {
+                    Self::Event(Event::SessionRenamed {
+                        session,
+                        name: TmuxText::from_bytes(new_name),
+                    })
+                })
+            }
+            "session-window-changed" => {
+                let (session, window) = split_once(arguments, b' ');
+                match (parsed(session), parsed(window)) {
+                    (Some(session), Some(window)) => {
+                        Self::Event(Event::SessionWindowChanged { session, window })
+                    }
+                    _ => text(),
+                }
+            }
+            "sessions-changed" => Self::Event(Event::SessionsChanged),
+            _ => return None,
+        })
     }
+
+    /// Notifications naming a window, linked into the attached session or not.
+    fn about_a_window(name: &str, arguments: &[u8], line: &[u8]) -> Option<Self> {
+        let text = || Self::Text(TmuxText::from_bytes(line));
+
+        Some(match name {
+            "window-add" => window_event(arguments, text, |window| Event::WindowAdded { window }),
+            "window-close" => {
+                window_event(arguments, text, |window| Event::WindowClosed { window })
+            }
+            "unlinked-window-add" => window_event(arguments, text, |window| {
+                Event::UnlinkedWindowAdded { window }
+            }),
+            "unlinked-window-close" => window_event(arguments, text, |window| {
+                Event::UnlinkedWindowClosed { window }
+            }),
+            "window-renamed" | "unlinked-window-renamed" => {
+                let (window, new_name) = split_once(arguments, b' ');
+                parsed(window).map_or_else(text, |window| {
+                    let new_name = TmuxText::from_bytes(new_name);
+                    Self::Event(if name == "window-renamed" {
+                        Event::WindowRenamed {
+                            window,
+                            name: new_name,
+                        }
+                    } else {
+                        Event::UnlinkedWindowRenamed {
+                            window,
+                            name: new_name,
+                        }
+                    })
+                })
+            }
+            "window-pane-changed" => {
+                let (window, pane) = split_once(arguments, b' ');
+                match (parsed(window), parsed(pane)) {
+                    (Some(window), Some(pane)) => {
+                        Self::Event(Event::WindowPaneChanged { window, pane })
+                    }
+                    _ => text(),
+                }
+            }
+            // Built from a format template rather than a printf, so it carries
+            // whatever `#{window_raw_flags}` expanded to -- possibly nothing.
+            "layout-change" => {
+                let (window, rest) = split_once(arguments, b' ');
+                let (layout, rest) = split_once(rest, b' ');
+                let (visible_layout, flags) = split_once(rest, b' ');
+                parsed(window).map_or_else(text, |window| {
+                    Self::Event(Event::LayoutChanged {
+                        window,
+                        layout: TmuxText::from_bytes(layout),
+                        visible_layout: TmuxText::from_bytes(visible_layout),
+                        flags: TmuxText::from_bytes(flags),
+                    })
+                })
+            }
+            _ => return None,
+        })
+    }
+
+    /// Notifications about clients, buffers, subscriptions, and the server.
+    fn about_the_server(name: &str, arguments: &[u8], line: &[u8]) -> Option<Self> {
+        let text = || Self::Text(TmuxText::from_bytes(line));
+
+        Some(match name {
+            "client-detached" => Self::Event(Event::ClientDetached {
+                client: TmuxText::from_bytes(arguments),
+            }),
+            "client-session-changed" => {
+                let (client, rest) = split_once(arguments, b' ');
+                let (session, session_name) = split_once(rest, b' ');
+                parsed(session).map_or_else(text, |session| {
+                    Self::Event(Event::ClientSessionChanged {
+                        client: TmuxText::from_bytes(client),
+                        session,
+                        name: TmuxText::from_bytes(session_name),
+                    })
+                })
+            }
+            "paste-buffer-changed" => Self::Event(Event::PasteBufferChanged {
+                name: TmuxText::from_bytes(arguments),
+            }),
+            "paste-buffer-deleted" => Self::Event(Event::PasteBufferDeleted {
+                name: TmuxText::from_bytes(arguments),
+            }),
+            "subscription-changed" => Self::subscription(arguments).unwrap_or_else(text),
+            "config-error" => Self::Event(Event::ConfigError {
+                message: TmuxText::from_bytes(arguments),
+            }),
+            "message" => Self::Event(Event::Message {
+                message: TmuxText::from_bytes(arguments),
+            }),
+            // A bare `%exit` is an ordinary shutdown; tmux adds a reason when
+            // it has one, such as falling too far behind.
+            "exit" => Self::Event(Event::Exit {
+                reason: (!arguments.is_empty()).then(|| TmuxText::from_bytes(arguments)),
+            }),
+            _ => return None,
+        })
+    }
+
+    /// Parse `%subscription-changed <name> $0 @1 2 %3 : <value>`.
+    ///
+    /// tmux writes `-` for each of window, index and pane when the
+    /// subscription is not that specific, so an absent field is a real answer
+    /// rather than a parse failure.
+    fn subscription(arguments: &[u8]) -> Option<Self> {
+        let (name, rest) = split_once(arguments, b' ');
+        let (session, rest) = split_once(rest, b' ');
+        let (window, rest) = split_once(rest, b' ');
+        let (index, rest) = split_once(rest, b' ');
+        let (pane, rest) = split_once(rest, b' ');
+
+        Some(Self::Event(Event::SubscriptionChanged {
+            name: TmuxText::from_bytes(name),
+            session: parsed(session)?,
+            window: named(window),
+            index: named(index),
+            pane: named(pane),
+            value: TmuxText::from_bytes(rest.strip_prefix(b": ").unwrap_or(rest)),
+        }))
+    }
+}
+
+/// Parse a subscription field that tmux writes as `-` when it names nothing.
+fn named<T: std::str::FromStr>(field: &[u8]) -> Option<T> {
+    if field == b"-" {
+        return None;
+    }
+    parsed(field)
+}
+
+/// Parse an ASCII field into whatever the caller is collecting.
+///
+/// Every field tmux puts in a notification is ASCII, so anything that is not
+/// is a line which merely begins with a percent.
+fn parsed<T: std::str::FromStr>(field: &[u8]) -> Option<T> {
+    std::str::from_utf8(field).ok()?.parse().ok()
+}
+
+/// Build a notification whose only argument is a pane id.
+fn pane_event(
+    arguments: &[u8],
+    text: impl FnOnce() -> Line,
+    build: impl FnOnce(PaneId) -> Event,
+) -> Line {
+    let (pane, _) = split_once(arguments, b' ');
+    parsed(pane).map_or_else(text, |pane| Line::Event(build(pane)))
+}
+
+/// Build a notification whose only argument is a window id.
+fn window_event(
+    arguments: &[u8],
+    text: impl FnOnce() -> Line,
+    build: impl FnOnce(WindowId) -> Event,
+) -> Line {
+    let (window, _) = split_once(arguments, b' ');
+    parsed(window).map_or_else(text, |window| Line::Event(build(window)))
 }
 
 /// Split at the first occurrence of `byte`, which is not kept.
@@ -819,8 +1485,10 @@ pub fn __fuzz_parse_control_line(line: &[u8]) {
 #[cfg(test)]
 mod tests {
 
+    use std::time::Duration;
+
     use super::{Event, Line, unescape_output};
-    use crate::TmuxText;
+    use crate::{PaneId, SessionId, TmuxText, WindowId};
 
     #[test]
     fn block_headers_correlate_by_the_number_tmux_assigns() {
@@ -848,25 +1516,295 @@ mod tests {
         assert!(matches!(Line::parse(b"%begin bad"), Line::Text(_)));
     }
 
-    #[test]
-    fn notifications_are_parsed_and_unknown_ones_are_kept() {
-        assert_eq!(
-            Line::parse(b"%session-changed $0 work"),
-            Line::Event(Event::SessionChanged {
-                session: "$0".parse().expect("a session id parses"),
-            }),
-        );
-        assert_eq!(Line::parse(b"%exit"), Line::Event(Event::Exit));
+    /// Shared by the notification tests, which between them name every
+    /// notification tmux writes. The strings are tmux's own format strings
+    /// from `control-notify.c` and `control.c` with the placeholders filled.
+    fn event(line: &[u8]) -> Event {
+        match Line::parse(line) {
+            Line::Event(event) => event,
+            other => panic!("{other:?} is not an event"),
+        }
+    }
 
-        // tmux adds notifications between releases, so an unrecognized one is
-        // kept rather than dropped.
+    fn a_session() -> SessionId {
+        "$0".parse().expect("a session id parses")
+    }
+
+    fn a_window() -> WindowId {
+        "@2".parse().expect("a window id parses")
+    }
+
+    fn a_pane() -> PaneId {
+        "%3".parse().expect("a pane id parses")
+    }
+
+    #[test]
+    fn session_notifications_are_parsed() {
         assert_eq!(
-            Line::parse(b"%window-renamed @2 build"),
-            Line::Event(Event::Other {
-                name: "window-renamed".to_owned(),
-                rest: TmuxText::from_bytes(*b"@2 build"),
-            }),
+            event(b"%session-changed $0 work"),
+            Event::SessionChanged {
+                session: a_session(),
+            },
         );
+        assert_eq!(
+            event(b"%session-renamed $0 renamed"),
+            Event::SessionRenamed {
+                session: a_session(),
+                name: TmuxText::from_bytes(*b"renamed"),
+            },
+        );
+        assert_eq!(
+            event(b"%session-window-changed $0 @2"),
+            Event::SessionWindowChanged {
+                session: a_session(),
+                window: a_window(),
+            },
+        );
+        assert_eq!(event(b"%sessions-changed"), Event::SessionsChanged);
+    }
+
+    #[test]
+    fn window_notifications_are_parsed() {
+        assert_eq!(
+            event(b"%window-add @2"),
+            Event::WindowAdded { window: a_window() },
+        );
+        assert_eq!(
+            event(b"%window-close @2"),
+            Event::WindowClosed { window: a_window() },
+        );
+        assert_eq!(
+            event(b"%window-renamed @2 build"),
+            Event::WindowRenamed {
+                window: a_window(),
+                name: TmuxText::from_bytes(*b"build"),
+            },
+        );
+        assert_eq!(
+            event(b"%window-pane-changed @2 %3"),
+            Event::WindowPaneChanged {
+                window: a_window(),
+                pane: a_pane(),
+            },
+        );
+        assert_eq!(
+            event(b"%unlinked-window-add @2"),
+            Event::UnlinkedWindowAdded { window: a_window() },
+        );
+        assert_eq!(
+            event(b"%unlinked-window-close @2"),
+            Event::UnlinkedWindowClosed { window: a_window() },
+        );
+        assert_eq!(
+            event(b"%unlinked-window-renamed @2 build"),
+            Event::UnlinkedWindowRenamed {
+                window: a_window(),
+                name: TmuxText::from_bytes(*b"build"),
+            },
+        );
+    }
+
+    /// The one notification tmux builds from a format template, so its
+    /// trailing field is whatever `#{window_raw_flags}` expanded to.
+    #[test]
+    fn a_layout_change_is_parsed() {
+        assert_eq!(
+            event(b"%layout-change @2 bc62,80x24,0,0,0 bc62,80x24,0,0,0 *"),
+            Event::LayoutChanged {
+                window: a_window(),
+                layout: TmuxText::from_bytes(*b"bc62,80x24,0,0,0"),
+                visible_layout: TmuxText::from_bytes(*b"bc62,80x24,0,0,0"),
+                flags: TmuxText::from_bytes(*b"*"),
+            },
+        );
+    }
+
+    #[test]
+    fn output_and_flow_control_notifications_are_parsed() {
+        assert_eq!(
+            event(b"%output %3 hi"),
+            Event::Output {
+                pane: a_pane(),
+                bytes: b"hi".to_vec(),
+            },
+        );
+        assert_eq!(
+            event(b"%extended-output %3 1500 : hi"),
+            Event::ExtendedOutput {
+                pane: a_pane(),
+                age: Duration::from_millis(1500),
+                bytes: b"hi".to_vec(),
+            },
+        );
+        assert_eq!(event(b"%pause %3"), Event::Paused { pane: a_pane() });
+        assert_eq!(event(b"%continue %3"), Event::Continued { pane: a_pane() });
+        assert_eq!(
+            event(b"%pane-mode-changed %3"),
+            Event::PaneModeChanged { pane: a_pane() },
+        );
+    }
+
+    #[test]
+    fn client_buffer_and_server_notifications_are_parsed() {
+        assert_eq!(
+            event(b"%client-detached /dev/pts/4"),
+            Event::ClientDetached {
+                client: TmuxText::from_bytes(*b"/dev/pts/4"),
+            },
+        );
+        assert_eq!(
+            event(b"%client-session-changed /dev/pts/4 $0 work"),
+            Event::ClientSessionChanged {
+                client: TmuxText::from_bytes(*b"/dev/pts/4"),
+                session: a_session(),
+                name: TmuxText::from_bytes(*b"work"),
+            },
+        );
+        assert_eq!(
+            event(b"%paste-buffer-changed buffer0"),
+            Event::PasteBufferChanged {
+                name: TmuxText::from_bytes(*b"buffer0"),
+            },
+        );
+        assert_eq!(
+            event(b"%paste-buffer-deleted buffer0"),
+            Event::PasteBufferDeleted {
+                name: TmuxText::from_bytes(*b"buffer0"),
+            },
+        );
+        assert_eq!(
+            event(b"%config-error /etc/tmux.conf:3: unknown command"),
+            Event::ConfigError {
+                message: TmuxText::from_bytes(*b"/etc/tmux.conf:3: unknown command"),
+            },
+        );
+        assert_eq!(
+            event(b"%message hello"),
+            Event::Message {
+                message: TmuxText::from_bytes(*b"hello"),
+            },
+        );
+        assert_eq!(event(b"%exit"), Event::Exit { reason: None });
+        assert_eq!(
+            event(b"%exit too far behind"),
+            Event::Exit {
+                reason: Some(TmuxText::from_bytes(*b"too far behind")),
+            },
+        );
+    }
+
+    /// tmux writes `-` for a field the subscription does not name, so an
+    /// absent one is a real answer rather than a parse failure.
+    #[test]
+    fn a_subscription_change_is_parsed_with_and_without_its_optional_fields() {
+        assert_eq!(
+            event(b"%subscription-changed watched $0 @2 7 %3 : value"),
+            Event::SubscriptionChanged {
+                name: TmuxText::from_bytes(*b"watched"),
+                session: a_session(),
+                window: Some(a_window()),
+                index: Some(7),
+                pane: Some(a_pane()),
+                value: TmuxText::from_bytes(*b"value"),
+            },
+        );
+        assert_eq!(
+            event(b"%subscription-changed watched $0 - - - : value"),
+            Event::SubscriptionChanged {
+                name: TmuxText::from_bytes(*b"watched"),
+                session: a_session(),
+                window: None,
+                index: None,
+                pane: None,
+                value: TmuxText::from_bytes(*b"value"),
+            },
+        );
+    }
+
+    /// tmux adds notifications between releases, so an unrecognized one is
+    /// kept rather than dropped.
+    #[test]
+    fn an_unmodelled_notification_is_kept() {
+        assert_eq!(
+            event(b"%invented-later @2 build"),
+            Event::Other {
+                name: "invented-later".to_owned(),
+                rest: TmuxText::from_bytes(*b"@2 build"),
+            },
+        );
+    }
+
+    /// tmux queues a notification raised while a block is open, so a line
+    /// inside one is command output even when it reads as a notification.
+    /// `list-panes -F '#{pane_id}'` writes `%0` for every row.
+    #[test]
+    fn a_block_line_that_looks_like_a_notification_is_output() {
+        assert_eq!(
+            Line::parse_within_block(b"%0", 12),
+            Line::Text(TmuxText::from_bytes(*b"%0")),
+        );
+        assert_eq!(
+            Line::parse_within_block(b"%output %3 hi", 12),
+            Line::Text(TmuxText::from_bytes(*b"%output %3 hi")),
+        );
+
+        // The block's own terminator is the one line that is still structure.
+        assert_eq!(
+            Line::parse_within_block(b"%end 1786582374 12 0", 12),
+            Line::BlockEnd {
+                number: 12,
+                succeeded: true,
+            },
+        );
+        // Another block's terminator is not this block's, so it is output.
+        assert_eq!(
+            Line::parse_within_block(b"%end 1786582374 13 0", 12),
+            Line::Text(TmuxText::from_bytes(*b"%end 1786582374 13 0")),
+        );
+    }
+
+    /// Parsing these leniently would report a pane that does not exist, which
+    /// is worse than reporting a line nobody claimed. The text keeps the whole
+    /// line, notification name included, so nothing is lost by not knowing it.
+    #[test]
+    fn a_malformed_notification_is_text_rather_than_a_guess() {
+        let cases: [&[u8]; 5] = [
+            b"%window-add nonsense",
+            b"%pause nonsense",
+            b"%extended-output %3 notanumber : hi",
+            b"%session-window-changed $0 nonsense",
+            b"%begin bad",
+        ];
+
+        for line in cases {
+            assert_eq!(
+                Line::parse(line),
+                Line::Text(TmuxText::from_bytes(line)),
+                "{}",
+                String::from_utf8_lossy(line),
+            );
+        }
+    }
+
+    #[test]
+    fn an_event_says_whether_a_listing_is_now_stale() {
+        let stale = |line: &[u8]| match Line::parse(line) {
+            Line::Event(event) => event.invalidates_listings(),
+            other => panic!("{other:?} is not an event"),
+        };
+
+        // Output says nothing about the shape of the server.
+        assert!(!stale(b"%output %3 hi"));
+        assert!(!stale(b"%extended-output %3 10 : hi"));
+        assert!(!stale(b"%pause %3"));
+
+        assert!(stale(b"%window-add @2"));
+        assert!(stale(b"%window-close @2"));
+        assert!(stale(b"%sessions-changed"));
+        assert!(stale(b"%window-pane-changed @2 %3"));
+        // An unmodelled notification is precisely the one whose meaning is
+        // unknown here, so it counts as invalidating.
+        assert!(stale(b"%invented-later whatever"));
     }
 
     #[test]
@@ -883,12 +1821,13 @@ mod tests {
             }),
         );
 
-        // The same holds for a window name inside a notification.
+        // The same holds for a window name inside a notification. The id is
+        // ASCII and parses; the name it carries is whatever tmux stored.
         assert_eq!(
             Line::parse(b"%window-renamed @2 \xff"),
-            Line::Event(Event::Other {
-                name: "window-renamed".to_owned(),
-                rest: TmuxText::from_bytes(*b"@2 \xff"),
+            Line::Event(Event::WindowRenamed {
+                window: "@2".parse().expect("a window id parses"),
+                name: TmuxText::from_bytes(*b"\xff"),
             }),
         );
     }
