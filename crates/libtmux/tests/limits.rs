@@ -152,3 +152,48 @@ async fn a_full_server_says_so_instead_of_waiting_forever() {
     holder.await.expect("the holder joins").expect("it ran");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
+    use libtmux::ControlLimits;
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("frames").await.expect("session");
+
+    // Small enough that an ordinary command's own response block exceeds it,
+    // which is the point: the budget is the only thing bounding a connection
+    // that reads from a process which keeps running.
+    let control = ControlMode::attach_with_limits(
+        server,
+        session.id(),
+        ControlLimits::default().max_block_bytes(16),
+    )
+    .await;
+
+    // Attaching itself reads tmux's opening block, so a 16-byte budget may
+    // fail there; either way the connection refuses rather than growing.
+    match control {
+        Err(error) => assert!(
+            matches!(&error, libtmux::Error::ControlModeFrameTooLarge { frame, limit, .. }
+                if *frame == "block" && *limit == 16),
+            "got {error:?}",
+        ),
+        Ok(control) => {
+            let error = control
+                .send(Command::new("list-panes").arg("-a"))
+                .await
+                .expect_err("the answer is past the budget");
+            assert!(
+                matches!(&error, libtmux::Error::ControlModeFrameTooLarge { .. }),
+                "got {error:?}",
+            );
+            assert_eq!(error.kind(), libtmux::ErrorKind::Decode);
+            let _ = control.shutdown().await;
+        }
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

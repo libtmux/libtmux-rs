@@ -154,3 +154,80 @@ impl Default for DispatchLimits {
         }
     }
 }
+
+/// What one control-mode connection may accumulate before it gives up.
+///
+/// Control mode is a framed text protocol read from a process that keeps
+/// running, so the framing is the only thing bounding memory: a line that
+/// never ends, or a `%begin` block whose `%end` never arrives, otherwise grows
+/// until the machine notices. A subprocess dispatch at least ends when the
+/// process does.
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "control-mode")] {
+/// use libtmux::ControlLimits;
+///
+/// let limits = ControlLimits::default().max_line_bytes(4096);
+/// assert_eq!(limits.line_bytes(), 4096);
+/// # }
+/// ```
+#[cfg(feature = "control-mode")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ControlLimits {
+    pub(crate) max_line_bytes: usize,
+    pub(crate) max_block_bytes: usize,
+}
+
+#[cfg(feature = "control-mode")]
+impl ControlLimits {
+    /// 8 MiB for one line. A pane printing a single enormous line is the
+    /// realistic way to reach this, and it is well past anything a terminal
+    /// displays.
+    pub const DEFAULT_LINE_BYTES: usize = 8 * 1024 * 1024;
+
+    /// 64 MiB for one `%begin`/`%end` block, which is a whole command's
+    /// answer rather than one line.
+    pub const DEFAULT_BLOCK_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Set the budget for a single protocol line.
+    #[must_use]
+    pub const fn max_line_bytes(self, bytes: usize) -> Self {
+        Self {
+            max_line_bytes: bytes,
+            ..self
+        }
+    }
+
+    /// Set the budget for one command's response block.
+    #[must_use]
+    pub const fn max_block_bytes(self, bytes: usize) -> Self {
+        Self {
+            max_block_bytes: bytes,
+            ..self
+        }
+    }
+
+    /// The budget for a single protocol line.
+    #[must_use]
+    pub const fn line_bytes(self) -> usize {
+        self.max_line_bytes
+    }
+
+    /// The budget for one command's response block.
+    #[must_use]
+    pub const fn block_bytes(self) -> usize {
+        self.max_block_bytes
+    }
+}
+
+#[cfg(feature = "control-mode")]
+impl Default for ControlLimits {
+    fn default() -> Self {
+        Self {
+            max_line_bytes: Self::DEFAULT_LINE_BYTES,
+            max_block_bytes: Self::DEFAULT_BLOCK_BYTES,
+        }
+    }
+}

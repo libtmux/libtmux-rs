@@ -265,6 +265,8 @@ pub use error::{
 };
 pub use formats::TmuxText;
 pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
+#[cfg(feature = "control-mode")]
+pub use limits::ControlLimits;
 pub use limits::{DispatchLimits, OutputLimits};
 pub use options::{
     OptionKind, OptionSchema, OptionScope, OptionValue, names as option_names, option_schema,

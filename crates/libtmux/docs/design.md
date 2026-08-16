@@ -1361,3 +1361,29 @@ Both are measured rather than asserted. The admission test times twelve
 dispatches through two permits and fails if they finish in less than the
 rounds require; run with the limit raised to 64 they finish in 138ms, which is
 what the test is written to catch.
+
+### Control mode needs its own budgets
+
+A subprocess dispatch ends when the process does, which bounds it whatever
+else is true. Control mode does not: it reads a framed text protocol from a
+tmux that keeps running, so the framing is the only thing standing between a
+malformed or unexpectedly verbose answer and unbounded memory. Two shapes
+grow, and they grow differently:
+
+- a line that never ends, accumulated across reads because a cancelled
+  `read_until` leaves its bytes behind for the next one;
+- a `%begin` block whose `%end` never arrives, which grows one *valid* line at
+  a time and so cannot be caught by a line budget.
+
+`ControlLimits` bounds both. Neither is recoverable in place: the parser is
+mid-frame and does not know where the next one starts, so the connection is
+finished and a caller who wants to continue attaches again.
+
+What a caller is told matters as much as the bound. The first version ended
+the connection correctly and reported `ControlMode { kind: Closed }` to
+everything still waiting, which is true and useless -- a caller who blew a
+budget can raise it, where one who merely lost the connection can only
+reconnect. The frame reason now reaches the pending requests instead.
+
+The budgets are large -- 8 MiB for a line, 64 MiB for a block -- because they
+exist to stop unbounded growth, not to police ordinary output.

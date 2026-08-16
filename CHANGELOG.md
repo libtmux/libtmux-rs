@@ -19,6 +19,10 @@ full.
 
 ### Added
 
+- `ControlLimits` and `ControlMode::attach_with_limits`, with
+  `Error::ControlModeFrameTooLarge`. A control-mode line or response block
+  could grow without bound, because unlike a subprocess dispatch the
+  connection does not end on its own.
 - `OutputLimits` and `DispatchLimits`, with `ServerBuilder::output_limits` and
   `dispatch_limits`, plus `Error::OutputLimitExceeded` and `Error::Overloaded`.
   Reading tmux output was unbounded, so a long pane history or a chatty

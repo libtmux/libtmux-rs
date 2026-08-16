@@ -314,6 +314,23 @@ pub enum Error {
         in_flight: usize,
     },
 
+    /// A control-mode frame grew past what the connection admits.
+    ///
+    /// Control mode reads from a process that keeps running, so the framing is
+    /// the only thing bounding memory. The connection cannot be resynchronized
+    /// after this -- the parser is mid-frame and does not know where the next
+    /// one begins -- so it is finished, and a caller who wants to continue
+    /// attaches again.
+    #[cfg(feature = "control-mode")]
+    #[non_exhaustive]
+    #[error("a control-mode {frame} grew past its {limit} byte budget")]
+    ControlModeFrameTooLarge {
+        /// Which frame: a line, or a command's response block.
+        frame: &'static str,
+        /// The budget in bytes.
+        limit: usize,
+    },
+
     /// A session of this name already exists.
     ///
     /// Classified rather than left as a generic refusal because it is the one
@@ -777,6 +794,8 @@ impl Error {
             | Self::DecodeListing { .. }
             | Self::UnreadableFormatValue { .. } => ErrorKind::Decode,
             #[cfg(feature = "control-mode")]
+            Self::ControlModeFrameTooLarge { .. } => ErrorKind::Decode,
+            #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, .. } => match kind {
                 ControlModeErrorKind::UnrepresentableCommand => ErrorKind::InvalidInput,
                 ControlModeErrorKind::Transport
@@ -832,6 +851,16 @@ impl Error {
             kind: ControlModeErrorKind::UnrepresentableCommand,
             source: None,
         }
+    }
+
+    /// A protocol frame ran past its budget.
+    ///
+    /// Not recoverable in place: the parser is mid-frame and cannot know where
+    /// the next one starts, so the connection is finished and the caller
+    /// reopens.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_frame_too_large(frame: &'static str, limit: usize) -> Self {
+        Self::ControlModeFrameTooLarge { frame, limit }
     }
 
     /// The connection closed before the command was answered.
@@ -1052,6 +1081,12 @@ impl fmt::Debug for Error {
                 .debug_struct("UnreadableFormatValue")
                 .field("format", format)
                 .field("detail", detail)
+                .finish(),
+            #[cfg(feature = "control-mode")]
+            Self::ControlModeFrameTooLarge { frame, limit } => formatter
+                .debug_struct("ControlModeFrameTooLarge")
+                .field("frame", frame)
+                .field("limit", limit)
                 .finish(),
             Self::OutputLimitExceeded {
                 request_id,

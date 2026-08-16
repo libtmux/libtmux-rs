@@ -45,6 +45,7 @@ use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::limits::ControlLimits;
 use crate::{Command, Error, PaneId, Server, SessionId, TmuxText};
 
 /// Something tmux reported that no command asked for.
@@ -143,6 +144,24 @@ impl ControlMode {
     /// the pipes it asked for, or exits before attaching -- which is what a
     /// session that is already gone looks like.
     pub async fn attach(server: &Server, session: &SessionId) -> Result<Self, Error> {
+        Self::attach_with_limits(server, session, ControlLimits::default()).await
+    }
+
+    /// Attach with explicit frame budgets.
+    ///
+    /// Control mode reads from a process that keeps running, so the framing is
+    /// the only thing bounding memory: a line that never ends, or a block
+    /// whose `%end` never arrives, otherwise grows until the machine notices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection cannot be opened, as
+    /// [`Self::attach`] does.
+    pub async fn attach_with_limits(
+        server: &Server,
+        session: &SessionId,
+        limits: ControlLimits,
+    ) -> Result<Self, Error> {
         let mut command = tokio::process::Command::new(server.tmux_executable());
         command
             .arg("-S")
@@ -167,6 +186,7 @@ impl ControlMode {
             child,
             stdin,
             stdout: BufReader::new(stdout),
+            limits,
             line: Vec::new(),
             commands: queue,
             events,
@@ -413,6 +433,8 @@ struct Connection {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    /// What one line and one block may accumulate before this gives up.
+    limits: ControlLimits,
     /// Bytes of a line that is not complete yet.
     ///
     /// This outlives one read because a cancelled read leaves what it got
@@ -433,9 +455,26 @@ impl Connection {
     async fn run(mut self) -> Result<(), Error> {
         let outcome = self.serve().await;
 
-        // Whatever is still waiting will never be answered.
+        // Whatever is still waiting will never be answered. It is told why
+        // where the reason is more specific than "closed": a caller who blew
+        // a frame budget can raise it, where one who merely lost the
+        // connection can only reconnect.
+        let reason = match &outcome {
+            Err(Error::ControlModeFrameTooLarge { frame, limit }) => {
+                Some(Error::control_mode_frame_too_large(frame, *limit))
+            }
+            _ => None,
+        };
         while let Some(result) = self.awaiting.pop_front() {
-            let _ = result.send(Err(Error::control_mode_closed()));
+            let _ = result.send(Err(reason.as_ref().map_or_else(
+                Error::control_mode_closed,
+                |error| match error {
+                    Error::ControlModeFrameTooLarge { frame, limit } => {
+                        Error::control_mode_frame_too_large(frame, *limit)
+                    }
+                    _ => Error::control_mode_closed(),
+                },
+            )));
         }
         drop(self.stdin);
         let _ = self.child.wait().await;
@@ -456,7 +495,7 @@ impl Connection {
             // a busy pane, and ordering is the queue's job, not the poll
             // order's.
             let step = tokio::select! {
-                line = read_line(&mut self.stdout, &mut self.line) => Step::Read(line),
+                line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes) => Step::Read(line),
                 request = self.commands.recv(), if sending => Step::Send(request),
                 asked = self.stopped.changed(), if watching => Step::Unwatched {
                     asked: asked.is_ok(),
@@ -502,7 +541,7 @@ impl Connection {
     /// Reports whether the connection survived to be served.
     async fn discard_opening_block(&mut self) -> Result<bool, Error> {
         loop {
-            match read_line(&mut self.stdout, &mut self.line).await? {
+            match read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes).await? {
                 Some(Line::BlockStart(number)) => {
                     self.read_block(number).await?;
                     return Ok(true);
@@ -552,8 +591,9 @@ impl Connection {
     /// Read to the end of a block that has already begun.
     async fn read_block(&mut self, number: u64) -> Result<BlockResult, Error> {
         let mut output = Vec::new();
+        let mut accumulated = 0usize;
         loop {
-            match read_line(&mut self.stdout, &mut self.line).await? {
+            match read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes).await? {
                 Some(Line::BlockEnd {
                     number: end,
                     succeeded,
@@ -564,7 +604,18 @@ impl Connection {
                         output,
                     });
                 }
-                Some(Line::Text(text)) => output.push(text),
+                Some(Line::Text(text)) => {
+                    // A block whose `%end` never arrives grows without bound,
+                    // and unlike a line it can do so one valid line at a time.
+                    accumulated = accumulated.saturating_add(text.as_bytes().len());
+                    if accumulated > self.limits.max_block_bytes {
+                        return Err(Error::control_mode_frame_too_large(
+                            "block",
+                            self.limits.max_block_bytes,
+                        ));
+                    }
+                    output.push(text);
+                }
                 Some(Line::Event(event)) => self.report(event).await,
                 // Blocks do not nest, so anything else here is not this one.
                 Some(Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
@@ -583,6 +634,7 @@ impl Connection {
 async fn read_line(
     stdout: &mut BufReader<ChildStdout>,
     pending: &mut Vec<u8>,
+    limit: usize,
 ) -> Result<Option<Line>, Error> {
     let read = stdout
         .read_until(b'\n', pending)
@@ -590,6 +642,13 @@ async fn read_line(
         .map_err(Error::control_mode)?;
     if read == 0 && pending.is_empty() {
         return Ok(None);
+    }
+    // A line that never ends is the one shape a framed protocol cannot
+    // recover from by reading further, so it stops here rather than growing.
+    // The connection is not resynchronizable afterwards: the caller reopens.
+    if pending.len() > limit {
+        pending.clear();
+        return Err(Error::control_mode_frame_too_large("line", limit));
     }
 
     // read_until stops at the newline or at end of input, so what is left
