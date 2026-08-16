@@ -58,6 +58,10 @@ full.
   Codex sends a `progressToken` on every `tools/call`, so this is consumed
   rather than merely published. A client that sends no token pays nothing.
 
+- `--confirm` and `TMUX_MCP_CONFIRM`, which ask a person before anything
+  destructive and refuse when the client cannot ask. Measured first: Codex
+  declares `elicitation`, so this is a question something can answer.
+
 - `Window::last_activity`. tmux stamps it on every byte a pane writes, unlike
   `has_activity`, which needs `monitor-activity` and is off by default.
 

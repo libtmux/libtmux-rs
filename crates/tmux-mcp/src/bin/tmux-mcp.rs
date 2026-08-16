@@ -81,7 +81,11 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let server = builder.build()?;
 
     let safety = options.safety.unwrap_or_else(Safety::from_env);
-    let tools = TmuxTools::builder(server).safety(safety).build();
+    let confirm = options.confirm || tmux_mcp::confirm_from_env();
+    let tools = TmuxTools::builder(server)
+        .safety(safety)
+        .confirm(confirm)
+        .build();
 
     // One line, once, naming what a later question about this process will
     // want: which tmux it chose, how much it will do, and where it thinks it

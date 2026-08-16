@@ -283,7 +283,10 @@ async fn killing_the_pane_the_server_runs_in_is_refused() {
         .build();
 
     let refused = tools
-        .kill_pane(args(serde_json::json!({"pane": own})))
+        .kill_pane(
+            args(serde_json::json!({"pane": own})),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .map(|_| ())
         .expect_err("killing our own pane is refused");
@@ -301,7 +304,10 @@ async fn killing_the_pane_the_server_runs_in_is_refused() {
 
     // The guard protects one pane, not the whole server.
     tools
-        .kill_pane(args(serde_json::json!({"pane": other})))
+        .kill_pane(
+            args(serde_json::json!({"pane": other})),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .expect("another pane is fair game");
     assert_eq!(panes(&tools).await.len(), 1);
@@ -325,14 +331,20 @@ async fn killing_the_window_or_session_holding_that_pane_is_refused() {
         .build();
 
     let refused = tools
-        .kill_window(args(serde_json::json!({"window": window})))
+        .kill_window(
+            args(serde_json::json!({"window": window})),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .map(|_| ())
         .expect_err("killing the window that holds us is refused");
     assert!(refused.message.contains(own), "{}", refused.message);
 
     let refused = tools
-        .kill_session(args(serde_json::json!({"session": "work"})))
+        .kill_session(
+            args(serde_json::json!({"session": "work"})),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .map(|_| ())
         .expect_err("killing the session that holds us is refused");
@@ -344,7 +356,10 @@ async fn killing_the_window_or_session_holding_that_pane_is_refused() {
         .await
         .expect("session is created");
     tools
-        .kill_session(args(serde_json::json!({"session": "scratch"})))
+        .kill_session(
+            args(serde_json::json!({"session": "scratch"})),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .expect("an unrelated session is fair game");
 
@@ -372,7 +387,10 @@ async fn a_pane_id_collision_across_sockets_does_not_block_a_kill() {
         .build();
 
     tools
-        .kill_session(args(serde_json::json!({"session": "work"})))
+        .kill_session(
+            args(serde_json::json!({"session": "work"})),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .expect("a session on another server is not ours to protect");
 
@@ -1285,7 +1303,7 @@ async fn killing_the_server_this_process_runs_on_is_refused() {
         .build();
 
     let refused = tools
-        .kill_server()
+        .kill_server(tmux_mcp::Asking::nobody())
         .await
         .map(|_| ())
         .expect_err("killing the server we are on is refused");
@@ -1328,7 +1346,7 @@ async fn killing_an_unrelated_server_is_allowed() {
     );
 
     tools
-        .kill_server()
+        .kill_server(tmux_mcp::Asking::nobody())
         .await
         .expect("a server this process is not on is fair game");
 
@@ -2289,6 +2307,61 @@ async fn what_changed_reports_windows_that_wrote_since_the_last_look() {
         reported[0]["activity"].as_i64().expect("a timestamp") > mark,
         "and it wrote after the mark",
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A server told to confirm and given no client to ask has to refuse. The
+/// alternative is destroying work unattended, which is what the setting
+/// exists to prevent -- and the operator would never learn the question went
+/// unasked.
+#[tokio::test]
+async fn confirming_refuses_when_there_is_nobody_to_ask() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .safety(tmux_mcp::Safety::Destructive)
+        .confirm(true)
+        .build();
+
+    tools
+        .create_session(args(serde_json::json!({"name": "doomed"})))
+        .await
+        .expect("session is created");
+    let pane = panes(&tools).await[0]["id"]
+        .as_str()
+        .expect("a pane id")
+        .to_owned();
+
+    let Err(error) = tools
+        .kill_pane(
+            args(serde_json::json!({"pane": pane})),
+            tmux_mcp::Asking::nobody(),
+        )
+        .await
+    else {
+        panic!("a destructive call with nobody to ask is refused");
+    };
+
+    let data = error.data.expect("the failure carries data");
+    assert_eq!(data["kind"], "refused");
+    assert_eq!(data["retryable"], false);
+    assert_eq!(data["stale"], false);
+
+    // And the pane is still there, which is the point.
+    assert_eq!(panes(&tools).await.len(), 1);
+
+    // Without the setting the same call goes through.
+    let permissive = TmuxTools::builder(guard.server().clone())
+        .safety(tmux_mcp::Safety::Destructive)
+        .confirm(false)
+        .build();
+    permissive
+        .kill_pane(
+            args(serde_json::json!({"pane": pane})),
+            tmux_mcp::Asking::nobody(),
+        )
+        .await
+        .expect("the pane is killed");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

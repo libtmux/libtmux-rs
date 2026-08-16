@@ -20,6 +20,8 @@ pub struct Options {
     pub socket_name: Option<OsString>,
     /// How much of the surface to offer, when the command line said.
     pub safety: Option<Safety>,
+    /// Whether to ask a person before destroying work.
+    pub confirm: bool,
 }
 
 /// Why the binary is stopping before it serves anything.
@@ -48,6 +50,8 @@ pub const HELP: &str = concat!(
     "                            destructive. Defaults to mutating, which offers\n",
     "                            everything except the tools that destroy work.\n",
     "                            Overrides TMUX_MCP_SAFETY.\n",
+    "        --confirm           Ask before destroying anything, and refuse when\n",
+    "                            the client cannot ask. Overrides TMUX_MCP_CONFIRM.\n",
     "    -h, --help              Print this help\n",
     "    -V, --version           Print the version\n",
     "\n",
@@ -103,6 +107,7 @@ impl Options {
                 "-L" | "--socket-name" => {
                     options.socket_name = Some(take("--socket-name")?);
                 }
+                "--confirm" => options.confirm = true,
                 "--safety" => {
                     let value = take("--safety")?;
                     let value = value.to_string_lossy();

@@ -122,6 +122,8 @@ pub struct TmuxTools {
     caller: Option<Arc<CallerIdentity>>,
     /// How much of the surface this server was told to offer.
     safety: Safety,
+    /// Whether a person is asked before work is destroyed.
+    confirm: bool,
     /// The server's own socket path, resolved once and kept.
     ///
     /// `Server::socket_path` reports what this crate was configured with,
@@ -230,6 +232,9 @@ const INSTRUCTIONS: &str = concat!(
 /// The environment variable naming how much of the surface is offered.
 pub const SAFETY_ENV: &str = "TMUX_MCP_SAFETY";
 
+/// The environment variable asking for a person's approval before destroying.
+pub const CONFIRM_ENV: &str = "TMUX_MCP_CONFIRM";
+
 /// How much of the tool surface an operator has allowed.
 ///
 /// A refusal an agent can see coming is better than one it discovers, so a
@@ -325,6 +330,7 @@ pub struct Builder {
     server: Server,
     caller: Option<CallerIdentity>,
     safety: Safety,
+    confirm: bool,
 }
 
 impl Builder {
@@ -340,6 +346,14 @@ impl Builder {
     #[must_use]
     pub const fn safety(mut self, safety: Safety) -> Self {
         self.safety = safety;
+        self
+    }
+
+    /// Ask a person before destroying work, rather than reading the
+    /// environment.
+    #[must_use]
+    pub const fn confirm(mut self, confirm: bool) -> Self {
+        self.confirm = confirm;
         self
     }
 
@@ -369,6 +383,7 @@ impl Builder {
             server: Arc::new(self.server),
             caller: self.caller.map(Arc::new),
             safety: self.safety,
+            confirm: self.confirm,
             socket: Arc::new(OnceLock::new()),
             tails: Arc::new(Tails::new()),
             jobs: Arc::new(Jobs::new()),
@@ -592,6 +607,112 @@ async fn reporting<T>(reporter: Reporter, what: &str, work: impl Future<Output =
 
 /// How often a long call says it is still going.
 const PROGRESS_EVERY: Duration = Duration::from_secs(5);
+
+/// What a person is asked before something irreversible happens.
+///
+/// One field, because the question is one question. A client renders this
+/// from the schema, so the doc comment below is what the person reads.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct Confirmation {
+    /// Destroy it?
+    pub confirmed: bool,
+}
+
+rmcp::elicit_safe!(Confirmation);
+
+/// Whoever can be asked before work is destroyed.
+///
+/// Extracted like [`Reporter`], and for the same reason: a tool declares that
+/// it asks by taking one, and an empty one can be built directly so these
+/// tools can still be driven without a live client.
+#[derive(Clone, Debug, Default)]
+pub struct Asking(Option<rmcp::service::Peer<rmcp::RoleServer>>);
+
+impl Asking {
+    /// A gate with nobody to ask.
+    #[must_use]
+    pub const fn nobody() -> Self {
+        Self(None)
+    }
+}
+
+impl<C> rmcp::handler::server::common::FromContextPart<C> for Asking
+where
+    C: rmcp::handler::server::common::AsRequestContext,
+{
+    fn from_context_part(context: &mut C) -> Result<Self, ErrorData> {
+        Ok(Self(Some(context.as_request_context().peer.clone())))
+    }
+}
+
+/// How long a person is given to answer before the question is withdrawn.
+///
+/// Generous, because the answer is a person leaving their terminal to read a
+/// prompt, and short enough that an abandoned client does not hold a tool
+/// call open indefinitely.
+const CONFIRM_WITHIN: Duration = Duration::from_secs(120);
+
+/// Read whether to ask a person before destroying work.
+///
+/// Anything other than an explicit yes leaves it off, because a typo that
+/// silently started refusing every destructive call would look like a bug in
+/// the tool rather than in the setting.
+#[must_use]
+pub fn confirm_from_env() -> bool {
+    std::env::var(CONFIRM_ENV)
+        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+}
+
+impl TmuxTools {
+    /// Ask a person before destroying something, when asked to.
+    ///
+    /// Fails closed. A server told to confirm and given no way to ask has to
+    /// refuse: proceeding would be exactly the unattended destruction the
+    /// setting exists to prevent, and the operator would never learn the
+    /// question went unasked.
+    async fn permitted(&self, asking: &Asking, what: &str) -> Result<(), ErrorData> {
+        if !self.confirm {
+            return Ok(());
+        }
+
+        let Some(peer) = asking.0.as_ref() else {
+            return Err(refused_without_asking(what, "there is no client to ask"));
+        };
+
+        match peer
+            .elicit_with_timeout::<Confirmation>(
+                format!("Destroy {what}? This cannot be undone."),
+                Some(CONFIRM_WITHIN),
+            )
+            .await
+        {
+            Ok(Some(answer)) if answer.confirmed => Ok(()),
+            Ok(Some(_)) => Err(refused_without_asking(what, "the request was declined")),
+            Ok(None) => Err(refused_without_asking(what, "the request was dismissed")),
+            Err(error) => Err(refused_without_asking(
+                what,
+                &format!("the client could not ask: {error}"),
+            )),
+        }
+    }
+}
+
+/// Report a destructive call that was not approved.
+///
+/// Classified `refused` rather than `object_gone`: nothing is stale, and the
+/// answer is not to look again but to get a person to agree.
+fn refused_without_asking(what: &str, why: &str) -> ErrorData {
+    let mut data = serde_json::Map::new();
+    data.insert("kind".into(), "refused".into());
+    data.insert("retryable".into(), false.into());
+    data.insert("stale".into(), false.into());
+
+    ErrorData::new(
+        rmcp::model::ErrorCode::INVALID_REQUEST,
+        format!("destroying {what} was not approved: {why}"),
+        Some(serde_json::Value::Object(data)),
+    )
+}
 
 /// Report a job id this server does not hold.
 ///
@@ -1371,6 +1492,7 @@ impl TmuxTools {
             server,
             caller: CallerIdentity::from_env(),
             safety: Safety::from_env(),
+            confirm: confirm_from_env(),
         }
     }
 
@@ -1675,9 +1797,11 @@ impl TmuxTools {
     pub async fn kill_window(
         &self,
         Parameters(WindowArgs { window }): Parameters<WindowArgs>,
+        asking: Asking,
     ) -> Result<Json<Killed>, ErrorData> {
         let window = self.find_window(&window).await?;
         let id = window.id().to_string();
+        self.permitted(&asking, &format!("window {id}")).await?;
         if let Some(own) = self.own_pane().await {
             let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
             if panes.iter().any(|pane| pane.id().to_string() == own) {
@@ -1703,9 +1827,11 @@ impl TmuxTools {
     pub async fn kill_pane(
         &self,
         Parameters(PaneArgs { pane }): Parameters<PaneArgs>,
+        asking: Asking,
     ) -> Result<Json<Killed>, ErrorData> {
         let pane = self.find_pane(&pane).await?;
         let id = pane.id().to_string();
+        self.permitted(&asking, &format!("pane {id}")).await?;
         if self.own_pane().await == Some(id.as_str()) {
             return Err(Self::self_harm("pane", &id));
         }
@@ -2102,9 +2228,11 @@ impl TmuxTools {
     pub async fn kill_session(
         &self,
         Parameters(SessionArgs { session }): Parameters<SessionArgs>,
+        asking: Asking,
     ) -> Result<Json<Killed>, ErrorData> {
         let target = self.find_session(&session).await?;
         let id = target.id().to_string();
+        self.permitted(&asking, &format!("session {id}")).await?;
         if let Some(own) = self.own_pane().await {
             let panes = target.panes().await.map_err(|e| tmux_error(&e))?;
             if panes.iter().any(|pane| pane.id().to_string() == own) {
@@ -2721,12 +2849,14 @@ impl TmuxTools {
             open_world_hint = false
         )
     )]
-    pub async fn kill_server(&self) -> Result<Json<ServerKilled>, ErrorData> {
+    pub async fn kill_server(&self, asking: Asking) -> Result<Json<ServerKilled>, ErrorData> {
         // Nothing on this server survives, so the caller's pane need not be
         // looked up: being here at all is disqualifying.
         if let Some(own) = self.own_pane().await {
             return Err(Self::self_harm("server", own));
         }
+        self.permitted(&asking, "this tmux server and every session on it")
+            .await?;
         // `Server::shutdown` closes this crate's own subprocess executor and
         // leaves the daemon running, which is the opposite of what this tool
         // promises.

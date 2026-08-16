@@ -266,6 +266,21 @@ Three tiers, also settable with `TMUX_MCP_SAFETY`:
 Tools above the tier are not advertised at all, because an agent cannot choose
 what it cannot see.
 
+### Asking first
+
+A tier is decided once, at launch. `--confirm` instead puts a person in the
+loop for each irreversible act:
+
+```console
+$ tmux-mcp --safety destructive --confirm
+```
+
+Every destructive call then asks the client to put the question to you, and
+proceeds only on a yes. It fails closed: a client that cannot ask gets a
+refusal rather than a destroyed session, because the alternative is the
+unattended destruction the setting exists to prevent. `TMUX_MCP_CONFIRM=1`
+does the same.
+
 Separately, when tmux started the server it knows which pane it is in. Pane
 listings mark that pane `caller: "self"`, and the tools that would destroy it
 refuse — so an agent cannot end the conversation it is having. That comparison

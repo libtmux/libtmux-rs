@@ -1416,3 +1416,140 @@ async fn a_long_wait_reports_progress_to_a_client_that_asked() {
     server.abort();
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Asking is only worth anything if the answer is honoured, so the test
+/// answers both ways and checks what survived.
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "a client that answers both ways, and the state left behind by each"
+)]
+async fn a_client_that_can_be_asked_decides_whether_work_is_destroyed() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use rmcp::model::{
+        ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
+    };
+
+    /// A client that answers the confirmation however it was told to.
+    #[derive(Clone)]
+    struct Decider {
+        approve: Arc<AtomicBool>,
+        asked: Arc<AtomicBool>,
+    }
+
+    impl rmcp::ClientHandler for Decider {
+        fn get_info(&self) -> ClientInfo {
+            let mut info = ClientInfo::default();
+            info.capabilities.elicitation = Some(ElicitationCapability::default());
+            info
+        }
+
+        async fn create_elicitation(
+            &self,
+            _: ElicitRequestParams,
+            _: rmcp::service::RequestContext<RoleClient>,
+        ) -> Result<ElicitResult, rmcp::ErrorData> {
+            self.asked.store(true, Ordering::SeqCst);
+            let mut answer = ElicitResult::new(ElicitationAction::Accept);
+            answer.content = Some(json!({"confirmed": self.approve.load(Ordering::SeqCst)}));
+            Ok(answer)
+        }
+    }
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .safety(Safety::Destructive)
+        .confirm(true)
+        .build();
+
+    let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
+    let server = tokio::spawn(async move {
+        let service = serve_server(tools, server_transport)
+            .await
+            .expect("server starts");
+        let _ = service.waiting().await;
+    });
+    let decider = Decider {
+        approve: Arc::new(AtomicBool::new(false)),
+        asked: Arc::new(AtomicBool::new(false)),
+    };
+    let client = decider
+        .clone()
+        .serve(client_transport)
+        .await
+        .expect("client connects");
+
+    let call = |name: &'static str, arguments: Value| {
+        let mut params = CallToolRequestParams::default();
+        params.name = name.into();
+        params.arguments = arguments.as_object().cloned();
+        params
+    };
+
+    client
+        .call_tool(call("create_session", json!({"name": "asked"})))
+        .await
+        .expect("session is created");
+    let listed = client
+        .call_tool(call("list_panes", json!({})))
+        .await
+        .expect("panes are listed");
+    let listed: Value = serde_json::to_value(listed.structured_content).expect("json");
+    let pane = listed["panes"][0]["id"]
+        .as_str()
+        .expect("a pane id")
+        .to_owned();
+    let spare = client
+        .call_tool(call("split_pane", json!({"pane": pane})))
+        .await
+        .expect("the pane splits");
+    let spare: Value = serde_json::to_value(spare.structured_content).expect("json");
+    let spare = spare["id"].as_str().expect("a pane id").to_owned();
+
+    // Declined: the pane survives.
+    let refused = client
+        .call_tool(call("kill_pane", json!({"pane": spare})))
+        .await;
+    assert!(decider.asked.load(Ordering::SeqCst), "the client was asked");
+    assert!(
+        refused.is_err() || refused.expect("answer").is_error == Some(true),
+        "a declined confirmation refuses the call",
+    );
+    let after: Value = serde_json::to_value(
+        client
+            .call_tool(call("list_panes", json!({})))
+            .await
+            .expect("panes are listed")
+            .structured_content,
+    )
+    .expect("json");
+    assert_eq!(
+        after["panes"].as_array().expect("a listing").len(),
+        2,
+        "the pane a person refused to destroy is still there",
+    );
+
+    // Approved: it goes.
+    decider.approve.store(true, Ordering::SeqCst);
+    client
+        .call_tool(call("kill_pane", json!({"pane": spare})))
+        .await
+        .expect("an approved confirmation destroys the pane");
+    let after: Value = serde_json::to_value(
+        client
+            .call_tool(call("list_panes", json!({})))
+            .await
+            .expect("panes are listed")
+            .structured_content,
+    )
+    .expect("json");
+    assert_eq!(after["panes"].as_array().expect("a listing").len(), 1);
+
+    let _ = client.cancel().await;
+    server.abort();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

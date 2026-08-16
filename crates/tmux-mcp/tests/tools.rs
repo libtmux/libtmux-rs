@@ -112,10 +112,13 @@ async fn an_unknown_target_is_invalid_input_rather_than_an_internal_failure() {
     );
 
     let error = tools
-        .kill_session(Parameters(
-            serde_json::from_value(serde_json::json!({"session": "absent"}))
-                .expect("arguments deserialize"),
-        ))
+        .kill_session(
+            Parameters(
+                serde_json::from_value(serde_json::json!({"session": "absent"}))
+                    .expect("arguments deserialize"),
+            ),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .map(|_| ())
         .expect_err("an unknown session is refused");
@@ -154,10 +157,13 @@ async fn mutating_tools_change_what_the_listing_tools_report() {
     assert_eq!(rows(tools.list_panes().await.expect("panes")).len(), 2);
 
     tools
-        .kill_session(Parameters(
-            serde_json::from_value(serde_json::json!({"session": "driven"}))
-                .expect("arguments deserialize"),
-        ))
+        .kill_session(
+            Parameters(
+                serde_json::from_value(serde_json::json!({"session": "driven"}))
+                    .expect("arguments deserialize"),
+            ),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .expect("kill succeeds");
     assert!(rows(tools.list_sessions().await.expect("sessions")).is_empty());
@@ -723,10 +729,13 @@ async fn scoped_tools_narrow_to_one_parent() {
         .expect("the window is renamed");
 
     tools
-        .kill_window(Parameters(
-            serde_json::from_value(serde_json::json!({"window": created}))
-                .expect("arguments deserialize"),
-        ))
+        .kill_window(
+            Parameters(
+                serde_json::from_value(serde_json::json!({"window": created}))
+                    .expect("arguments deserialize"),
+            ),
+            tmux_mcp::Asking::nobody(),
+        )
         .await
         .expect("the window is killed");
     assert_eq!(rows(tools.list_windows().await.expect("windows")).len(), 2);
