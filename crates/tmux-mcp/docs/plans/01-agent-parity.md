@@ -233,6 +233,29 @@ that look like one are not:
 writes, whatever the options say. So the tool answers at window granularity
 and says so, rather than answering per pane and being wrong.
 
+## What clients actually ask for
+
+Three capabilities were measured the same way before any of them was built: a
+probe server that answers just enough protocol to get past the handshake, then
+records what each installed agent CLI declares and sends. Two were built and
+one was not.
+
+| Capability | What a client does | Built |
+| --- | --- | --- |
+| `progressToken` | Codex attaches one to every `tools/call` | yes |
+| `elicitation` | Codex declares it, with `form` and `url` | yes |
+| MCP tasks | nothing declares it | no |
+| `resources/subscribe` | Codex reads resources and never subscribes, even against a server advertising `subscribe: true` | no |
+
+The last row is the one that matters for resources here. `%layout-change` and
+the other notifications now arrive typed from libtmux, so pushing
+`notifications/resources/updated` would be a small amount of work. It stays
+unbuilt for the same reason tasks does: a notification nobody has subscribed
+to is not delivered to anyone, and shipping it would leave a capability that
+looks supported and is never exercised.
+
+Worth re-measuring with the same probe rather than re-reasoned about.
+
 ## Where tmux disagrees with itself
 
 Running the tools across the supported range turns up behaviour that changes

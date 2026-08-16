@@ -2197,7 +2197,7 @@ async fn real_tmux_compat_capturing_the_last_command_says_whether_it_could() {
 /// command with everything it ever wrote. Found by watching a real agent ask
 /// for the last command and receive two thousand lines.
 #[tokio::test]
-async fn an_unmarked_pane_falls_back_to_the_screen_not_the_history() {
+async fn real_tmux_compat_an_unmarked_pane_falls_back_to_the_screen() {
     let (guard, tools, pane) = typing_fixture("unmarked").await;
 
     tools
@@ -2228,8 +2228,14 @@ async fn an_unmarked_pane_falls_back_to_the_screen_not_the_history() {
             .expect("the capture runs"),
     );
 
-    // A default shell emits no OSC 133, so this is the fallback path.
-    assert_eq!(last["marks"], "absent");
+    // A default shell emits no OSC 133, and below tmux 3.7 there are no line
+    // flags to ask about. Either way this is the fallback path, and what has
+    // to hold is that the fallback stays bounded.
+    let marks = last["marks"].as_str().expect("a marks field");
+    assert!(
+        matches!(marks, "absent" | "unsupported"),
+        "a default shell has no prompt marks: {marks}",
+    );
     let lines = last["lines"].as_u64().expect("lines");
     assert!(
         lines < history["lines"].as_u64().expect("lines"),
