@@ -3115,6 +3115,17 @@ pub struct SessionTreeFields {
     pub windows: ManyRelation<SessionTree, WindowTree>,
 }
 
+// Named rather than exhaustive, as the generated field sets are: every handle
+// is a zero-sized name, so listing them prints a page of nothing.
+#[cfg(feature = "query")]
+impl fmt::Debug for SessionTreeFields {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionTreeFields")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Typed filter handles for [`WindowTree`].
 ///
 /// # Examples
@@ -3140,6 +3151,15 @@ pub struct WindowTreeFields {
     pub window: WindowFields<WindowTree>,
     /// The panes in this window.
     pub panes: ManyRelation<WindowTree, Pane>,
+}
+
+#[cfg(feature = "query")]
+impl fmt::Debug for WindowTreeFields {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WindowTreeFields")
+            .finish_non_exhaustive()
+    }
 }
 
 /// The wire name of the relation from a session to its windows.

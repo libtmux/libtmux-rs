@@ -86,6 +86,7 @@ pub enum BuildError {
 }
 
 /// Creates tmux sessions from workspace configurations.
+#[derive(Debug)]
 pub struct WorkspaceBuilder<'server> {
     server: &'server Server,
 }

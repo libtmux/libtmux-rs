@@ -137,6 +137,19 @@ pub struct TmuxTools {
     tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
 }
 
+// The resolved socket path stays out, as `ServerIdentity`'s own `Debug` keeps
+// it out: this server's logs go wherever the agent's do.
+impl std::fmt::Debug for TmuxTools {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TmuxTools")
+            .field("server", &self.server)
+            .field("caller", &self.caller)
+            .field("safety", &self.safety)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Render tmux bytes for a protocol that requires valid UTF-8.
 ///
 /// tmux permits names and titles that are not UTF-8. JSON cannot carry those
@@ -298,6 +311,7 @@ impl Safety {
 }
 
 /// Assembles a [`TmuxTools`] with the parts the environment usually supplies.
+#[derive(Debug)]
 pub struct Builder {
     server: Server,
     caller: Option<CallerIdentity>,

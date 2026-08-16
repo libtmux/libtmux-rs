@@ -2858,6 +2858,7 @@ pub mod __private {
     /// let unsigned = IntegerKind::U8;
     /// let _ = (signed, unsigned);
     /// ```
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
     pub enum IntegerKind {
         /// `i8`.
         I8,
@@ -2882,7 +2883,7 @@ pub mod __private {
     }
 
     impl IntegerKind {
-        fn signed_bounds(&self) -> Option<(i128, i128)> {
+        fn signed_bounds(self) -> Option<(i128, i128)> {
             match self {
                 Self::I8 => Some((i128::from(i8::MIN), i128::from(i8::MAX))),
                 Self::I16 => Some((i128::from(i16::MIN), i128::from(i16::MAX))),
@@ -2893,7 +2894,7 @@ pub mod __private {
             }
         }
 
-        fn unsigned_max(&self) -> Option<u128> {
+        fn unsigned_max(self) -> Option<u128> {
             match self {
                 Self::U8 => Some(u128::from(u8::MAX)),
                 Self::U16 => Some(u128::from(u16::MAX)),
@@ -2915,6 +2916,17 @@ pub mod __private {
     pub struct Predicate {
         id: PredicateIdentity,
         data: PredicateData,
+    }
+
+    // The field name, not the operand. A predicate carries values a caller
+    // filtered on, which are tmux data rather than this crate's to disclose.
+    impl core::fmt::Debug for Predicate {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter
+                .debug_struct("Predicate")
+                .field("field", &self.field())
+                .finish_non_exhaustive()
+        }
     }
 
     impl Predicate {
