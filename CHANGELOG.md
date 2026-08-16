@@ -19,84 +19,35 @@ full.
 
 ### Added
 
-- `Debug` on the seven public types that lacked it, which the Rust API
-  guidelines ask for. `ServerBuilder`'s redacts the socket and config paths,
-  as `ServerIdentity`'s already did.
-- Runnable examples on every crate-root type, taking `just example-coverage`
-  from 36% to 67 of 67. `just example-coverage-check` now fails on a type
-  added without one, so the number cannot quietly slip; CI runs it beside
-  `api-check`, which already needs the same nightly rustdoc JSON.
-- `just doc-blocks`, part of `just check`, failing when a doc comment opens
-  mid-sentence. rustdoc attaches prose to whatever item follows it and never
-  checks the two match, so a block inserted one line too high silently gives
-  a type its neighbour's summary and nothing complains.
-- `tmux-mcp` bounds the tmux side of an agent's fan-out: four dispatches in
-  flight and an output budget on the `Server` it builds. Its existing caps
-  bound what it returns, which does not unspend memory the core already
-  allocated to read a reply.
-- A recorded public API surface at `crates/libtmux/docs/public-api.txt`,
-  with `just api` to regenerate and `just api-check` to fail on drift.
-  Dropping the vacuous `semver` recipe left nothing reporting what the API
-  does between releases.
-- Fuzz targets for the three parsers that read bytes this crate did not
-  write: the control-mode line parser, the filter-expression wire format, and
-  the workspace YAML loader. Run with `just fuzz <target>`; CI runs them
-  weekly.
-- `ControlLimits` and `ControlMode::attach_with_limits`, with
-  `Error::ControlModeFrameTooLarge`. A control-mode line or response block
-  could grow without bound, because unlike a subprocess dispatch the
-  connection does not end on its own.
-- `OutputLimits` and `DispatchLimits`, with `ServerBuilder::output_limits` and
-  `dispatch_limits`, plus `Error::OutputLimitExceeded` and `Error::Overloaded`.
-  Reading tmux output was unbounded, so a long pane history or a chatty
-  `run-shell` could grow until the operating system intervened, and nothing
-  capped how many tmux client processes ran at once.
-- `ServerGeneration`, `Server::generation`, `Server::require_generation`, and
-  `Error::ServerGenerationChanged`. A socket path does not identify a tmux
-  server: the socket outlives the daemon, a replacement binds the same path
-  and reissues ids from zero, so a handle held across a restart resolves to a
-  real object that is not the one it meant.
-- `Client::attached_session`, `attached_window`, and `attached_pane`, plus
-  `Error::UnreadableFormatValue` for the case where tmux answers an id query
-  with something that is not an id. The window and pane are the session's
-  current ones rather than a per-client view, because tmux keeps no per-client
-  focus.
-
-- `missing_debug_implementations` and `elided_lifetimes_in_paths`, which the
-  Rust API guidelines ask for. The first immediately found seven more public
-  types without `Debug` -- `IntegerKind`, `Predicate`, `SessionTreeFields`,
-  `WindowTreeFields`, `WorkspaceBuilder`, `TmuxTools`, and `Builder` -- the
-  same omission a hand audit had already had to find once. `Predicate` and
-  `TmuxTools` redact rather than derive, because one holds values a caller
-  filtered on and the other a resolved socket path.
-- A test that handle equality and hashing separate two servers. The contract
-  was stated in `roadmap.md` and implemented on all four handles with nothing
-  exercising it; two servers each issue `$0`, so the ids collide and only the
-  server identity tells the handles apart.
+- `OutputLimits`, `DispatchLimits`, and `ControlLimits`, with
+  `ServerBuilder::output_limits`, `dispatch_limits`, and
+  `ControlMode::attach_with_limits`. Reading tmux output was unbounded.
+- `ServerGeneration`, `Server::generation`, `Server::require_generation`. A
+  socket path does not identify a daemon across a restart.
+- `Client::attached_session`, `attached_window`, `attached_pane`.
+- `Error::ControlModeFrameTooLarge`, `OutputLimitExceeded`, `Overloaded`,
+  `ServerGenerationChanged`, `UnreadableFormatValue`.
+- `Debug` on every public type, enforced by `missing_debug_implementations`.
+- A runnable example on every crate-root type, enforced by
+  `just example-coverage-check`.
+- A recorded public API surface: `just api`, `just api-check`.
+- `just doc-blocks`, which catches a doc comment split across two items.
+- Fuzz targets for the control-mode, filter-expression, and workspace-YAML
+  parsers. `just fuzz <target>`; weekly in CI.
+- A test that handle equality and hashing separate two servers.
+- `tmux-mcp` caps its tmux-side fan-out.
 
 ### Fixed
 
-- Twelve parity rows were `planned` after shipping, including atomic
-  `refresh`/`refreshed`, `Server::hierarchy`, handle equality over server
-  identity, sensitive-value classification, and `SparseValues`. The ledger is
-  the stated definition of done, so understating it misdirects; the row for
-  hierarchy listings also still described a `try_*` naming the crate did not
-  adopt. Rows without focused evidence -- `Error::UnsupportedCapability`,
-  `Client` equality, and `Drop` behaviour -- stay `planned`.
-- `ServerGeneration` and `PaneDirection` rendered with the summary of the type
-  above them. Both doc blocks had been inserted into the middle of a
-  neighbour's, splitting one sentence across two items: `ServerIdentity` and
-  `Window` were left opening mid-clause, and the two new types wore prose
-  describing something else. `CommandSummary` had likewise lost its summary
-  line and opened on a detail.
-- `just api-check` wrote its comparison to a fixed path in `/tmp`, which two
-  checkouts on one machine share.
+- `ServerGeneration`, `PaneDirection`, and `CommandSummary` rendered with a
+  neighbouring type's summary.
+- Twelve parity rows were `planned` after shipping.
+- `just api-check` used a fixed `/tmp` path, shared between checkouts.
 
 ### Removed
 
 - The `semver` recipe. `cargo-semver-checks` skips every lint on a
-  prerelease-to-prerelease step, so it reported `0 checks` and then `no semver
-  update required`, which reads like a clean bill of health and is not one.
+  prerelease-to-prerelease step and then reports success.
 
 ## 0.1.0-alpha.4 - 2026-08-15
 
