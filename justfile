@@ -171,6 +171,20 @@ watch-clippy:
 docs:
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 
+# The catalog is hand-maintained, so a format tmux gained -- or one nobody
+# ever added -- is invisible: nothing fails, callers just cannot ask for the
+# field. Checking needs no tmux source, so it is part of `just check`.
+#
+# Report formats tmux publishes that the catalog does not carry
+[group: 'docs']
+format-coverage-check:
+    python3 scripts/format-coverage.py --check
+
+# Rerecord the ledger against a tmux checkout
+[group: 'release']
+format-coverage source:
+    python3 scripts/format-coverage.py {{ source }}
+
 # rustdoc attaches prose to whatever item follows it and never checks that the
 # two match, so a block inserted one line too high gives a type its
 # neighbour's summary. Pure text, no toolchain, so it is part of `just check`.
@@ -213,7 +227,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test doctest docs doc-blocks features deny msrv package
+check: fmt-check clippy test doctest docs doc-blocks format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

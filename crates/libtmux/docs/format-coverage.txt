@@ -1,0 +1,279 @@
+# Every format name tmux publishes, and what this crate does about it.
+#
+# Regenerate with `just format-coverage <path to a tmux checkout>`.
+# A `missing` entry is a field a listing could carry and does not; an
+# `excluded` entry names why no listing can ever answer it.
+
+active_window_index catalogued
+alternate_on missing: pane
+alternate_saved_x catalogued
+alternate_saved_y catalogued
+bracket_paste_flag catalogued
+buffer_created excluded: needs a paste buffer, which is not a hierarchy row
+buffer_full excluded: needs a paste buffer, which is not a hierarchy row
+buffer_mode_format excluded: format-internal
+buffer_name catalogued
+buffer_sample catalogued
+buffer_size catalogued
+client_activity catalogued
+client_cell_height catalogued
+client_cell_width catalogued
+client_control_mode catalogued
+client_created catalogued
+client_discarded catalogued
+client_flags catalogued
+client_height catalogued
+client_key_table catalogued
+client_last_session catalogued
+client_mode_format catalogued
+client_name catalogued
+client_pid catalogued
+client_prefix catalogued
+client_readonly catalogued
+client_session catalogued
+client_termfeatures catalogued
+client_termname catalogued
+client_termtype catalogued
+client_theme missing: client
+client_tty catalogued
+client_uid catalogued
+client_user catalogued
+client_utf8 catalogued
+client_width catalogued
+client_written catalogued
+command excluded: only inside cmd-queue
+command_list_alias catalogued
+command_list_name catalogued
+command_list_usage catalogued
+command_prompt excluded: only inside status
+config_files catalogued
+copy_cursor_hyperlink excluded: only inside window-copy
+copy_cursor_line catalogued
+copy_cursor_word catalogued
+copy_cursor_x catalogued
+copy_cursor_y catalogued
+copy_position excluded: only inside window-copy
+copy_position_limit excluded: only inside window-copy
+current_file catalogued
+cursor_blinking missing: pane
+cursor_character catalogued
+cursor_colour missing: pane
+cursor_flag catalogued
+cursor_shape missing: pane
+cursor_very_visible missing: pane
+cursor_x catalogued
+cursor_y catalogued
+history_all_bytes missing: pane
+history_bytes catalogued
+history_limit catalogued
+history_size catalogued
+hook excluded: only inside cmd-queue
+hook_arguments excluded: only inside cmd-queue
+hook_client excluded: only inside notify
+hook_pane excluded: only inside notify
+hook_session excluded: only inside notify
+hook_session_name excluded: only inside notify
+hook_window excluded: only inside notify
+hook_window_name excluded: only inside notify
+host excluded: format-internal
+host_short excluded: format-internal
+insert_flag catalogued
+is_key excluded: only inside window-customize
+is_option excluded: only inside window-customize
+key excluded: only inside window-customize
+key_command excluded: only inside cmd-list-keys
+key_has_repeat excluded: only inside cmd-list-keys
+key_note excluded: only inside cmd-list-keys
+key_prefix excluded: only inside cmd-list-keys
+key_repeat excluded: only inside cmd-list-keys
+key_string excluded: only inside cmd-list-keys
+key_string_width excluded: only inside cmd-list-keys
+key_table excluded: only inside cmd-list-keys
+key_table_width excluded: only inside cmd-list-keys
+keypad_cursor_flag catalogued
+keypad_flag catalogued
+last_window_index catalogued
+line catalogued
+loop_last_flag excluded: only set inside a #{L:} format loop
+message excluded: only inside status
+message_number excluded: only inside cmd-show-messages
+message_text excluded: only inside cmd-show-messages
+mouse_all_flag catalogued
+mouse_any_flag catalogued
+mouse_button_flag catalogued
+mouse_hyperlink excluded: needs a mouse event
+mouse_line excluded: needs a mouse event
+mouse_pane excluded: needs a mouse event
+mouse_sgr_flag catalogued
+mouse_standard_flag catalogued
+mouse_status_line excluded: needs a mouse event
+mouse_status_range excluded: needs a mouse event
+mouse_utf8_flag missing: pane
+mouse_word excluded: needs a mouse event
+mouse_x excluded: needs a mouse event
+mouse_y excluded: needs a mouse event
+next_session_id catalogued
+notes_only excluded: only inside cmd-list-keys
+option_is_array excluded: only inside window-customize
+option_is_global excluded: only inside window-customize
+option_name excluded: only inside window-customize
+option_scope excluded: only inside window-customize
+option_unit excluded: only inside window-customize
+option_value excluded: only inside window-customize
+origin_flag catalogued
+pane_active catalogued
+pane_at_bottom catalogued
+pane_at_left catalogued
+pane_at_right catalogued
+pane_at_top catalogued
+pane_bg catalogued
+pane_bottom catalogued
+pane_current_command catalogued
+pane_current_path catalogued
+pane_dead catalogued
+pane_dead_signal catalogued
+pane_dead_status catalogued
+pane_dead_time catalogued
+pane_fg catalogued
+pane_flags catalogued
+pane_floating_flag catalogued
+pane_format catalogued
+pane_height catalogued
+pane_id catalogued
+pane_in_mode catalogued
+pane_index catalogued
+pane_input_off catalogued
+pane_key_mode missing: pane
+pane_last catalogued
+pane_left catalogued
+pane_marked catalogued
+pane_marked_set catalogued
+pane_mode catalogued
+pane_path catalogued
+pane_pb_progress catalogued
+pane_pb_state catalogued
+pane_pid catalogued
+pane_pipe catalogued
+pane_pipe_pid catalogued
+pane_right catalogued
+pane_search_string catalogued
+pane_start_command catalogued
+pane_start_path catalogued
+pane_synchronized catalogued
+pane_tabs catalogued
+pane_title catalogued
+pane_top catalogued
+pane_tty catalogued
+pane_unseen_changes missing: pane
+pane_width catalogued
+pane_x catalogued
+pane_y catalogued
+pane_z catalogued
+pane_zoomed_flag catalogued
+pid catalogued
+popup_centre_x excluded: only inside cmd-display-menu
+popup_centre_y excluded: only inside cmd-display-menu
+popup_height excluded: only inside cmd-display-menu
+popup_mouse_bottom excluded: only inside cmd-display-menu
+popup_mouse_centre_x excluded: only inside cmd-display-menu
+popup_mouse_centre_y excluded: only inside cmd-display-menu
+popup_mouse_top excluded: only inside cmd-display-menu
+popup_mouse_x excluded: only inside cmd-display-menu
+popup_mouse_y excluded: only inside cmd-display-menu
+popup_pane_bottom excluded: only inside cmd-display-menu
+popup_pane_left excluded: only inside cmd-display-menu
+popup_pane_right excluded: only inside cmd-display-menu
+popup_pane_top excluded: only inside cmd-display-menu
+popup_status_line_y excluded: only inside cmd-display-menu
+popup_width excluded: only inside cmd-display-menu
+popup_window_status_line_x excluded: only inside cmd-display-menu
+popup_window_status_line_y excluded: only inside cmd-display-menu
+rectangle_toggle excluded: only inside window-copy
+scroll_position catalogued
+scroll_region_lower catalogued
+scroll_region_upper catalogued
+search_count excluded: only inside window-copy
+search_count_partial excluded: only inside window-copy
+search_match catalogued
+search_present excluded: only inside window-copy
+search_timed_out excluded: only inside window-copy
+selection_active excluded: only inside window-copy
+selection_end_x catalogued
+selection_end_y catalogued
+selection_mode excluded: only inside window-copy
+selection_present excluded: only inside window-copy
+selection_start_x catalogued
+selection_start_y catalogued
+server_sessions excluded: format-internal
+session_active missing: session
+session_activity catalogued
+session_activity_flag missing: winlink
+session_alert missing: session
+session_alerts catalogued
+session_attached catalogued
+session_attached_list catalogued
+session_bell_flag missing: session
+session_created catalogued
+session_format catalogued
+session_group catalogued
+session_group_attached catalogued
+session_group_attached_list catalogued
+session_group_list catalogued
+session_group_many_attached catalogued
+session_group_size catalogued
+session_grouped catalogued
+session_id catalogued
+session_last_attached catalogued
+session_many_attached catalogued
+session_marked catalogued
+session_name catalogued
+session_path catalogued
+session_silence_flag missing: winlink
+session_stack catalogued
+session_windows catalogued
+sixel_support excluded: format-internal
+socket_path catalogued
+start_time catalogued
+synchronized_output_flag catalogued
+top_line_time excluded: only inside window-copy
+tree_mode_format excluded: format-internal
+uid catalogued
+user catalogued
+version catalogued
+window_active catalogued
+window_active_clients catalogued
+window_active_clients_list catalogued
+window_active_sessions catalogued
+window_active_sessions_list catalogued
+window_activity catalogued
+window_activity_flag catalogued
+window_after_active excluded: only inside format
+window_before_active excluded: only inside format
+window_bell_flag catalogued
+window_bigger catalogued
+window_cell_height catalogued
+window_cell_width catalogued
+window_end_flag catalogued
+window_flags catalogued
+window_format catalogued
+window_height catalogued
+window_id catalogued
+window_index catalogued
+window_last_flag catalogued
+window_layout catalogued
+window_linked catalogued
+window_linked_sessions catalogued
+window_linked_sessions_list catalogued
+window_marked_flag catalogued
+window_name catalogued
+window_offset_x catalogued
+window_offset_y catalogued
+window_panes catalogued
+window_raw_flags catalogued
+window_silence_flag catalogued
+window_stack_index catalogued
+window_start_flag catalogued
+window_visible_layout catalogued
+window_width catalogued
+window_zoomed_flag catalogued
+wrap_flag catalogued

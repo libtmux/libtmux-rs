@@ -114,6 +114,14 @@ inserted one line too high silently hands a type its neighbour's summary.
 Never insert a doc block without landing above the whole of the previous
 item's comment.
 
+**The format catalog is measured against tmux's own source.**
+`crates/libtmux/docs/format-coverage.txt` records every format name tmux
+publishes and what this crate does about it: `catalogued`, `missing`, or
+`excluded` with a reason. `just format-coverage <tmux checkout>` rerecords it,
+`just format-coverage-check` fails on drift and is part of `just check`. A
+`missing` row is a field a listing could carry and does not; adding one is
+ordinary work, leaving it unrecorded is not.
+
 **Parsers that read from outside are fuzzed.** The control-mode line parser,
 the filter-expression wire format, and the workspace YAML loader each have a
 target under `fuzz/`, reached with `just fuzz <target>`. It is not a workspace

@@ -34,7 +34,11 @@ full.
 - `just doc-blocks`, which catches a doc comment split across two items.
 - Fuzz targets for the control-mode, filter-expression, and workspace-YAML
   parsers. `just fuzz <target>`; weekly in CI.
-- A test that handle equality and hashing separate two servers.
+- A test that handle equality and hashing separate two servers, and that the
+  four handles are `Clone + Debug + Eq + Hash + Send + Sync`.
+- `crates/libtmux/docs/format-coverage.txt`, measuring the format catalog
+  against tmux's own source: 178 catalogued, 80 excluded, 15 missing.
+  `just format-coverage-check` fails on drift.
 - `tmux-mcp` caps its tmux-side fan-out.
 
 ### Fixed
