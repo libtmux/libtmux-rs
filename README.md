@@ -217,7 +217,7 @@ it into an MCP client.
 Rust 1.85 or newer, tmux 3.2a or newer, and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
-Every supported tmux release — 3.2a, 3.4, 3.5a, 3.6, and 3.7b — is built from
+Every supported tmux release — 3.2a, 3.4, 3.5a, 3.6b, and 3.7b — is built from
 source in CI and runs the whole workspace, because tmux's own output and error
 wording change between releases. Where a release is wrong rather than merely
 old, the crate says so: `run_shell` refuses on 3.3 through 3.4, which drop the

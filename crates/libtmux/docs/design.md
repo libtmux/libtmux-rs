@@ -909,7 +909,7 @@ here publishes: a path-only dependency cannot be published at all.
 
 `scripts/test-tmux-format-compat.sh` builds each pinned tmux from source and
 runs the whole workspace against it, all targets and all features. The lanes
-are 3.2a, 3.4, 3.5a, 3.6, and 3.7b: the floor, the ceiling, and the releases
+are 3.2a, 3.4, 3.5a, 3.6b, and 3.7b: the floor, the ceiling, and the releases
 in between that are known to differ. 3.4 and 3.5a are the two that wrapped
 command output in `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH`, and are the reason the
 codec has a second dialect at all.
@@ -1387,3 +1387,23 @@ reconnect. The frame reason now reaches the pending requests instead.
 
 The budgets are large -- 8 MiB for a line, 64 MiB for a block -- because they
 exist to stop unbounded growth, not to police ordinary output.
+
+### Which tmux releases the lanes build
+
+The final patch of each series rather than its first: 3.2a, 3.5a, 3.6b, and
+3.7b are what a distribution ships and what a user runs. 3.4 is the exception,
+because that series has no later patch and is one of the two releases that
+wrapped command output in `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH`.
+
+The lane was `3.6` and is now `3.6b` for that reason. Note that `3.6` still
+appears in the source as a *behaviour boundary* -- the dialect restore landed
+in 3.6 itself -- which is a different statement from which build CI runs.
+
+### macOS is tested, not assumed
+
+The platform contract names macOS, and for a long time the evidence was
+Linux-only. What differs there is exactly what this crate leans on: process
+groups, Unix sockets, `waitid`, and temporary paths. The lane runs the test
+suite rather than the whole gate, and on master rather than every push,
+because a macOS runner bills at ten times a Linux one while the lints it would
+re-run are platform-independent.

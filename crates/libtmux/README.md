@@ -313,7 +313,7 @@ with the crate.
 ## Compatibility
 
 Every supported tmux release is built from source in CI and runs the whole
-workspace: 3.2a, 3.4, 3.5a, 3.6, and 3.7b. The floor and the ceiling matter
+workspace: 3.2a, 3.4, 3.5a, 3.6b, and 3.7b. The floor and the ceiling matter
 equally — 3.4 and 3.5a are the releases that wrap command output differently,
 which is why the format codec carries a second dialect.
 

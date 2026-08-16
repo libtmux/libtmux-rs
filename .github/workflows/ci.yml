@@ -49,6 +49,31 @@ jobs:
 
       - run: just check
 
+  # tmux's habitat is not only Linux, and the parts most likely to differ are
+  # exactly the ones this crate leans on: process groups, Unix sockets,
+  # `waitid`, and temporary paths. Scoped to the test suite rather than the
+  # whole gate, and to master rather than every push, because a macOS runner
+  # bills at ten times a Linux one and the lints are platform-independent.
+  macos:
+    name: tests on macOS
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install tmux
+        run: |
+          brew install tmux
+          tmux -V
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --locked --workspace --all-targets --all-features
+
   # The slow lane. tmux's output and error wording change between releases, so
   # every supported one is built from source and runs the whole workspace.
   compat:

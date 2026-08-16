@@ -255,10 +255,13 @@ run_lane \
     "549c35b06165f6ae023115eb76f83f2cbf945395" \
     "tmux 3.5a" \
 
+# The final patch of each series rather than its first: 3.2a, 3.5a, 3.6b, and
+# 3.7b are what a distribution ships and what a user runs. 3.4 is the
+# exception because that series has no later patch.
 run_lane \
-    "3.6" \
-    "0dac7fe434d029a4f0b819cba8eb7963df291990" \
-    "tmux 3.6" \
+    "3.6b" \
+    "0623d1e968423ad0c192e0d8debf1258671063d5" \
+    "tmux 3.6b" \
 
 run_lane \
     "3.7b" \
