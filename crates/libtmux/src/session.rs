@@ -77,7 +77,7 @@ impl Session {
     /// use libtmux::{Pane, Session};
     ///
     /// let session = server.new_session("locating-session").await?;
-    /// let pane = session.try_panes().await?.remove(0);
+    /// let pane = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
     /// let found = Session::from_env_value(server, Some(pane.id().as_ref())).await?;
@@ -125,7 +125,7 @@ impl Session {
     /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
     /// # let _ = server.cmd(Command::new("kill-server")).await;
     /// # server.cmd(Command::new("new-session").arg("-d").arg("sleep 60")).await?;
-    /// let session = server.sessions().await.into_iter().next().expect("one session");
+    /// let session = server.sessions_or_empty().await.into_iter().next().expect("one session");
     /// assert!(session.id().to_string().starts_with('$'));
     /// # let _ = server.cmd(Command::new("kill-server")).await;
     /// # server.shutdown().await?;
@@ -197,10 +197,10 @@ impl Session {
 
     /// List the windows linked into this session, in tmux's own order.
     ///
-    /// This is the lenient form; use [`Session::try_windows`] when the reason
+    /// This is the lenient form; use [`Session::windows`] when the reason
     /// for an empty result matters.
-    pub async fn windows(&self) -> Vec<Window> {
-        self.try_windows().await.unwrap_or_default()
+    pub async fn windows_or_empty(&self) -> Vec<Window> {
+        self.windows().await.unwrap_or_default()
     }
 
     /// List the windows linked into this session, preserving any failure.
@@ -212,7 +212,7 @@ impl Session {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn try_windows(&self) -> Result<Vec<Window>, Error> {
+    pub async fn windows(&self) -> Result<Vec<Window>, Error> {
         let target = self.id().to_string();
         let projections =
             listing::windows(&self.core, listing::Scope::Target(&target), None).await?;
@@ -226,18 +226,18 @@ impl Session {
     /// The windows under this session that a matcher accepts.
     ///
     /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::try_search_windows`] when the difference matters.
+    /// [`Self::search_windows`] when the difference matters.
     ///
     /// Filtering happens here rather than in tmux. A [`crate::query::FilterExpr`]
     /// is built to stay compilable to a tmux `-f` predicate, so pushing one
     /// down later would change what this costs and not what it answers.
     #[cfg(feature = "query")]
     #[must_use]
-    pub async fn search_windows<M: crate::query::Matcher<Window>>(
+    pub async fn search_windows_or_empty<M: crate::query::Matcher<Window>>(
         &self,
         matcher: M,
     ) -> Vec<Window> {
-        self.try_search_windows(matcher).await.unwrap_or_default()
+        self.search_windows(matcher).await.unwrap_or_default()
     }
 
     /// The windows under this session that a matcher accepts, reporting why
@@ -260,7 +260,7 @@ impl Session {
     /// session.new_window("build").await?;
     ///
     /// let fields = libtmux::Window::filter_fields();
-    /// let found = session.try_search_windows(&fields.window_name.eq("build")).await?;
+    /// let found = session.search_windows(&fields.window_name.eq("build")).await?;
     /// assert_eq!(found.len(), 1);
     ///
     /// guard.shutdown().await?;
@@ -270,13 +270,13 @@ impl Session {
     /// # }
     /// ```
     #[cfg(feature = "query")]
-    pub async fn try_search_windows<M: crate::query::Matcher<Window>>(
+    pub async fn search_windows<M: crate::query::Matcher<Window>>(
         &self,
         matcher: M,
     ) -> Result<Vec<Window>, Error> {
         use crate::query::QueryIteratorExt as _;
 
-        let all = self.try_windows().await?;
+        let all = self.windows().await?;
         Ok(all.iter().matching(matcher).cloned().collect())
     }
 
@@ -369,19 +369,15 @@ impl Session {
     /// active window, so `Ok(None)` means the session disappeared between the
     /// snapshot and this call.
     pub async fn active_window(&self) -> Result<Option<Window>, Error> {
-        Ok(self
-            .try_windows()
-            .await?
-            .into_iter()
-            .find(Window::is_active))
+        Ok(self.windows().await?.into_iter().find(Window::is_active))
     }
 
     /// List every pane in this session, in tmux's own order.
     ///
-    /// This is the lenient form; use [`Session::try_panes`] when the reason
+    /// This is the lenient form; use [`Session::panes`] when the reason
     /// for an empty result matters.
-    pub async fn panes(&self) -> Vec<Pane> {
-        self.try_panes().await.unwrap_or_default()
+    pub async fn panes_or_empty(&self) -> Vec<Pane> {
+        self.panes().await.unwrap_or_default()
     }
 
     /// List every pane in this session, preserving any failure.
@@ -390,7 +386,7 @@ impl Session {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn try_panes(&self) -> Result<Vec<Pane>, Error> {
+    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
         let target = self.id().to_string();
         let projections =
             listing::panes(&self.core, listing::Scope::SessionTarget(&target), None).await?;
@@ -859,7 +855,7 @@ impl Session {
     /// Succeeds when no client was attached. tmux reports that as a failure,
     /// but the state this asks for -- nobody attached to this session -- is
     /// already true, and a caller that has to tell "detached them" from
-    /// "there was nobody" can compare [`crate::Server::clients`] before and
+    /// "there was nobody" can compare [`crate::Server::clients_or_empty`] before and
     /// after.
     ///
     /// # Errors
@@ -1229,7 +1225,7 @@ impl Session {
         let name = name.as_ref();
 
         Ok(self
-            .try_windows()
+            .windows()
             .await?
             .into_iter()
             .find(|window| window.name() == name))

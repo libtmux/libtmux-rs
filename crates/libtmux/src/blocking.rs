@@ -16,7 +16,7 @@
 //! let runtime = Runtime::new()?;
 //! let server = libtmux::Server::new()?;
 //!
-//! let sessions = runtime.run(server.try_sessions())?;
+//! let sessions = runtime.run(server.sessions())?;
 //! for session in &sessions {
 //!     println!("{}", session.id());
 //! }

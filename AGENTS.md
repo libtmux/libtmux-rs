@@ -66,10 +66,11 @@ UTF-8, so they cross the API as `TmuxText`. Reading a tmux stream with
 anything that requires UTF-8 fails the whole operation the first time a pane
 prints a high byte.
 
-**Listings come in pairs.** The plain form returns an empty `Vec` on failure;
-the `try_` form propagates. Both halves are load-bearing — a `try_` form that
-quietly returned no rows would make the pair meaningless. Add both when adding
-a listing.
+**Listings come in pairs, and the short name is the loud one.** `sessions()`
+returns `Result`; `sessions_or_empty()` collapses failure into no rows. Both
+halves are load-bearing, and which one gets the short name is the whole point:
+a caller who writes the obvious thing gets the error, and a caller who wants
+an empty list on failure has to say so. Add both when adding a listing.
 
 **A failure says what to do about it.** `Error::kind` reduces the variants to
 a decision, and `is_object_gone` is the branch most callers write. tmux

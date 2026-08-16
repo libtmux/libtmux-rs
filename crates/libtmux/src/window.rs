@@ -92,7 +92,7 @@ impl Window {
     /// use libtmux::Window;
     ///
     /// let session = server.new_session("locating-window").await?;
-    /// let pane = session.try_panes().await?.remove(0);
+    /// let pane = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
     /// let found = Window::from_env_value(server, Some(pane.id().as_ref())).await?;
@@ -216,10 +216,10 @@ impl Window {
 
     /// List this window's panes, in tmux's own order.
     ///
-    /// This is the lenient form; use [`Window::try_panes`] when the reason for
+    /// This is the lenient form; use [`Window::panes`] when the reason for
     /// an empty result matters.
-    pub async fn panes(&self) -> Vec<Pane> {
-        self.try_panes().await.unwrap_or_default()
+    pub async fn panes_or_empty(&self) -> Vec<Pane> {
+        self.panes().await.unwrap_or_default()
     }
 
     /// List this window's panes, preserving any failure.
@@ -231,7 +231,7 @@ impl Window {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn try_panes(&self) -> Result<Vec<Pane>, Error> {
+    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
         let target = self.id().to_string();
         let projections = listing::panes(&self.core, listing::Scope::Target(&target), None).await?;
 
@@ -244,15 +244,18 @@ impl Window {
     /// The panes under this window that a matcher accepts.
     ///
     /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::try_search_panes`] when the difference matters.
+    /// [`Self::search_panes`] when the difference matters.
     ///
     /// Filtering happens here rather than in tmux. A [`crate::query::FilterExpr`]
     /// is built to stay compilable to a tmux `-f` predicate, so pushing one
     /// down later would change what this costs and not what it answers.
     #[cfg(feature = "query")]
     #[must_use]
-    pub async fn search_panes<M: crate::query::Matcher<Pane>>(&self, matcher: M) -> Vec<Pane> {
-        self.try_search_panes(matcher).await.unwrap_or_default()
+    pub async fn search_panes_or_empty<M: crate::query::Matcher<Pane>>(
+        &self,
+        matcher: M,
+    ) -> Vec<Pane> {
+        self.search_panes(matcher).await.unwrap_or_default()
     }
 
     /// The panes under this window that a matcher accepts, reporting why
@@ -275,7 +278,7 @@ impl Window {
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// let fields = libtmux::Pane::filter_fields();
-    /// let found = window.try_search_panes(&fields.pane_active.eq(true)).await?;
+    /// let found = window.search_panes(&fields.pane_active.eq(true)).await?;
     /// assert_eq!(found.len(), 1);
     ///
     /// guard.shutdown().await?;
@@ -285,13 +288,13 @@ impl Window {
     /// # }
     /// ```
     #[cfg(feature = "query")]
-    pub async fn try_search_panes<M: crate::query::Matcher<Pane>>(
+    pub async fn search_panes<M: crate::query::Matcher<Pane>>(
         &self,
         matcher: M,
     ) -> Result<Vec<Pane>, Error> {
         use crate::query::QueryIteratorExt as _;
 
-        let all = self.try_panes().await?;
+        let all = self.panes().await?;
         Ok(all.iter().matching(matcher).cloned().collect())
     }
 
@@ -303,7 +306,7 @@ impl Window {
     /// active pane, so `Ok(None)` means the window disappeared between the
     /// snapshot and this call.
     pub async fn active_pane(&self) -> Result<Option<Pane>, Error> {
-        Ok(self.try_panes().await?.into_iter().find(Pane::is_active))
+        Ok(self.panes().await?.into_iter().find(Pane::is_active))
     }
 
     /// Move focus one pane in this direction, and report where it landed.
@@ -436,7 +439,7 @@ impl Window {
     /// makes the list `a,has,comma`, which reads exactly like three sessions.
     ///
     /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::try_linked_sessions`] when the difference matters.
+    /// [`Self::linked_sessions`] when the difference matters.
     ///
     /// # Examples
     ///
@@ -450,10 +453,10 @@ impl Window {
     /// let second = server.new_session("second").await?;
     /// let window = first.active_window().await?.expect("a window");
     ///
-    /// assert_eq!(window.linked_sessions().await.len(), 1);
+    /// assert_eq!(window.linked_sessions_or_empty().await.len(), 1);
     ///
     /// window.link_to(&second, None).await?;
-    /// let linked = window.linked_sessions().await;
+    /// let linked = window.linked_sessions_or_empty().await;
     /// assert_eq!(linked.len(), 2, "the same window, reached two ways");
     ///
     /// guard.shutdown().await?;
@@ -462,18 +465,18 @@ impl Window {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn linked_sessions(&self) -> Vec<Session> {
-        self.try_linked_sessions().await.unwrap_or_default()
+    pub async fn linked_sessions_or_empty(&self) -> Vec<Session> {
+        self.linked_sessions().await.unwrap_or_default()
     }
 
     /// The sessions this window is linked into, reporting why if it cannot.
     ///
-    /// The loud form of [`Self::linked_sessions`].
+    /// The loud form of [`Self::linked_sessions_or_empty`].
     ///
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses a listing.
-    pub async fn try_linked_sessions(&self) -> Result<Vec<Session>, Error> {
+    pub async fn linked_sessions(&self) -> Result<Vec<Session>, Error> {
         // The window id is a sigil and digits, so tmux matches it server-side
         // and returns only the winlink rows that reach this window.
         let links = listing::windows(
@@ -661,13 +664,13 @@ impl Window {
     /// let mut window = session.active_window().await?.expect("a window");
     /// window.split(SplitOptions::new(SplitDirection::Below)).await?;
     ///
-    /// let before: Vec<_> = window.try_panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// let before: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
     /// window.rotate(Rotation::Up).await?;
-    /// let after: Vec<_> = window.try_panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// let after: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
     ///
     /// assert_ne!(before, after, "the panes moved");
     /// window.rotate(Rotation::Down).await?;
-    /// let back: Vec<_> = window.try_panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// let back: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
     /// assert_eq!(before, back, "and the other way undoes it");
     ///
     /// guard.shutdown().await?;
@@ -1199,7 +1202,7 @@ impl Window {
     /// use libtmux::ResizeDirection;
     ///
     /// let session = server.new_session("resized-window").await?;
-    /// let mut window = session.try_windows().await?.remove(0);
+    /// let mut window = session.windows().await?.remove(0);
     ///
     /// window.resize(80, 24).await?;
     /// window.resize_by(ResizeDirection::Down, 4).await?;
@@ -1246,11 +1249,11 @@ impl Window {
     /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
     /// let source = server.new_session("linking-from").await?;
     /// let target = server.new_session("linking-to").await?;
-    /// let window = source.try_windows().await?.remove(0);
+    /// let window = source.windows().await?.remove(0);
     ///
     /// window.link_to(&target, None).await?;
     ///
-    /// let linked = target.try_windows().await?;
+    /// let linked = target.windows().await?;
     /// assert!(linked.iter().any(|other| other.id() == window.id()));
     /// # Ok(())
     /// # }
@@ -1288,7 +1291,7 @@ impl Window {
     /// ```
     /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
     /// let session = server.new_session("sized").await?;
-    /// let mut window = session.try_windows().await?.remove(0);
+    /// let mut window = session.windows().await?.remove(0);
     ///
     /// window.resize(100, 40).await?;
     /// assert_eq!((window.width(), window.height()), (100, 40));

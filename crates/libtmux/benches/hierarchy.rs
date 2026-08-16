@@ -78,9 +78,9 @@ async fn build(sessions: usize, windows: usize) -> Fixture {
 /// Gather the hierarchy the obvious way, one listing per parent.
 async fn walk(server: &Server) -> usize {
     let mut panes = 0;
-    for session in server.try_sessions().await.expect("sessions") {
-        for window in session.try_windows().await.expect("windows") {
-            panes += window.try_panes().await.expect("panes").len();
+    for session in server.sessions().await.expect("sessions") {
+        for window in session.windows().await.expect("windows") {
+            panes += window.panes().await.expect("panes").len();
         }
     }
 

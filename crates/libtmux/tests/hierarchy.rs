@@ -36,32 +36,26 @@ async fn empty_server_lists_nothing_across_the_hierarchy() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    assert!(server.sessions().await.is_empty());
-    assert!(server.windows().await.is_empty());
-    assert!(server.panes().await.is_empty());
+    assert!(server.sessions_or_empty().await.is_empty());
+    assert!(server.windows_or_empty().await.is_empty());
+    assert!(server.panes_or_empty().await.is_empty());
 
     // An empty listing is an ordinary result, not a decoding failure.
     assert!(
         server
-            .try_sessions()
+            .sessions()
             .await
             .expect("loud form succeeds")
             .is_empty()
     );
     assert!(
         server
-            .try_windows()
+            .windows()
             .await
             .expect("loud form succeeds")
             .is_empty()
     );
-    assert!(
-        server
-            .try_panes()
-            .await
-            .expect("loud form succeeds")
-            .is_empty()
-    );
+    assert!(server.panes().await.expect("loud form succeeds").is_empty());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -75,7 +69,7 @@ async fn listings_preserve_tmux_order_and_report_snapshot_values() {
         new_session(server, name).await;
     }
 
-    let sessions = server.try_sessions().await.expect("sessions list");
+    let sessions = server.sessions().await.expect("sessions list");
     let names = sessions
         .iter()
         .map(|session| session.name().as_bytes().to_vec())
@@ -117,7 +111,7 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
 
     let origin = session_id(server, "origin").await;
     let source = server
-        .try_windows()
+        .windows()
         .await
         .expect("windows list")
         .into_iter()
@@ -134,7 +128,7 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
     )
     .await;
 
-    let windows = server.try_windows().await.expect("windows list");
+    let windows = server.windows().await.expect("windows list");
     let links = windows
         .iter()
         .filter(|window| window.id() == source.id())
@@ -157,7 +151,7 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
     );
 
     // Panes under a linked window repeat for the same reason.
-    let panes = server.try_panes().await.expect("panes list");
+    let panes = server.panes().await.expect("panes list");
     let pane_rows = panes
         .iter()
         .filter(|pane| pane.window_id() == source.id())
@@ -172,7 +166,7 @@ async fn a_linked_window_appears_once_per_session_that_links_it() {
 /// Resolve a session id by name through the public listing.
 async fn session_id(server: &Server, name: &str) -> String {
     server
-        .try_sessions()
+        .sessions()
         .await
         .expect("sessions list")
         .into_iter()
@@ -198,10 +192,10 @@ async fn panes_report_their_window_and_process_details() {
     )
     .await;
 
-    let panes = server.try_panes().await.expect("panes list");
+    let panes = server.panes().await.expect("panes list");
     assert_eq!(panes.len(), 2, "the split produced a second pane");
 
-    let windows = server.try_windows().await.expect("windows list");
+    let windows = server.windows().await.expect("windows list");
     assert_eq!(windows.len(), 1, "both panes share one window");
     assert_eq!(windows[0].pane_count(), 2);
 
@@ -250,7 +244,7 @@ async fn traversal_scopes_each_level_to_its_parent() {
     )
     .await;
 
-    let sessions = server.try_sessions().await.expect("sessions list");
+    let sessions = server.sessions().await.expect("sessions list");
     let one = sessions
         .iter()
         .find(|session| session.name().as_bytes() == b"one")
@@ -261,11 +255,11 @@ async fn traversal_scopes_each_level_to_its_parent() {
         .expect("session two exists");
 
     // Session scoping: the server sees three windows, each session sees its own.
-    assert_eq!(server.try_windows().await.expect("windows").len(), 3);
-    assert_eq!(one.try_windows().await.expect("windows").len(), 2);
-    assert_eq!(two.try_windows().await.expect("windows").len(), 1);
+    assert_eq!(server.windows().await.expect("windows").len(), 3);
+    assert_eq!(one.windows().await.expect("windows").len(), 2);
+    assert_eq!(two.windows().await.expect("windows").len(), 1);
 
-    let one_windows = one.try_windows().await.expect("windows");
+    let one_windows = one.windows().await.expect("windows");
     assert!(
         one_windows
             .iter()
@@ -293,7 +287,7 @@ async fn traversal_scopes_each_level_to_its_parent() {
         .iter()
         .find(|window| window.pane_count() == 2)
         .expect("one window holds the split");
-    let panes = split_window.try_panes().await.expect("panes list");
+    let panes = split_window.panes().await.expect("panes list");
     assert_eq!(panes.len(), 2);
     assert!(
         panes
@@ -309,8 +303,8 @@ async fn traversal_scopes_each_level_to_its_parent() {
     assert!(active_pane.is_active());
 
     // Session-scoped panes span every window in that session.
-    assert_eq!(one.try_panes().await.expect("panes").len(), 3);
-    assert_eq!(two.try_panes().await.expect("panes").len(), 1);
+    assert_eq!(one.panes().await.expect("panes").len(), 3);
+    assert_eq!(two.panes().await.expect("panes").len(), 1);
 
     // Upward traversal re-reads tmux and lands back where we started.
     let parent = split_window
@@ -330,7 +324,7 @@ async fn upward_traversal_reflects_a_rename_rather_than_the_snapshot() {
 
     new_session(server, "before").await;
     let window = server
-        .try_windows()
+        .windows()
         .await
         .expect("windows list")
         .into_iter()
@@ -368,7 +362,7 @@ async fn refreshing_one_handle_leaves_its_clones_alone() {
 
     new_session(server, "before").await;
     let mut session = server
-        .try_sessions()
+        .sessions()
         .await
         .expect("sessions list")
         .into_iter()
@@ -417,7 +411,7 @@ async fn refresh_reports_an_object_that_tmux_no_longer_has() {
     new_session(server, "drop").await;
 
     let mut doomed = server
-        .try_sessions()
+        .sessions()
         .await
         .expect("sessions list")
         .into_iter()
@@ -451,7 +445,7 @@ async fn refresh_follows_a_window_that_moved_index() {
 
     new_session(server, "work").await;
     let mut window = server
-        .try_windows()
+        .windows()
         .await
         .expect("windows list")
         .into_iter()
@@ -507,14 +501,14 @@ async fn a_dead_server_yields_empty_leniently_and_an_error_loudly() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 
     // The lenient contract hides the cause behind an empty listing.
-    assert!(server.sessions().await.is_empty());
-    assert!(server.windows().await.is_empty());
-    assert!(server.panes().await.is_empty());
+    assert!(server.sessions_or_empty().await.is_empty());
+    assert!(server.windows_or_empty().await.is_empty());
+    assert!(server.panes_or_empty().await.is_empty());
 
     // The loud form keeps it. This is the whole reason both forms exist: the
     // executor is gone, which is a caller mistake rather than an empty server.
     let error = server
-        .try_sessions()
+        .sessions()
         .await
         .expect_err("a shut-down executor cannot list");
     assert!(
@@ -540,12 +534,12 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
         .expect("an inert server handle is built");
 
     assert!(
-        server.sessions().await.is_empty(),
+        server.sessions_or_empty().await.is_empty(),
         "the lenient form suits a status line, which has nothing to say",
     );
 
     let error = server
-        .try_sessions()
+        .sessions()
         .await
         .expect_err("the loud form keeps the reason");
     assert!(
@@ -593,15 +587,15 @@ async fn attached_sessions_selects_only_sessions_with_clients() {
 
     // Nothing is attached in a headless fixture, so the filtered listing is
     // empty while the unfiltered one is not.
-    assert_eq!(server.try_sessions().await.expect("sessions").len(), 1);
+    assert_eq!(server.sessions().await.expect("sessions").len(), 1);
     assert!(
         server
-            .try_attached_sessions()
+            .attached_sessions()
             .await
             .expect("attached sessions")
             .is_empty(),
     );
-    assert!(server.attached_sessions().await.is_empty());
+    assert!(server.attached_sessions_or_empty().await.is_empty());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -723,7 +717,7 @@ async fn one_hierarchy_fetch_matches_walking_down() {
         .expect("lookup")
         .expect("alpha exists");
     first
-        .window_at(first.try_windows().await.expect("windows")[0].index())
+        .window_at(first.windows().await.expect("windows")[0].index())
         .await
         .expect("lookup")
         .expect("the window exists")
@@ -735,10 +729,10 @@ async fn one_hierarchy_fetch_matches_walking_down() {
     let tree = server.hierarchy().await.expect("hierarchy");
     let walked: Vec<_> = {
         let mut walked = Vec::new();
-        for session in server.try_sessions().await.expect("sessions") {
+        for session in server.sessions().await.expect("sessions") {
             let mut windows = Vec::new();
-            for window in session.try_windows().await.expect("windows") {
-                let panes = window.try_panes().await.expect("panes");
+            for window in session.windows().await.expect("windows") {
+                let panes = window.panes().await.expect("panes");
                 windows.push((window, panes));
             }
             walked.push((session, windows));
@@ -825,7 +819,7 @@ async fn a_process_inside_tmux_can_find_where_it_is() {
         .new_window(NewWindowOptions::new("second").command("sleep 300"))
         .await
         .expect("window");
-    let pane = window.try_panes().await.expect("panes").remove(0);
+    let pane = window.panes().await.expect("panes").remove(0);
 
     // tmux exports TMUX_PANE to every process it starts. Reading it back is
     // how a program answers "where am I" without being told.
@@ -909,7 +903,7 @@ async fn linked_sessions_survive_a_session_name_that_looks_like_a_list() {
         .await
         .expect("the window links into both");
 
-    let linked = window.try_linked_sessions().await.expect("linked sessions");
+    let linked = window.linked_sessions().await.expect("linked sessions");
     let mut names: Vec<String> = linked
         .iter()
         .map(|session| String::from_utf8_lossy(session.name().as_bytes()).into_owned())

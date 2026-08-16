@@ -1337,7 +1337,7 @@ async fn killing_an_unrelated_server_is_allowed() {
 
 /// How many clients tmux has, which is how a control-mode connection shows up.
 async fn client_count(server: &Server) -> usize {
-    server.try_clients().await.map_or(0, |found| found.len())
+    server.clients().await.map_or(0, |found| found.len())
 }
 
 /// Wait for the client count to settle at `wanted`, and report what it was.

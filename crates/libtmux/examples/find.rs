@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fields = Pane::filter_fields();
     let running = fields.pane_current_command.eq(wanted.as_str());
 
-    let panes = server.try_panes().await?;
+    let panes = server.panes().await?;
     for pane in panes.iter().matching(&running) {
         println!("{} in window {}", pane.id(), pane.window_id());
     }

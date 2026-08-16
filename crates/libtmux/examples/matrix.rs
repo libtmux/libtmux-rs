@@ -65,10 +65,10 @@ async fn query(server: &Server, session: &str) -> String {
         .await
         .expect("the session is readable")
         .expect("the workload built its session");
-    let windows = session.try_windows().await.expect("windows list");
+    let windows = session.windows().await.expect("windows list");
     let mut panes = Vec::new();
     for window in &windows {
-        panes.extend(window.try_panes().await.expect("panes list"));
+        panes.extend(window.panes().await.expect("panes list"));
     }
 
     let fields = libtmux::Pane::filter_fields();

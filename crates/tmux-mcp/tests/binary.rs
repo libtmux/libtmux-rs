@@ -444,7 +444,7 @@ fn tailing_many_panes_stays_within_its_connection_budget() {
                 .new_window(libtmux::NewWindowOptions::new(format!("w{index}")))
                 .await
                 .expect("a window");
-            let pane = window.try_panes().await.expect("panes").remove(0);
+            let pane = window.panes().await.expect("panes").remove(0);
             ids.push(pane.id().to_string());
         }
         ids

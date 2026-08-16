@@ -46,8 +46,8 @@
 //!
 //! ```no_run
 //! # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! let quiet = server.sessions().await;          // empty on failure
-//! let loud = server.try_sessions().await?;      // Err on failure
+//! let quiet = server.sessions_or_empty().await;          // empty on failure
+//! let loud = server.sessions().await?;      // Err on failure
 //! # let _ = (quiet, loud);
 //! # Ok(())
 //! # }
@@ -211,7 +211,7 @@ blocking API: one type to learn, and no second surface to keep in step.
 let runtime = libtmux::blocking::Runtime::new()?;
 let server = libtmux::Server::new()?;
 
-let sessions = runtime.run(server.try_sessions())?;
+let sessions = runtime.run(server.sessions())?;
 println!("{} sessions", sessions.len());
 # Ok(())
 # }

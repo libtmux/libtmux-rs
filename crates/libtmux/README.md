@@ -166,9 +166,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Listings come in pairs. The plain form returns an empty `Vec` when the
-underlying tmux command fails, which suits a status line; the `try_` form keeps
-the reason, which suits anything that must not guess.
+Listings come in pairs, and the short name is the honest one. `sessions()`
+returns `Result<Vec<Session>>`, so an unreachable tmux is an error rather than
+an empty list. `sessions_or_empty()` collapses failure into no rows, which
+suits a status line and nothing that reconciles state -- a reconciler reading
+"no sessions" from an outage will happily delete everything.
 
 ## Filtering
 
@@ -185,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = guard.server();
     server.new_session("work").await?;
 
-    let panes = server.try_panes().await?;
+    let panes = server.panes().await?;
     let fields = libtmux::Pane::filter_fields();
 
     let active_shell = fields
@@ -266,7 +268,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let session = guard.server().new_session("work").await?;
 
-    match session.try_windows().await {
+    match session.windows().await {
         Ok(windows) => println!("{} windows", windows.len()),
         Err(error) if error.is_object_gone() => println!("gone"),
         Err(error) if error.is_transient() => println!("retry: {error}"),

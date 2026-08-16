@@ -58,7 +58,7 @@ impl Pane {
     /// use libtmux::Pane;
     ///
     /// let session = server.new_session("locating").await?;
-    /// let expected = session.try_panes().await?.remove(0);
+    /// let expected = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
     /// let found = Pane::from_env_value(server, Some(expected.id().as_ref())).await?;
@@ -187,7 +187,7 @@ impl Pane {
     /// // bottom, and the new one the other way round.
     /// let lower = window.split(SplitOptions::new(SplitDirection::Below)).await?;
     /// let upper = window
-    ///     .try_panes()
+    ///     .panes()
     ///     .await?
     ///     .into_iter()
     ///     .find(|pane| pane.id() != lower.id())
@@ -365,7 +365,7 @@ impl Pane {
     /// use libtmux::{PaneSize, SplitDirection, SplitOptions};
     ///
     /// let session = server.new_session("split-from-pane").await?;
-    /// let pane = session.try_panes().await?.remove(0);
+    /// let pane = session.panes().await?.remove(0);
     ///
     /// let above = pane
     ///     .split(
@@ -407,7 +407,7 @@ impl Pane {
     /// use libtmux::{ResizeDirection, SplitDirection, SplitOptions};
     ///
     /// let session = server.new_session("resized-pane").await?;
-    /// let pane = session.try_panes().await?.remove(0);
+    /// let pane = session.panes().await?.remove(0);
     /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
     ///
     /// let mut pane = pane.refreshed().await?;
@@ -454,7 +454,7 @@ impl Pane {
     /// use libtmux::{SplitDirection, SplitOptions};
     ///
     /// let session = server.new_session("zoomed").await?;
-    /// let pane = session.try_panes().await?.remove(0);
+    /// let pane = session.panes().await?.remove(0);
     /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
     ///
     /// let mut pane = pane.refreshed().await?;
@@ -556,7 +556,7 @@ impl Pane {
     /// use libtmux::CaptureOptions;
     ///
     /// let session = server.new_session("captured").await?;
-    /// let pane = session.try_panes().await?.remove(0);
+    /// let pane = session.panes().await?.remove(0);
     ///
     /// let visible = pane.capture_with(CaptureOptions::visible()).await?;
     /// let everything = pane.capture_with(CaptureOptions::history()).await?;

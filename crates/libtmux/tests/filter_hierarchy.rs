@@ -41,7 +41,7 @@ async fn a_typed_expression_filters_the_handles_a_listing_returned() {
         new_session(server, name).await;
     }
 
-    let sessions = server.try_sessions().await.expect("sessions list");
+    let sessions = server.sessions().await.expect("sessions list");
     let fields = libtmux::Session::filter_fields();
 
     // Native iteration remains the floor: a closure needs no expression.
@@ -119,7 +119,7 @@ async fn every_hierarchy_handle_is_filterable() {
     )
     .await;
 
-    let windows = server.try_windows().await.expect("windows list");
+    let windows = server.windows().await.expect("windows list");
     let window_fields = libtmux::Window::filter_fields();
     assert_eq!(
         windows
@@ -158,7 +158,7 @@ async fn poll_until(
 ) -> Vec<libtmux::Pane> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let panes = server.try_panes().await.expect("panes list");
+        let panes = server.panes().await.expect("panes list");
         if ready(&panes) {
             return panes;
         }
@@ -181,7 +181,7 @@ async fn a_filter_expression_is_inert_and_reusable() {
 
     // The expression holds no connection and no snapshot, so it applies before
     // and after the state it describes changes.
-    let before = server.try_sessions().await.expect("sessions list");
+    let before = server.sessions().await.expect("sessions list");
     assert_eq!(before.iter().matching(&expression).count(), 1);
 
     run(
@@ -193,7 +193,7 @@ async fn a_filter_expression_is_inert_and_reusable() {
     )
     .await;
 
-    let after = server.try_sessions().await.expect("sessions list");
+    let after = server.sessions().await.expect("sessions list");
     assert_eq!(after.iter().matching(&expression).count(), 0);
     // The original snapshot is unchanged, so the same expression still matches.
     assert_eq!(before.iter().matching(&expression).count(), 1);
@@ -218,14 +218,14 @@ async fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
     // The expression decides, and it is the same one a listing takes: the
     // search is the listing plus the filter, not a second query language.
     let building = session
-        .try_search_windows(&fields.window_name.starts_with("build"))
+        .search_windows(&fields.window_name.starts_with("build"))
         .await
         .expect("search");
     assert_eq!(building.len(), 2);
 
     // A matcher nothing satisfies is an empty answer, not a failure.
     let none = session
-        .try_search_windows(&fields.window_name.eq("absent"))
+        .search_windows(&fields.window_name.eq("absent"))
         .await
         .expect("search");
     assert!(none.is_empty());
@@ -234,7 +234,7 @@ async fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
     // the listing itself fails, which is what the pair exists to distinguish.
     assert_eq!(
         session
-            .search_windows(&fields.window_name.starts_with("build"))
+            .search_windows_or_empty(&fields.window_name.starts_with("build"))
             .await
             .len(),
         building.len(),

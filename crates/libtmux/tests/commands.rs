@@ -86,7 +86,7 @@ async fn formats_expand_against_a_target() {
     // A format is evaluated against a pane, and resolves the session and
     // window around it from there.
     let pane = session
-        .try_panes()
+        .panes()
         .await
         .expect("panes")
         .into_iter()
@@ -160,7 +160,7 @@ async fn scoped_operations_clean_up_after_success_and_failure() {
         .await
         .expect("the scope runs and the operation succeeds");
     assert!(seen.starts_with('$'));
-    assert!(server.try_sessions().await.expect("sessions").is_empty());
+    assert!(server.sessions().await.expect("sessions").is_empty());
 
     // Failure: the operation's error comes back, and cleanup still ran.
     // The operation's error comes back directly: one `?`, not two.
@@ -171,7 +171,7 @@ async fn scoped_operations_clean_up_after_success_and_failure() {
         .await;
     assert_eq!(outcome, Err(Failure::Deliberate));
     assert!(
-        server.try_sessions().await.expect("sessions").is_empty(),
+        server.sessions().await.expect("sessions").is_empty(),
         "cleanup runs even when the operation failed",
     );
 
@@ -184,7 +184,7 @@ async fn scoped_windows_and_panes_nest() {
     let server = guard.server();
     let session = server.new_session("nested").await.expect("session");
 
-    let before = session.try_windows().await.expect("windows").len();
+    let before = session.windows().await.expect("windows").len();
 
     let pane_count = session
         .with_window(
@@ -194,7 +194,7 @@ async fn scoped_windows_and_panes_nest() {
                     .with_pane(
                         SplitOptions::new(SplitDirection::Below).command("sleep 300"),
                         async |_pane| {
-                            Ok::<_, libtmux::Error>(window.try_panes().await.expect("panes").len())
+                            Ok::<_, libtmux::Error>(window.panes().await.expect("panes").len())
                         },
                     )
                     .await
@@ -205,7 +205,7 @@ async fn scoped_windows_and_panes_nest() {
 
     assert_eq!(pane_count, 2, "the scoped pane existed inside its scope");
     assert_eq!(
-        session.try_windows().await.expect("windows").len(),
+        session.windows().await.expect("windows").len(),
         before,
         "the scoped window is gone afterwards",
     );
@@ -287,7 +287,7 @@ async fn client_operations_need_a_client_and_report_when_there_is_none() {
 
     // A test server has no terminal attached, so there are no clients and the
     // operations that need one fail loudly rather than pretending to work.
-    assert!(server.try_clients().await.expect("clients list").is_empty());
+    assert!(server.clients().await.expect("clients list").is_empty());
     assert!(
         server.display_popup(None, "true").await.is_err(),
         "a popup needs a client with a terminal",
@@ -320,14 +320,14 @@ async fn a_client_reports_itself_while_it_is_attached() {
     // separate command, so wait for it rather than assuming the order.
     libtmux::test::retry_until(Duration::from_secs(10), async || {
         server
-            .try_clients()
+            .clients()
             .await
             .is_ok_and(|clients| !clients.is_empty())
     })
     .await
     .expect("the attached client is listed");
 
-    let mut client = server.try_clients().await.expect("clients").remove(0);
+    let mut client = server.clients().await.expect("clients").remove(0);
     assert!(client.is_control_mode(), "this client attached with -C");
     assert!(!client.name().as_bytes().is_empty());
     assert!(client.pid() > 0);
@@ -352,7 +352,7 @@ async fn a_client_reports_itself_while_it_is_attached() {
     client.detach().await.expect("the client detaches");
     libtmux::test::retry_until(Duration::from_secs(10), async || {
         server
-            .try_clients()
+            .clients()
             .await
             .is_ok_and(|clients| clients.is_empty())
     })
@@ -369,7 +369,7 @@ async fn pane_modes_enter_and_leave() {
     let server = guard.server();
     let session = server.new_session("modes").await.expect("session");
     let mut pane = session
-        .try_panes()
+        .panes()
         .await
         .expect("panes")
         .into_iter()
@@ -442,7 +442,7 @@ async fn retry_until_waits_for_tmux_rather_than_sleeping() {
     // tmux applies a split before the new pane's command has necessarily
     // execed, so wait for the state under test.
     session
-        .try_windows()
+        .windows()
         .await
         .expect("windows")
         .into_iter()
@@ -453,10 +453,7 @@ async fn retry_until_waits_for_tmux_rather_than_sleeping() {
         .expect("pane is created");
 
     retry_until(Duration::from_secs(5), async || {
-        session
-            .try_panes()
-            .await
-            .is_ok_and(|panes| panes.len() == 2)
+        session.panes().await.is_ok_and(|panes| panes.len() == 2)
     })
     .await
     .expect("the second pane appears");

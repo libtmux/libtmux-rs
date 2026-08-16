@@ -82,6 +82,13 @@ it is republished to pick up the licence and repository metadata.
 
 ### Changed
 
+- **Breaking.** Listing pairs swapped names: `sessions()`, `windows()`,
+  `panes()`, `clients()`, `attached_sessions()`, `linked_sessions()`,
+  `search_panes()`, and `search_windows()` now return `Result`, and the
+  collapsing form is `*_or_empty()`. A caller reaching for the obvious name
+  got a `Vec` that could not be told apart from a healthy server with nothing
+  running, which for anything that reconciles state reads an outage as an
+  instruction to delete everything.
 - `tmux-workspace` refuses a value that is present and the wrong shape
   instead of defaulting it, and names where it happened:
   `windows[0].panes[1].enter must be a boolean, found "maybe"`. `focus: "tru"`

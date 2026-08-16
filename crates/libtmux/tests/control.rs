@@ -361,7 +361,7 @@ async fn one_pane_can_be_watched_without_the_protocol_showing() {
     let session = server.new_session("streaming").await.expect("session");
 
     let window = session
-        .try_windows()
+        .windows()
         .await
         .expect("windows")
         .into_iter()
@@ -512,11 +512,11 @@ async fn detaching_a_session_removes_the_clients_attached_to_it() {
         .await
         .expect("control mode attaches");
     let (sender, events) = control.split();
-    assert_eq!(server.try_clients().await.expect("clients").len(), 1);
+    assert_eq!(server.clients().await.expect("clients").len(), 1);
 
     session.detach_clients().await.expect("clients detach");
     assert!(
-        server.try_clients().await.expect("clients").is_empty(),
+        server.clients().await.expect("clients").is_empty(),
         "the attached client is gone",
     );
 
@@ -555,7 +555,7 @@ async fn a_client_reports_the_session_window_and_pane_it_is_attached_to() {
         .expect("control mode attaches");
 
     let client = server
-        .try_clients()
+        .clients()
         .await
         .expect("clients")
         .into_iter()

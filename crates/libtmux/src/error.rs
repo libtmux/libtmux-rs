@@ -1352,7 +1352,7 @@ mod compat_tests {
 
         // A mutation against a target tmux does not have is where the wording
         // matters: it is the only signal separating this from a bad argument.
-        let mut window = session.try_windows().await.expect("windows").remove(0);
+        let mut window = session.windows().await.expect("windows").remove(0);
         let doomed = session
             .new_window(crate::NewWindowOptions::new("doomed").command("sleep 300"))
             .await

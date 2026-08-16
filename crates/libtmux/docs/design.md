@@ -151,7 +151,7 @@ tmux. Its source is not copied into the crate.
   another clone, avoiding locks and hidden shared state.
 - A real-tmux guard created unique short socket paths, exposed the exact path,
   and removed the daemon and socket on drop.
-- Lenient list access and explicit `try_*` access can coexist without making
+- Loud list access and explicit `*_or_empty` access can coexist without making
   raw command execution swallow failures.
 - A failed command at the start of a tmux semicolon chain prevents later
   commands from executing. A control-mode implementation that predicts one
@@ -573,7 +573,7 @@ a thing it can say. That is deliberate: the grammar stays per-object so it can
 later compile to tmux's own `-f`, which evaluates against one row.
 
 Cross-object questions are asked by narrowing first, which is what tmux does
-with a target: `Session::try_panes` and `Window::try_panes` choose the rows,
+with a target: `Session::panes` and `Window::panes` choose the rows,
 and the expression chooses among them. `tmux-mcp`'s `find_panes` takes both
 for exactly this reason.
 
@@ -648,7 +648,7 @@ either success or error, and delegates cancellation cleanup to the same
 independently owned supervisor used by command execution. Ordinary cloneable
 handles do not perform async side effects in `Drop`.
 
-### Errors and lenient collections
+### Errors and collapsed collections
 
 The current public `#[non_exhaustive]` `Error` enum covers Foundation server
 configuration, command input, process execution, timeouts, shutdown, version
@@ -665,16 +665,16 @@ Invalid regexes and portable wire data use the focused, source-less
 raw process output, row bytes, snapshot text, regex patterns, or serialized
 filter values.
 
-List-shaped object access follows the repository's established lenient
+List-shaped object access offers both shapes, and the short name is the loud one. What follows describes the collapsing
 contract:
 
 ```rust
-let sessions = server.sessions().await;
-let sessions = server.try_sessions().await?;
+let sessions = server.sessions_or_empty().await;
+let sessions = server.sessions().await?;
 ```
 
 The first returns an empty `Vec` when the underlying tmux list operation fails
-and records the failure through tracing when enabled. The `try_*` form returns
+and records the failure through tracing when enabled. The short form returns
 `Result<Vec<_>, Error>` and preserves command, framing, and decoding failures.
 This pair applies consistently to hierarchy collections. Expression
 construction, future explicit remote query execution, and mutations remain
@@ -976,9 +976,9 @@ not resolve it. The scope, and the request's own `-t`, are what tell them
 apart.
 
 Listing accessors come in pairs, and the split is load-bearing here. The
-lenient form returns an empty `Vec` for any failure, which suits a status
-line. The `try_` form propagates, which is the whole reason it exists -- a
-`try_` form that quietly returned no rows for an unreachable daemon would make
+`*_or_empty` form returns an empty `Vec` for any failure, which suits a status
+line. The short form propagates, which is the whole reason it exists -- a
+short form that quietly returned no rows for an unreachable daemon would make
 the pair meaningless.
 
 ## Cost of gathering the hierarchy
@@ -1445,3 +1445,21 @@ Getting there needed the failure to say more than `ShutdownFailed`, which
 named four different problems. `TestServerError` now carries the step that
 produced it, which is how a fixture on a machine the author does not have is
 debugged at all.
+
+### The short name belongs to the honest form
+
+Both halves of a listing pair existed from the start, and the short name went
+to the collapsing one: `sessions()` returned `Vec<Session>` and swallowed the
+reason, while `try_sessions()` returned `Result`.
+
+That is the wrong way round, and the reason is not taste. A Rust caller
+reaching for `sessions()` expects fallible I/O to be fallible, and gets a
+value that cannot be distinguished from a healthy server with nothing running.
+For a status line that is fine. For anything that reconciles -- a supervisor,
+a cleanup pass, a workspace builder -- "no sessions" read from an outage is an
+instruction to delete everything.
+
+So the names swapped. `sessions()` returns `Result`, and a caller who wants
+the old behaviour writes `sessions_or_empty()`, which says what it does. The
+breaking change is cheap now and would not be later, which is the argument for
+doing it during an alpha rather than after one.

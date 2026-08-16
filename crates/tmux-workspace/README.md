@@ -43,7 +43,7 @@ windows:
     let session = WorkspaceBuilder::new(guard.server()).build(&workspace).await?;
 
     assert_eq!(session.name().to_string_lossy(), "dev");
-    assert_eq!(session.try_windows().await?.len(), 1);
+    assert_eq!(session.windows().await?.len(), 1);
 
     guard.shutdown().await?;
     Ok(())
@@ -82,7 +82,7 @@ windows:
         .collect();
 
     assert!(commands[0].contains("new-session"));
-    assert_eq!(guard.server().try_sessions().await?.len(), 0, "nothing ran");
+    assert_eq!(guard.server().sessions().await?.len(), 0, "nothing ran");
 
     guard.shutdown().await?;
     Ok(())

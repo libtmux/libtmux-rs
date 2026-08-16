@@ -43,9 +43,9 @@ async fn creating_an_object_returns_it_hydrated_in_one_command() {
     assert!(pane.pid() > 0);
 
     // The server agrees with what the creating commands reported.
-    assert_eq!(server.try_sessions().await.expect("sessions").len(), 1);
-    assert_eq!(server.try_windows().await.expect("windows").len(), 2);
-    assert_eq!(server.try_panes().await.expect("panes").len(), 3);
+    assert_eq!(server.sessions().await.expect("sessions").len(), 1);
+    assert_eq!(server.windows().await.expect("windows").len(), 2);
+    assert_eq!(server.panes().await.expect("panes").len(), 3);
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -67,7 +67,7 @@ async fn creation_options_reach_tmux() {
         .await
         .expect("session is created");
 
-    let windows = session.try_windows().await.expect("windows list");
+    let windows = session.windows().await.expect("windows list");
     assert_eq!(windows[0].name().as_bytes().to_vec(), b"first".to_vec());
 
     // tmux records the requested size as the session's `default-size`, which
@@ -86,7 +86,7 @@ async fn creation_options_reach_tmux() {
         b"120x40",
     );
 
-    let panes = session.try_panes().await.expect("panes list");
+    let panes = session.panes().await.expect("panes list");
     assert_eq!(
         text(panes[0].current_path()),
         directory
@@ -184,7 +184,7 @@ async fn killing_removes_the_object_and_strands_other_handles() {
 
     session.kill().await.expect("kill succeeds");
 
-    assert_eq!(server.try_sessions().await.expect("sessions").len(), 1);
+    assert_eq!(server.sessions().await.expect("sessions").len(), 1);
     let error = stale.refresh().await.expect_err("a killed session is gone");
     assert!(matches!(
         error,
@@ -227,7 +227,7 @@ async fn unlink_removes_one_link_while_kill_removes_the_window() {
         .expect("link succeeds");
 
     let links: Vec<_> = server
-        .try_windows()
+        .windows()
         .await
         .expect("windows list")
         .into_iter()
@@ -238,7 +238,7 @@ async fn unlink_removes_one_link_while_kill_removes_the_window() {
     // Unlinking removes one edge; the window survives in the other session.
     links[0].clone().unlink().await.expect("unlink succeeds");
     let remaining: Vec<_> = server
-        .try_windows()
+        .windows()
         .await
         .expect("windows list")
         .into_iter()
@@ -254,7 +254,7 @@ async fn unlink_removes_one_link_while_kill_removes_the_window() {
     remaining[0].clone().kill().await.expect("kill succeeds");
     assert!(
         server
-            .try_windows()
+            .windows()
             .await
             .expect("windows list")
             .iter()
@@ -275,7 +275,7 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
         .await
         .expect("session is created");
     let mut pane = session
-        .try_panes()
+        .panes()
         .await
         .expect("panes list")
         .into_iter()
@@ -354,7 +354,7 @@ async fn pane_operations_reshape_the_hierarchy() {
 
     let session = server.new_session("shaping").await.expect("session");
     let window = session
-        .try_windows()
+        .windows()
         .await
         .expect("windows")
         .into_iter()
@@ -365,7 +365,7 @@ async fn pane_operations_reshape_the_hierarchy() {
         .await
         .expect("pane is created");
     let mut first = window
-        .try_panes()
+        .panes()
         .await
         .expect("panes")
         .into_iter()
@@ -384,10 +384,10 @@ async fn pane_operations_reshape_the_hierarchy() {
     assert_ne!(first.index(), before, "the pane moved");
 
     // Breaking a pane out gives it a window of its own.
-    let windows_before = session.try_windows().await.expect("windows").len();
+    let windows_before = session.windows().await.expect("windows").len();
     second.break_out().await.expect("pane is broken out");
     assert_eq!(
-        session.try_windows().await.expect("windows").len(),
+        session.windows().await.expect("windows").len(),
         windows_before + 1,
     );
 
@@ -441,7 +441,7 @@ async fn a_session_environment_is_set_read_and_removed() {
         .new_window(NewWindowOptions::new("later").command("sleep 300"))
         .await
         .expect("window");
-    let pane = window.try_panes().await.expect("panes").remove(0);
+    let pane = window.panes().await.expect("panes").remove(0);
     let seen = server
         .format(Some(&pane), "#{?#{==:#{EDITOR},},unset,set}")
         .await
@@ -493,7 +493,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
     // One window, two winlinks: the id is the same on both sides, and the
     // link reports itself as linked rather than as a copy.
     let linked = target
-        .try_windows()
+        .windows()
         .await
         .expect("windows")
         .into_iter()
@@ -521,7 +521,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
     linked.unlink().await.expect("the link is removed");
     assert!(
         !target
-            .try_windows()
+            .windows()
             .await
             .expect("windows")
             .iter()
@@ -529,7 +529,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
     );
     assert!(
         source
-            .try_windows()
+            .windows()
             .await
             .expect("windows")
             .iter()
@@ -539,7 +539,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
 
     // An index another window already holds is a refusal, not an overwrite.
     let occupied = target
-        .try_windows()
+        .windows()
         .await
         .expect("windows")
         .first()
@@ -559,7 +559,7 @@ async fn objects_are_found_by_their_tmux_identity() {
         .new_window(NewWindowOptions::new("found").command("sleep 300"))
         .await
         .expect("window");
-    let pane = window.try_panes().await.expect("panes").remove(0);
+    let pane = window.panes().await.expect("panes").remove(0);
 
     assert_eq!(
         server
@@ -631,7 +631,7 @@ async fn a_failure_says_what_to_do_about_it() {
 
     // Every object kind reports the same way, through whichever command the
     // caller happened to run.
-    let pane = session.try_panes().await.expect("panes").remove(0);
+    let pane = session.panes().await.expect("panes").remove(0);
     let stale_pane = pane.clone();
     let gone_session = session.clone();
     session.kill().await.expect("the session is killed");
@@ -644,7 +644,7 @@ async fn a_failure_says_what_to_do_about_it() {
         (
             ErrorKind::ObjectGone,
             gone_session
-                .try_windows()
+                .windows()
                 .await
                 .expect_err("the session is gone"),
         ),
@@ -682,7 +682,7 @@ async fn a_failure_says_what_to_do_about_it() {
         .socket_path("/tmp/libtmux-rs-unreachable.sock")
         .build()
         .expect("the configuration is valid")
-        .try_sessions()
+        .sessions()
         .await
         .expect_err("there is no such executable");
     assert_eq!(absent.kind(), ErrorKind::Unreachable);
@@ -725,7 +725,7 @@ async fn a_name_tmux_cannot_address_is_rejected_before_it_is_created() {
 
     // The session is nonetheless there, which is what makes this worth
     // refusing rather than letting a caller discover later.
-    assert_eq!(server.try_sessions().await.expect("sessions").len(), 1);
+    assert_eq!(server.sessions().await.expect("sessions").len(), 1);
 
     // So the type refuses those names, and keeps everything tmux can address.
     assert!(libtmux::SessionName::new("a:b").is_err());
@@ -765,7 +765,7 @@ async fn a_taken_session_name_is_classified_rather_than_a_bare_refusal() {
     assert_eq!(error.kind(), libtmux::ErrorKind::Refused);
 
     // The first session is untouched by the refusal.
-    assert_eq!(server.try_sessions().await.expect("sessions").len(), 1);
+    assert_eq!(server.sessions().await.expect("sessions").len(), 1);
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

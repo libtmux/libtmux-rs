@@ -126,7 +126,7 @@ fn a_plan_renders_what_it_can_before_it_runs() {
 
 /// How many panes the server holds, as tmux counts them.
 async fn pane_count(server: &Server) -> usize {
-    server.try_panes().await.expect("panes list").len()
+    server.panes().await.expect("panes list").len()
 }
 
 #[tokio::test]

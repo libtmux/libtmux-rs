@@ -2118,7 +2118,7 @@ async fn a_replacement_daemon_on_the_same_socket_is_a_different_generation() {
         // Same daemon: the check is a no-op.
         server.require_generation(first).await?;
         let first_pane = server
-            .try_panes()
+            .panes()
             .await?
             .first()
             .map(|pane| pane.id().to_string());
@@ -2131,7 +2131,7 @@ async fn a_replacement_daemon_on_the_same_socket_is_a_different_generation() {
         server.new_session("second").await?;
         let second = server.generation().await?;
         let second_pane = server
-            .try_panes()
+            .panes()
             .await?
             .first()
             .map(|pane| pane.id().to_string());

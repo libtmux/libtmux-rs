@@ -196,7 +196,7 @@ impl Client {
     /// # #[cfg(feature = "control-mode")]
     /// # {
     /// let control = libtmux::control::ControlMode::attach(server, session.id()).await?;
-    /// let client = server.try_clients().await?.into_iter().next().expect("one client");
+    /// let client = server.clients().await?.into_iter().next().expect("one client");
     ///
     /// let attached = client.attached_session().await?.expect("it is attached");
     /// assert_eq!(attached.id(), session.id());

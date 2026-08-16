@@ -16,7 +16,7 @@ fn a_script_can_drive_the_whole_api_without_being_async() {
         .expect("tmux starts");
     let server = guard.server();
 
-    assert!(runtime.run(server.try_sessions()).expect("list").is_empty());
+    assert!(runtime.run(server.sessions()).expect("list").is_empty());
 
     let session = runtime
         .run(server.new_session("blocking"))
@@ -27,7 +27,7 @@ fn a_script_can_drive_the_whole_api_without_being_async() {
     let window = runtime
         .run(session.new_window("work"))
         .expect("window is created");
-    assert_eq!(runtime.run(window.try_panes()).expect("panes").len(), 1);
+    assert_eq!(runtime.run(window.panes()).expect("panes").len(), 1);
 
     let found = runtime
         .run(server.session("blocking"))
@@ -57,15 +57,12 @@ fn one_runtime_serves_several_servers() {
 
     // Separate servers stay separate; the shared runtime does not merge them.
     assert_eq!(
-        runtime
-            .run(first.server().try_sessions())
-            .expect("list")
-            .len(),
+        runtime.run(first.server().sessions()).expect("list").len(),
         1
     );
     assert!(
         runtime
-            .run(second.server().try_sessions())
+            .run(second.server().sessions())
             .expect("list")
             .is_empty()
     );

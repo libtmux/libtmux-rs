@@ -97,7 +97,7 @@ windows:
     assert_eq!(text(session.name()), "dev");
     assert_eq!(session.window_count(), 2);
 
-    let windows = session.try_windows().await.expect("windows list");
+    let windows = session.windows().await.expect("windows list");
     let names: Vec<_> = windows.iter().map(|window| text(window.name())).collect();
     assert_eq!(names, ["editor", "logs"]);
     assert_eq!(windows[0].pane_count(), 2);
@@ -145,12 +145,12 @@ windows:
         .await
         .expect("workspace builds");
 
-    let windows = session.try_windows().await.expect("windows list");
+    let windows = session.windows().await.expect("windows list");
     let canonical_root = root.path().canonicalize().expect("canonical root");
     let canonical_nested = nested.canonicalize().expect("canonical nested");
 
     for (window, expected) in windows.iter().zip([canonical_root, canonical_nested]) {
-        let panes = window.try_panes().await.expect("panes list");
+        let panes = window.panes().await.expect("panes list");
         assert_eq!(
             text_optional(panes[0].current_path()),
             expected.display().to_string(),
@@ -214,7 +214,7 @@ windows:
         .await
         .expect("the workspace builds");
 
-    let windows = session.try_windows().await.expect("windows");
+    let windows = session.windows().await.expect("windows");
     let mut placed: Vec<_> = windows
         .iter()
         .map(|window| (window.index(), text(window.name())))
@@ -235,7 +235,7 @@ windows:
         .iter()
         .find(|window| window.index() == 1)
         .expect("the first window");
-    let pane = first.try_panes().await.expect("panes").remove(0);
+    let pane = first.panes().await.expect("panes").remove(0);
     assert_eq!(pane.current_command().map(text).as_deref(), Some("sleep"));
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -265,8 +265,8 @@ windows:
         .await
         .expect("the workspace builds");
 
-    let window = session.try_windows().await.expect("windows").remove(0);
-    let panes = window.try_panes().await.expect("panes");
+    let window = session.windows().await.expect("windows").remove(0);
+    let panes = window.panes().await.expect("panes");
     assert_eq!(panes.len(), 2);
 
     // The pane prints the variable it was started with, so this reads what
@@ -407,7 +407,7 @@ windows:
     );
 
     let window = session
-        .try_windows()
+        .windows()
         .await
         .expect("windows")
         .into_iter()

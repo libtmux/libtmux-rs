@@ -95,7 +95,7 @@ async fn options_are_scoped_to_the_object_that_set_them() {
         .await
         .expect("window created");
     let pane = window
-        .try_panes()
+        .panes()
         .await
         .expect("panes list")
         .into_iter()
@@ -768,7 +768,7 @@ async fn a_started_process_gets_the_server_and_session_environments_merged() {
         .await
         .expect("window created");
     let pane = window
-        .try_panes()
+        .panes()
         .await
         .expect("panes")
         .into_iter()

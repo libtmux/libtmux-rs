@@ -470,7 +470,7 @@ impl Server {
     ///
     /// This is the lenient form: a server that is not running, or any other
     /// failure of the underlying list operation, yields an empty `Vec`. Use
-    /// [`Server::try_sessions`] when the reason matters.
+    /// [`Server::sessions`] when the reason matters.
     ///
     /// # Examples
     ///
@@ -484,13 +484,13 @@ impl Server {
     /// # let socket = root.join("libtmux-doc-sessions.sock");
     /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
     /// # let _ = server.cmd(Command::new("kill-server")).await;
-    /// assert!(server.sessions().await.is_empty());
+    /// assert!(server.sessions_or_empty().await.is_empty());
     ///
     /// server
     ///     .cmd(Command::new("new-session").arg("-d").arg("-s").arg("work").arg("sleep 60"))
     ///     .await?;
     ///
-    /// let sessions = server.sessions().await;
+    /// let sessions = server.sessions_or_empty().await;
     /// assert_eq!(sessions.len(), 1);
     /// assert_eq!(sessions[0].name().as_bytes(), b"work");
     /// # let _ = server.cmd(Command::new("kill-server")).await;
@@ -500,8 +500,8 @@ impl Server {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn sessions(&self) -> Vec<Session> {
-        self.try_sessions().await.unwrap_or_else(|error| {
+    pub async fn sessions_or_empty(&self) -> Vec<Session> {
+        self.sessions().await.unwrap_or_else(|error| {
             Self::trace_lenient_listing("list-sessions", &error);
             Vec::new()
         })
@@ -512,10 +512,10 @@ impl Server {
     /// A window linked into several sessions appears once per link, so a
     /// window id can repeat. See [`Window`] for what that means for equality.
     ///
-    /// This is the lenient form; use [`Server::try_windows`] when the reason
+    /// This is the lenient form; use [`Server::windows`] when the reason
     /// for an empty result matters.
-    pub async fn windows(&self) -> Vec<Window> {
-        self.try_windows().await.unwrap_or_else(|error| {
+    pub async fn windows_or_empty(&self) -> Vec<Window> {
+        self.windows().await.unwrap_or_else(|error| {
             Self::trace_lenient_listing("list-windows", &error);
             Vec::new()
         })
@@ -527,7 +527,7 @@ impl Server {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn try_windows(&self) -> Result<Vec<Window>, Error> {
+    pub async fn windows(&self) -> Result<Vec<Window>, Error> {
         let projections = listing::windows(&self.core, listing::Scope::Server, None).await?;
 
         Ok(projections
@@ -539,9 +539,9 @@ impl Server {
     /// List every pane on the server, in tmux's own order.
     ///
     /// Panes under a linked window appear once per link, matching
-    /// [`Server::windows`].
-    pub async fn panes(&self) -> Vec<Pane> {
-        self.try_panes().await.unwrap_or_else(|error| {
+    /// [`Server::windows_or_empty`].
+    pub async fn panes_or_empty(&self) -> Vec<Pane> {
+        self.panes().await.unwrap_or_else(|error| {
             Self::trace_lenient_listing("list-panes", &error);
             Vec::new()
         })
@@ -553,7 +553,7 @@ impl Server {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn try_panes(&self) -> Result<Vec<Pane>, Error> {
+    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
         let projections = listing::panes(&self.core, listing::Scope::Server, None).await?;
 
         Ok(projections
@@ -563,8 +563,8 @@ impl Server {
     }
 
     /// List every client attached to the server, in tmux's own order.
-    pub async fn clients(&self) -> Vec<Client> {
-        self.try_clients().await.unwrap_or_else(|error| {
+    pub async fn clients_or_empty(&self) -> Vec<Client> {
+        self.clients().await.unwrap_or_else(|error| {
             Self::trace_lenient_listing("list-clients", &error);
             Vec::new()
         })
@@ -576,7 +576,7 @@ impl Server {
     ///
     /// Returns an error when the list command cannot run, or when its output
     /// cannot be decoded into snapshots.
-    pub async fn try_clients(&self) -> Result<Vec<Client>, Error> {
+    pub async fn clients(&self) -> Result<Vec<Client>, Error> {
         let infos = listing::clients(&self.core, None).await?;
 
         Ok(infos
@@ -656,10 +656,10 @@ impl Server {
 
     /// List the sessions that have at least one client attached.
     ///
-    /// This is the lenient form; use [`Server::try_attached_sessions`] when the
+    /// This is the lenient form; use [`Server::attached_sessions`] when the
     /// reason for an empty result matters.
-    pub async fn attached_sessions(&self) -> Vec<Session> {
-        self.try_attached_sessions().await.unwrap_or_else(|error| {
+    pub async fn attached_sessions_or_empty(&self) -> Vec<Session> {
+        self.attached_sessions().await.unwrap_or_else(|error| {
             Self::trace_lenient_listing("list-sessions", &error);
             Vec::new()
         })
@@ -670,8 +670,8 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when the session listing fails.
-    pub async fn try_attached_sessions(&self) -> Result<Vec<Session>, Error> {
-        let mut sessions = self.try_sessions().await?;
+    pub async fn attached_sessions(&self) -> Result<Vec<Session>, Error> {
+        let mut sessions = self.sessions().await?;
         sessions.retain(Session::is_attached);
 
         Ok(sessions)
@@ -2025,7 +2025,7 @@ impl Server {
         let name = name.as_ref();
 
         Ok(self
-            .try_sessions()
+            .sessions()
             .await?
             .into_iter()
             .find(|session| session.name() == name))
@@ -2127,7 +2127,7 @@ impl Server {
     /// Find the window with this id, through the first link that reaches it.
     ///
     /// A window linked into several sessions is returned once. Use
-    /// [`Server::windows`] when the link matters.
+    /// [`Server::windows_or_empty`] when the link matters.
     ///
     /// # Errors
     ///
@@ -2184,7 +2184,7 @@ impl Server {
         let name = name.as_ref();
 
         Ok(self
-            .try_clients()
+            .clients()
             .await?
             .into_iter()
             .find(|client| client.name() == name))
@@ -2192,7 +2192,7 @@ impl Server {
 
     /// Fetch the whole hierarchy in three commands.
     ///
-    /// Walking down with [`Server::sessions`], then each session's windows,
+    /// Walking down with [`Server::sessions_or_empty`], then each session's windows,
     /// then each window's panes costs one command per object. tmux can answer
     /// the same question with `list-sessions`, `list-windows -a`, and
     /// `list-panes -a`, so this issues three regardless of how much is
@@ -2210,7 +2210,7 @@ impl Server {
     /// Returns an error when any of the three listings fails.
     pub async fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
         let (sessions, windows, panes) =
-            tokio::try_join!(self.try_sessions(), self.try_windows(), self.try_panes(),)?;
+            tokio::try_join!(self.sessions(), self.windows(), self.panes(),)?;
 
         // Grouping is by the numeric part of each ID rather than the ID: it
         // is Copy and unique among IDs of one kind, so stitching the three
@@ -2295,7 +2295,7 @@ impl Server {
         let name = name.as_ref();
 
         Ok(self
-            .try_sessions()
+            .sessions()
             .await?
             .iter()
             .any(|session| session.name() == name))
@@ -2346,7 +2346,7 @@ impl Server {
     ///     .cmd(Command::new("new-session").arg("-d").arg("-s").arg("work").arg("sleep 60"))
     ///     .await?;
     ///
-    /// let sessions = server.try_sessions().await?;
+    /// let sessions = server.sessions().await?;
     /// assert_eq!(sessions.len(), 1);
     /// assert!(sessions[0].id().to_string().starts_with('$'));
     /// # let _ = server.cmd(Command::new("kill-server")).await;
@@ -2356,7 +2356,7 @@ impl Server {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn try_sessions(&self) -> Result<Vec<Session>, Error> {
+    pub async fn sessions(&self) -> Result<Vec<Session>, Error> {
         let infos = listing::sessions(&self.core, None).await?;
 
         Ok(infos

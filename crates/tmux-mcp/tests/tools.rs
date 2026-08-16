@@ -252,7 +252,7 @@ async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
     let tools = TmuxTools::new(server.clone());
 
     let first = session
-        .try_panes()
+        .panes()
         .await
         .expect("panes")
         .remove(0)
@@ -281,7 +281,7 @@ async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
         .await
         .expect("the split succeeds"));
 
-    let panes = session.try_panes().await.expect("panes");
+    let panes = session.panes().await.expect("panes");
     assert_eq!(panes.len(), 3);
 
     let find = |id: &str| {
@@ -344,7 +344,7 @@ async fn reading_a_pane_can_reach_past_the_visible_screen() {
     let session = server.new_session("scrolled").await.expect("session");
     let tools = TmuxTools::new(server.clone());
 
-    let pane = session.try_panes().await.expect("panes").remove(0);
+    let pane = session.panes().await.expect("panes").remove(0);
     let id = pane.id().to_string();
 
     // More lines than the screen holds, so the early ones are only reachable
@@ -403,7 +403,7 @@ async fn watching_a_pane_reports_what_capture_would_miss() {
     let tools = TmuxTools::new(server.clone());
 
     let pane = session
-        .try_panes()
+        .panes()
         .await
         .expect("panes")
         .into_iter()
@@ -778,7 +778,7 @@ async fn a_plan_runs_as_one_call_instead_of_one_call_per_step() {
 
     let sessions = guard
         .server()
-        .try_sessions()
+        .sessions()
         .await
         .expect("sessions list")
         .len();
@@ -825,7 +825,7 @@ async fn a_plan_is_refused_per_operation_when_the_tier_does_not_offer_it() {
     assert!(
         guard
             .server()
-            .try_sessions()
+            .sessions()
             .await
             .expect("sessions list")
             .is_empty(),

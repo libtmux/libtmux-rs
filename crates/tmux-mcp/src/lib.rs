@@ -1095,11 +1095,7 @@ impl TmuxTools {
         )
     )]
     pub async fn list_sessions(&self) -> Result<Json<Sessions>, ErrorData> {
-        let sessions = self
-            .server
-            .try_sessions()
-            .await
-            .map_err(|e| tmux_error(&e))?;
+        let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
         Ok(Json(Self::render_sessions(&sessions)))
     }
 
@@ -1132,11 +1128,7 @@ impl TmuxTools {
         )
     )]
     pub async fn list_windows(&self) -> Result<Json<Windows>, ErrorData> {
-        let windows = self
-            .server
-            .try_windows()
-            .await
-            .map_err(|e| tmux_error(&e))?;
+        let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
         Ok(Json(Self::render_windows(&windows)))
     }
 
@@ -1153,7 +1145,7 @@ impl TmuxTools {
         meta = always_load()
     )]
     pub async fn list_panes(&self) -> Result<Json<Panes>, ErrorData> {
-        let panes = self.server.try_panes().await.map_err(|e| tmux_error(&e))?;
+        let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(self.render_panes(&panes).await))
     }
@@ -1222,7 +1214,7 @@ impl TmuxTools {
         Parameters(SessionArgs { session }): Parameters<SessionArgs>,
     ) -> Result<Json<Windows>, ErrorData> {
         let session = self.find_session(&session).await?;
-        let windows = session.try_windows().await.map_err(|e| tmux_error(&e))?;
+        let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Self::render_windows(&windows)))
     }
@@ -1243,7 +1235,7 @@ impl TmuxTools {
         Parameters(WindowArgs { window }): Parameters<WindowArgs>,
     ) -> Result<Json<Panes>, ErrorData> {
         let window = self.find_window(&window).await?;
-        let panes = window.try_panes().await.map_err(|e| tmux_error(&e))?;
+        let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(self.render_panes(&panes).await))
     }
@@ -1396,7 +1388,7 @@ impl TmuxTools {
         let window = self.find_window(&window).await?;
         let id = window.id().to_string();
         if let Some(own) = self.own_pane().await {
-            let panes = window.try_panes().await.map_err(|e| tmux_error(&e))?;
+            let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
             if panes.iter().any(|pane| pane.id().to_string() == own) {
                 return Err(Self::self_harm("window", own));
             }
@@ -1462,7 +1454,7 @@ impl TmuxTools {
 
         let mut session = self
             .server
-            .try_sessions()
+            .sessions()
             .await
             .map_err(|e| tmux_error(&e))?
             .into_iter()
@@ -1517,9 +1509,9 @@ impl TmuxTools {
         // does not have every pane listed to answer a question about one
         // window.
         let panes = match (session.as_deref(), window.as_deref()) {
-            (_, Some(window)) => self.find_window(window).await?.try_panes().await,
-            (Some(session), None) => self.find_session(session).await?.try_panes().await,
-            (None, None) => self.server.try_panes().await,
+            (_, Some(window)) => self.find_window(window).await?.panes().await,
+            (Some(session), None) => self.find_session(session).await?.panes().await,
+            (None, None) => self.server.panes().await,
         };
         let panes = panes.map_err(|e| tmux_error(&e))?;
         let views: Vec<_> = panes.iter().matching(&expression).cloned().collect();
@@ -1736,7 +1728,7 @@ impl TmuxTools {
         let target = self.find_session(&session).await?;
         let id = target.id().to_string();
         if let Some(own) = self.own_pane().await {
-            let panes = target.try_panes().await.map_err(|e| tmux_error(&e))?;
+            let panes = target.panes().await.map_err(|e| tmux_error(&e))?;
             if panes.iter().any(|pane| pane.id().to_string() == own) {
                 return Err(Self::self_harm("session", own));
             }
@@ -1949,7 +1941,7 @@ impl TmuxTools {
                 let panes = self
                     .find_window(target.window_id().as_ref())
                     .await?
-                    .try_panes()
+                    .panes()
                     .await
                     .map_err(|e| tmux_error(&e))?;
                 let at = panes
@@ -2202,9 +2194,9 @@ impl TmuxTools {
         // Narrowed with tmux's own scoping first, so searching one window does
         // not read every pane on the server.
         let panes = match (session.as_deref(), window.as_deref()) {
-            (_, Some(window)) => self.find_window(window).await?.try_panes().await,
-            (Some(session), None) => self.find_session(session).await?.try_panes().await,
-            (None, None) => self.server.try_panes().await,
+            (_, Some(window)) => self.find_window(window).await?.panes().await,
+            (Some(session), None) => self.find_session(session).await?.panes().await,
+            (None, None) => self.server.panes().await,
         };
         let panes = panes.map_err(|e| tmux_error(&e))?;
 
@@ -2384,7 +2376,7 @@ impl TmuxTools {
                 let target = target.ok_or_else(|| needs("session"))?;
                 let session = self
                     .server
-                    .try_sessions()
+                    .sessions()
                     .await
                     .map_err(|e| tmux_error(&e))?
                     .into_iter()
@@ -2771,11 +2763,7 @@ impl TmuxTools {
 
         match target {
             Target::Server => {
-                let sessions = self
-                    .server
-                    .try_sessions()
-                    .await
-                    .map_err(|e| tmux_error(&e))?;
+                let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
                 resources::json(
                     uri,
                     &ServerView {
@@ -2789,23 +2777,15 @@ impl TmuxTools {
                 )
             }
             Target::Sessions => {
-                let sessions = self
-                    .server
-                    .try_sessions()
-                    .await
-                    .map_err(|e| tmux_error(&e))?;
+                let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
                 resources::json(uri, &Self::render_sessions(&sessions))
             }
             Target::Windows => {
-                let windows = self
-                    .server
-                    .try_windows()
-                    .await
-                    .map_err(|e| tmux_error(&e))?;
+                let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
                 resources::json(uri, &Self::render_windows(&windows))
             }
             Target::Panes => {
-                let panes = self.server.try_panes().await.map_err(|e| tmux_error(&e))?;
+                let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
                 resources::json(uri, &self.render_panes(&panes).await)
             }
             Target::Session(name) => {
@@ -2819,12 +2799,12 @@ impl TmuxTools {
             }
             Target::SessionWindows(name) => {
                 let session = self.find_session(&name).await?;
-                let windows = session.try_windows().await.map_err(|e| tmux_error(&e))?;
+                let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
                 resources::json(uri, &Self::render_windows(&windows))
             }
             Target::Window(name, index) => {
                 let session = self.find_session(&name).await?;
-                let windows = session.try_windows().await.map_err(|e| tmux_error(&e))?;
+                let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
                 let window = windows
                     .into_iter()
                     .find(|window| window.index().to_string() == index)
@@ -2856,7 +2836,7 @@ impl TmuxTools {
     /// Resolve a window id, reporting an unknown one as invalid input.
     async fn find_window(&self, id: &str) -> Result<libtmux::Window, ErrorData> {
         self.server
-            .try_windows()
+            .windows()
             .await
             .map_err(|e| tmux_error(&e))?
             .into_iter()
@@ -2867,7 +2847,7 @@ impl TmuxTools {
     /// Resolve a pane id, reporting an unknown one as invalid input.
     async fn find_pane(&self, id: &str) -> Result<libtmux::Pane, ErrorData> {
         self.server
-            .try_panes()
+            .panes()
             .await
             .map_err(|e| tmux_error(&e))?
             .into_iter()
@@ -2878,7 +2858,7 @@ impl TmuxTools {
     /// Resolve a session by name, reporting an unknown one as invalid input.
     async fn find_session(&self, name: &str) -> Result<libtmux::Session, ErrorData> {
         self.server
-            .try_sessions()
+            .sessions()
             .await
             .map_err(|e| tmux_error(&e))?
             .into_iter()

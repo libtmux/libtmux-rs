@@ -51,10 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("captured {output} lines");
-    assert!(
-        server.try_sessions().await?.is_empty(),
-        "the scope cleaned up"
-    );
+    assert!(server.sessions().await?.is_empty(), "the scope cleaned up");
 
     server.shutdown().await?;
     Ok(())

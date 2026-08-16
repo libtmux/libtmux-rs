@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     pane.send_keys("echo built").await?;
     pane.send_key_names(["Enter"]).await?;
 
-    assert_eq!(server.try_sessions().await?.len(), 1);
+    assert_eq!(server.sessions().await?.len(), 1);
 
     guard.shutdown().await?;
     Ok(())
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = guard.server();
     server.new_session("work").await?;
 
-    let panes = server.try_panes().await?;
+    let panes = server.panes().await?;
     let fields = libtmux::Pane::filter_fields();
 
     // `pane_active` is a flag, so `.eq(true)` compiles; `.gt(..)` would not.

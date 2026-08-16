@@ -26,7 +26,7 @@ async fn populate(server: &libtmux::Server) {
         .await
         .expect("session");
     build
-        .try_windows()
+        .windows()
         .await
         .expect("windows")
         .remove(0)
@@ -217,7 +217,7 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
         .await
         .expect("session");
 
-    let sessions = server.try_sessions().await.expect("sessions");
+    let sessions = server.sessions().await.expect("sessions");
     let fields = Session::filter_fields();
     let named = |expression: &libtmux::query::FilterExpr<Session>| {
         let mut names: Vec<_> = sessions
@@ -253,7 +253,7 @@ async fn a_numeric_field_compares_by_order_as_well_as_by_value() {
             .expect("window");
     }
 
-    let sessions = server.try_sessions().await.expect("sessions");
+    let sessions = server.sessions().await.expect("sessions");
     let over_nine: Vec<_> = sessions
         .iter()
         .matching(&fields.session_windows.gt(9_u32))

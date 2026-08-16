@@ -129,12 +129,12 @@ async fn walking_down_costs_a_command_for_every_step() {
     // it is what the traversal API does, and it is the right shape when a
     // caller wants one branch rather than the whole tree.
     counter.reset();
-    let sessions = server.try_sessions().await.expect("sessions");
+    let sessions = server.sessions().await.expect("sessions");
     let mut windows = 0;
     for session in &sessions {
-        for window in session.try_windows().await.expect("windows") {
+        for window in session.windows().await.expect("windows") {
             windows += 1;
-            let _ = window.try_panes().await.expect("panes");
+            let _ = window.panes().await.expect("panes");
         }
     }
     let walked = counter.commands();
