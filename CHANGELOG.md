@@ -36,6 +36,13 @@ full.
 - `pane_unseen_changes`, closing a `missing` row in the format ledger. tmux
   3.4 and newer.
 
+- `tmux-mcp` runs commands in the background: `start_command` returns a job id
+  at once, `job_status` reports the exit status and only what is new since the
+  cursor it gave you, `list_jobs` and `cancel_job` manage them. A ten-minute
+  build no longer costs an agent its turn, and several can run at once.
+- `tmux-mcp` gains `wait_for_idle`, for when a caller cannot name what success
+  looks like -- a TUI settling, a prompt glyph no regex predicts.
+
 ### Fixed
 
 - `Pane::stream_output` read and discarded every other pane's output. It now

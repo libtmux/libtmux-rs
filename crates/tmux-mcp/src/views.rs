@@ -320,3 +320,21 @@ pub struct ServerKilled {
     /// Always true; the call fails rather than reporting false.
     pub killed: bool,
 }
+
+/// Every background command this server holds.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct JobList {
+    /// The jobs, newest first.
+    pub jobs: Vec<crate::jobs::JobView>,
+}
+
+/// A background command that was stopped.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct JobCancelled {
+    /// The job that was forgotten.
+    pub job: String,
+    /// The pane it was running in.
+    pub pane: String,
+    /// Whether an interrupt was sent, which it is not for a finished job.
+    pub interrupted: bool,
+}

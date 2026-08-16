@@ -180,7 +180,12 @@ async fn every_tool_advertises_a_description_and_a_schema() {
 ///
 /// Kept beside the test rather than inside it so the list stays readable as
 /// tools are added; the test checks it covers everything the server offers.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one call per tool, and the list is the point"
+)]
 fn every_call(
+    job: &str,
     pane: &str,
     window: &str,
     spare: &str,
@@ -287,6 +292,17 @@ fn every_call(
             "create_session",
             json!({"name": "another", "start_directory": "/tmp"}),
         ),
+        (
+            "start_command",
+            json!({"pane": pane, "command": "sleep 30"}),
+        ),
+        ("job_status", json!({"job": job, "cursor": 0, "seconds": 0})),
+        ("list_jobs", json!({})),
+        ("cancel_job", json!({"job": job})),
+        (
+            "wait_for_idle",
+            json!({"pane": pane, "quiet_seconds": 1, "seconds": 2}),
+        ),
         ("kill_server", json!({})),
     ]
 }
@@ -327,7 +343,19 @@ async fn every_tool_accepts_the_arguments_its_schema_describes() {
     wire.json("create_session", json!({"name": "spare-session"}))
         .await;
 
-    let calls = every_call(&pane, &window, &spare, &doomed_window);
+    // Started here rather than in the list, because the job tools need an id
+    // that exists and the list is built before any of it runs.
+    let job = wire
+        .json(
+            "start_command",
+            json!({"pane": pane, "command": "sleep 30"}),
+        )
+        .await["job"]
+        .as_str()
+        .expect("a job id")
+        .to_owned();
+
+    let calls = every_call(&job, &pane, &window, &spare, &doomed_window);
 
     // A list of calls rots the moment a tool is added without one, and a
     // rotted list looks exactly like a passing test. So the list is checked
@@ -378,14 +406,17 @@ const READING: &[&str] = &[
     "capture_since",
     "watch_pane",
     "wait_for_text",
+    "wait_for_idle",
     "wait_for_channel",
+    "job_status",
+    "list_jobs",
 ];
 
 /// The tools that destroy work.
 const DESTRUCTIVE: &[&str] = &["kill_pane", "kill_window", "kill_session", "kill_server"];
 
 /// The tools that put the caller's own payload into a live terminal.
-const OPEN_WORLD: &[&str] = &["send_keys", "run_command"];
+const OPEN_WORLD: &[&str] = &["send_keys", "run_command", "start_command"];
 
 #[tokio::test]
 async fn every_tool_declares_what_it_does_to_the_server() {

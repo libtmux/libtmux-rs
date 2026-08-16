@@ -54,6 +54,8 @@ pub enum Outcome {
     /// control-mode connection is released here instead of being held for
     /// the rest of the caller's deadline.
     Cancelled,
+    /// The pane went quiet for as long as the caller asked.
+    Idle,
     /// The pane never acknowledged the command.
     ///
     /// The keys were sent but the opening sentinel never came back. That is
@@ -107,6 +109,24 @@ pub struct WaitView {
     /// caller to wait out the deadline wondering.
     pub present_at_entry: bool,
     /// What the pane wrote, with escape sequences removed.
+    pub text: String,
+    /// How many bytes arrived, before filtering or truncation.
+    pub bytes: usize,
+}
+
+/// What a pane did while it was watched for quiet.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct IdleView {
+    /// The pane that was watched.
+    pub pane: String,
+    /// How the wait finished.
+    pub outcome: Outcome,
+    /// How long the pane was quiet for, in seconds.
+    ///
+    /// Equal to what was asked for when the outcome is `idle`, and how long
+    /// the last gap was when the deadline arrived first.
+    pub quiet_seconds: u64,
+    /// What the pane wrote while waiting, with escape sequences removed.
     pub text: String,
     /// How many bytes arrived, before filtering or truncation.
     pub bytes: usize,
@@ -185,6 +205,70 @@ pub(crate) async fn run_command(
     suppress_history: bool,
     cancelled: &CancellationToken,
 ) -> Result<RunView, Error> {
+    let mut run = start_run(pane, command, suppress_history).await?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut outcome = Outcome::Deadline;
+
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            // Checked first so a request cancelled while output is already
+            // waiting still stops, rather than reading one more chunk.
+            () = cancelled.cancelled() => {
+                outcome = Outcome::Cancelled;
+                break;
+            }
+            chunk = tokio::time::timeout_at(deadline, run.output.next_chunk()) => chunk,
+        };
+        match chunk {
+            Ok(Some(chunk)) => {
+                if let Some(mut view) = run.scanner.push(&chunk) {
+                    view.pane = run.output.pane().to_string();
+                    // Shutting down is what distinguishes a connection that
+                    // broke from one that closed, so its failure is this
+                    // call's failure.
+                    run.output.shutdown().await?;
+                    return Ok(view);
+                }
+            }
+            Ok(None) => {
+                outcome = Outcome::PaneClosed;
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+
+    let view = run.scanner.unfinished(outcome, run.pane.clone());
+    run.output.shutdown().await?;
+
+    Ok(view)
+}
+
+/// A command that has been sent to a pane and is being watched.
+///
+/// Held so a caller can decide how long to read for -- to a deadline, as
+/// `run_command` does, or until it ends, as a background job does.
+pub(crate) struct Run {
+    output: libtmux::control::PaneOutput,
+    scanner: Scanner,
+    pane: String,
+}
+
+/// Send a command to a pane, bracketed by the sentinels that delimit it.
+///
+/// Returns once the keys are away and the connection is open. Nothing has been
+/// read yet, so nothing has been missed: the stream was attached first.
+///
+/// # Errors
+///
+/// Returns an error when the pane cannot be watched or the keys cannot be
+/// sent.
+pub(crate) async fn start_run(
+    pane: &Pane,
+    command: &str,
+    suppress_history: bool,
+) -> Result<Run, Error> {
     let nonce = format!(
         "{:x}{:x}",
         std::process::id(),
@@ -194,7 +278,7 @@ pub(crate) async fn run_command(
     let closed = format!("\x1b_{nonce}e;").into_bytes();
 
     // Attached before the keys are sent, so no output can arrive unseen.
-    let mut output = pane.stream_output().await?;
+    let output = pane.stream_output().await?;
 
     // The command runs in a subshell: a bare `exit` in it would otherwise end
     // the pane's own shell. A leading space is how `suppress_history` keeps
@@ -207,41 +291,111 @@ pub(crate) async fn run_command(
     pane.send_keys(payload).await?;
     pane.send_key_names(["Enter"]).await?;
 
-    let mut scanner = Scanner::new(opened, closed);
+    Ok(Run {
+        output,
+        scanner: Scanner::new(opened, closed),
+        pane: pane.id().to_string(),
+    })
+}
+
+impl Run {
+    /// Read until the command ends or the pane closes, publishing as it goes.
+    ///
+    /// `publish` receives the command's output so far and how many bytes were
+    /// dropped from the front of it, so a poller sees progress rather than
+    /// only the answer.
+    pub(crate) async fn collect(mut self, mut publish: impl FnMut(&[u8], u64)) -> RunView {
+        while let Some(chunk) = self.output.next_chunk().await {
+            let finished = self.scanner.push(&chunk);
+            publish(self.scanner.body(), self.scanner.body_dropped());
+
+            if let Some(mut view) = finished {
+                view.pane = self.pane.clone();
+                let _ = self.output.shutdown().await;
+                return view;
+            }
+        }
+
+        let view = self
+            .scanner
+            .unfinished(Outcome::PaneClosed, self.pane.clone());
+        let _ = self.output.shutdown().await;
+        view
+    }
+}
+
+/// Watch a pane until it stops writing for `quiet`, or time runs out.
+///
+/// The complement of [`wait_for_text`], for the case where a caller cannot
+/// name what success looks like: a TUI finishing its redraw, an installer
+/// settling, a prompt whose glyph nobody can predict. Reads the same stream,
+/// so it measures what the program wrote rather than what the screen shows.
+///
+/// # Errors
+///
+/// Returns an error when the pane cannot be watched.
+pub(crate) async fn wait_for_idle(
+    pane: &Pane,
+    quiet: Duration,
+    timeout: Duration,
+    cancelled: &CancellationToken,
+) -> Result<IdleView, Error> {
+    let mut output = pane.stream_output().await?;
+
+    let mut filter = TextFilter::new();
+    let mut text: Vec<u8> = Vec::new();
+    let mut bytes = 0usize;
     let mut outcome = Outcome::Deadline;
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut last_wrote = tokio::time::Instant::now();
 
     loop {
+        // Whichever comes first: the caller's deadline, or the pane having
+        // been quiet long enough.
+        let quiet_at = last_wrote + quiet;
+        let until = quiet_at.min(deadline);
+
         let chunk = tokio::select! {
             biased;
-            // Checked first so a request cancelled while output is already
-            // waiting still stops, rather than reading one more chunk.
             () = cancelled.cancelled() => {
                 outcome = Outcome::Cancelled;
                 break;
             }
-            chunk = tokio::time::timeout_at(deadline, output.next_chunk()) => chunk,
+            chunk = tokio::time::timeout_at(until, output.next_chunk()) => chunk,
         };
         match chunk {
             Ok(Some(chunk)) => {
-                if let Some(mut view) = scanner.push(&chunk) {
-                    view.pane = output.pane().to_string();
-                    // Shutting down is what distinguishes a connection that
-                    // broke from one that closed, so its failure is this
-                    // call's failure.
-                    output.shutdown().await?;
-                    return Ok(view);
+                bytes = bytes.saturating_add(chunk.len());
+                filter.push(&chunk, &mut text);
+                last_wrote = tokio::time::Instant::now();
+
+                if text.len() > OUTPUT_LIMIT {
+                    let excess = text.len() - OUTPUT_LIMIT;
+                    text.drain(..excess);
                 }
             }
             Ok(None) => {
                 outcome = Outcome::PaneClosed;
                 break;
             }
-            Err(_) => break,
+            // Nothing arrived before `until`. Which deadline that was decides
+            // whether the pane went quiet or the caller ran out of time.
+            Err(_) => {
+                if quiet_at <= deadline {
+                    outcome = Outcome::Idle;
+                }
+                break;
+            }
         }
     }
 
-    let view = scanner.unfinished(outcome, pane.id().to_string());
+    let view = IdleView {
+        pane: pane.id().to_string(),
+        outcome,
+        quiet_seconds: last_wrote.elapsed().as_secs(),
+        text: String::from_utf8_lossy(&text).into_owned(),
+        bytes,
+    };
     output.shutdown().await?;
 
     Ok(view)
@@ -264,6 +418,11 @@ struct Scanner {
     /// the block can arrive in a later chunk, and by then the sentinel sits
     /// behind everything newly scanned.
     close_at: Option<usize>,
+    /// Where the command's own output begins, once the opening sentinel has
+    /// arrived. An index into `collected`, moved when the front is trimmed.
+    body_at: Option<usize>,
+    /// How many bytes of the command's output trimming has dropped.
+    body_dropped: u64,
     bytes: usize,
     truncated: bool,
 }
@@ -276,6 +435,8 @@ impl Scanner {
             collected: Vec::new(),
             scanned: 0,
             close_at: None,
+            body_at: None,
+            body_dropped: 0,
             bytes: 0,
             truncated: false,
         }
@@ -285,6 +446,10 @@ impl Scanner {
     fn push(&mut self, chunk: &[u8]) -> Option<RunView> {
         self.bytes = self.bytes.saturating_add(chunk.len());
         self.collected.extend_from_slice(chunk);
+
+        if self.body_at.is_none() {
+            self.body_at = find(&self.collected, &self.opened).map(|at| at + self.opened.len());
+        }
 
         if self.close_at.is_none() {
             // Scanning forward only, with an overlap wide enough that a
@@ -303,6 +468,12 @@ impl Scanner {
                 self.collected.drain(..excess);
                 self.scanned = self.scanned.saturating_sub(excess);
                 self.truncated = true;
+                if let Some(body_at) = self.body_at {
+                    // Trimming eats the command's output only once it has
+                    // eaten everything before it.
+                    self.body_dropped += excess.saturating_sub(body_at) as u64;
+                    self.body_at = Some(body_at.saturating_sub(excess));
+                }
             }
         }
 
@@ -311,6 +482,23 @@ impl Scanner {
         view.bytes = self.bytes;
         view.truncated = self.truncated;
         Some(view)
+    }
+
+    /// The command's own output so far, between the sentinels.
+    ///
+    /// Empty until the opening sentinel arrives, which is what separates the
+    /// shell's echo of the typed line from what the command wrote.
+    fn body(&self) -> &[u8] {
+        let Some(from) = self.body_at else {
+            return &[];
+        };
+        let to = self.close_at.unwrap_or(self.collected.len());
+        self.collected.get(from..to).unwrap_or_default()
+    }
+
+    /// How many bytes of the command's output were dropped to bound memory.
+    const fn body_dropped(&self) -> u64 {
+        self.body_dropped
     }
 
     /// Report a run that stopped without completing.
@@ -474,7 +662,7 @@ pub(crate) async fn wait_for_text(
 }
 
 /// Render collected bytes as text, with escape sequences removed.
-fn readable(bytes: &[u8]) -> String {
+pub(crate) fn readable(bytes: &[u8]) -> String {
     let mut filter = TextFilter::new();
     let mut out = Vec::new();
     filter.push(bytes, &mut out);

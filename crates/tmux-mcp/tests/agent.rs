@@ -1637,3 +1637,225 @@ async fn capture_since_says_so_when_output_outran_the_buffer() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// The point of a job is that starting one costs nothing, so the test asserts
+/// on time as well as on the answer: a ten-second command must not hold the
+/// call that starts it.
+#[tokio::test]
+async fn starting_a_job_returns_before_the_command_finishes() {
+    let (guard, tools, pane) = typing_fixture("jobs-return").await;
+
+    let began = std::time::Instant::now();
+    let started = json(
+        tools
+            .start_command(args(serde_json::json!({
+                "pane": pane,
+                "command": "sleep 10; echo finished-at-last",
+            })))
+            .await
+            .expect("the job starts"),
+    );
+    let elapsed = began.elapsed();
+
+    assert_eq!(started["state"], "running");
+    assert_eq!(started["pane"], pane.as_str());
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "starting a ten-second command took {elapsed:?}",
+    );
+
+    let job = started["job"].as_str().expect("a job id").to_owned();
+    let listed = json(tools.list_jobs().await.expect("jobs list"));
+    assert_eq!(listed["jobs"][0]["job"], job.as_str());
+
+    // Cancelling interrupts the pane rather than leaving it busy.
+    let cancelled = json(
+        tools
+            .cancel_job(args(serde_json::json!({"job": job})))
+            .await
+            .expect("the job cancels"),
+    );
+    assert_eq!(cancelled["interrupted"], true);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A job reports the same exit status `run_command` would, and its cursor
+/// returns only what is new -- which is what makes polling cheap.
+#[tokio::test]
+async fn a_job_reports_its_status_and_only_what_is_new() {
+    let (guard, tools, pane) = typing_fixture("jobs-status").await;
+
+    let job = json(
+        tools
+            .start_command(args(serde_json::json!({
+                "pane": pane,
+                "command": "echo first-line; sleep 1; echo second-line; exit 3",
+            })))
+            .await
+            .expect("the job starts"),
+    )["job"]
+        .as_str()
+        .expect("a job id")
+        .to_owned();
+
+    // Waiting returns when the job ends, not at the deadline.
+    let began = std::time::Instant::now();
+    let finished = json(
+        tools
+            .job_status(args(serde_json::json!({"job": job, "seconds": 30})))
+            .await
+            .expect("the job reports"),
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(25),
+        "waiting ran to its deadline rather than to the job's end",
+    );
+
+    assert_eq!(finished["state"], "finished");
+    assert_eq!(finished["exit_status"], 3);
+    assert_eq!(finished["complete"], true);
+    let output = finished["output"].as_str().expect("output is a string");
+    assert!(output.contains("first-line"), "output was {output:?}");
+    assert!(output.contains("second-line"), "output was {output:?}");
+    assert!(
+        !output.contains("echo first-line"),
+        "the shell's echo of the typed line is not the command's output: {output:?}",
+    );
+
+    // The cursor it handed back returns nothing further.
+    let cursor = finished["cursor"].as_u64().expect("a cursor");
+    let again = json(
+        tools
+            .job_status(args(serde_json::json!({"job": job, "cursor": cursor})))
+            .await
+            .expect("the job reports again"),
+    );
+    assert_eq!(again["output"], "");
+    assert_eq!(again["exit_status"], 3);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Several jobs at once is the case a blocking call cannot serve at all.
+#[tokio::test]
+async fn jobs_run_in_several_panes_at_once() {
+    let (guard, tools) = fixture("jobs-parallel").await;
+
+    let first = panes(&tools).await[0]["id"]
+        .as_str()
+        .expect("a pane id")
+        .to_owned();
+    let second = id(tools
+        .split_pane(args(serde_json::json!({"pane": first})))
+        .await
+        .expect("the pane splits"));
+    prompt_ready(guard.server(), &first).await;
+    prompt_ready(guard.server(), &second).await;
+
+    let mut jobs = Vec::new();
+    for (pane, marker) in [(&first, "from-one"), (&second, "from-two")] {
+        jobs.push(
+            json(
+                tools
+                    .start_command(args(serde_json::json!({
+                        "pane": pane,
+                        "command": format!("sleep 1; echo {marker}"),
+                    })))
+                    .await
+                    .expect("the job starts"),
+            )["job"]
+                .as_str()
+                .expect("a job id")
+                .to_owned(),
+        );
+    }
+
+    for (job, marker) in jobs.iter().zip(["from-one", "from-two"]) {
+        let done = json(
+            tools
+                .job_status(args(serde_json::json!({"job": job, "seconds": 30})))
+                .await
+                .expect("the job reports"),
+        );
+        assert_eq!(done["state"], "finished", "job {job} finished");
+        assert!(
+            done["output"].as_str().expect("output").contains(marker),
+            "job {job} carried its own output",
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A job id this server does not hold is stale, not bad input: the fix is to
+/// list again, and an agent decides that from the classification.
+#[tokio::test]
+async fn an_unknown_job_is_reported_as_stale() {
+    let (guard, tools) = fixture("jobs-unknown").await;
+
+    let Err(error) = tools
+        .job_status(args(serde_json::json!({"job": "job-does-not-exist"})))
+        .await
+    else {
+        panic!("an unknown job fails");
+    };
+
+    let data = error.data.expect("the failure carries data");
+    assert_eq!(data["kind"], "object_gone");
+    assert_eq!(data["retryable"], false);
+    assert_eq!(data["stale"], true);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Waiting for quiet is what a caller reaches for when it cannot name the
+/// text that means success, so the test proves both halves: a pane that
+/// settles is reported idle, and one that keeps writing is not.
+#[tokio::test]
+async fn waiting_for_quiet_distinguishes_a_settled_pane_from_a_busy_one() {
+    let (guard, tools, pane) = typing_fixture("idle").await;
+
+    // A pane at a prompt is already quiet.
+    let settled = json(
+        tools
+            .wait_for_idle(
+                args(serde_json::json!({"pane": pane, "quiet_seconds": 1, "seconds": 20})),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("the wait runs"),
+    );
+    assert_eq!(settled["outcome"], "idle");
+    assert_eq!(settled["pane"], pane.as_str());
+
+    // A pane writing steadily never goes quiet, so the deadline arrives first.
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "while true; do printf 'still-working '; sleep 0.2; done",
+            "enter": true,
+        })))
+        .await
+        .expect("keys are sent");
+
+    let busy = json(
+        tools
+            .wait_for_idle(
+                args(serde_json::json!({"pane": pane, "quiet_seconds": 2, "seconds": 5})),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("the wait runs"),
+    );
+    assert_eq!(busy["outcome"], "deadline");
+    assert!(
+        busy["text"]
+            .as_str()
+            .expect("text is a string")
+            .contains("still-working"),
+        "what the pane wrote comes back with the answer",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

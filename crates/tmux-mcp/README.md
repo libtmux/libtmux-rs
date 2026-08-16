@@ -206,15 +206,16 @@ you want the tools that destroy work; see below.
 
 ## What it offers
 
-Thirty-one tools. Each says what it does to the server, so a client can decide
-what to run unattended and what to put in front of you.
+Thirty-seven tools. Each says what it does to the server, so a client can
+decide what to run unattended and what to put in front of you.
 
 | | Tools |
 |---|---|
 | **Look** | `list_sessions`, `list_windows`, `list_panes`, `list_session_windows`, `list_window_panes`, `describe` |
 | **Read a pane** | `capture_pane`, `snapshot_pane`, `capture_since`, `watch_pane`, `search_panes` |
 | **Find** | `find_panes`, `find_sessions` |
-| **Run and wait** | `run_command`, `send_keys`, `wait_for_text`, `wait_for_channel`, `signal_channel` |
+| **Run and wait** | `run_command`, `send_keys`, `wait_for_text`, `wait_for_idle`, `wait_for_channel`, `signal_channel` |
+| **Run in the background** | `start_command`, `job_status`, `list_jobs`, `cancel_job` |
 | **Arrange** | `create_session`, `new_window`, `split_pane`, `select_pane`, `select_window`, `resize_pane`, `rename` |
 | **Configure** | `show_option`, `set_option` |
 | **Destroy** | `kill_pane`, `kill_window`, `kill_session`, `kill_server` |
@@ -257,7 +258,7 @@ Three tiers, also settable with `TMUX_MCP_SAFETY`:
 
 | Tier | Offers |
 |---|---|
-| `readonly` | The 16 tools that change nothing |
+| `readonly` | The 19 tools that change nothing |
 | `mutating` | The default: everything except the four that destroy work |
 | `destructive` | Everything |
 
@@ -309,10 +310,18 @@ Reaching the deadline ends the waiting, not the command, so the answer says
 `deadline` and the pane is still busy — send `C-c` with `send_keys` and
 `keys: ["C-c"]` to stop it.
 
+**Running something slow.** `start_command` returns a job id immediately and
+collects the answer whether or not anyone is waiting, so a ten-minute build
+does not cost an agent its turn. `job_status` reports the exit status once
+there is one, and returns only what the command has written since the cursor
+it gave you last. Several can run at once, in different panes.
+
 **Waiting for something you did not start.** `wait_for_text` watches the
 pane's output stream for a pattern, with stop patterns for the failures you
 already know. Because it reads the stream rather than polling the screen, a
-line that scrolls past between looks is still seen.
+line that scrolls past between looks is still seen. When you cannot name what
+success looks like -- a TUI settling, a prompt glyph you cannot predict --
+`wait_for_idle` waits for the pane to stop writing instead.
 
 **Following a pane over several turns.** `capture_since` returns only what is
 new since the cursor it gave you last time, and says `missed: true` if

@@ -81,6 +81,7 @@ pub mod resources;
 
 mod caller;
 mod exec;
+mod jobs;
 mod tail;
 mod text;
 mod views;
@@ -109,6 +110,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 
 use exec::Patterns;
+use jobs::Jobs;
 use tail::Tails;
 
 /// A tmux server presented as MCP tools.
@@ -127,6 +129,8 @@ pub struct TmuxTools {
     socket: Arc<OnceLock<Option<PathBuf>>>,
     /// Live per-pane output, for `capture_since`.
     tails: Arc<Tails>,
+    /// Commands still running, for `job_status`.
+    jobs: Arc<Jobs>,
     /// The recipes this server offers alongside its tools.
     prompt_router: rmcp::handler::server::router::prompt::PromptRouter<Self>,
     /// The tools this server offers, after the tier has taken its cut.
@@ -199,7 +203,10 @@ const INSTRUCTIONS: &str = concat!(
      several turns.",
     // The habit worth breaking before it starts.
     "\n\nWAIT, DO NOT POLL: run_command runs something and reports its exit \
-     status. wait_for_text watches for output you did not author. \
+     status. start_command does the same without holding the call, for \
+     anything slow or for several at once; poll it with job_status. \
+     wait_for_text watches for output you did not author, and wait_for_idle \
+     waits for a pane to go quiet when you cannot name what to look for. \
      capture_since returns only what is new since your last look. Reading \
      capture_pane in a loop is slower and misses whatever scrolled past \
      between reads.",
@@ -362,6 +369,7 @@ impl Builder {
             safety: self.safety,
             socket: Arc::new(OnceLock::new()),
             tails: Arc::new(Tails::new()),
+            jobs: Arc::new(Jobs::new()),
             tool_router: router,
             prompt_router: TmuxTools::prompt_router(),
         }
@@ -485,6 +493,23 @@ impl TmuxTools {
             ),
         )]
     }
+}
+
+/// Report a job id this server does not hold.
+///
+/// Classified `stale` rather than as bad input: a job is forgotten when it
+/// ages out, so listing again is what helps, not a different argument.
+fn unknown_job(job: &str) -> ErrorData {
+    let mut data = serde_json::Map::new();
+    data.insert("kind".into(), "object_gone".into());
+    data.insert("retryable".into(), false.into());
+    data.insert("stale".into(), true.into());
+
+    ErrorData::new(
+        rmcp::model::ErrorCode::INVALID_PARAMS,
+        format!("no job {job}; it finished long enough ago to be forgotten, or never existed"),
+        Some(serde_json::Value::Object(data)),
+    )
 }
 
 /// Marks a tool a client should keep loaded rather than defer.
@@ -844,6 +869,56 @@ pub struct RunCommandArgs {
     /// Whether to keep the command out of the shell's history.
     #[serde(default)]
     pub suppress_history: bool,
+}
+
+/// Arguments for starting a command that outlives this call.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StartCommandArgs {
+    /// The `%`-prefixed pane to run in.
+    pub pane: String,
+    /// The shell command to run.
+    ///
+    /// It runs inside a subshell, so several lines are fine and a bare `exit`
+    /// does not end the pane's own shell.
+    pub command: String,
+    /// Whether to keep the command out of the shell's history.
+    #[serde(default)]
+    pub suppress_history: bool,
+}
+
+/// Arguments for asking how a background command is getting on.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct JobStatusArgs {
+    /// The job id `start_command` returned.
+    pub job: String,
+    /// The cursor from the previous call, to read only what is new.
+    ///
+    /// Omit it to read the command's output from the beginning.
+    pub cursor: Option<u64>,
+    /// Seconds to wait for the job to finish before answering.
+    ///
+    /// Omitted or zero answers immediately, which is the cheap poll. A value
+    /// here returns as soon as the job ends rather than at the deadline, so
+    /// waiting costs nothing when the job was already over.
+    pub seconds: Option<u64>,
+}
+
+/// Arguments for stopping a background command.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CancelJobArgs {
+    /// The job id `start_command` returned.
+    pub job: String,
+}
+
+/// Arguments for waiting until a pane goes quiet.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WaitForIdleArgs {
+    /// The `%`-prefixed pane to watch.
+    pub pane: String,
+    /// How many seconds of silence count as quiet. Defaults to 2.
+    pub quiet_seconds: Option<u64>,
+    /// How long to allow in total, in seconds. Defaults to 30, capped at 600.
+    pub seconds: Option<u64>,
 }
 
 /// Arguments for waiting until a pane says something.
@@ -2461,6 +2536,177 @@ impl TmuxTools {
         )
         .await
         .map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(view))
+    }
+
+    /// Start a command without waiting for it.
+    #[tool(
+        description = "Start a shell command in a pane and return at once with a job id, \
+                       instead of holding this call until it finishes. Use this for anything \
+                       slow -- a build, a test suite, a deploy -- and for running several at \
+                       once: the answer is collected whether or not you are waiting for it. \
+                       Poll with job_status, which returns only what is new. Prefer \
+                       run_command when the command is quick and you want its answer now.",
+        title = "Start Command In Background",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    pub async fn start_command(
+        &self,
+        Parameters(StartCommandArgs {
+            pane,
+            command,
+            suppress_history,
+        }): Parameters<StartCommandArgs>,
+    ) -> Result<Json<jobs::JobView>, ErrorData> {
+        let target = self.find_pane(&pane).await?;
+        // A pane in copy mode does not pass keys to the shell, so the command
+        // would be read as navigation and the job would never start.
+        if target.is_in_mode() {
+            return Err(bad_input(format!(
+                "pane {pane} is in copy mode, where keys move the cursor rather than \
+                     reaching the shell. Leave it first."
+            )));
+        }
+
+        let view = self
+            .jobs
+            .start(&target, &command, suppress_history)
+            .await
+            .map_err(|e| tmux_error(&e))?;
+
+        Ok(Json(view))
+    }
+
+    /// Report how a background command is getting on.
+    #[tool(
+        description = "Report whether a job started with start_command is still running, its \
+                       exit status once it is not, and what it has written since the cursor \
+                       you were given last. Pass that cursor back to read only what is new. \
+                       Give seconds to wait for it to finish, which returns as soon as it \
+                       does rather than at the deadline.",
+        title = "Check Background Command",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn job_status(
+        &self,
+        Parameters(JobStatusArgs {
+            job,
+            cursor,
+            seconds,
+        }): Parameters<JobStatusArgs>,
+    ) -> Result<Json<jobs::JobProgress>, ErrorData> {
+        if let Some(seconds) = seconds.filter(|seconds| *seconds > 0) {
+            self.jobs.wait(&job, Self::budget(Some(seconds))).await;
+        }
+
+        self.jobs
+            .read(&job, cursor)
+            .map(Json)
+            .ok_or_else(|| unknown_job(&job))
+    }
+
+    /// List the background commands this server is holding.
+    #[tool(
+        description = "List every job started with start_command, running and finished, \
+                       newest first. A finished job is kept so its answer can still be \
+                       collected, and the oldest is forgotten once too many pile up.",
+        title = "List Background Commands",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn list_jobs(&self) -> Result<Json<JobList>, ErrorData> {
+        Ok(Json(JobList {
+            jobs: self.jobs.list(),
+        }))
+    }
+
+    /// Stop a background command and forget it.
+    #[tool(
+        description = "Interrupt a running job with C-c and forget it. A job that has already \
+                       finished is forgotten without touching its pane. This sends the \
+                       interrupt to the pane the job runs in, so anything else that pane is \
+                       doing is interrupted too.",
+        title = "Cancel Background Command",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn cancel_job(
+        &self,
+        Parameters(CancelJobArgs { job }): Parameters<CancelJobArgs>,
+    ) -> Result<Json<JobCancelled>, ErrorData> {
+        let (pane, running) = self
+            .jobs
+            .running_in(&job)
+            .ok_or_else(|| unknown_job(&job))?;
+
+        if running {
+            let target = self.find_pane(&pane).await?;
+            target
+                .send_key_names(["C-c"])
+                .await
+                .map_err(|e| tmux_error(&e))?;
+        }
+        self.jobs.forget(&job);
+
+        Ok(Json(JobCancelled {
+            job,
+            pane,
+            interrupted: running,
+        }))
+    }
+
+    /// Wait until a pane stops writing.
+    #[tool(
+        description = "Wait until a pane has written nothing for a few seconds. Use this when \
+                       you cannot name what success looks like: a TUI settling, an installer \
+                       finishing, a prompt whose glyph you cannot predict. Prefer run_command \
+                       for a command you sent yourself, and wait_for_text when you know the \
+                       text to look for -- both are exact, and this one infers.",
+        title = "Wait For Pane To Go Quiet",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    pub async fn wait_for_idle(
+        &self,
+        Parameters(WaitForIdleArgs {
+            pane,
+            quiet_seconds,
+            seconds,
+        }): Parameters<WaitForIdleArgs>,
+        cancelled: tokio_util::sync::CancellationToken,
+    ) -> Result<Json<exec::IdleView>, ErrorData> {
+        let target = self.find_pane(&pane).await?;
+        // Clamped against the total, because quiet longer than the deadline
+        // could never be observed and would always answer `deadline`.
+        let budget = Self::budget(seconds);
+        let quiet = Duration::from_secs(quiet_seconds.unwrap_or(2).max(1)).min(budget);
+
+        let view = exec::wait_for_idle(&target, quiet, budget, &cancelled)
+            .await
+            .map_err(|e| tmux_error(&e))?;
 
         Ok(Json(view))
     }
