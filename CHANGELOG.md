@@ -19,6 +19,11 @@ full.
 
 ### Added
 
+- `OutputLimits` and `DispatchLimits`, with `ServerBuilder::output_limits` and
+  `dispatch_limits`, plus `Error::OutputLimitExceeded` and `Error::Overloaded`.
+  Reading tmux output was unbounded, so a long pane history or a chatty
+  `run-shell` could grow until the operating system intervened, and nothing
+  capped how many tmux client processes ran at once.
 - `ServerGeneration`, `Server::generation`, `Server::require_generation`, and
   `Error::ServerGenerationChanged`. A socket path does not identify a tmux
   server: the socket outlives the daemon, a replacement binds the same path

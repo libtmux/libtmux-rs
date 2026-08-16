@@ -1322,3 +1322,42 @@ the caller reaches for around work that must not be misapplied.
 A cheaper token was ruled out by measurement rather than reasoning: the socket
 *inode* is unchanged across a restart, because tmux reuses the file rather
 than recreating it.
+
+### Budgets, because tmux is an unbounded producer
+
+Two resources had no ceiling, and both are the caller's process rather than
+tmux's.
+
+**Output.** Each dispatch drained stdout and stderr with `read_to_end`. A pane
+with a long history, a buffer someone pasted a file into, or a `run-shell` that
+keeps printing all answer with as many bytes as they have, so the operating
+system decided when to stop -- by killing the process. `OutputLimits` bounds
+the read where the allocation happens, by taking `limit + 1` bytes and failing
+if the extra one arrives.
+
+It fails rather than truncating. A truncated tmux listing is a *shorter
+listing*: it decodes cleanly and reports fewer panes than exist, which is worse
+than an error because nothing downstream can tell. A caller who wants less asks
+tmux for less.
+
+The default is 32 MiB of stdout and 1 MiB of stderr -- generous on purpose. The
+point is that a ceiling exists and names itself in an error, not that it is
+small. A budget below a listing row breaks every command, which is worth
+knowing: the crate's own snapshot projection is a few hundred bytes, and a
+64-byte budget was enough to fail `new-session` during testing.
+
+**Dispatches.** Nothing bounded how many tmux clients ran at once. A caller
+that fans out -- an agent driving the MCP server, a reconciler sweeping every
+pane -- turned its own concurrency into process, descriptor, and memory
+pressure, and tmux serializes on the far side regardless, so the extra clients
+bought queueing rather than throughput. `DispatchLimits` is a semaphore
+acquired before the request is registered, so a refusal costs nothing.
+
+`Error::Overloaded` is deliberately distinct from `Error::Timeout`: overload
+means the dispatch never started, so retrying is safe, where a timeout means
+tmux may have run the command already.
+
+Both are measured rather than asserted. The admission test times twelve
+dispatches through two permits and fails if they finish in less than the
+rounds require; run with the limit raised to 64 they finish in 138ms, which is
+what the test is written to catch.

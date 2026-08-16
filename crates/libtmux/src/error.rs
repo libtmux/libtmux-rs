@@ -277,6 +277,43 @@ pub enum Error {
         found: crate::ServerGeneration,
     },
 
+    /// tmux produced more output than the dispatch was allowed to read.
+    ///
+    /// Not a truncation. A shortened tmux listing decodes cleanly and says
+    /// something false -- fewer panes than exist -- so the dispatch fails
+    /// instead, and the caller either asks tmux for less or raises
+    /// [`crate::OutputLimits`].
+    #[non_exhaustive]
+    #[error("{command} produced more than {limit} bytes on {stream} (request {request_id})")]
+    OutputLimitExceeded {
+        /// Core-scoped dispatch-request identity.
+        request_id: u64,
+        /// Sanitized command context.
+        command: CommandSummary,
+        /// Which stream ran past its budget.
+        stream: &'static str,
+        /// The budget in bytes.
+        limit: usize,
+    },
+
+    /// The server is already running as much work as it admits.
+    ///
+    /// The dispatch never started, so retrying it is safe: nothing was sent
+    /// to tmux and no state changed. Distinct from
+    /// [`Self::Timeout`](Self::Timeout), which means the work may have run.
+    #[non_exhaustive]
+    #[error(
+        "{command} was not admitted: {in_flight} dispatches already running (request {request_id})"
+    )]
+    Overloaded {
+        /// Core-scoped dispatch-request identity.
+        request_id: u64,
+        /// Sanitized command context.
+        command: CommandSummary,
+        /// How many dispatches the server admits at once.
+        in_flight: usize,
+    },
+
     /// A session of this name already exists.
     ///
     /// Classified rather than left as a generic refusal because it is the one
@@ -713,6 +750,8 @@ impl Error {
         match self {
             Self::ObjectGone { .. } => ErrorKind::ObjectGone,
             Self::CommandFailed { .. }
+            | Self::OutputLimitExceeded { .. }
+            | Self::Overloaded { .. }
             | Self::SessionExists { .. }
             | Self::OptionRejected { .. }
             | Self::ServerGenerationChanged { .. } => ErrorKind::Refused,
@@ -1013,6 +1052,28 @@ impl fmt::Debug for Error {
                 .debug_struct("UnreadableFormatValue")
                 .field("format", format)
                 .field("detail", detail)
+                .finish(),
+            Self::OutputLimitExceeded {
+                request_id,
+                command,
+                stream,
+                limit,
+            } => formatter
+                .debug_struct("OutputLimitExceeded")
+                .field("request_id", request_id)
+                .field("command", command)
+                .field("stream", stream)
+                .field("limit", limit)
+                .finish(),
+            Self::Overloaded {
+                request_id,
+                command,
+                in_flight,
+            } => formatter
+                .debug_struct("Overloaded")
+                .field("request_id", request_id)
+                .field("command", command)
+                .field("in_flight", in_flight)
                 .finish(),
             Self::ServerGenerationChanged { expected, found } => formatter
                 .debug_struct("ServerGenerationChanged")

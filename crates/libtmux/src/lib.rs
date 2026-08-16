@@ -237,6 +237,7 @@ mod error;
 mod formats;
 pub mod hooks;
 mod internal;
+mod limits;
 mod options;
 mod pane;
 #[cfg(feature = "plan")]
@@ -264,6 +265,7 @@ pub use error::{
 };
 pub use formats::TmuxText;
 pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
+pub use limits::{DispatchLimits, OutputLimits};
 pub use options::{
     OptionKind, OptionSchema, OptionScope, OptionValue, names as option_names, option_schema,
 };

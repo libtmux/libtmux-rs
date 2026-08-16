@@ -22,10 +22,10 @@ use crate::session::Session;
 use crate::snapshot::{SessionFields, WindowFields};
 use crate::window::Window;
 use crate::{
-    Command, CommandChain, CommandResult, EngineCapabilities, EnvironmentEntry, Error,
-    IndexedHooks, ObjectKind, OptionValue, PaneId, ReleaseSuffix, ReleaseVersion, ReplaceMode,
-    ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, SessionId, SparseValues,
-    WindowId,
+    Command, CommandChain, CommandResult, DispatchLimits, EngineCapabilities, EnvironmentEntry,
+    Error, IndexedHooks, ObjectKind, OptionValue, OutputLimits, PaneId, ReleaseSuffix,
+    ReleaseVersion, ReplaceMode, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
+    SessionId, SparseValues, WindowId,
 };
 
 /// The first tmux release that has a server access list.
@@ -2401,6 +2401,8 @@ pub struct ServerBuilder {
     colors: Option<u16>,
     executable: OsString,
     timeout: Duration,
+    output_limits: OutputLimits,
+    dispatch_limits: DispatchLimits,
     #[cfg(feature = "test-support")]
     prevent_server_start: bool,
 }
@@ -2414,9 +2416,60 @@ impl ServerBuilder {
             colors: None,
             executable: OsString::from("tmux"),
             timeout: CoreConfiguration::default_timeout(),
+            output_limits: OutputLimits::default(),
+            dispatch_limits: DispatchLimits::default(),
             #[cfg(feature = "test-support")]
             prevent_server_start: false,
         }
+    }
+
+    /// Bound how many bytes one command may read from tmux.
+    ///
+    /// tmux answers with as many bytes as it has: a pane with a long history,
+    /// a buffer holding a pasted file, a `run-shell` that keeps printing.
+    /// Without a ceiling the operating system decides when to stop, and it
+    /// does that by killing this process.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::OutputLimits;
+    ///
+    /// let server = libtmux::Server::builder()
+    ///     .output_limits(OutputLimits::default().max_stdout_bytes(1024 * 1024))
+    ///     .build()?;
+    /// # let _ = server;
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
+    #[must_use = "use the returned builder to retain the limits"]
+    pub const fn output_limits(mut self, limits: OutputLimits) -> Self {
+        self.output_limits = limits;
+        self
+    }
+
+    /// Bound how many commands may run at once.
+    ///
+    /// Each one is a tmux client process with its own pipes and reader tasks,
+    /// and tmux serializes them on the far side anyway, so past a point more
+    /// clients buy queueing rather than throughput. A caller that fans out
+    /// wide -- an agent, a reconciler sweeping every pane -- otherwise turns
+    /// its own concurrency into pressure on the machine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::DispatchLimits;
+    ///
+    /// let server = libtmux::Server::builder()
+    ///     .dispatch_limits(DispatchLimits::default().max_in_flight(4))
+    ///     .build()?;
+    /// # let _ = server;
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
+    #[must_use = "use the returned builder to retain the limits"]
+    pub const fn dispatch_limits(mut self, limits: DispatchLimits) -> Self {
+        self.dispatch_limits = limits;
+        self
     }
 
     /// Select a named tmux socket.
@@ -2559,7 +2612,8 @@ impl ServerBuilder {
             self.timeout,
             BuildContext::capture(),
         )
-        .map_err(Error::invalid_server_configuration)?;
+        .map_err(Error::invalid_server_configuration)?
+        .with_limits(self.output_limits, self.dispatch_limits);
         #[cfg(feature = "test-support")]
         let configuration = if self.prevent_server_start {
             configuration.prevent_server_start()

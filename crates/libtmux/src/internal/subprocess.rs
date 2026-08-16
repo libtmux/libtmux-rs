@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::{HashMap, hash_map::Entry};
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::future::Future;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -14,9 +15,11 @@ use std::time::Duration;
 use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::{Child, ChildStderr, ChildStdout, Command as TokioCommand};
-use tokio::sync::{Notify, oneshot, watch};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
+
+use crate::limits::{DispatchLimits, OutputLimits};
 
 #[cfg(feature = "tracing")]
 use tracing::instrument::WithSubscriber as _;
@@ -35,6 +38,8 @@ pub(crate) struct SubprocessExecutor {
 struct Configuration {
     executable: OsString,
     timeout: Duration,
+    output_limits: OutputLimits,
+    dispatch_limits: DispatchLimits,
     current_dir: Option<PathBuf>,
     environment: Vec<(OsString, Option<OsString>)>,
     #[cfg(feature = "test-support")]
@@ -77,6 +82,13 @@ impl Configuration {
 struct Shared {
     lifecycle: Mutex<Lifecycle>,
     empty: Notify,
+    /// How many dispatches may hold a tmux client process at once.
+    ///
+    /// Each dispatch is a process, two pipes, and two reader tasks. Without a
+    /// ceiling a caller's own fan-out becomes the machine's problem, and tmux
+    /// serializes on the far side regardless, so the extra clients buy
+    /// queueing rather than throughput.
+    permits: Arc<Semaphore>,
 }
 
 struct Lifecycle {
@@ -120,11 +132,61 @@ pub(crate) struct TestHooks {
 }
 
 impl SubprocessExecutor {
+    /// Wait for room to run, or say the server is full.
+    async fn acquire_permit(
+        &self,
+        context: &RequestContext,
+    ) -> Result<OwnedSemaphorePermit, Error> {
+        let permits = Arc::clone(&self.shared.permits);
+        let limits = self.configuration.dispatch_limits;
+
+        let acquired = match limits.acquire_timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, permits.acquire_owned()).await {
+                Ok(acquired) => acquired,
+                // Waited the whole budget without room, which is overload
+                // rather than slowness: nothing was sent to tmux.
+                Err(_) => {
+                    return Err(Error::Overloaded {
+                        request_id: context.request_id(),
+                        command: context.command.clone(),
+                        in_flight: limits.max_in_flight,
+                    });
+                }
+            },
+            None => permits.acquire_owned().await,
+        };
+
+        acquired
+            .map_err(|_| Error::executor_shutdown(context.request_id(), context.command.clone()))
+    }
+
+    /// Replace how many dispatches may run at once.
+    pub(crate) fn with_dispatch_limits(mut self, limits: DispatchLimits) -> Self {
+        Arc::make_mut(&mut self.configuration).dispatch_limits = limits;
+        self.shared = Arc::new(Shared {
+            lifecycle: Mutex::new(Lifecycle {
+                accepting: true,
+                entries: HashMap::new(),
+            }),
+            empty: Notify::new(),
+            permits: Arc::new(Semaphore::new(limits.max_in_flight)),
+        });
+        self
+    }
+
+    /// Replace the byte budgets each dispatch's output is read under.
+    pub(crate) fn with_output_limits(mut self, limits: OutputLimits) -> Self {
+        Arc::make_mut(&mut self.configuration).output_limits = limits;
+        self
+    }
+
     pub(crate) fn new(executable: impl Into<OsString>, timeout: Duration) -> Self {
         Self {
             configuration: Arc::new(Configuration {
                 executable: executable.into(),
                 timeout,
+                output_limits: OutputLimits::default(),
+                dispatch_limits: DispatchLimits::default(),
                 current_dir: None,
                 environment: Vec::new(),
                 #[cfg(feature = "test-support")]
@@ -138,6 +200,7 @@ impl SubprocessExecutor {
                     entries: HashMap::new(),
                 }),
                 empty: Notify::new(),
+                permits: Arc::new(Semaphore::new(DispatchLimits::DEFAULT_IN_FLIGHT)),
             }),
         }
     }
@@ -208,6 +271,16 @@ impl SubprocessExecutor {
             timeout: self.configuration.timeout,
         };
         trace_requested(&context);
+
+        // Held for the whole dispatch and released on drop, so a cancelled
+        // caller returns its permit even though the child it started is still
+        // being cleaned up.
+        // Bound to `_permit` rather than dropped: the guard is the admission,
+        // and releasing it here would let the next dispatch in immediately.
+        let _permit = match self.acquire_permit(&context).await {
+            Ok(permit) => permit,
+            Err(error) => return Err(error),
+        };
 
         let (cancellation_sender, cancellation_receiver) = watch::channel(false);
         let admission_error = {
@@ -300,6 +373,7 @@ impl SubprocessExecutor {
         let readers = ReaderTasks::spawn(
             child.stdout.take(),
             child.stderr.take(),
+            self.configuration.output_limits,
             #[cfg(test)]
             &self.configuration.hooks,
         );
@@ -676,6 +750,25 @@ fn map_reader_result(
 ) -> Result<Vec<u8>, Error> {
     match result {
         Ok(Ok(bytes)) => Ok(bytes),
+        // A budget overrun is a decision the caller can act on -- ask tmux for
+        // less, or raise the budget -- so it is not folded into the generic
+        // "the pipe failed" case.
+        Ok(Err(source))
+            if source
+                .get_ref()
+                .is_some_and(|inner| inner.downcast_ref::<OutputTooLarge>().is_some()) =>
+        {
+            let limit = source
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<OutputTooLarge>())
+                .map_or(0, |exceeded| exceeded.limit);
+            Err(Error::OutputLimitExceeded {
+                request_id: context.request_id(),
+                command: context.command.clone(),
+                stream,
+                limit,
+            })
+        }
         Ok(Err(source)) => Err(Error::read_output(
             context.request_id(),
             context.command.clone(),
@@ -741,21 +834,23 @@ impl ReaderTasks {
     fn spawn(
         stdout: Option<ChildStdout>,
         stderr: Option<ChildStderr>,
+        limits: OutputLimits,
         #[cfg(test)] hooks: &TestHooks,
     ) -> Self {
         #[cfg(test)]
         let stdout = spawn_reader(
             stdout,
+            limits.max_stdout_bytes,
             hooks.reader_failure,
             hooks.reader_failure_release.clone(),
         );
         #[cfg(not(test))]
-        let stdout = spawn_reader(stdout);
+        let stdout = spawn_reader(stdout, limits.max_stdout_bytes);
 
         #[cfg(test)]
-        let stderr = spawn_reader(stderr, None, None);
+        let stderr = spawn_reader(stderr, limits.max_stderr_bytes, None, None);
         #[cfg(not(test))]
-        let stderr = spawn_reader(stderr);
+        let stderr = spawn_reader(stderr, limits.max_stderr_bytes);
 
         Self {
             stdout: Some(stdout),
@@ -794,6 +889,7 @@ impl ReaderTasks {
 )]
 fn spawn_reader<R>(
     reader: Option<R>,
+    limit: usize,
     #[cfg(test)] failure: Option<ReaderFailure>,
     #[cfg(test)] failure_release: Option<Arc<Notify>>,
 ) -> JoinHandle<Result<Vec<u8>, io::Error>>
@@ -815,17 +911,49 @@ where
             }
         }
 
-        let Some(mut reader) = reader else {
+        let Some(reader) = reader else {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
                 "child output pipe is unavailable",
             ));
         };
+
+        // Read one byte more than the budget. `read_to_end` on an unbounded
+        // pipe is how a `capture-pane` over a large history, or a `run-shell`
+        // that never stops printing, becomes the process's memory ceiling
+        // rather than tmux's. Taking `limit + 1` distinguishes "exactly at the
+        // budget" from "over it" without a second read.
         let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
+        let overflow = limit.saturating_add(1);
+        let mut bounded = reader.take(overflow as u64);
+        bounded.read_to_end(&mut bytes).await?;
+        if bytes.len() > limit {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                OutputTooLarge { limit },
+            ));
+        }
+
         Ok(bytes)
     })
 }
+
+/// Marker for a read that ran past its budget.
+///
+/// Carried as the source of an `io::Error` so the executor can tell this from
+/// an ordinary pipe failure and report the budget that was exceeded.
+#[derive(Debug)]
+pub(crate) struct OutputTooLarge {
+    pub(crate) limit: usize,
+}
+
+impl fmt::Display for OutputTooLarge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "output exceeded the {} byte budget", self.limit)
+    }
+}
+
+impl std::error::Error for OutputTooLarge {}
 
 struct ProcessGroupGuard {
     process_group: Option<Pid>,

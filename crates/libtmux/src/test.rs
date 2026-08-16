@@ -32,6 +32,7 @@ use rustix::io::{Errno, write as write_all};
 use rustix::process::{Pid, Signal, getpgid, kill_process, kill_process_group, test_kill_process};
 
 use self::containment::OwnerContainment;
+use crate::limits::{DispatchLimits, OutputLimits};
 use crate::{Command, Server};
 
 const SOCKET_NAME: &str = "s";
@@ -210,6 +211,8 @@ impl std::error::Error for TestServerError {}
 pub struct TestServerBuilder {
     executable: OsString,
     lifecycle_timeout: Duration,
+    output_limits: OutputLimits,
+    dispatch_limits: DispatchLimits,
 }
 
 impl fmt::Debug for TestServerBuilder {
@@ -226,7 +229,25 @@ impl TestServerBuilder {
         Self {
             executable: OsString::from("tmux"),
             lifecycle_timeout: Duration::from_secs(5),
+            output_limits: OutputLimits::default(),
+            dispatch_limits: DispatchLimits::default(),
         }
+    }
+
+    /// Bound how many bytes one command may read, as [`crate::ServerBuilder`]
+    /// does, so a test can prove the ceiling without producing 32 MiB.
+    #[must_use = "use the returned builder to retain the limits"]
+    pub const fn output_limits(mut self, limits: OutputLimits) -> Self {
+        self.output_limits = limits;
+        self
+    }
+
+    /// Bound how many commands may run at once, as [`crate::ServerBuilder`]
+    /// does.
+    #[must_use = "use the returned builder to retain the limits"]
+    pub const fn dispatch_limits(mut self, limits: DispatchLimits) -> Self {
+        self.dispatch_limits = limits;
+        self
     }
 
     /// Configure the tmux executable used by the daemon and every client.
@@ -305,6 +326,8 @@ impl TestServerBuilder {
             .socket_path(&files.socket_path)
             .config_file(&files.config_path)
             .tmux_executable(self.executable.clone())
+            .output_limits(self.output_limits)
+            .dispatch_limits(self.dispatch_limits)
             .prevent_server_start()
             .build()
             .map_err(|_| TestServerError::new(TestServerErrorKind::FilesystemSetupFailed))?;

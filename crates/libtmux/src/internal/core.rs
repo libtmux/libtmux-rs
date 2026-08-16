@@ -11,6 +11,7 @@ use tokio::sync::OnceCell;
 use crate::command::{CommandChain, CommandRequest, CommandResult, RequestId};
 use crate::internal::executor::Executor;
 use crate::internal::subprocess::SubprocessExecutor;
+use crate::limits::{DispatchLimits, OutputLimits};
 use crate::target::endpoint_resolution::{
     EndpointInputs, IdentityError, ResolvedSocketSelector, resolve_server_endpoint,
 };
@@ -80,11 +81,24 @@ pub(crate) struct CoreConfiguration {
     working_directory: PathBuf,
     global_argv: Vec<OsString>,
     environment: Vec<(OsString, Option<OsString>)>,
+    output_limits: OutputLimits,
+    dispatch_limits: DispatchLimits,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_supervisor_drop: bool,
 }
 
 impl CoreConfiguration {
+    /// Replace the budgets this server's dispatches run under.
+    pub(crate) const fn with_limits(
+        mut self,
+        output: OutputLimits,
+        dispatch: DispatchLimits,
+    ) -> Self {
+        self.output_limits = output;
+        self.dispatch_limits = dispatch;
+        self
+    }
+
     pub(crate) fn resolve(
         selection: &SocketSelection,
         config_file: Option<PathBuf>,
@@ -175,6 +189,8 @@ impl CoreConfiguration {
             working_directory,
             global_argv,
             environment,
+            output_limits: OutputLimits::default(),
+            dispatch_limits: DispatchLimits::default(),
             #[cfg(feature = "test-support")]
             synchronous_reap_on_supervisor_drop: false,
         })
@@ -284,7 +300,9 @@ impl Core {
     pub(crate) fn new(configuration: CoreConfiguration) -> Self {
         let mut executor =
             SubprocessExecutor::new(configuration.executable.clone(), configuration.timeout)
-                .with_current_dir(configuration.working_directory.clone());
+                .with_current_dir(configuration.working_directory.clone())
+                .with_output_limits(configuration.output_limits)
+                .with_dispatch_limits(configuration.dispatch_limits);
         #[cfg(feature = "test-support")]
         {
             executor = executor.with_synchronous_reap_on_supervisor_drop(
@@ -319,6 +337,8 @@ impl Core {
             executable: OsString::from("tmux"),
             timeout: DEFAULT_TIMEOUT,
             working_directory: PathBuf::from("/"),
+            output_limits: OutputLimits::default(),
+            dispatch_limits: DispatchLimits::default(),
             global_argv: Vec::new(),
             environment: Vec::new(),
             #[cfg(feature = "test-support")]
