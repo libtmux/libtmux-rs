@@ -163,7 +163,7 @@ pub struct TestServerError {
     /// A fixture that fails on someone else's machine is debugged from this
     /// line alone, and `ShutdownFailed` alone does not say whether the
     /// executor, the wait, or the signal was the part that went wrong.
-    stage: Option<&'static str>,
+    stage: Option<String>,
 }
 
 impl fmt::Debug for TestServerError {
@@ -182,17 +182,17 @@ impl TestServerError {
     }
 
     /// Record which step failed, where the kind alone is ambiguous.
-    const fn at(kind: TestServerErrorKind, stage: &'static str) -> Self {
+    fn at(kind: TestServerErrorKind, stage: impl Into<String>) -> Self {
         Self {
             kind,
-            stage: Some(stage),
+            stage: Some(stage.into()),
         }
     }
 
     /// Which step produced this, when the kind alone does not say.
     #[must_use]
-    pub const fn stage(&self) -> Option<&'static str> {
-        self.stage
+    pub fn stage(&self) -> Option<&str> {
+        self.stage.as_deref()
     }
 
     /// Return the stable category for this failure.
@@ -683,7 +683,7 @@ impl TestServer {
             CleanupOutcome::LifecycleFailed | CleanupOutcome::LifecycleAndFilesystemFailed => {
                 Err(TestServerError::at(
                     TestServerErrorKind::ShutdownFailed,
-                    detail.unwrap_or("daemon did not exit"),
+                    detail.unwrap_or_else(|| "daemon did not exit".to_owned()),
                 ))
             }
             CleanupOutcome::FilesystemFailed => Err(TestServerError::at(
@@ -903,7 +903,7 @@ struct Lifecycle {
     ///
     /// A fixture failing on a machine the author does not have is debugged
     /// from this alone, and "shutdown failed" names four different problems.
-    failure: Option<&'static str>,
+    failure: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1023,9 +1023,14 @@ impl Lifecycle {
         let mut lifecycle_ok = !matches!(self.leader_state, LeaderState::Lost);
         if matches!(self.leader_state, LeaderState::Waitable) {
             if self.numeric_phase_is_safe() {
-                lifecycle_ok &= signal_result(kill_process(self.pid, Signal::TERM));
+                let outcome = kill_process(self.pid, Signal::TERM);
+                if !signal_result(outcome) {
+                    lifecycle_ok = false;
+                    self.failure = Some(format!("TERM leader: {outcome:?}"));
+                }
             } else {
                 lifecycle_ok = false;
+                self.failure = Some("leader unsafe before TERM".to_owned());
             }
         }
         let started = Instant::now();
@@ -1065,16 +1070,27 @@ impl Lifecycle {
     fn force_leader_and_group(&mut self, lifecycle_ok: &mut bool) {
         if matches!(self.leader_state, LeaderState::Waitable) {
             if self.numeric_phase_is_safe() {
-                *lifecycle_ok &= child_kill_result(self.child.kill());
+                let outcome = self.child.kill();
+                let described = format!("{outcome:?}");
+                if !child_kill_result(outcome) {
+                    *lifecycle_ok = false;
+                    self.failure = Some(format!("kill child: {described}"));
+                }
             } else {
                 *lifecycle_ok = false;
+                self.failure = Some("leader unsafe before kill".to_owned());
             }
         }
         if matches!(self.leader_state, LeaderState::Waitable) {
             if self.numeric_phase_is_safe() {
-                *lifecycle_ok &= signal_result(kill_process_group(self.pid, Signal::KILL));
+                let outcome = kill_process_group(self.pid, Signal::KILL);
+                if !signal_result(outcome) {
+                    *lifecycle_ok = false;
+                    self.failure = Some(format!("KILL group: {outcome:?}"));
+                }
             } else {
                 *lifecycle_ok = false;
+                self.failure = Some("leader unsafe before group kill".to_owned());
             }
         }
         if matches!(self.leader_state, LeaderState::Waitable) {
@@ -1096,15 +1112,18 @@ impl Lifecycle {
         mut lifecycle_ok: bool,
     ) -> (Option<std::process::ExitStatus>, bool) {
         if !lifecycle_ok && self.failure.is_none() {
-            self.failure = Some("signal or wait");
+            self.failure = Some("signal or wait".to_owned());
         }
         if !matches!(self.leader_state, LeaderState::Reaped(_)) {
             lifecycle_ok = false;
-            self.failure = Some(match self.leader_state {
-                LeaderState::Waitable => "leader still waitable",
-                LeaderState::Lost => "leader lost",
-                LeaderState::Reaped(_) => unreachable!(),
-            });
+            self.failure = Some(
+                match self.leader_state {
+                    LeaderState::Waitable => "leader still waitable",
+                    LeaderState::Lost => "leader lost",
+                    LeaderState::Reaped(_) => unreachable!(),
+                }
+                .to_owned(),
+            );
         }
         if !self
             .files
@@ -1113,15 +1132,15 @@ impl Lifecycle {
             .is_success()
         {
             lifecycle_ok = false;
-            self.failure = Some("containment sweep");
+            self.failure = Some("containment sweep".to_owned());
         }
         self.cleanup_pending = false;
         (self.reaped_status(), lifecycle_ok)
     }
 
     /// Why the last cleanup failed, when it did.
-    const fn failure(&self) -> Option<&'static str> {
-        self.failure
+    fn failure(&self) -> Option<String> {
+        self.failure.clone()
     }
 }
 
