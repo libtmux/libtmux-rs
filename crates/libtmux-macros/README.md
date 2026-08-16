@@ -15,7 +15,7 @@ You do not depend on this crate. `libtmux` re-exports the macro behind its
 `derive` feature:
 
 ```console
-$ cargo add libtmux@0.1.0-alpha.5 --features derive
+$ cargo add libtmux@0.1.0-alpha.6 --features derive
 ```
 
 <details>
@@ -23,7 +23,7 @@ $ cargo add libtmux@0.1.0-alpha.5 --features derive
 
 ```toml
 [dependencies]
-libtmux = { version = "0.1.0-alpha.5", features = ["derive"] }
+libtmux = { version = "0.1.0-alpha.6", features = ["derive"] }
 ```
 
 </details>

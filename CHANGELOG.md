@@ -16,6 +16,11 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.6 - 2026-08-16
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.6;
+`tmux-mcp` is 0.1.0-alpha.7, because it was already at alpha.6.
+
 ### Added
 
 - Typed control-mode events. `Event` now names every notification tmux

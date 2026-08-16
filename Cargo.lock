@@ -836,7 +836,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libtmux"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 dependencies = [
  "caseless",
  "criterion",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "libtmux-macros"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 dependencies = [
  "libtmux",
  "proc-macro-crate",
@@ -1598,7 +1598,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tmux-mcp"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.7"
 dependencies = [
  "libtmux",
  "regex",
@@ -1612,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "tmux-workspace"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 dependencies = [
  "libtmux",
  "tempfile",
