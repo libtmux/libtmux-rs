@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tmux
         run: |
@@ -35,15 +35,20 @@ jobs:
           sudo apt-get install -y --no-install-recommends tmux
           tmux -V
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
       # `just msrv` invokes these by exact name via `rustup run`. Two floors,
       # because they are two promises: the libraries support 1.85, and
       # tmux-mcp cannot, since its dependencies require 1.88.
-      - uses: dtolnay/rust-toolchain@1.85.0
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.85.0"
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.88.0"
 
       - uses: taiki-e/install-action@v2
         with:
@@ -66,14 +71,16 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install tmux
         run: |
           brew install tmux
           tmux -V
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo test --locked --workspace --all-targets --all-features
@@ -89,8 +96,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
       - uses: taiki-e/install-action@v2
         with:
           tool: just
@@ -116,8 +125,10 @@ jobs:
       matrix:
         target: [control_line, filter_expr_json, workspace_yaml]
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
@@ -130,7 +141,7 @@ jobs:
             -- -max_total_time=300 -rss_limit_mb=4096
       - name: Keep any crash that was found
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/
@@ -142,7 +153,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tmux build dependencies
         run: |
@@ -154,7 +165,9 @@ jobs:
             libncurses-dev \
             pkg-config
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
       - uses: taiki-e/install-action@v2
         with:
           tool: just
