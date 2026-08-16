@@ -473,3 +473,42 @@ windows:
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// A value that is present and wrong is a different workspace, not a default.
+///
+/// tmuxp files are hand-written, and the failure mode being guarded here is
+/// quiet: `focus: "tru"` used to build a session that was valid and focused
+/// the wrong pane, with nothing to say so.
+#[test]
+fn a_present_but_invalid_value_is_refused_rather_than_defaulted() {
+    for (source, expected) in [
+        (
+            "session_name: s\nwindows:\n  - focus: \"tru\"\n",
+            "windows[0].focus",
+        ),
+        (
+            "session_name: s\nwindows:\n  - panes:\n      - enter: maybe\n",
+            "windows[0].panes[0].enter",
+        ),
+        (
+            "session_name: s\nstart_directory: 123\nwindows: []\n",
+            "start_directory",
+        ),
+        (
+            "session_name: s\nwindows:\n  - layout: [not, a, string]\n",
+            "windows[0].layout",
+        ),
+    ] {
+        let error = Workspace::from_yaml(source).expect_err("the value is refused");
+        let message = error.to_string();
+        assert!(
+            message.contains(expected),
+            "the error names where it happened: expected {expected:?} in {message:?}",
+        );
+    }
+
+    // Absence still defaults, which is the whole distinction.
+    let workspace = Workspace::from_yaml("session_name: s\nwindows:\n  - window_name: w\n")
+        .expect("an absent value defaults");
+    assert!(!workspace.windows[0].focus);
+}

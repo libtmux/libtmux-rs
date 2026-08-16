@@ -82,6 +82,11 @@ it is republished to pick up the licence and repository metadata.
 
 ### Changed
 
+- `tmux-workspace` refuses a value that is present and the wrong shape
+  instead of defaulting it, and names where it happened:
+  `windows[0].panes[1].enter must be a boolean, found "maybe"`. `focus: "tru"`
+  used to read as `false`, which builds a workspace that is valid and not the
+  one the file describes.
 - Option failures are classified by the same path as every other failure. They
   previously built `Error::CommandFailed` directly and so bypassed it.
 - Licensed under `MIT OR Apache-2.0` rather than MIT alone, matching Rust

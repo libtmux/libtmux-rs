@@ -166,19 +166,20 @@ impl Workspace {
             Yaml::BadValue | Yaml::Null => Vec::new(),
             Yaml::Array(entries) => entries
                 .iter()
-                .map(WindowConfig::from_yaml)
+                .enumerate()
+                .map(|(index, window)| WindowConfig::from_yaml(window, index))
                 .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(ConfigError::invalid("windows must be a list")),
         };
 
         Ok(Self {
             session_name,
-            start_directory: optional_path(&document["start_directory"]),
+            start_directory: optional_path(&document["start_directory"], "start_directory")?,
             environment: pairs(&document["environment"])?,
             options: pairs(&document["options"])?,
             global_options: pairs(&document["global_options"])?,
             shell_command_before: commands(&document["shell_command_before"])?,
-            suppress_history: is_true(&document["suppress_history"]),
+            suppress_history: is_true(&document["suppress_history"], "suppress_history")?,
             windows,
             unsupported_keys: unsupported(document, SESSION_KEYS),
         })
@@ -186,15 +187,17 @@ impl Workspace {
 }
 
 impl WindowConfig {
-    fn from_yaml(value: &Yaml) -> Result<Self, ConfigError> {
+    fn from_yaml(value: &Yaml, index: usize) -> Result<Self, ConfigError> {
+        let at = format!("windows[{index}]");
         let panes = match &value["panes"] {
             // A window with no panes still has the one tmux creates with it.
             Yaml::BadValue | Yaml::Null => vec![PaneConfig::default()],
             Yaml::Array(entries) => entries
                 .iter()
-                .map(PaneConfig::from_yaml)
+                .enumerate()
+                .map(|(pane, entry)| PaneConfig::from_yaml(entry, &at, pane))
                 .collect::<Result<Vec<_>, _>>()?,
-            _ => return Err(ConfigError::invalid("panes must be a list")),
+            _ => return Err(ConfigError::invalid(format!("{at}.panes must be a list"))),
         };
 
         Ok(Self {
@@ -202,12 +205,18 @@ impl WindowConfig {
             window_index: optional_index(&value["window_index"])?,
             window_shell: value["window_shell"].as_str().map(ToOwned::to_owned),
             environment: pairs(&value["environment"])?,
-            layout: value["layout"].as_str().map(ToOwned::to_owned),
-            start_directory: optional_path(&value["start_directory"]),
-            focus: is_true(&value["focus"]),
+            layout: optional_text(&value["layout"], &format!("{at}.layout"))?,
+            start_directory: optional_path(
+                &value["start_directory"],
+                &format!("{at}.start_directory"),
+            )?,
+            focus: is_true(&value["focus"], &format!("{at}.focus"))?,
             options: pairs(&value["options"])?,
             shell_command_before: commands(&value["shell_command_before"])?,
-            suppress_history: optional_bool(&value["suppress_history"]),
+            suppress_history: optional_bool(
+                &value["suppress_history"],
+                &format!("{at}.suppress_history"),
+            )?,
             unsupported_keys: unsupported(value, WINDOW_KEYS),
             panes: if panes.is_empty() {
                 vec![PaneConfig::default()]
@@ -219,7 +228,8 @@ impl WindowConfig {
 }
 
 impl PaneConfig {
-    fn from_yaml(value: &Yaml) -> Result<Self, ConfigError> {
+    fn from_yaml(value: &Yaml, window: &str, index: usize) -> Result<Self, ConfigError> {
+        let at = format!("{window}.panes[{index}]");
         // tmuxp lets a pane be a bare command string.
         if let Some(command) = value.as_str() {
             return Ok(Self {
@@ -229,19 +239,25 @@ impl PaneConfig {
         }
 
         if !matches!(value, Yaml::Hash(_)) {
-            return Err(ConfigError::invalid(
-                "a pane must be a command string or a mapping",
-            ));
+            return Err(ConfigError::invalid(format!(
+                "{at} must be a command string or a mapping"
+            )));
         }
 
         Ok(Self {
             shell_commands: commands(&value["shell_command"])?,
             environment: pairs(&value["environment"])?,
-            start_directory: optional_path(&value["start_directory"]),
-            focus: is_true(&value["focus"]),
+            start_directory: optional_path(
+                &value["start_directory"],
+                &format!("{at}.start_directory"),
+            )?,
+            focus: is_true(&value["focus"], &format!("{at}.focus"))?,
             // tmuxp presses Enter unless a file says otherwise.
-            enter: optional_bool(&value["enter"]).unwrap_or(true),
-            suppress_history: optional_bool(&value["suppress_history"]),
+            enter: optional_bool(&value["enter"], &format!("{at}.enter"))?.unwrap_or(true),
+            suppress_history: optional_bool(
+                &value["suppress_history"],
+                &format!("{at}.suppress_history"),
+            )?,
             unsupported_keys: unsupported(value, PANE_KEYS),
         })
     }
@@ -367,20 +383,48 @@ fn optional_index(value: &Yaml) -> Result<Option<i32>, ConfigError> {
     }
 }
 
-fn optional_path(value: &Yaml) -> Option<PathBuf> {
-    value.as_str().map(PathBuf::from)
+/// Read an optional path, refusing a value that is present and not one.
+///
+/// Absence defaults; a wrong shape does not. `start_directory: 123` used to
+/// read as "no start directory", which builds a workspace that is valid and
+/// not the one the file describes.
+fn optional_path(value: &Yaml, path: &str) -> Result<Option<PathBuf>, ConfigError> {
+    match value {
+        Yaml::BadValue | Yaml::Null => Ok(None),
+        Yaml::String(text) => Ok(Some(PathBuf::from(text))),
+        _ => Err(ConfigError::invalid(format!("{path} must be a string"))),
+    }
+}
+
+/// Read an optional string, refusing a value that is present and not one.
+fn optional_text(value: &Yaml, path: &str) -> Result<Option<String>, ConfigError> {
+    match value {
+        Yaml::BadValue | Yaml::Null => Ok(None),
+        Yaml::String(text) => Ok(Some(text.clone())),
+        _ => Err(ConfigError::invalid(format!("{path} must be a string"))),
+    }
 }
 
 /// tmuxp writes booleans as bools in some files and strings in others.
-fn optional_bool(value: &Yaml) -> Option<bool> {
-    value.as_bool().or_else(|| match value.as_str()? {
-        "true" | "yes" | "on" => Some(true),
-        "false" | "no" | "off" => Some(false),
-        _ => None,
-    })
+///
+/// Both spellings are accepted; a third thing is refused. `focus: "tru"` used
+/// to read as `false`, which is a different workspace rather than an error.
+fn optional_bool(value: &Yaml, path: &str) -> Result<Option<bool>, ConfigError> {
+    match value {
+        Yaml::BadValue | Yaml::Null => Ok(None),
+        Yaml::Boolean(flag) => Ok(Some(*flag)),
+        Yaml::String(text) => match text.as_str() {
+            "true" | "yes" | "on" => Ok(Some(true)),
+            "false" | "no" | "off" => Ok(Some(false)),
+            _ => Err(ConfigError::invalid(format!(
+                "{path} must be a boolean, found {text:?}"
+            ))),
+        },
+        _ => Err(ConfigError::invalid(format!("{path} must be a boolean"))),
+    }
 }
 
-/// Read a boolean that defaults to false when absent.
-fn is_true(value: &Yaml) -> bool {
-    optional_bool(value).unwrap_or(false)
+/// Read a boolean that defaults to false when absent, and fails when wrong.
+fn is_true(value: &Yaml, path: &str) -> Result<bool, ConfigError> {
+    Ok(optional_bool(value, path)?.unwrap_or(false))
 }
