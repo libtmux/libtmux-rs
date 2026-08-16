@@ -146,6 +146,12 @@ pub enum TestServerErrorKind {
 /// A source-less, redacted failure from [`TestServer`].
 pub struct TestServerError {
     kind: TestServerErrorKind,
+    /// Which step produced it, for kinds several steps can produce.
+    ///
+    /// A fixture that fails on someone else's machine is debugged from this
+    /// line alone, and `ShutdownFailed` alone does not say whether the
+    /// executor, the wait, or the signal was the part that went wrong.
+    stage: Option<&'static str>,
 }
 
 impl fmt::Debug for TestServerError {
@@ -153,13 +159,28 @@ impl fmt::Debug for TestServerError {
         formatter
             .debug_struct("TestServerError")
             .field("kind", &self.kind)
+            .field("stage", &self.stage)
             .finish()
     }
 }
 
 impl TestServerError {
     const fn new(kind: TestServerErrorKind) -> Self {
-        Self { kind }
+        Self { kind, stage: None }
+    }
+
+    /// Record which step failed, where the kind alone is ambiguous.
+    const fn at(kind: TestServerErrorKind, stage: &'static str) -> Self {
+        Self {
+            kind,
+            stage: Some(stage),
+        }
+    }
+
+    /// Which step produced this, when the kind alone does not say.
+    #[must_use]
+    pub const fn stage(&self) -> Option<&'static str> {
+        self.stage
     }
 
     /// Return the stable category for this failure.
@@ -623,24 +644,39 @@ impl TestServer {
     pub async fn shutdown(mut self) -> Result<(), TestServerError> {
         let executor_failed = self.server.shutdown().await.is_err();
         let Some(mut lifecycle) = self.lifecycle.take() else {
-            return Err(TestServerError::new(TestServerErrorKind::CleanupFailed));
+            return Err(TestServerError::at(
+                TestServerErrorKind::CleanupFailed,
+                "lifecycle already taken",
+            ));
         };
         let timeout = self.lifecycle_timeout;
         let waiter = tokio::task::spawn_blocking(move || lifecycle.cleanup(timeout));
         let Ok(cleanup) = waiter.await else {
-            return Err(TestServerError::new(TestServerErrorKind::ShutdownFailed));
+            return Err(TestServerError::at(
+                TestServerErrorKind::ShutdownFailed,
+                "cleanup task",
+            ));
         };
         if executor_failed {
-            return Err(TestServerError::new(TestServerErrorKind::ShutdownFailed));
+            return Err(TestServerError::at(
+                TestServerErrorKind::ShutdownFailed,
+                "executor",
+            ));
         }
         match cleanup {
             CleanupOutcome::Complete => Ok(()),
-            CleanupOutcome::LifecycleFailed | CleanupOutcome::LifecycleAndFilesystemFailed => {
-                Err(TestServerError::new(TestServerErrorKind::ShutdownFailed))
-            }
-            CleanupOutcome::FilesystemFailed => {
-                Err(TestServerError::new(TestServerErrorKind::CleanupFailed))
-            }
+            CleanupOutcome::LifecycleFailed => Err(TestServerError::at(
+                TestServerErrorKind::ShutdownFailed,
+                "daemon did not exit",
+            )),
+            CleanupOutcome::LifecycleAndFilesystemFailed => Err(TestServerError::at(
+                TestServerErrorKind::ShutdownFailed,
+                "daemon did not exit, files remain",
+            )),
+            CleanupOutcome::FilesystemFailed => Err(TestServerError::at(
+                TestServerErrorKind::CleanupFailed,
+                "files remain",
+            )),
         }
     }
 }

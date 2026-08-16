@@ -649,12 +649,17 @@ mod tests {
     #[test]
     fn named_and_default_sockets_include_the_resolved_root_and_real_uid() {
         let root = tempfile::tempdir().unwrap();
+        // Resolution canonicalizes, which is what makes two selectors for one
+        // endpoint compare equal. On macOS the temporary root reaches here as
+        // `/var/...` and resolves to `/private/var/...`, so the expectation
+        // has to be canonical too or it is only testing Linux.
+        let canonical = root.path().canonicalize().unwrap();
         let context = inputs(Path::new("/work"), Some(root.path().as_os_str()), None);
         let named = resolve_server_identity(None, Some(OsStr::new("testing")), context).unwrap();
         let default = resolve_server_identity(None, None, context).unwrap();
 
-        assert_eq!(named.socket_path(), root.path().join("tmux-1000/testing"),);
-        assert_eq!(default.socket_path(), root.path().join("tmux-1000/default"),);
+        assert_eq!(named.socket_path(), canonical.join("tmux-1000/testing"),);
+        assert_eq!(default.socket_path(), canonical.join("tmux-1000/default"),);
         assert_ne!(named, default);
     }
 
@@ -814,7 +819,14 @@ mod tests {
     #[test]
     fn selectors_for_the_same_endpoint_share_server_identity() {
         let root = tempfile::tempdir().unwrap();
-        let endpoint = root.path().join("tmux-1000/default");
+        // The explicit selector is compared against ones that resolve through
+        // canonicalization, so it has to name the canonical path or they
+        // differ wherever the temporary root is itself a symlink.
+        let endpoint = root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("tmux-1000/default");
         let mut inherited_bytes = endpoint.as_os_str().as_bytes().to_vec();
         inherited_bytes.extend_from_slice(b",1,0");
         let inherited = OsString::from_vec(inherited_bytes);

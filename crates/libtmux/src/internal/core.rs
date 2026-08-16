@@ -802,11 +802,15 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
             .expect("fake subprocess executes");
         let stdout = result.stdout_utf8().expect("fixture output is UTF-8");
 
+        // The working directory is captured canonically, so the expectation
+        // has to be too: on macOS a temporary path arrives as `/var/...` and
+        // resolves to `/private/var/...`.
+        let canonical_workspace = workspace.path().canonicalize().expect("workspace resolves");
         assert_eq!(
             stdout,
             format!(
                 "{}\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<display-message>\n<value\\;>\n<PATH={}>\n<TMUX=unset>\n<TMUX_PANE=unset>\n<TMUX_TMPDIR=unset>\n",
-                workspace.path().display(),
+                canonical_workspace.display(),
                 workspace.path().join("socket;").display(),
                 workspace.path().join("config;").display(),
                 bin.display(),
