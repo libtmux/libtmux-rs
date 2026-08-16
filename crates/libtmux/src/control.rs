@@ -1115,13 +1115,10 @@ impl Line {
     /// Only that block's own terminator is structure. Everything else is
     /// output, however much it resembles a notification.
     fn parse_within_block(line: &[u8], number: u64) -> Self {
-        if let Self::BlockEnd { number: end, .. } = Self::parse(line)
-            && end == number
-        {
-            return Self::parse(line);
+        match Self::parse(line) {
+            end @ Self::BlockEnd { number: found, .. } if found == number => end,
+            _ => Self::Text(TmuxText::from_bytes(line)),
         }
-
-        Self::Text(TmuxText::from_bytes(line))
     }
 
     fn parse(line: &[u8]) -> Self {

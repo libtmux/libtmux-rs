@@ -151,6 +151,26 @@ pub struct Tree {
     pub sessions: Vec<Branch>,
 }
 
+/// Whether tmux knew where the last command's output began.
+///
+/// Reported rather than inferred: an answer that fell back to the whole
+/// screen looks exactly like a command that printed a great deal.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Marks {
+    /// The prompt marks were there, so the text is one command's output.
+    Present,
+    /// tmux has the marks but this pane has none, because its shell does not
+    /// emit OSC 133. fish does; bash and zsh need shell integration. The
+    /// whole history came back instead.
+    Absent,
+    /// This tmux predates `capture-pane -F`, which arrived in 3.7. The
+    /// visible screen came back instead.
+    Unsupported,
+    /// The caller did not ask for the last command, so nothing was looked up.
+    NotAsked,
+}
+
 /// What a pane is showing.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Capture {
@@ -160,6 +180,8 @@ pub struct Capture {
     pub text: String,
     /// How many lines that is.
     pub lines: usize,
+    /// Whether the text is one command's output, and why it is not.
+    pub marks: Marks,
 }
 
 /// A pane's contents and the state a capture leaves out.

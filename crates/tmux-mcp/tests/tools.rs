@@ -360,6 +360,7 @@ async fn reading_a_pane_can_reach_past_the_visible_screen() {
         async move {
             tools
                 .capture_pane(Parameters(CapturePaneArgs {
+                    last_command: false,
                     pane,
                     history,
                     start: None,

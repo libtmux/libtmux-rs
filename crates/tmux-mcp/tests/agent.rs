@@ -2077,3 +2077,72 @@ async fn listing_servers_marks_the_one_these_tools_are_bound_to() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Reading only the last command's output is the biggest saving available to
+/// an agent, so the test measures it: with prompt marks the answer is a
+/// fraction of the history, and without them it says so rather than
+/// pretending.
+#[tokio::test]
+async fn real_tmux_compat_capturing_the_last_command_says_whether_it_could() {
+    let (guard, tools, pane) = typing_fixture("last-command").await;
+
+    // A long run, so falling back to the history would be obvious.
+    tools
+        .run_command(
+            args(serde_json::json!({
+                "pane": pane,
+                "command": "seq 1 300",
+                "seconds": 20,
+            })),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("the first command runs");
+
+    // Standing in for shell integration, which bash and zsh lack.
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": r"printf '\033]133;A\007'; echo the-prompt; printf '\033]133;C\007'; echo only-this-line",
+            "enter": true,
+        })))
+        .await
+        .expect("keys are sent");
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    let last = json(
+        tools
+            .capture_pane(args(
+                serde_json::json!({"pane": pane, "last_command": true}),
+            ))
+            .await
+            .expect("the capture runs"),
+    );
+    let whole = json(
+        tools
+            .capture_pane(args(serde_json::json!({"pane": pane, "history": true})))
+            .await
+            .expect("the capture runs"),
+    );
+    assert_eq!(whole["marks"], "not_asked");
+
+    match last["marks"].as_str().expect("a marks field") {
+        "present" => {
+            let text = last["text"].as_str().expect("text");
+            assert!(
+                text.contains("only-this-line"),
+                "the last command's output came back: {text:?}",
+            );
+            assert!(!text.contains("299"), "the run before it did not: {text:?}");
+            assert!(
+                last["lines"].as_u64().expect("lines") < whole["lines"].as_u64().expect("lines"),
+                "the answer is shorter than the history it was cut from",
+            );
+        }
+        // Below tmux 3.7 there is no `capture-pane -F` to ask.
+        "unsupported" => assert!(last["lines"].as_u64().expect("lines") > 0),
+        other => panic!("unexpected marks {other:?}"),
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

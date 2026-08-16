@@ -1186,6 +1186,15 @@ pub struct CapturePaneArgs {
     /// Read the whole history rather than the visible screen.
     #[serde(default)]
     pub history: bool,
+    /// Return only the last command's output, when the shell marks its
+    /// prompts.
+    ///
+    /// Answers far less than the screen or the history, because it starts
+    /// where the last command's output began. Reports `marks: "absent"` and
+    /// falls back when the pane's shell does not mark its prompts, which is
+    /// the common case outside fish.
+    #[serde(default)]
+    pub last_command: bool,
     /// Start at this line. Zero is the top of the screen, negative is
     /// scrollback.
     pub start: Option<i32>,
@@ -1697,7 +1706,10 @@ impl TmuxTools {
     /// Read one pane's contents.
     #[tool(
         description = "Read a pane's contents. Reads the visible screen by default; set history \
-                       to reach output that has scrolled off, or give a start and end line",
+                       to reach output that has scrolled off, or give a start and end line. \
+                       Set last_command to get only what the last command printed, which is \
+                       usually what you want and is far shorter -- it needs tmux 3.7 and a \
+                       shell that marks its prompts, and says so when it cannot.",
         title = "Read Pane Contents",
         annotations(
             read_only_hint = true,
@@ -1711,10 +1723,15 @@ impl TmuxTools {
         Parameters(CapturePaneArgs {
             pane,
             history,
+            last_command,
             start,
             end,
         }): Parameters<CapturePaneArgs>,
     ) -> Result<Json<Capture>, ErrorData> {
+        if last_command {
+            return self.capture_last_command(&pane).await;
+        }
+
         let mut options = if history {
             CaptureOptions::history()
         } else {
@@ -1742,6 +1759,78 @@ impl TmuxTools {
             pane: pane.id().to_string(),
             lines: rendered.len(),
             text: rendered.join("\n"),
+            marks: Marks::NotAsked,
+        }))
+    }
+
+    /// Read what the last command in a pane printed.
+    ///
+    /// tmux records where a prompt and its output begin from the OSC 133
+    /// sequences a shell emits. Where those marks exist this is exact; where
+    /// they do not, the whole screen comes back with `marks` saying why, so a
+    /// caller reads a field rather than guessing from a suspiciously long
+    /// answer.
+    async fn capture_last_command(&self, pane: &str) -> Result<Json<Capture>, ErrorData> {
+        let target = self.find_pane(pane).await?;
+        let supported = self.server.capabilities().await.is_ok_and(|capabilities| {
+            capabilities
+                .tmux_version()
+                .meets(&libtmux::since::CAPTURE_LINE_FLAGS)
+        });
+
+        let (rendered, marks) = if supported {
+            let lines = target
+                .capture_lines(CaptureOptions::history())
+                .await
+                .map_err(|e| tmux_error(&e))?;
+
+            // The last run begins at the last line marked as output, and ends
+            // where the next prompt begins -- which for the last command is
+            // the end of what tmux holds.
+            match lines.iter().rposition(|line| line.starts_output) {
+                Some(from) => {
+                    // Searched past the output's own line: a shell that emits
+                    // both marks before printing anything puts them on one
+                    // line, and that prompt cannot delimit its own output.
+                    let to = lines[from + 1..]
+                        .iter()
+                        .position(|line| line.starts_prompt)
+                        .map_or(lines.len(), |offset| from + 1 + offset);
+                    (
+                        lines[from..to]
+                            .iter()
+                            .map(|line| line.text.to_string_lossy().into_owned())
+                            .collect::<Vec<_>>(),
+                        Marks::Present,
+                    )
+                }
+                None => (
+                    lines
+                        .iter()
+                        .map(|line| line.text.to_string_lossy().into_owned())
+                        .collect(),
+                    Marks::Absent,
+                ),
+            }
+        } else {
+            let lines = target
+                .capture_with(CaptureOptions::visible())
+                .await
+                .map_err(|e| tmux_error(&e))?;
+            (
+                lines
+                    .iter()
+                    .map(|line| line.to_string_lossy().into_owned())
+                    .collect(),
+                Marks::Unsupported,
+            )
+        };
+
+        Ok(Json(Capture {
+            pane: target.id().to_string(),
+            lines: rendered.len(),
+            text: rendered.join("\n"),
+            marks,
         }))
     }
 

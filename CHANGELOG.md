@@ -52,6 +52,11 @@ full.
 - `cargo run --example budget`, measuring what a client downloads at
   `tools/list`. That budget is why adding a tool is a decision.
 
+- `capture_pane` takes `last_command`, returning only what the last command
+  printed instead of the screen or the whole history. It reports `marks` --
+  `present`, `absent`, or `unsupported` -- because an answer that fell back
+  looks exactly like a command that printed a great deal.
+
 ### Changed
 
 - `run_command`, `wait_for_text` and `wait_for_idle` each answer with their
