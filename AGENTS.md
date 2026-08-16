@@ -237,9 +237,14 @@ To cut a release:
    published crate whose own dependency requirement points at the previous
    version will not resolve. `tmux-mcp` carries its own version and is bumped
    separately.
-2. Move the changelog's `Unreleased` entries under a dated heading.
-3. `just check`.
-4. Push one tag per crate, in dependency order, waiting for each to land:
+2. Bump the version every README tells a reader to depend on. The packaged
+   crate ships its README, so a stale one is shipped install instructions;
+   `just package` fails on it.
+3. `cargo update --workspace`, which moves the four members in `Cargo.lock`
+   and nothing else. `just check` passes `--locked` and fails without it.
+4. Move the changelog's `Unreleased` entries under a dated heading.
+5. `just check`.
+6. Push one tag per crate, in dependency order, waiting for each to land:
    `libtmux-macros@vX.Y.Z`, then `libtmux@vX.Y.Z`, then `tmux-workspace@vX.Y.Z`
    and `tmux-mcp@vA.B.C`. `tmux-workspace` inherits the workspace version, so
    skipping it leaves it pinned to a `libtmux` that is no longer current.
@@ -328,8 +333,9 @@ what:
 
 ### Release commits
 
-Never create tags. Never push tags. The user handles tagging and tag
-pushes (tags trigger the CI publish workflow).
+Tagging is allowed here. A tag publishes to crates.io, and a published
+version is immutable -- it can be yanked, never replaced -- so push one,
+watch it land, and only then push the next.
 
 Release commit subjects are plain and short: `Tag v<version>`. Put
 the detailed why/what in the commit body. Don't use the
