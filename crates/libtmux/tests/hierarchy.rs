@@ -1018,3 +1018,40 @@ async fn a_point_lookup_picks_the_link_the_window_is_current_through() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Every public type prints, and the ones holding paths do not print them.
+///
+/// `Debug` on a public type is a Rust API guideline, and the redaction is this
+/// crate's own rule: a caller debugging a connection should not put a socket
+/// path into a log by printing the thing that holds it.
+#[test]
+fn public_types_are_printable_without_disclosing_paths() {
+    use libtmux::{DispatchLimits, OutputLimits, Server};
+
+    let builder = Server::builder()
+        .socket_path("/tmp/libtmux-rs-test/debug-redaction.sock")
+        .output_limits(OutputLimits::default())
+        .dispatch_limits(DispatchLimits::default());
+
+    let printed = format!("{builder:?}");
+    assert!(
+        printed.contains("ServerBuilder"),
+        "it names itself: {printed}"
+    );
+    assert!(
+        !printed.contains("debug-redaction"),
+        "the socket path is redacted: {printed}",
+    );
+
+    // The generated field handles print their own name rather than a page of
+    // zero-sized markers. They only exist with `query`, and so does their
+    // `Debug`, so the assertion is gated the same way.
+    #[cfg(feature = "query")]
+    {
+        use libtmux::Pane;
+        use libtmux::query::Filterable as _;
+
+        let fields = format!("{:?}", Pane::filter_fields());
+        assert!(fields.starts_with("PaneFields"), "got {fields}");
+    }
+}

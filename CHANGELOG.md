@@ -19,6 +19,9 @@ full.
 
 ### Added
 
+- `Debug` on the seven public types that lacked it, which the Rust API
+  guidelines ask for. `ServerBuilder`'s redacts the socket and config paths,
+  as `ServerIdentity`'s already did.
 - Runnable examples on `Server`, `Session`, `Window`, `Pane`, `OptionValue`,
   `EnvironmentEntry`, `SplitOptions`, `NewSessionOptions`, and
   `CaptureOptions`, plus `just example-coverage` to report which crate-root

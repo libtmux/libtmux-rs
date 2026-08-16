@@ -849,6 +849,17 @@ macro_rules! define_snapshot_info {
             pub $field: filter_field_type!(Target, $decoder)),*
         }
 
+        // Named rather than exhaustive. Every field is a zero-sized handle
+        // whose whole content is its own name, so listing all of them prints a
+        // page of nothing; what a caller printing this wants to know is which
+        // handle set they are holding.
+        #[cfg(feature = "query")]
+        impl<Target> core::fmt::Debug for $fields<Target> {
+            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.debug_struct(stringify!($fields)).finish_non_exhaustive()
+            }
+        }
+
         #[cfg(feature = "query")]
         impl<Target> $fields<Target> {
             /// Build handles bound to one filter target name.

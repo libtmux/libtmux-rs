@@ -2434,6 +2434,33 @@ pub struct ServerBuilder {
     prevent_server_start: bool,
 }
 
+// Redacted like `ServerIdentity`'s, and for the same reason: a builder holds
+// the socket path and the config path, and a caller who prints one while
+// debugging should not put either into a log.
+impl fmt::Debug for ServerBuilder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServerBuilder")
+            .field(
+                "socket_name",
+                &self.socket_name.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "socket_path",
+                &self.socket_path.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "config_file",
+                &self.config_file.as_ref().map(|_| "<redacted>"),
+            )
+            .field("colors", &self.colors)
+            .field("timeout", &self.timeout)
+            .field("output_limits", &self.output_limits)
+            .field("dispatch_limits", &self.dispatch_limits)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ServerBuilder {
     fn new() -> Self {
         Self {
