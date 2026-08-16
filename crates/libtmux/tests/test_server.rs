@@ -1999,7 +1999,18 @@ async fn a_fixture_pane_runs_a_fixed_shell_rather_than_the_callers() {
         )
         .await
         .expect("tmux reports the pane");
-    assert_eq!(running.stdout_lossy().trim(), "sh");
+
+    // The options above are the proof that the shell is pinned. This is the
+    // runtime confirmation, and what tmux reports is whatever `/bin/sh`
+    // actually is: `sh` where that is dash, `bash` on macOS, where `/bin/sh`
+    // is bash in POSIX mode. What matters is that it is a plain POSIX shell
+    // rather than the caller's `$SHELL`, which is what the fixture exists to
+    // prevent.
+    let reported = running.stdout_lossy().trim().to_owned();
+    assert!(
+        matches!(reported.as_str(), "sh" | "bash" | "dash"),
+        "the pane runs whatever /bin/sh is here, not the caller's shell: {reported}",
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
