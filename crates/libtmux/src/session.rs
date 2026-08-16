@@ -119,7 +119,9 @@ impl Session {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// # use libtmux::Command;
-    /// # let socket = std::env::temp_dir().join("libtmux-doc-session-id.sock");
+    /// # let root = std::path::Path::new("/tmp/libtmux-rs-test");
+    /// # std::fs::create_dir_all(root)?;
+    /// # let socket = root.join("libtmux-doc-session-id.sock");
     /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
     /// # let _ = server.cmd(Command::new("kill-server")).await;
     /// # server.cmd(Command::new("new-session").arg("-d").arg("sleep 60")).await?;

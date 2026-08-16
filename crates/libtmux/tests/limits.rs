@@ -36,7 +36,11 @@ async fn output_past_the_budget_fails_rather_than_arriving_short() {
     // Past it. A buffer loaded from a file is the deterministic way to make
     // tmux emit a lot: a large *argument* is refused by tmux itself, and
     // `run-shell` output is unavailable on some releases.
-    let payload = std::env::temp_dir().join("libtmux-rs-test/limits-payload");
+    // The fixture root this workspace owns, not `temp_dir()`: that is `/tmp`
+    // on Linux and `/var/folders/...` on macOS, where the root does not exist.
+    let root = std::path::Path::new("/tmp/libtmux-rs-test");
+    std::fs::create_dir_all(root).expect("the fixture root is writable");
+    let payload = root.join("limits-payload");
     std::fs::write(&payload, vec![b'x'; 16 * 1024]).expect("payload is written");
     server
         .cmd(

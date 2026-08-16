@@ -479,7 +479,9 @@ impl Server {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// # use libtmux::Command;
-    /// # let socket = std::env::temp_dir().join("libtmux-doc-sessions.sock");
+    /// # let root = std::path::Path::new("/tmp/libtmux-rs-test");
+    /// # std::fs::create_dir_all(root)?;
+    /// # let socket = root.join("libtmux-doc-sessions.sock");
     /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
     /// # let _ = server.cmd(Command::new("kill-server")).await;
     /// assert!(server.sessions().await.is_empty());
@@ -2335,7 +2337,9 @@ impl Server {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// # use libtmux::Command;
-    /// # let socket = std::env::temp_dir().join("libtmux-doc-try-sessions.sock");
+    /// # let root = std::path::Path::new("/tmp/libtmux-rs-test");
+    /// # std::fs::create_dir_all(root)?;
+    /// # let socket = root.join("libtmux-doc-try-sessions.sock");
     /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
     /// # let _ = server.cmd(Command::new("kill-server")).await;
     /// server
