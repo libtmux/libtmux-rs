@@ -258,18 +258,25 @@ pub enum Safety {
 }
 
 impl Safety {
-    /// Read the tier from the environment, falling back to the default.
-    ///
-    /// An unreadable value is not worth refusing to start over, and widening
-    /// the surface on a typo would be the wrong way to fail, so anything
-    /// unrecognised leaves the default in place.
+    /// Read the tier from the environment, falling back rather than refusing.
     #[must_use]
     pub fn from_env() -> Self {
-        std::env::var(SAFETY_ENV)
-            .ok()
-            .as_deref()
-            .and_then(Self::parse)
-            .unwrap_or_default()
+        Self::from_value(std::env::var(SAFETY_ENV).ok().as_deref())
+    }
+
+    /// Resolve a tier from the value an environment would give.
+    ///
+    /// Separate from [`Safety::from_env`] so the fallback can be tested without
+    /// a process-wide environment, which no test can hold alone.
+    ///
+    /// Unset takes the default. Set and unrecognised takes [`Safety::ReadOnly`]:
+    /// a typo costs a restart in that direction and an unnoticed grant of
+    /// authority in the other.
+    #[must_use]
+    pub fn from_value(value: Option<&str>) -> Self {
+        value.map_or_else(Self::default, |value| {
+            Self::parse(value).unwrap_or(Self::ReadOnly)
+        })
     }
 
     /// Read a tier by name.
@@ -4119,5 +4126,38 @@ impl ServerHandler for TmuxTools {
         }
         info.instructions = Some(instructions);
         info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Safety;
+
+    #[test]
+    fn an_unset_tier_takes_the_default() {
+        assert_eq!(Safety::from_value(None), Safety::Mutating);
+    }
+
+    #[test]
+    fn a_tier_is_read_by_name() {
+        for (given, expected) in [
+            ("readonly", Safety::ReadOnly),
+            ("read-only", Safety::ReadOnly),
+            ("mutating", Safety::Mutating),
+            ("destructive", Safety::Destructive),
+        ] {
+            assert_eq!(Safety::from_value(Some(given)), expected, "{given}");
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_tier_narrows_rather_than_widens() {
+        // Every one of these is a plausible way to mistype `readonly`. The
+        // flag refuses them; the environment cannot, because it is read from
+        // wherever the process was started -- so it falls to the tier that
+        // offers least rather than to the one it was already going to use.
+        for given in ["read only", "read_only", "ro", "yolo", ""] {
+            assert_eq!(Safety::from_value(Some(given)), Safety::ReadOnly, "{given}");
+        }
     }
 }

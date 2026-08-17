@@ -266,6 +266,11 @@ Three tiers, also settable with `TMUX_MCP_SAFETY`:
 Tools above the tier are not advertised at all, because an agent cannot choose
 what it cannot see.
 
+`--safety` refuses a name it does not know. `TMUX_MCP_SAFETY` cannot -- it is
+read from wherever the process was started -- so an unrecognised value there
+falls to `readonly` rather than to the default. The startup line names the tier
+in force, which is where a typo shows up.
+
 ### Asking first
 
 A tier is decided once, at launch. `--confirm` instead puts a person in the
