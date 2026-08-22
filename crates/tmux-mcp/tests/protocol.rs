@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use libtmux::test::TestServer;
+use libtmux::test::{DaemonState, TestServer, retry_until};
 use libtmux::{Command, Server};
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
@@ -24,6 +24,25 @@ use tmux_mcp::{Safety, TmuxTools};
 struct Wire {
     client: RunningService<RoleClient, ()>,
     server: tokio::task::JoinHandle<()>,
+}
+
+/// Which layer turned a call down.
+///
+/// The distinction is the whole point of this suite: only one of the two is
+/// evidence about a schema, and both reach a caller as an error.
+#[derive(Debug)]
+enum Refusal {
+    /// The arguments could not be built by rmcp, so the tool never ran.
+    Arguments(String),
+    /// The arguments were accepted and the call failed after that.
+    Call(String),
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Arguments(detail) | Self::Call(detail)) = self;
+        formatter.write_str(detail)
+    }
 }
 
 impl Wire {
@@ -44,7 +63,7 @@ impl Wire {
     /// Answers come back as `structuredContent`, which is where a typed tool
     /// puts its value; the text block carries the same thing for clients that
     /// predate structured output.
-    async fn call(&self, name: &'static str, arguments: Value) -> Result<String, String> {
+    async fn call(&self, name: &'static str, arguments: Value) -> Result<String, Refusal> {
         let mut params = CallToolRequestParams::default();
         params.name = name.into();
         params.arguments = arguments.as_object().cloned();
@@ -52,7 +71,7 @@ impl Wire {
             .client
             .call_tool(params)
             .await
-            .map_err(|error| format!("transport: {error}"))?;
+            .map_err(|error| Refusal::Call(error.to_string()))?;
 
         let text = answer
             .content
@@ -60,7 +79,7 @@ impl Wire {
             .filter_map(|part| part.as_text().map(|text| text.text.clone()))
             .collect::<String>();
         if answer.is_error == Some(true) {
-            return Err(text);
+            return Err(Refusal::Arguments(text));
         }
         Ok(text)
     }
@@ -111,6 +130,20 @@ async fn detail(wire: &Wire, name: &'static str, arguments: Value) -> Value {
         }
         Ok(_) => panic!("{name} should have failed"),
     }
+}
+
+/// Read the daemon's fate, allowing for one that is on its way out.
+///
+/// tmux's client reports a lost server as soon as the socket closes, which is
+/// before the kernel has a status for the process behind it, so a single
+/// reading calls a dead daemon running. This waits for the exit rather than
+/// for a duration, and reports what it saw either way.
+async fn daemon_fate(guard: &mut TestServer) -> DaemonState {
+    let _ = retry_until(Duration::from_secs(5), async || {
+        !guard.daemon_state().is_running()
+    })
+    .await;
+    guard.daemon_state()
 }
 
 /// Wait until a pane's shell has drawn a prompt.
@@ -333,7 +366,7 @@ fn every_call(
 
 #[tokio::test]
 async fn every_tool_accepts_the_arguments_its_schema_describes() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let mut guard = TestServer::builder().start().await.expect("tmux starts");
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
@@ -408,15 +441,36 @@ async fn every_tool_accepts_the_arguments_its_schema_describes() {
         "these tools are advertised but never called over the wire: {missing:?}",
     );
 
+    // The daemon is checked before each call rather than after, so the last
+    // call in the list is the one tool allowed to end it: `kill_server`.
+    let mut previous = "the setup";
     for (name, arguments) in calls {
-        let answer = wire.call(name, arguments.clone()).await;
+        let daemon = guard.daemon_state();
         assert!(
-            answer.is_ok(),
-            "{name} rejected the arguments its own schema describes: {arguments} -> {answer:?}",
+            daemon.is_running(),
+            "the fixture daemon is {daemon} before {name}, so {previous} took the server \
+             down and nothing after it says anything about a schema",
         );
+
+        if let Err(refusal) = wire.call(name, arguments.clone()).await {
+            let daemon = daemon_fate(&mut guard).await;
+            match refusal {
+                Refusal::Arguments(detail) => panic!(
+                    "{name} rejected the arguments its own schema describes \
+                     (fixture daemon {daemon}): {arguments} -> {detail}",
+                ),
+                Refusal::Call(detail) => panic!(
+                    "{name} accepted its arguments and the call failed after that, so this \
+                     is not evidence about its schema (fixture daemon {daemon}): \
+                     {arguments} -> {detail}",
+                ),
+            }
+        }
+        previous = name;
     }
 
     wire.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
 /// The tools that change nothing about the server.

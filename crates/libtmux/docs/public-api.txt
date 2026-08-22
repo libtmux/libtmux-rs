@@ -277,6 +277,7 @@ enum libtmux::target::PaneTarget
 enum libtmux::target::SessionNameError
 enum libtmux::target::SessionTarget
 enum libtmux::target::WindowTarget
+enum libtmux::test::DaemonState
 enum libtmux::test::TestServerErrorKind
 enum libtmux::window::PaneDirection
 enum libtmux::window::PaneSize
@@ -754,9 +755,11 @@ function libtmux::target::ServerGeneration::pid
 function libtmux::target::ServerGeneration::start_time
 function libtmux::target::SessionName::as_str
 function libtmux::target::SessionName::new
+function libtmux::test::DaemonState::is_running
 function libtmux::test::RetryTimeout::waited
 function libtmux::test::TestServer::builder
 function libtmux::test::TestServer::daemon_pid
+function libtmux::test::TestServer::daemon_state
 function libtmux::test::TestServer::new
 function libtmux::test::TestServer::server
 function libtmux::test::TestServer::session
@@ -1294,6 +1297,9 @@ variant libtmux::target::SessionNameError::Empty
 variant libtmux::target::SessionNameError::Separator
 variant libtmux::target::SessionTarget::Id
 variant libtmux::target::WindowTarget::Id
+variant libtmux::test::DaemonState::Gone
+variant libtmux::test::DaemonState::Running
+variant libtmux::test::DaemonState::Unreadable
 variant libtmux::test::TestServerErrorKind::CleanupFailed
 variant libtmux::test::TestServerErrorKind::DaemonExited
 variant libtmux::test::TestServerErrorKind::DaemonPidMismatch
