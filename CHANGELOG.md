@@ -16,6 +16,15 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `libtmux::test::TestServer::daemon_state` and `DaemonState`, reporting
+  whether a fixture's tmux daemon is still running and, when it is not, the
+  status the kernel gave. tmux's client reports a daemon that died as
+  `server exited unexpectedly` and exit 1, which is the same shape as a
+  command tmux rejected, so a test asserting on the reply alone blames the
+  command.
+
 ## 0.1.0-alpha.7 - 2026-08-22
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.7;

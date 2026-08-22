@@ -494,6 +494,79 @@ impl fmt::Debug for TestServer {
     }
 }
 
+/// Whether a fixture's tmux daemon is still running, and how it ended if not.
+///
+/// A test drives tmux through tmux's own client, and that client reports a
+/// daemon that died as an ordinary refusal: it prints `server exited
+/// unexpectedly` and exits 1, the same shape as a command tmux rejected. An
+/// assertion written against the reply alone therefore blames the command.
+/// [`TestServer::daemon_state`] answers the question the reply cannot.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::test::{DaemonState, TestServer};
+///
+/// let mut guard = TestServer::new().await?;
+/// assert_eq!(guard.daemon_state(), DaemonState::Running);
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DaemonState {
+    /// The daemon has not exited.
+    Running,
+    /// The daemon has exited, with the status the kernel reported.
+    ///
+    /// `signal: 11 (SIGSEGV)` is tmux crashing; `signal: 9 (SIGKILL)` is
+    /// something outside the fixture killing it; an exit status is tmux
+    /// deciding to stop.
+    Gone(std::process::ExitStatus),
+    /// The wait could not be made, so the daemon's fate is unknown.
+    Unreadable,
+}
+
+impl DaemonState {
+    /// Whether the daemon has not exited.
+    ///
+    /// [`DaemonState::Unreadable`] counts as not running: a fixture that
+    /// cannot prove its daemon is there has nothing to assert against.
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let mut guard = libtmux::test::TestServer::new().await?;
+    /// assert!(guard.daemon_state().is_running());
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn is_running(self) -> bool {
+        matches!(self, Self::Running)
+    }
+}
+
+impl fmt::Display for DaemonState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Running => formatter.write_str("running"),
+            Self::Gone(status) => write!(formatter, "gone ({status})"),
+            Self::Unreadable => formatter.write_str("in an unreadable state"),
+        }
+    }
+}
+
 impl TestServer {
     /// Start an isolated tmux server with the default builder settings.
     ///
@@ -622,6 +695,45 @@ impl TestServer {
     #[must_use]
     pub const fn daemon_pid(&self) -> u32 {
         self.daemon_pid
+    }
+
+    /// Report whether the daemon is still running, and how it ended if not.
+    ///
+    /// Takes `&mut self` because reading the fate of a daemon that has exited
+    /// reaps it; the guard then skips the signalling it no longer needs and
+    /// still sweeps the panes the daemon left behind. Calling this on a
+    /// running daemon changes nothing and costs one `waitpid`.
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use std::time::Duration;
+    ///
+    /// use libtmux::{Command, test::{DaemonState, TestServer, retry_until}};
+    ///
+    /// let mut guard = TestServer::new().await?;
+    /// guard.session("work").await?;
+    /// guard.server().cmd(Command::new("kill-server")).await.ok();
+    ///
+    /// // tmux stops answering on the socket before the kernel has a status
+    /// // for the process behind it, so this is a wait rather than a reading.
+    /// retry_until(Duration::from_secs(5), async || {
+    ///     !guard.daemon_state().is_running()
+    /// })
+    /// .await?;
+    /// assert!(matches!(guard.daemon_state(), DaemonState::Gone(_)));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn daemon_state(&mut self) -> DaemonState {
+        self.lifecycle
+            .as_mut()
+            .map_or(DaemonState::Unreadable, Lifecycle::daemon_state)
     }
 
     /// Stop the client executor and consume the daemon guard.
@@ -985,6 +1097,29 @@ impl Lifecycle {
         match self.leader_state {
             LeaderState::Reaped(status) => Some(status),
             LeaderState::Waitable | LeaderState::Lost => None,
+        }
+    }
+
+    /// Read the daemon's fate without disturbing a daemon that is still there.
+    ///
+    /// Reaping here is what makes the status readable at all: only the parent
+    /// can be told how a child ended, and the fixture is the parent. The
+    /// retained status is the one cleanup would have collected, so cleanup
+    /// stays correct after this runs.
+    fn daemon_state(&mut self) -> DaemonState {
+        if let Some(status) = self.reaped_status() {
+            return DaemonState::Gone(status);
+        }
+        if !matches!(self.leader_state, LeaderState::Waitable) {
+            return DaemonState::Unreadable;
+        }
+        match self.child.try_wait() {
+            Ok(None) => DaemonState::Running,
+            Ok(Some(status)) => {
+                self.leader_state = LeaderState::Reaped(status);
+                DaemonState::Gone(status)
+            }
+            Err(_) => DaemonState::Unreadable,
         }
     }
 
