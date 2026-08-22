@@ -1,0 +1,359 @@
+# Contributing
+
+This repository is a Cargo workspace of four published crates, and the gates
+below are what a change has to pass. It was extracted from the Python libtmux
+repository; a convention you recognise from that project does not apply here
+unless a file here says so, and none of its commands do — nothing here uses
+`uv`, `pytest`, `ruff`, or `mypy`.
+
+For how the prose reads — README, changelog, release notes, commit messages,
+rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
+
+## Getting set up
+
+You need tmux 3.2a or newer on `PATH` and a Unix target. Native Windows is
+unsupported because tmux is unavailable there; WSL works.
+
+`rust-toolchain.toml` pins the toolchain, so rustup installs it on the first
+cargo command. The gate also needs the two MSRV floors and three tools:
+
+```console
+$ rustup toolchain install 1.85.0 1.88.0
+```
+
+```console
+$ cargo install just cargo-hack cargo-deny
+```
+
+Nightly is needed only for `just api-check`, `just example-coverage-check`,
+and `just fuzz`, none of which are part of the local gate.
+
+`just` with no argument lists every recipe. Cargo is authoritative; the
+justfile only groups Cargo commands.
+
+## Building
+
+```console
+$ cargo build --workspace --all-features
+```
+
+Four crates, all published:
+
+| Crate | What it is |
+| --- | --- |
+| `crates/libtmux` | The async tmux client and object model |
+| `crates/libtmux-macros` | `#[derive(Filterable)]`, for downstream structs |
+| `crates/tmux-mcp` | A Model Context Protocol server over tmux |
+| `crates/tmux-workspace` | A tmuxp-style YAML builder |
+
+`tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
+the workspace's: it moves at its own pace, and `rmcp` and `darling` require a
+newer compiler than the libraries promise. `fuzz/` is excluded from the
+workspace because it needs nightly and a sanitizer.
+
+`tmux-mcp` and `tmux-workspace` exist to use `libtmux` from outside it, and
+being genuinely published is part of that job — a crate built only inside its
+own workspace never proves its dependency requirements resolve.
+`tmux-workspace` could not be published at all until `libtmux` shipped the
+`plan` feature it asks for, which is not visible from inside the tree. When
+either needs a workaround, that is a finding about `libtmux`.
+
+## Running the tests
+
+```console
+$ just test
+```
+
+Tests run against real tmux. There are no mocks; a test that would need one is
+usually asking for a design change. `libtmux::test::TestServer`, behind the
+`test-support` feature, gives each test an isolated socket and deterministic
+cleanup. Tests are functions, not methods on a struct.
+
+Doctests are a separate target and are part of the gate. Several READMEs are
+compiled along with them: the root `README.md` and `crates/libtmux/README.md`
+through `crates/libtmux/src/lib.rs`, and `crates/tmux-workspace/README.md`
+through its own. A Rust example on one of those pages is a test.
+
+```console
+$ just doctest
+```
+
+### Where a test goes
+
+- **Beside the code**, in an inline `#[cfg(test)] mod tests`, when it reaches
+  an unexported identifier.
+- **In the crate's `tests/` directory** otherwise. Each file there is its own
+  binary, named for the surface it covers — `control.rs`, `query.rs`,
+  `mutations.rs`.
+- **Named `real_tmux_compat_…`** when it pins behavior or wording against real
+  tmux releases rather than against our own expectations. These are the tests
+  the compatibility lane exists to run, and the prefix is how they are found.
+  Version-specific behavior belongs in one of these, not in a comment.
+
+A passing gate is evidence only once it has been shown capable of failing.
+Pair a new test with a deliberate break that proves it bites.
+
+### The fixture root
+
+**This workspace owns `/tmp/libtmux-rs-test/` and nothing outside it.** More
+than one libtmux lives on a developer's machine, and the Python suites put
+their sockets in `/tmp` too. Sharing the root makes "whose leftover is this"
+unanswerable, and a stray reaper or a socket collision then reads as a bug in
+whatever ran next: one such session ended with 3,023 of 4,096 pseudo-terminals
+held and `fork` failing with `No space left on device` in an unrelated build.
+
+- Fixtures go under `/tmp/libtmux-rs-test/`. `TestServer` puts them there; do
+  not pass a socket path outside it.
+- Throwaway sockets for hand spikes go under `/tmp/libtmux-rs-dev/`, so they
+  are as obviously ours as the fixtures are and can be swept without thinking.
+- `reap_abandoned_servers` only ever looks inside the fixture root, so it
+  cannot reach another workspace's server however abandoned that server looks.
+  Keep it that way.
+- Socket paths are bounded by `sun_path` at about 108 bytes, which is why the
+  root is short. A scratch directory deep under `$TMPDIR` fails to bind with
+  "File name too long".
+
+## Checks that must pass
+
+```console
+$ just check
+```
+
+That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`, `docs`,
+`doc-blocks`, `format-coverage-check`, `features`, `deny`, `msrv`, `package`.
+Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
+every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
+fails until the lockfile is committed.
+
+Four gates are **not** in `just check` and run only in CI:
+
+| Gate | Why it is separate |
+| --- | --- |
+| `just api-check` | Needs nightly rustdoc JSON; the gate stays on stable |
+| `just example-coverage-check` | Same, and rides the same nightly build |
+| `just compat` | Builds five tmux releases from source; 90 minutes |
+| `just fuzz <target>` | Needs nightly and a sanitizer; runs weekly |
+
+CI also runs the suite on macOS, but only on `master` or manual dispatch: a
+macOS runner bills at ten times a Linux one and the lints are
+platform-independent. On a pull request, `tests on macOS` and `fuzz parsers`
+report as skipping. That is the design, not a failure.
+
+The gates worth explaining:
+
+**Doctests must actually run.** A `#[cfg(feature = "…")]` inside a doctest
+reads the doctest's own crate, which has no features, so it is always false:
+the example compiles to nothing and passes vacuously. Gate the doc attribute
+instead — `#![cfg_attr(feature = "x", doc = "…")]`. When adding a doctest for
+gated API, break it once and confirm it fails.
+
+**The public surface is recorded.** `crates/libtmux/docs/public-api.txt` lists
+every public item. `just api` regenerates it; `just api-check` fails when the
+tree disagrees. Adding or changing public API means committing the regenerated
+file, and that diff is the review artefact. There is no semver gate while the
+crates are prerelease: `cargo-semver-checks` treats a prerelease-to-prerelease
+step as a major change and skips every lint, reporting `0 checks: 0 pass, 254
+skip` and then `no semver update required`, which reads like a clean bill of
+health and is not one. The changelog is the record until the first
+non-prerelease version.
+
+**Every crate-root type has a runnable example.**
+`just example-coverage-check` fails on a type added without one. Write it
+against a real `TestServer` where behavior is the point: an example that runs
+is the only kind that catches a wrong belief about tmux, which is what they
+keep catching.
+
+**Doc comments are checked for splits.** `just doc-blocks` fails when a doc
+comment opens mid-sentence or sits below a non-doc attribute — the shape a
+split leaves when it lands on a sentence boundary. See
+[`WRITING.md`](WRITING.md) for the rule this enforces.
+
+**The format catalog is measured against tmux's own source.**
+`crates/libtmux/docs/format-coverage.txt` records every format name tmux
+publishes and what this crate does about it: `catalogued`, `missing`, or
+`excluded` with a reason. `just format-coverage <tmux checkout>` rerecords it
+and `just format-coverage-check` fails on drift, needing no tmux source, which
+is why that half is in the gate. A `missing` row is a field a listing could
+carry and does not; adding one is ordinary work, leaving it unrecorded is not.
+
+**Parsers that read from outside are fuzzed.** The control-mode line parser,
+the filter-expression wire format, and the workspace YAML loader each have a
+target under `fuzz/`. Add one when adding a parser that reads bytes this crate
+did not write, and seed it — an unseeded target proves only that arbitrary
+input is not valid input.
+
+**Packaging is a gate.** `just package` builds the published crates and
+verifies what the tarballs contain. A packaged crate ships its README, so a
+README telling a reader to depend on a version that is no longer current is
+shipped install instructions, and this is what catches it.
+
+## The language floor
+
+MSRV is **1.85** for the libraries, Edition 2024's first compiler, and
+**1.88** for `tmux-mcp`, which cannot meet the lower floor because `rmcp` and
+`darling` do not. Two floors because they are two promises. A raise is a minor
+bump, and is a compatibility entry in the changelog naming both versions.
+
+The floor is stated in several places, and they have to agree:
+
+- `[workspace.package] rust-version` in `Cargo.toml`
+- `crates/tmux-mcp/Cargo.toml`, which sets its own
+- the `msrv` recipe in the justfile, which runs each floor by exact name
+- the toolchain installs in `.github/workflows/ci.yml`
+- the MSRV badge and the Requirements section in `README.md`
+
+`just msrv` runs the library tests on 1.85.0, then `cargo hack check
+--each-feature` on 1.85.0 so no single feature raises the floor on its own,
+then the `tmux-mcp` tests on 1.88.0. `rust-toolchain.toml` pins a much newer
+toolchain for day-to-day work; it is not the floor and does not prove one.
+
+## Dependencies
+
+- A declared version is the **minimum supported**, not the newest published,
+  and never one whose own `rust-version` exceeds our floor.
+- Shared versions live in `[workspace.dependencies]`. `libtmux-macros` is
+  pinned exactly, because the derive expands to paths into a hidden surface
+  that only the matching version provides.
+- `cargo deny check` gates licences, advisories, and sources: seven licences
+  are allowed, yanked crates are denied, wildcard requirements are denied
+  outside the workspace's own path dependencies, and unknown registries and
+  git sources are denied.
+- `libtmux` must not require proc macros. Its own `Filterable` impls are
+  hand-written; the derive is for downstream structs only.
+
+## API conventions
+
+The reasoning behind these is in
+[`crates/libtmux/docs/design.md`](../crates/libtmux/docs/design.md); what
+follows is the rule.
+
+- **Handles and snapshots keep private fields behind accessors.** The two
+  shapes `Server::hierarchy` returns are `#[non_exhaustive]` instead, because
+  callers read their fields directly. Enums that model something tmux owns are
+  `#[non_exhaustive]`; enums whose variants are complete by construction are
+  not.
+- **tmux emits bytes, not text.** Names, titles, and pane output can be
+  invalid UTF-8, so they cross the API as `TmuxText`. Reading a tmux stream
+  with anything that requires UTF-8 fails the whole operation the first time a
+  pane prints a high byte.
+- **Listings come in pairs, and the short name is the loud one.** `sessions()`
+  returns `Result`; `sessions_or_empty()` collapses failure into no rows. Both
+  halves are load-bearing, and which one gets the short name is the point: a
+  caller who writes the obvious thing gets the error, and a caller who wants
+  an empty list on failure has to say so. Add both when adding a listing.
+- **A failure says what to do about it.** `Error::kind` reduces the variants
+  to a decision, and `is_object_gone` is the branch most callers write. tmux
+  reports a missing target and a bad argument with the same exit status, so
+  the classification reads stderr, and `real_tmux_compat_error_…` pins that
+  wording against every supported release.
+- `unsafe_code` is `forbid` at the workspace level. `unwrap`, `expect`, and
+  `panic` are denied outside tests.
+
+## Pull requests
+
+Keep a change scoped to what was asked for; unrelated cleanup goes in its own
+commit or its own pull request. Make the smallest coherent change that solves
+the verified problem, and reuse an existing helper, type, or test before
+adding one.
+
+Run `just check` before pushing. A pull request that changes public API
+carries the regenerated `public-api.txt`; one that changes behavior carries a
+changelog entry under `## Unreleased`; one that adds a gate carries the proof
+that the gate can fail.
+
+Commit format is in [`WRITING.md`](WRITING.md).
+
+## Review
+
+The diff of `public-api.txt` is the review artefact for an API change, and the
+changelog entry is the review artefact for a behavioral one. A reviewer reads
+both before the implementation.
+
+Two questions a reviewer is expected to ask: has this test been shown to fail,
+and does the comment that came with it survive the gates in
+[`WRITING.md`](WRITING.md).
+
+## Releases
+
+Publishing is done by `.github/workflows/release.yml`, on a
+`<crate>@v<version>` tag. There is no API token anywhere: the workflow mints a
+short-lived one from crates.io by exchanging a GitHub OIDC identity token
+through `rust-lang/crates-io-auth-action`. Nothing in the repository can
+publish without such a tag, because the `release` environment only accepts
+refs matching `*@v*`, and crates.io checks the environment as well as the
+workflow file.
+
+**One tag names one crate.** The crates do not share a version — `tmux-mcp`
+moves at its own pace — so a workspace-wide tag could not say what was being
+released. The tag also orders the work: publishing a crate before the
+`libtmux` it requires simply fails, because cargo resolves that dependency
+from the registry rather than from the tree. Tags go out leaves-first, and
+each waits for the previous to appear on crates.io.
+
+To cut a release:
+
+1. Bump `[workspace.package] version` and the `libtmux` pin in
+   `[workspace.dependencies]` together — they are the same number, and a
+   published crate whose own dependency requirement points at the previous
+   version will not resolve. `tmux-mcp` carries its own version and is bumped
+   separately.
+2. Bump the version every README tells a reader to depend on. The packaged
+   crate ships its README, so a stale one is shipped install instructions;
+   `just package` fails on it.
+3. `cargo update --workspace`, which moves the four members in `Cargo.lock`
+   and nothing else. `just check` passes `--locked` and fails without it.
+4. Move the changelog's `Unreleased` entries under a dated heading.
+5. `just check`.
+6. Push one tag per crate, in dependency order, waiting for each to land:
+   `libtmux-macros@vX.Y.Z`, then `libtmux@vX.Y.Z`, then
+   `tmux-workspace@vX.Y.Z` and `tmux-mcp@vA.B.C`. `tmux-workspace` inherits
+   the workspace version, so skipping it leaves it pinned to a `libtmux` that
+   is no longer current.
+
+The workflow checks that the version in the tag is the version in the
+manifest, then runs the whole gate on that exact commit, packages the crate,
+attests it, publishes, and attaches the `.crate` to a GitHub release. It runs
+the gate rather than trusting the tag because a crates.io version is
+immutable: it is the one build that cannot be taken back.
+
+**Provenance is attached to the release, not to the registry.** crates.io does
+not host or display build attestations yet, and `cargo` does not verify them,
+so `actions/attest` signs the packaged `.crate` files and the attestation
+lives with the GitHub release. It is Sigstore-signed and logged in Rekor, and
+it covers the same bytes crates.io serves, because `cargo package` is
+byte-deterministic for a given tree — measured rather than assumed.
+
+**One step is not in this repository.** Each published crate has to name this
+workflow as a trusted publisher, once, in the crates.io UI under the crate's
+Settings:
+
+| Field | Value |
+| --- | --- |
+| Repository owner | `libtmux` |
+| Repository name | `libtmux-rs` |
+| Workflow filename | `release.yml` |
+| Environment | `release` |
+
+A crate has to have been published at least once by hand before it can be
+configured, which all four have been.
+
+## Compatibility
+
+Every supported tmux release is built from source in CI and runs the whole
+workspace, because tmux's own output and error wording change between
+releases. The lane covers **3.2a, 3.4, 3.5a, 3.6b, and 3.7b** — the final
+patch of each series, which is what a distribution ships and what a user runs;
+3.4 is the exception because that series has no later patch.
+
+Where a release is wrong rather than merely old, the crate says so rather than
+working around it silently: `run_shell` refuses on 3.3 through 3.4, which drop
+the command's output instead of returning it.
+
+Run the lane locally with `just compat`, which builds each release from
+source. It is slow, and it is the only thing that catches a version-specific
+break before CI does.
+
+While the version is `0.1.0-alpha.*` the API is not settled and any release
+may change or remove exported identifiers without a deprecation period. That
+is stated in `README.md` and `CHANGELOG.md` in the wording every libtmux port
+uses; keep the three in agreement.
