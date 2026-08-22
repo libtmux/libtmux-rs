@@ -242,6 +242,7 @@ constant libtmux::options::generated::names::WORD_SEPARATORS
 constant libtmux::options::generated::names::WRAP_SEARCH
 constant libtmux::options::generated::names::XTERM_KEYS
 constant libtmux::version::since::CAPTURE_LINE_FLAGS
+constant libtmux::version::since::CONTROL_PANE_OFF
 constant libtmux::version::since::PROMPT_HISTORY
 constant libtmux::version::since::SERVER_ACCESS
 enum libtmux::control::Event
