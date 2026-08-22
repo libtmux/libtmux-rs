@@ -558,23 +558,20 @@ impl Server {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// # use libtmux::Command;
-    /// # let root = std::path::Path::new("/tmp/libtmux-rs-test");
-    /// # std::fs::create_dir_all(root)?;
-    /// # let socket = root.join("libtmux-doc-sessions.sock");
-    /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
-    /// # let _ = server.cmd(Command::new("kill-server")).await;
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    ///
+    /// // A fixture starts with no sessions. The lenient form reports that as
+    /// // an empty listing rather than as the failure it also collapses.
     /// assert!(server.sessions_or_empty().await.is_empty());
     ///
-    /// server
-    ///     .cmd(Command::new("new-session").arg("-d").arg("-s").arg("work").arg("sleep 60"))
-    ///     .await?;
+    /// guard.session("work").await?;
     ///
     /// let sessions = server.sessions_or_empty().await;
     /// assert_eq!(sessions.len(), 1);
     /// assert_eq!(sessions[0].name().as_bytes(), b"work");
-    /// # let _ = server.cmd(Command::new("kill-server")).await;
-    /// # server.shutdown().await?;
+    ///
+    /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// # })?;
     /// # Ok(())
@@ -2426,21 +2423,14 @@ impl Server {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// # use libtmux::Command;
-    /// # let root = std::path::Path::new("/tmp/libtmux-rs-test");
-    /// # std::fs::create_dir_all(root)?;
-    /// # let socket = root.join("libtmux-doc-try-sessions.sock");
-    /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
-    /// # let _ = server.cmd(Command::new("kill-server")).await;
-    /// server
-    ///     .cmd(Command::new("new-session").arg("-d").arg("-s").arg("work").arg("sleep 60"))
-    ///     .await?;
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// guard.session("work").await?;
     ///
-    /// let sessions = server.sessions().await?;
+    /// let sessions = guard.server().sessions().await?;
     /// assert_eq!(sessions.len(), 1);
     /// assert!(sessions[0].id().to_string().starts_with('$'));
-    /// # let _ = server.cmd(Command::new("kill-server")).await;
-    /// # server.shutdown().await?;
+    ///
+    /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// # })?;
     /// # Ok(())
