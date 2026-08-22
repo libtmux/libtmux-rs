@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "libtmux"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.6"
 dependencies = [
  "caseless",
  "futures-core",
@@ -385,7 +385,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tmux-workspace"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.6"
 dependencies = [
  "libtmux",
  "thiserror",
