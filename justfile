@@ -17,6 +17,48 @@ test *args:
 doctest:
     cargo test --locked --workspace --doc --all-features
 
+# tmux never unlinks its socket when the server exits, so whatever named one
+# owns removing it. `TestServer` does; a test that hand-rolls a socket path
+# does not, and the file it leaves is invisible until the root fills up. Pure
+# filesystem, no toolchain, so it is part of `just check`.
+#
+# A run that has not finished is not this gate's business, or a suite in one
+# terminal fails the gate in another: a fixture records the process that made
+# it, and a socket a server still answers on is in use.
+#
+# Report anything the suite left in the fixture root
+[group: 'test']
+fixture-root:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=/tmp/libtmux-rs-test
+    if [ ! -d "$root" ]; then
+        echo "fixture root absent"
+        exit 0
+    fi
+    left=()
+    for entry in "$root"/* "$root"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        owner="$entry/owner"
+        if [ -f "$owner" ] && kill -0 "$(cat "$owner")" 2>/dev/null; then
+            continue
+        fi
+        if [ -S "$entry" ] && tmux -S "$entry" list-sessions >/dev/null 2>&1; then
+            continue
+        fi
+        left+=("${entry#"$root"/}")
+    done
+    if [ ${#left[@]} -eq 0 ]; then
+        echo "fixture root clean"
+        exit 0
+    fi
+    printf 'the fixture root still holds:\n' >&2
+    printf '  %s\n' "${left[@]}" >&2
+    printf '\ntmux does not unlink its socket when the server exits, so a test that\n' >&2
+    printf 'names its own socket path has to remove it. libtmux::test::TestServer\n' >&2
+    printf 'owns that lifecycle; prefer it over Server::builder().socket_path().\n' >&2
+    exit 1
+
 # Run the suite on each crate's minimum supported Rust version
 #
 # Two floors, because they are two promises. The libraries support 1.85 and
@@ -227,7 +269,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test doctest docs doc-blocks format-coverage-check features deny msrv package
+check: fmt-check clippy test doctest fixture-root docs doc-blocks format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

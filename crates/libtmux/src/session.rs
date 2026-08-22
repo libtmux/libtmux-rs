@@ -174,17 +174,12 @@ impl Session {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
-    /// # use libtmux::Command;
-    /// # let root = std::path::Path::new("/tmp/libtmux-rs-test");
-    /// # std::fs::create_dir_all(root)?;
-    /// # let socket = root.join("libtmux-doc-session-id.sock");
-    /// let server = libtmux::Server::builder().socket_path(&socket).build()?;
-    /// # let _ = server.cmd(Command::new("kill-server")).await;
-    /// # server.cmd(Command::new("new-session").arg("-d").arg("sleep 60")).await?;
-    /// let session = server.sessions_or_empty().await.into_iter().next().expect("one session");
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.session("work").await?;
+    ///
     /// assert!(session.id().to_string().starts_with('$'));
-    /// # let _ = server.cmd(Command::new("kill-server")).await;
-    /// # server.shutdown().await?;
+    ///
+    /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// # })?;
     /// # Ok(())

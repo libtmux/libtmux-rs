@@ -132,6 +132,11 @@ held and `fork` failing with `No space left on device` in an unrelated build.
 - Socket paths are bounded by `sun_path` at about 108 bytes, which is why the
   root is short. A scratch directory deep under `$TMPDIR` fails to bind with
   "File name too long".
+- **tmux does not unlink its socket when the server exits**, so whatever named
+  the socket owns removing it. `TestServer` does; a test that reaches for
+  `Server::builder().socket_path(...)` and starts a server there does not, and
+  the file it leaves is invisible until the root fills up. `just fixture-root`
+  fails when anything is left behind, and runs as part of `just check`.
 
 ## Flaky, or broken?
 
@@ -170,8 +175,9 @@ belongs in the test rather than in a rerun.
 $ just check
 ```
 
-That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`, `docs`,
-`doc-blocks`, `format-coverage-check`, `features`, `deny`, `msrv`, `package`.
+That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`,
+`fixture-root`, `docs`, `doc-blocks`, `format-coverage-check`, `features`,
+`deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.
@@ -220,6 +226,13 @@ it is not part of the surface.
 Write it against a real `TestServer` where behavior is the point: an example
 that runs is the only kind that catches a wrong belief about tmux, which is
 what they keep catching.
+
+**The fixture root has to be empty afterwards.** `just fixture-root` lists
+anything left in `/tmp/libtmux-rs-test/` and fails. It runs after `doctest`
+because a doctest is the easy place to leak one: reaching for a hand-named
+socket path looks reasonable until you notice tmux never removes it. A fixture
+whose owning process is still running is skipped, so a suite in flight
+elsewhere does not fail somebody else's gate.
 
 **Doc comments are checked for splits.** `just doc-blocks` fails when a doc
 comment opens mid-sentence or sits below a non-doc attribute — the shape a
