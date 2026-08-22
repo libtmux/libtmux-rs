@@ -26,6 +26,13 @@ full.
   queue. A muted pane therefore reports `Event::Paused` on those releases, and
   tmux keeps draining its terminal rather than letting the write block.
 
+- `Error::kind` reports a replaced tmux server as `ObjectGone` rather than
+  `Refused`. A daemon that restarted on the same socket reissues ids from the
+  start, so every handle captured from the previous one names something that
+  is not there, and looking it up again is exactly the fix `Refused` said
+  would not help. `Error::is_object_gone` now answers `true` for it, and
+  `tmux-mcp` reports it as `"stale": true`.
+
 - `Error::kind` no longer reports a missing tmux server as `Refused`, whose
   documented meaning is that the arguments were wrong. tmux exits 1 for a
   command it refused and for one that found no server, and separates them

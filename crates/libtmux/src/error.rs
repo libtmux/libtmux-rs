@@ -991,14 +991,17 @@ impl Error {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::ObjectGone { .. } => ErrorKind::ObjectGone,
+            // A replaced daemon reissues ids from the start, so every handle
+            // captured from the previous one names something that is not
+            // there. That is the same decision as a missing object, and the
+            // same branch a caller already writes for one.
+            Self::ObjectGone { .. } | Self::ServerGenerationChanged { .. } => ErrorKind::ObjectGone,
             Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
             | Self::SessionExists { .. }
-            | Self::OptionRejected { .. }
-            | Self::ServerGenerationChanged { .. } => ErrorKind::Refused,
+            | Self::OptionRejected { .. } => ErrorKind::Refused,
             Self::Timeout { .. } => ErrorKind::Timeout,
             Self::ExecutableNotFound { .. }
             | Self::InvalidServerConfiguration { .. }
