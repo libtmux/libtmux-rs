@@ -810,6 +810,7 @@ fn tmux_error(error: &libtmux::Error) -> ErrorData {
         "kind": match kind {
             ErrorKind::ObjectGone => "object_gone",
             ErrorKind::Refused => "refused",
+            ErrorKind::ServerGone => "server_gone",
             ErrorKind::Timeout => "timeout",
             ErrorKind::Unreachable => "unreachable",
             ErrorKind::UnsupportedVersion => "unsupported_version",

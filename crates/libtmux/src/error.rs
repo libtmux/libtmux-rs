@@ -177,6 +177,50 @@ pub enum OptionErrorKind {
     BadValue,
 }
 
+/// Which way a tmux server was not there.
+///
+/// The four are one decision -- there is no server -- and four different
+/// stories about how, which is the difference between a socket nobody has
+/// started and a server that died under the command being run.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{Error, ServerGoneKind};
+///
+/// fn advise(error: &Error) -> &'static str {
+///     match error {
+///         Error::ServerGone { kind, .. } => match kind {
+///             ServerGoneKind::NotRunning => "start one",
+///             ServerGoneKind::Unreachable => "check the socket path",
+///             ServerGoneKind::Lost | ServerGoneKind::Stopped => "it went away mid-command",
+///             _ => "there is no server",
+///         },
+///         _ => "not a server problem",
+///     }
+/// }
+///
+/// let absent = Error::ServerGone {
+///     command: "list-sessions",
+///     kind: ServerGoneKind::NotRunning,
+///     stderr: "no server running on /tmp/libtmux-rs-dev/absent".to_owned(),
+/// };
+/// assert_eq!(advise(&absent), "start one");
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ServerGoneKind {
+    /// Nothing was listening on the socket.
+    NotRunning,
+    /// The socket was there and the connection to it failed.
+    Unreachable,
+    /// The connection was lost with the command in flight, which is a server
+    /// that crashed or was killed.
+    Lost,
+    /// The server shut down with the command in flight.
+    Stopped,
+}
+
 /// What tmux says when it has no client to act on.
 pub(crate) const NO_CURRENT_CLIENT: &str = "no current client";
 
@@ -207,6 +251,8 @@ pub enum ErrorKind {
     ObjectGone,
     /// tmux ran the command and refused it. The arguments were wrong.
     Refused,
+    /// No tmux server answered. Start one, or name the socket that has it.
+    ServerGone,
     /// The command did not finish in time. Retry, or allow longer.
     Timeout,
     /// tmux could not be run at all: not installed, or not where the server
@@ -654,6 +700,21 @@ pub enum Error {
     #[error("a blocking runtime cannot be driven from inside an async context")]
     RuntimeNested,
 
+    /// The tmux server the command needed was not there.
+    ///
+    /// tmux exits 1 for this and for a command it refused, and separates them
+    /// only in stderr, so this is read from the message rather than the
+    /// status. [`ServerGoneKind`] says which way it was missing.
+    #[error("tmux found no server for {command}: {stderr}")]
+    ServerGone {
+        /// The tmux command that found no server.
+        command: &'static str,
+        /// Which way the server was not there.
+        kind: ServerGoneKind,
+        /// What tmux wrote to stderr.
+        stderr: String,
+    },
+
     /// tmux rejected a command that the crate requires to succeed.
     ///
     /// The raw [`crate::Server::cmd`] boundary keeps a nonzero status as data.
@@ -807,6 +868,17 @@ impl Error {
         stderr: String,
         target: Option<&std::ffi::OsStr>,
     ) -> Self {
+        // The wording is tmux's own and is identical on every supported
+        // release. None of these say the request was wrong, so they are read
+        // before anything that does.
+        const GONE: [(&str, ServerGoneKind); 4] = [
+            ("no server running on", ServerGoneKind::NotRunning),
+            ("error connecting to", ServerGoneKind::Unreachable),
+            // Before the shorter one, which it starts with and does not mean.
+            ("server exited unexpectedly", ServerGoneKind::Lost),
+            ("server exited", ServerGoneKind::Stopped),
+        ];
+
         const MISSING: [(&str, ObjectKind); 4] = [
             ("can't find session:", ObjectKind::Session),
             ("can't find window:", ObjectKind::Window),
@@ -827,6 +899,16 @@ impl Error {
             ("bad value:", OptionErrorKind::BadValue),
             ("value is invalid:", OptionErrorKind::BadValue),
         ];
+
+        for (prefix, kind) in GONE {
+            if stderr.trim_end().starts_with(prefix) {
+                return Self::ServerGone {
+                    command,
+                    kind,
+                    stderr,
+                };
+            }
+        }
 
         for (prefix, kind) in OPTION {
             if let Some(detail) = stderr.trim_end().strip_prefix(prefix) {
@@ -910,6 +992,7 @@ impl Error {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::ObjectGone { .. } => ErrorKind::ObjectGone,
+            Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
@@ -1393,6 +1476,16 @@ impl fmt::Debug for Error {
                 .field("kind", kind)
                 .field("id", id)
                 .finish(),
+            Self::ServerGone {
+                command,
+                kind,
+                stderr,
+            } => formatter
+                .debug_struct("ServerGone")
+                .field("command", command)
+                .field("kind", kind)
+                .field("stderr", stderr)
+                .finish(),
             Self::DecodeListing {
                 list_command,
                 detail,
@@ -1402,6 +1495,72 @@ impl fmt::Debug for Error {
                 .field("detail", detail)
                 .finish(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, ErrorKind, ServerGoneKind};
+
+    /// The three server-gone wordings a live fixture cannot produce on demand.
+    ///
+    /// Only "no server running" is reachable from a test, because the other
+    /// three need the server to die between the client connecting and the
+    /// command finishing. They are read from tmux's `client.c`, so they are
+    /// asserted against the classifier rather than against tmux.
+    #[test]
+    fn a_server_that_is_not_there_is_not_a_refusal() {
+        for (stderr, expected) in [
+            (
+                "no server running on /tmp/libtmux-rs-dev/absent",
+                ServerGoneKind::NotRunning,
+            ),
+            (
+                "error connecting to /tmp/libtmux-rs-dev/absent (Connection refused)",
+                ServerGoneKind::Unreachable,
+            ),
+            ("server exited unexpectedly", ServerGoneKind::Lost),
+            ("server exited", ServerGoneKind::Stopped),
+        ] {
+            let error = Error::refused("list-sessions", Some(1), stderr.to_owned(), None);
+            assert_eq!(error.kind(), ErrorKind::ServerGone, "{stderr}");
+            assert!(
+                matches!(&error, Error::ServerGone { kind, .. } if *kind == expected),
+                "{stderr} should be {expected:?}, got {error:?}",
+            );
+            assert!(!error.is_object_gone(), "{stderr}");
+        }
+    }
+
+    /// The order the two server-exit wordings are read in is load-bearing.
+    ///
+    /// A lost server says `server exited unexpectedly`, which starts with the
+    /// `server exited` of one that shut down and does not mean it.
+    #[test]
+    fn a_lost_server_is_not_read_as_one_that_stopped() {
+        let error = Error::refused(
+            "new-session",
+            Some(1),
+            "server exited unexpectedly".to_owned(),
+            None,
+        );
+        assert!(
+            matches!(&error, Error::ServerGone { kind, .. } if *kind == ServerGoneKind::Lost),
+            "{error:?}",
+        );
+    }
+
+    /// A refusal that says nothing about the server stays a refusal, so the
+    /// classification is not simply calling everything gone.
+    #[test]
+    fn a_refusal_that_names_no_server_stays_a_refusal() {
+        let error = Error::refused(
+            "delete-buffer",
+            Some(1),
+            "no buffer never-existed".to_owned(),
+            None,
+        );
+        assert_eq!(error.kind(), ErrorKind::Refused, "{error:?}");
     }
 }
 
@@ -1533,6 +1692,60 @@ mod compat_tests {
             error.kind(),
             ErrorKind::ObjectGone,
             "tmux 'no current target' is recognized: {error}",
+        );
+
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+
+    /// Pin the tmux wording that says the server, not the request, is the
+    /// problem.
+    ///
+    /// tmux exits 1 for a command it refused and for a command that found no
+    /// server, and separates them only in stderr. Reading the second as the
+    /// first tells a caller to fix arguments that were never the trouble.
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
+        use std::time::Duration;
+
+        use crate::test::{TestServer, retry_until};
+        use crate::{Command, ErrorKind, ServerGoneKind};
+
+        let mut guard = TestServer::builder().start().await.expect("tmux starts");
+        guard.session("compat-gone").await.expect("session");
+
+        guard
+            .server()
+            .cmd(Command::new("kill-server"))
+            .await
+            .expect("the server is killed");
+
+        // tmux stops answering on the socket before the kernel has a status
+        // for the process behind it, so this waits for the daemon rather than
+        // for a duration.
+        retry_until(Duration::from_secs(5), async || {
+            !guard.daemon_state().is_running()
+        })
+        .await
+        .expect("the daemon exits");
+
+        let error = guard
+            .server()
+            .sessions()
+            .await
+            .expect_err("there is no server to list");
+        assert_eq!(
+            error.kind(),
+            ErrorKind::ServerGone,
+            "tmux 'no server running' is recognized: {error}",
+        );
+        assert!(
+            matches!(&error, crate::Error::ServerGone { kind, .. } if *kind == ServerGoneKind::NotRunning),
+            "the absence is named: {error:?}",
+        );
+        assert!(
+            !error.is_object_gone(),
+            "an absent server is not a missing object: {error}",
         );
 
         guard.shutdown().await.expect("tmux fixture shuts down");

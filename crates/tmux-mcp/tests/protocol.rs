@@ -1095,7 +1095,7 @@ async fn every_advertised_schema_uses_formats_json_schema_defines() {
 
 #[tokio::test]
 async fn a_failure_says_whether_retrying_could_help() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let mut guard = TestServer::builder().start().await.expect("tmux starts");
     // Destructive, so the kill tools are offered: a tool the tier withheld
     // would fail as an unknown tool and never reach the classification.
     let wire = Wire::connect(
@@ -1166,6 +1166,24 @@ async fn a_failure_says_whether_retrying_could_help() {
             "{tool} did not say whether its listing is out of date: {classified}",
         );
     }
+
+    // A server that is not there is nobody's argument. tmux reports it the
+    // same way it reports a refusal, so an agent told "refused" would rewrite
+    // a request that was never the trouble.
+    wire.json("kill_server", json!({})).await;
+    let daemon = daemon_fate(&mut guard).await;
+    assert!(!daemon.is_running(), "the fixture daemon is {daemon}");
+
+    let absent = detail(&wire, "list_sessions", json!({})).await;
+    assert_eq!(absent["kind"], "server_gone", "{absent}");
+    assert_eq!(
+        absent["retryable"], false,
+        "the same call cannot start a server",
+    );
+    assert_eq!(
+        absent["stale"], false,
+        "an absent server is not a listing that went out of date",
+    );
 
     wire.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");

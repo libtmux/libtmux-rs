@@ -252,6 +252,7 @@ enum libtmux::error::ErrorKind
 enum libtmux::error::ObjectKind
 enum libtmux::error::OptionErrorKind
 enum libtmux::error::ServerConfigurationErrorKind
+enum libtmux::error::ServerGoneKind
 enum libtmux::hooks::ReplaceMode
 enum libtmux::options::OptionKind
 enum libtmux::options::OptionScope
@@ -1176,6 +1177,7 @@ variant libtmux::error::Error::ReadOutput
 variant libtmux::error::Error::RuntimeNested
 variant libtmux::error::Error::RuntimeUnavailable
 variant libtmux::error::Error::ServerGenerationChanged
+variant libtmux::error::Error::ServerGone
 variant libtmux::error::Error::SessionExists
 variant libtmux::error::Error::Spawn
 variant libtmux::error::Error::SupervisorLost
@@ -1189,6 +1191,7 @@ variant libtmux::error::ErrorKind::Decode
 variant libtmux::error::ErrorKind::InvalidInput
 variant libtmux::error::ErrorKind::ObjectGone
 variant libtmux::error::ErrorKind::Refused
+variant libtmux::error::ErrorKind::ServerGone
 variant libtmux::error::ErrorKind::Timeout
 variant libtmux::error::ErrorKind::Transport
 variant libtmux::error::ErrorKind::Unreachable
@@ -1209,6 +1212,10 @@ variant libtmux::error::ServerConfigurationErrorKind::MalformedTmuxVariable
 variant libtmux::error::ServerConfigurationErrorKind::NotInsideTmux
 variant libtmux::error::ServerConfigurationErrorKind::SocketRootUnavailable
 variant libtmux::error::ServerConfigurationErrorKind::WorkingDirectoryUnavailable
+variant libtmux::error::ServerGoneKind::Lost
+variant libtmux::error::ServerGoneKind::NotRunning
+variant libtmux::error::ServerGoneKind::Stopped
+variant libtmux::error::ServerGoneKind::Unreachable
 variant libtmux::hooks::ReplaceMode::Merge
 variant libtmux::hooks::ReplaceMode::Replace
 variant libtmux::options::OptionKind::Choice
