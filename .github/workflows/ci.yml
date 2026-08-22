@@ -137,7 +137,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          cargo fuzz run "$TARGET" "fuzz/seeds/$TARGET" \
+          cargo +nightly fuzz run "$TARGET" "fuzz/seeds/$TARGET" \
             -- -max_total_time=300 -rss_limit_mb=4096
       - name: Keep any crash that was found
         if: failure()
