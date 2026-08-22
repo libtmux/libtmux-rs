@@ -6,7 +6,7 @@ default-members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 authors = ["libtmux contributors"]
 edition = "2024"
 rust-version = "1.85"
@@ -16,11 +16,11 @@ repository = "https://github.com/libtmux/libtmux-rs"
 # Shared dependency versions. A crate names the features it needs; the
 # version lives here so a bump is one edit rather than one per crate.
 [workspace.dependencies]
-libtmux = { path = "crates/libtmux", version = "0.1.0-alpha.7" }
+libtmux = { path = "crates/libtmux", version = "0.1.0-alpha.8" }
 # Exact, not caret. The derive expands to paths into a hidden core surface, so
 # a macro from one release paired with a core from another is not a
 # combination anyone has tested. They move together or not at all.
-libtmux-macros = { path = "crates/libtmux-macros", version = "=0.1.0-alpha.7" }
+libtmux-macros = { path = "crates/libtmux-macros", version = "=0.1.0-alpha.8" }
 serde = { version = "1.0.225", features = ["derive"] }
 serde_json = "1.0.149"
 tempfile = "3.20"

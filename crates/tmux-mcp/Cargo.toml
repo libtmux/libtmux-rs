@@ -3,7 +3,7 @@ name = "tmux-mcp"
 # Not inherited. Only this crate has changed since the workspace version was
 # last published, and inheriting would force libtmux and libtmux-macros to be
 # republished byte-identical just so this one's dependency on them resolves.
-version = "0.1.0-alpha.8"
+version = "0.1.0-alpha.9"
 authors.workspace = true
 edition.workspace = true
 # Not inherited. The workspace floor is the libraries' floor, which this

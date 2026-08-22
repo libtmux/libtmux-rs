@@ -16,6 +16,14 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.8 - 2026-08-22
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.8;
+`tmux-mcp` is 0.1.0-alpha.9, because it was already at alpha.8.
+
+Take this one if you run tmux below 3.7: `ControlSender::mute_pane` could kill
+the tmux server outright on every supported release but the newest.
+
 ### Fixed
 
 - `ControlSender::mute_pane` no longer kills the tmux server on releases
