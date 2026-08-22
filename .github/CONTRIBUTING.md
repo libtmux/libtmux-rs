@@ -113,6 +113,37 @@ held and `fork` failing with `No space left on device` in an unrelated build.
   root is short. A scratch directory deep under `$TMPDIR` fails to bind with
   "File name too long".
 
+## Flaky, or broken?
+
+Tests drive a real tmux server, so they are load-sensitive in a way a mocked
+suite is not. A single failure in a full-suite run warrants re-running that
+test in isolation before blaming the change:
+
+```console
+$ cargo test --locked -p <crate> --test <file> --all-features <test_name>
+```
+
+Three signs it is the machine rather than the code: the failure moves between
+runs, the failure reads as a timeout, an empty listing, or `no server running`
+rather than a wrong value, and the file that failed is not one the change
+touched.
+
+That is not permission to shrug. Several have turned out to be real defects in
+the test, and two shapes account for most of them:
+
+- **Typing into a pane that cannot read yet.** tmux hands back a pane the
+  moment it forks, long before the shell in it starts, and keys sent before
+  then are swallowed. `typing_fixture` waits for the prompt; a test that types
+  without it passes on an idle machine and not on a loaded one.
+- **A fixed sleep standing in for a wait.** A duration chosen to cover a
+  latency that has no upper bound is a guess, and load is what collects on it.
+  Wait for the observable instead — this workspace ships `wait_for_text` and
+  `wait_for_idle` for exactly that, and a wait must assert the outcome it got,
+  since one that runs to its deadline still returns successfully.
+
+A test that only passes on an idle machine is a broken test, and the fix
+belongs in the test rather than in a rerun.
+
 ## Checks that must pass
 
 ```console
