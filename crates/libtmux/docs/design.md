@@ -1190,6 +1190,45 @@ the others return the output.
 CI found this, not the local gate -- the workspace's own tmux is unaffected,
 which is exactly what the compatibility lanes are for.
 
+### Muting a control-mode pane kills the server before tmux 3.7
+
+`ControlSender::mute_pane` takes a pane out of a control client's stream with
+`refresh-client -A <pane>:off`. On 3.2a, 3.4, 3.5a and 3.6b that call can kill
+the tmux server outright, and the crate pauses the pane instead below
+`since::CONTROL_PANE_OFF`.
+
+tmux keeps one read buffer per pane and one offset into it per consumer, and
+drains the buffer up to the least-advanced offset. `control_pane_offset`
+returns nothing for a pane that is off, so the pane's offset stops holding the
+buffer back while the output blocks already queued for it stay queued. The
+next drain moves the base offset past that offset, `window_pane_get_new_data`
+computes `used = offset - base_offset` as an unsigned subtraction, and the
+result wraps: `control_append_data` reads from a pointer far past the buffer
+and the server segfaults. Every command after it reports `server exited
+unexpectedly`.
+
+Pausing is the same idea without the defect. `control_pause_pane` discards the
+pane's queued blocks as it pauses, on every supported release, so nothing is
+left holding a stale offset. What it costs is back-pressure: tmux keeps
+draining a paused pane's terminal, where a pane that is off lets the write
+block. That is the trade below 3.7, and it is the right way round.
+
+Upstream added the same discard to `control_set_pane_off` in tmux 3.7. The
+range was measured rather than read: a fixture that floods three panes, mutes
+them mid-write and asks whether the daemon is still there kills 3.2a, 3.4,
+3.5a and 3.6b on every run and leaves 3.7b up.
+`real_tmux_compat_muting_a_producing_pane_leaves_the_server_up` is that
+fixture, and the queue is its whole subject -- muting an idle pane never
+reaches the defect, which is why the flood test beside it passed on every
+release for as long as it has existed.
+
+This surfaced as an intermittent failure two crates away, in a `tmux-mcp` test
+that asserted a tool accepted the arguments its schema describes. tmux reports
+a server that died the same way it reports a command it refused, so the
+assertion blamed the arguments. `TestServer::daemon_state` exists because of
+that: a test driving tmux cannot tell the two apart from the reply, and the
+fixture is the daemon's parent, so it is the only thing that can.
+
 ### Two shapes that make a test flaky under load
 
 Both of these passed locally for a long time and failed in CI, which has fewer

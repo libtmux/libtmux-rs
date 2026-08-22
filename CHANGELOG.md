@@ -16,6 +16,16 @@ full.
 
 ## Unreleased
 
+### Fixed
+
+- `ControlSender::mute_pane` no longer kills the tmux server on releases
+  before 3.7. `refresh-client -A <pane>:off` leaves the output already queued
+  for that pane pointing into a buffer tmux then drains, and writing it
+  segfaults the server; measured on 3.2a, 3.4, 3.5a and 3.6b. Below
+  `since::CONTROL_PANE_OFF` the pane is paused instead, which discards the
+  queue. A muted pane therefore reports `Event::Paused` on those releases, and
+  tmux keeps draining its terminal rather than letting the write block.
+
 ### Added
 
 - `libtmux::test::TestServer::daemon_state` and `DaemonState`, reporting
@@ -24,6 +34,8 @@ full.
   `server exited unexpectedly` and exit 1, which is the same shape as a
   command tmux rejected, so a test asserting on the reply alone blames the
   command.
+- `libtmux::since::CONTROL_PANE_OFF`, the release that takes a pane out of a
+  control client's stream without losing the server.
 
 ## 0.1.0-alpha.7 - 2026-08-22
 

@@ -845,3 +845,105 @@ async fn a_stream_opens_on_a_server_that_is_already_flooding() {
     output.shutdown().await.expect("the connection shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Muting a pane that is already producing must not take the server with it.
+///
+/// Below [`libtmux::since::CONTROL_PANE_OFF`], `refresh-client -A <pane>:off`
+/// leaves the output blocks already queued for that pane in place while the
+/// pane stops holding the server's read buffer back. Writing them later reads
+/// past the end of what the server has since drained, and the server
+/// segfaults, so every command after it reports `server exited unexpectedly`.
+///
+/// The queue is the whole condition: muting an idle pane never reaches it,
+/// which is why the flood test above passes on every release. So the panes
+/// run their flood as their own command rather than being typed into, the
+/// mute waits until that flood has reached the connection, and the reader is
+/// slower than the panes it reads.
+#[tokio::test]
+async fn real_tmux_compat_muting_a_producing_pane_leaves_the_server_up() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    const MARKER: &str = "libtmux-mute-regression";
+
+    let mut guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard.session("mute").await.expect("session is created");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    // The flood is the pane's command, so it starts with the pane rather than
+    // after a shell that may not be reading yet.
+    let mut noisy = Vec::new();
+    for _ in 0..3 {
+        noisy.push(
+            window
+                .split(SplitOptions::new(SplitDirection::Below).command(format!("yes {MARKER}")))
+                .await
+                .expect("pane is created"),
+        );
+    }
+
+    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    // Muting a pane that has written nothing tests nothing, so this waits for
+    // the flood rather than assuming it started.
+    wait_for(&mut events, |event| {
+        matches!(event, Event::Output { bytes, .. }
+            if String::from_utf8_lossy(bytes).contains(MARKER))
+    })
+    .await
+    .expect("a flooding pane reaches the connection");
+
+    // Drained as fast as this can, because the queue does not need help: the
+    // panes write faster than anything reads, and a reader that falls far
+    // enough behind stalls the connection this test drives.
+    let reader = tokio::spawn(async move { while events.next_event().await.is_some() {} });
+
+    // Muting is what reaches the defect. The server writes the blocks that
+    // were queued for a pane after the mute has been answered, so the failure
+    // can land on any command after it, and every one of them is reported
+    // against the daemon rather than as a closed connection: the second says
+    // nothing about why.
+    for pane in &noisy {
+        let muted = commands.mute_pane(pane.id()).await;
+        let daemon = guard.daemon_state();
+        assert!(
+            daemon.is_running() && muted.is_ok(),
+            "muting {} mid-write left the fixture daemon {daemon} and answered {muted:?}",
+            pane.id(),
+        );
+    }
+
+    for probe in 0..10 {
+        let answered = commands
+            .send(Command::new("display-message").arg("-p").arg("up"))
+            .await;
+        let daemon = guard.daemon_state();
+        assert!(
+            daemon.is_running() && answered.is_ok(),
+            "probe {probe} after muting left the fixture daemon {daemon} and \
+             answered {answered:?}",
+        );
+    }
+
+    for pane in &noisy {
+        let unmuted = commands.unmute_pane(pane.id()).await;
+        let daemon = guard.daemon_state();
+        assert!(
+            daemon.is_running() && unmuted.is_ok(),
+            "unmuting {} left the fixture daemon {daemon} and answered {unmuted:?}",
+            pane.id(),
+        );
+    }
+
+    drop(commands);
+    reader.abort();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

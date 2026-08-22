@@ -613,4 +613,15 @@ pub mod since {
 
     /// `capture-pane -F`, and so [`crate::Pane::capture_lines`].
     pub const CAPTURE_LINE_FLAGS: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// Taking a pane out of a control client's stream without crashing the
+    /// server, and so [`crate::control::ControlSender::mute_pane`] using `off`.
+    ///
+    /// Before this release `refresh-client -A <pane>:off` leaves the output
+    /// blocks already queued for that pane in place, while the pane stops
+    /// holding the server's read buffer back. Writing those blocks later
+    /// reads past the end of a buffer the server has drained, and the server
+    /// segfaults. `mute_pane` pauses the pane below this release instead,
+    /// which discards the queue on every supported release.
+    pub const CONTROL_PANE_OFF: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 }

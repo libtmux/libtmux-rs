@@ -49,6 +49,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::limits::ControlLimits;
+use crate::version::since::CONTROL_PANE_OFF;
 use crate::{Command, Error, PaneId, Server, SessionId, TmuxText, WindowId};
 
 /// Something tmux reported that no command asked for.
@@ -89,9 +90,12 @@ pub enum Event {
         /// The output bytes.
         bytes: Vec<u8>,
     },
-    /// tmux stopped sending a pane's output because this client fell behind.
+    /// tmux stopped sending a pane's output.
     ///
-    /// Only ever sent to a client that asked for `pause-after`. Resume with
+    /// Two things ask for this: [`ControlSender::pause_after`], after which
+    /// tmux pauses a pane this client has fallen behind on, and
+    /// [`ControlSender::mute_pane`] below [`crate::since::CONTROL_PANE_OFF`],
+    /// which pauses rather than take a pane out of the stream. Resume with
     /// [`ControlSender::resume_pane`].
     Paused {
         /// The pane that was paused.
@@ -403,6 +407,14 @@ impl ControlMode {
         session: &SessionId,
         limits: ControlLimits,
     ) -> Result<Self, Error> {
+        // Asked before the attach so a connection never carries an unknown
+        // answer: a release that cannot be read is treated as too old, which
+        // costs a pane's back-pressure rather than the server.
+        let pane_off_is_safe = server
+            .capabilities()
+            .await
+            .is_ok_and(|capabilities| capabilities.tmux_version().meets(&CONTROL_PANE_OFF));
+
         let mut command = tokio::process::Command::new(server.tmux_executable());
         command
             .arg("-S")
@@ -443,7 +455,10 @@ impl ControlMode {
         }
 
         Ok(Self {
-            sender: ControlSender { commands },
+            sender: ControlSender {
+                commands,
+                pane_off_is_safe,
+            },
             events: ControlEvents {
                 events: received,
                 stop,
@@ -491,6 +506,11 @@ impl ControlMode {
 #[derive(Clone, Debug)]
 pub struct ControlSender {
     commands: mpsc::Sender<Request>,
+    /// Whether this tmux can take a pane out of the stream with `off`.
+    ///
+    /// Read once at attach rather than per call: the server cannot change
+    /// release under a connection.
+    pane_off_is_safe: bool,
 }
 
 impl ControlSender {
@@ -528,11 +548,26 @@ impl ControlSender {
     /// Muting a pane that does not exist is not an error; tmux ignores an
     /// unresolvable id here.
     ///
+    /// Below [`crate::since::CONTROL_PANE_OFF`] this pauses the pane rather
+    /// than taking it out of the stream, because taking it out crashes the
+    /// server. tmux reports a paused pane, so a caller reading
+    /// [`ControlEvents`] sees [`Event::Paused`] for it there and not on a
+    /// newer tmux. The pane stops arriving either way; what a paused pane
+    /// costs is the back-pressure, since tmux keeps draining its terminal.
+    ///
     /// # Errors
     ///
     /// Returns an error when the connection has closed.
     pub async fn mute_pane(&self, pane: &PaneId) -> Result<(), Error> {
-        self.set_pane_stream(pane, "off").await
+        self.set_pane_stream(
+            pane,
+            if self.pane_off_is_safe {
+                "off"
+            } else {
+                "pause"
+            },
+        )
+        .await
     }
 
     /// Resume sending what a pane writes, after [`Self::mute_pane`].
@@ -540,11 +575,22 @@ impl ControlSender {
     /// tmux resumes from the pane's current output rather than replaying what
     /// was skipped, so a caller unmuting a pane has a gap, not a backlog.
     ///
+    /// Below [`crate::since::CONTROL_PANE_OFF`] this continues the pane that
+    /// [`Self::mute_pane`] paused, which is the same gap by another name.
+    ///
     /// # Errors
     ///
     /// Returns an error when the connection has closed.
     pub async fn unmute_pane(&self, pane: &PaneId) -> Result<(), Error> {
-        self.set_pane_stream(pane, "on").await
+        self.set_pane_stream(
+            pane,
+            if self.pane_off_is_safe {
+                "on"
+            } else {
+                "continue"
+            },
+        )
+        .await
     }
 
     /// Resume a pane tmux paused because this connection fell behind.
