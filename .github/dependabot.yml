@@ -27,19 +27,3 @@ updates:
       prefix: "rs(deps[toolchain]) "
     cooldown:
       default-days: 7
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-    # Selected by branch, not tag: stable, nightly, and the MSRV floors
-    # `just msrv` invokes by exact name.
-    ignore:
-      - dependency-name: "dtolnay/rust-toolchain"
-    groups:
-      actions:
-        patterns: ["*"]
-    commit-message:
-      prefix: "ci(deps) "
-    cooldown:
-      default-days: 7
