@@ -262,8 +262,10 @@ gives each test an isolated socket under `/tmp/libtmux-rs-test/` and
 deterministic cleanup.
 
 Every Rust example on this page is compiled by `cargo test --doc`, including
-the ones in this file. See [`AGENTS.md`](AGENTS.md) for the conventions and
-the things that will bite.
+the ones in this file. See
+[`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md) for the gates and the
+things that will bite, and [`.github/WRITING.md`](.github/WRITING.md) for how
+the prose reads.
 
 ## License
 

@@ -15,8 +15,10 @@ What replaced it:
 - [design.md](design.md) carries the reasoning: transport, the snapshot and
   format boundary, the query grammar, control mode, test architecture, the
   compatibility lanes, and every tmux defect worked around.
-- [AGENTS.md](../../../AGENTS.md) carries the conventions, the release
-  process, and the things that will bite.
+- [.github/CONTRIBUTING.md](../../../.github/CONTRIBUTING.md) carries the
+  gates, the release process, and the things that will bite;
+  [.github/WRITING.md](../../../.github/WRITING.md) carries how the prose
+  reads. [AGENTS.md](../../../AGENTS.md) routes to them.
 
 Keep this file short. If it needs a status, it will be wrong within a week.
 
