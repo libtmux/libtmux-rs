@@ -26,7 +26,21 @@ full.
   queue. A muted pane therefore reports `Event::Paused` on those releases, and
   tmux keeps draining its terminal rather than letting the write block.
 
+- `Error::kind` no longer reports a missing tmux server as `Refused`, whose
+  documented meaning is that the arguments were wrong. tmux exits 1 for a
+  command it refused and for one that found no server, and separates them
+  only in stderr. A caller branching on the kind was told to fix a request
+  that was never the trouble; `tmux-mcp` reported the same thing on the wire
+  as `"kind": "refused"`.
+
 ### Added
+
+- `ErrorKind::ServerGone`, `Error::ServerGone` and `ServerGoneKind`, naming
+  which way a server was not there: never started, unreachable on its socket,
+  lost with the command in flight, or shut down with it in flight. The wording
+  is pinned against every supported tmux release. `tmux-mcp` reports it as
+  `"kind": "server_gone"`, and as an internal error rather than
+  `invalid_params`, because the request was not what failed.
 
 - `libtmux::test::TestServer::daemon_state` and `DaemonState`, reporting
   whether a fixture's tmux daemon is still running and, when it is not, the
