@@ -16,6 +16,15 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.7 - 2026-08-22
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.7;
+`tmux-mcp` is 0.1.0-alpha.8, because it was already at alpha.7.
+
+No published code changed. Each crate's install instructions name the current
+version, and a test that typed into a pane before its shell could read was
+fixed.
+
 ## 0.1.0-alpha.6 - 2026-08-16
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.6;

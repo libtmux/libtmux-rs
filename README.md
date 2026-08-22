@@ -52,7 +52,7 @@ The version has to be written out in full: Cargo does not resolve a prerelease
 unless the requirement names one, so a plain `0.1` requirement selects nothing.
 
 ```console
-$ cargo add libtmux@0.1.0-alpha.6
+$ cargo add libtmux@0.1.0-alpha.7
 ```
 
 <details>
@@ -60,7 +60,7 @@ $ cargo add libtmux@0.1.0-alpha.6
 
 ```toml
 [dependencies]
-libtmux = "0.1.0-alpha.6"
+libtmux = "0.1.0-alpha.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The examples on this page run as written, against a throwaway tmux. To run
 them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.0-alpha.6", features = ["test-support"] }`.
+`libtmux = { version = "0.1.0-alpha.7", features = ["test-support"] }`.
 
 Everything that reaches tmux is `async`. Everything that reads an
 already-taken snapshot is not, so walking a tree you already have costs no
@@ -207,7 +207,7 @@ server over this API, read-biased, where every tool that changes state names
 exactly what it changes.
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.7
+$ cargo install tmux-mcp --version 0.1.0-alpha.8
 ```
 
 See [its README](crates/tmux-mcp/README.md) for the tool list and for wiring
