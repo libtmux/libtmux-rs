@@ -16,6 +16,23 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `Safety::from_value`, resolving a tier from an optional value the way the
+  environment supplies one, so the fallback is testable without a
+  process-wide environment.
+
+### Fixed
+
+- `TMUX_MCP_SAFETY` no longer widens the tool surface on a typo. An
+  unrecognised value fell back to the default, `mutating`, so
+  `TMUX_MCP_SAFETY=read_only` -- or any other near-miss for `readonly` --
+  offered an agent the tools to type into panes and create sessions on a
+  server the operator had meant to be read-only, with nothing saying so.
+  It now falls to `readonly`; unset still takes the default. `--safety`
+  continues to refuse an unknown name outright, because a flag is typed on
+  purpose.
+
 ## 0.1.0-alpha.7 - 2026-08-22
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.7;

@@ -189,9 +189,9 @@ mod tests {
 
     #[test]
     fn an_unknown_tier_stops_rather_than_widening() {
-        // The environment falls back to the default on nonsense, because it
-        // is read from wherever the process was started. A flag is typed on
-        // purpose, so a wrong one is a mistake worth reporting.
+        // The environment narrows to readonly on nonsense, because it is read
+        // from wherever the process was started. A flag is typed on purpose,
+        // so a wrong one is a mistake worth reporting.
         let refused = parse(&["--safety", "yolo"]).expect_err("refused");
 
         assert!(matches!(refused, Stop::Misuse(reason) if reason.contains("yolo")));
