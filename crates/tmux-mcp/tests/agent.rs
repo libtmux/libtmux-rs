@@ -2255,7 +2255,7 @@ async fn real_tmux_compat_an_unmarked_pane_falls_back_to_the_screen() {
 /// hears only about what happened next.
 #[tokio::test]
 async fn what_changed_reports_windows_that_wrote_since_the_last_look() {
-    let (guard, tools) = fixture("changes").await;
+    let (guard, tools, pane) = typing_fixture("changes").await;
 
     let quiet = json(
         tools
@@ -2284,10 +2284,26 @@ async fn what_changed_reports_windows_that_wrote_since_the_last_look() {
     // tmux stamps activity in whole seconds, so a change inside the same
     // second as `mark` is indistinguishable from one before it.
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    let pane = panes(&tools).await[0]["id"]
-        .as_str()
-        .expect("a pane id")
-        .to_owned();
+    // Attach the wait before typing: a stream carries only what comes next, so
+    // text already on screen never matches.
+    let waiting = {
+        let tools = tools.clone();
+        let pane = pane.clone();
+        tokio::spawn(async move {
+            tools
+                .wait_for_text(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "patterns": ["something-happened"],
+                        "seconds": 20
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
     tools
         .send_keys(args(serde_json::json!({
             "pane": pane,
@@ -2296,7 +2312,8 @@ async fn what_changed_reports_windows_that_wrote_since_the_last_look() {
         })))
         .await
         .expect("keys are sent");
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    let waited = json(waiting.await.expect("the wait finishes").expect("a result"));
+    assert_eq!(waited["outcome"], "matched", "the pane wrote: {waited:?}");
 
     let after = json(
         tools
