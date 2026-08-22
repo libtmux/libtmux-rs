@@ -2169,4 +2169,15 @@ async fn a_replacement_daemon_on_the_same_socket_is_a_different_generation() {
             if *expected == first && *found == second),
         "the error names both daemons, got {error:?}",
     );
+
+    // The decision it reduces to is the one a caller already writes for a
+    // handle that has gone stale: look it up again. Reported as a refusal it
+    // said the opposite, that the request was wrong and re-listing would not
+    // help, which is the one thing that does.
+    assert_eq!(
+        error.kind(),
+        libtmux::ErrorKind::ObjectGone,
+        "a replaced daemon is every captured handle gone, got {error:?}",
+    );
+    assert!(error.is_object_gone(), "{error}");
 }
