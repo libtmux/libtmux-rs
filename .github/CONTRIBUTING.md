@@ -69,14 +69,34 @@ usually asking for a design change. `libtmux::test::TestServer`, behind the
 `test-support` feature, gives each test an isolated socket and deterministic
 cleanup. Tests are functions, not methods on a struct.
 
-Doctests are a separate target and are part of the gate. Several READMEs are
-compiled along with them: the root `README.md` and `crates/libtmux/README.md`
-through `crates/libtmux/src/lib.rs`, and `crates/tmux-workspace/README.md`
-through its own. A Rust example on one of those pages is a test.
+Doctests are a separate target and are part of the gate:
 
 ```console
 $ just doctest
 ```
+
+Four READMEs are compiled along with them, so a Rust example on any of these
+pages is a test rather than prose:
+
+- `crates/libtmux/README.md`, by `#![doc = include_str!(…)]` at the top of
+  `crates/libtmux/src/lib.rs`: that README is the crate documentation.
+- `README.md`, by a `#[cfg(doctest)] #[doc = include_str!(…)]` item further
+  down the same file, so the front page is tested without appearing in the
+  rendered documentation.
+- `crates/tmux-workspace/README.md`, by the same top-of-crate include in
+  `crates/tmux-workspace/src/lib.rs`.
+- `crates/libtmux-macros/README.md`, by `MacrosReadme` in
+  `crates/tmux-workspace/src/lib.rs`, reached through a symlink. A proc-macro
+  crate cannot doctest a README that derives through it, and the example needs
+  `libtmux` under its own name, which is only true from a third crate.
+  `crates/libtmux/tests/macros_readme.rs` compiles the same example again as
+  an ordinary test.
+
+`crates/tmux-mcp/README.md` is the page not covered; its blocks are prose.
+
+Nothing checks that a page stays wired. Deleting one of those `include_str!`
+items stops testing that README and every gate stays green, so treat the item
+as load-bearing, and wire a new README in when adding one.
 
 ### Where a test goes
 
@@ -189,10 +209,17 @@ health and is not one. The changelog is the record until the first
 non-prerelease version.
 
 **Every crate-root type has a runnable example.**
-`just example-coverage-check` fails on a type added without one. Write it
-against a real `TestServer` where behavior is the point: an example that runs
-is the only kind that catches a wrong belief about tmux, which is what they
-keep catching.
+`just example-coverage-check` fails on a type added without one. It reads
+rustdoc's JSON for `libtmux` and takes every `struct`, `enum`, `trait`, and
+`type_alias` reachable as `libtmux::X`, following the root's re-exports; a type
+counts as covered when its own documentation carries a fenced block. Methods do
+not count, and a trivial accessor inherits the example on its type. The escape
+hatch is the one the failure names: add an example, or make the type private if
+it is not part of the surface.
+
+Write it against a real `TestServer` where behavior is the point: an example
+that runs is the only kind that catches a wrong belief about tmux, which is
+what they keep catching.
 
 **Doc comments are checked for splits.** `just doc-blocks` fails when a doc
 comment opens mid-sentence or sits below a non-doc attribute — the shape a
@@ -201,11 +228,30 @@ split leaves when it lands on a sentence boundary. See
 
 **The format catalog is measured against tmux's own source.**
 `crates/libtmux/docs/format-coverage.txt` records every format name tmux
-publishes and what this crate does about it: `catalogued`, `missing`, or
-`excluded` with a reason. `just format-coverage <tmux checkout>` rerecords it
-and `just format-coverage-check` fails on drift, needing no tmux source, which
-is why that half is in the gate. A `missing` row is a field a listing could
-carry and does not; adding one is ordinary work, leaving it unrecorded is not.
+publishes and what this crate does about it: `catalogued`, `missing: <scope>`,
+or `excluded: <reason>`. The catalog itself is the table in
+`crates/libtmux/src/formats.rs`.
+
+`just format-coverage-check` compares the ledger against that catalog, not
+against tmux, which is why it needs no tmux source and can sit in the gate. It
+fails on three disagreements: a name in the catalog and absent from the ledger,
+a name recorded `catalogued` but absent from the catalog, and a name recorded
+`missing` that has since been added. Adding a format is therefore two steps —
+the catalog entry, then the ledger — and the gate fails in between.
+
+Rerecording does need a tmux checkout, because it reads `format.c` for both
+`format_table[]` and the names attached by `format_add` and `cmdq_add_format`:
+
+```console
+$ just format-coverage ../tmux
+```
+
+The scope on a `missing` row is inferred from which member of the format tree
+the callback reads, so it is a guess. An `excluded:` reason written by hand
+survives rerecording, which is how a reviewed judgement outlives the crude test
+that would otherwise demote it back to `missing`. A `missing` row is a field a
+listing could carry and does not; adding one is ordinary work, leaving it
+unrecorded is not.
 
 **Parsers that read from outside are fuzzed.** The control-mode line parser,
 the filter-expression wire format, and the workspace YAML loader each have a

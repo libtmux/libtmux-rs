@@ -84,8 +84,10 @@ what using it feels like, how to install it, and where everything else lives.
   reader away is worth more than the one that keeps the wrong reader.
 - Compatibility is content, not an afterthought: supported tmux releases, the
   MSRV, and the platforms belong in the README under their own heading.
-- Every Rust example on a README is compiled by `cargo test --doc`. Write
-  examples that run; an example that cannot compile is not an example.
+- A Rust example on a README is compiled by `cargo test --doc`, on the four
+  pages wired in for it. Write examples that run; one that cannot compile is
+  not an example. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists which pages those
+  are, and says that adding a README means wiring it in.
 - Badges: CI, the published crates, MSRV, license. That is the set.
 
 The alpha warning is worded the same in every libtmux port. Do not reword it.
@@ -112,8 +114,10 @@ channel inside a type is not documentation.
 
 **Sections, when they say something.**
 
-- `# Examples` on every crate-root type. This is enforced; see
-  [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- `# Examples` on every crate-root type. This is enforced, though the check is
+  cruder than the rule: it accepts any fenced block in the type's own
+  documentation, so the heading is the convention and the block is the gate.
+  See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - `# Errors` on anything returning `Result`, naming the conditions rather than
   restating that it can fail.
 - `# Panics` where a caller could trip one. Where nothing can, "Never panics"
