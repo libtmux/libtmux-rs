@@ -1,4 +1,4 @@
-# libtmux-rs
+# libtmux for Rust
 
 [![CI]][actions] [![libtmux]][libtmux-crate] [![tmux-mcp]][mcp-crate] [![MSRV]][rust-1.85] [![License]][license]
 
@@ -17,11 +17,9 @@
 and panes — and a query layer that makes "which pane is running the tests?" one
 expression instead of a parsing problem.**
 
-> **Alpha.** Every crate here is prerelease. The API changes between releases,
-> including in ways that will not be called out as breaking, because nothing is
-> stable yet. Cargo will not resolve a prerelease unless the requirement names
-> one, so a plain `0.1` requirement does not pick these up: depend on the exact
-> version, and expect to edit it.
+> **Alpha.** Releases carry an `-alpha` prerelease tag. The API is not
+> settled, and any release may change or remove exported identifiers without a
+> deprecation period. Pin an exact version. Not recommended for production.
 
 You may be looking for:
 
@@ -49,6 +47,9 @@ Not for you if you need Windows without WSL — tmux does not run there — or a
 synchronous-first API. Blocking callers get a runtime, not a mirrored API.
 
 ## Install
+
+The version has to be written out in full: Cargo does not resolve a prerelease
+unless the requirement names one, so a plain `0.1` requirement selects nothing.
 
 ```console
 $ cargo add libtmux@0.1.0-alpha.6
