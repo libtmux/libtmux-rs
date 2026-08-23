@@ -25,7 +25,71 @@ KINDS = {
 }
 
 
-def parents(index: dict, paths: dict) -> dict:
+def public_paths(index: dict, root, crate: str) -> dict:
+    """Map each item to the path a caller can actually name it by.
+
+    rustdoc reports where an item was defined, which is not where it can be
+    reached: this crate keeps its modules private and re-exports from the root,
+    so `libtmux::limits::DispatchLimits` is what rustdoc says and
+    `libtmux::DispatchLimits` is what compiles. A ledger that prints the first
+    is a ledger a reviewer cannot paste.
+
+    Breadth-first, so the first path found for an item is a shortest one, which
+    is the one a caller would write.
+    """
+    best: dict = {}
+    frontier = [(root, crate)]
+    visited = set()
+
+    while frontier:
+        following = []
+        for module_id, prefix in frontier:
+            if module_id in visited:
+                continue
+            visited.add(module_id)
+            item = index.get(str(module_id)) or index.get(module_id)
+            module = (item or {}).get("inner", {}).get("module")
+            if module is None:
+                continue
+
+            for child_id in module.get("items") or []:
+                child = index.get(str(child_id)) or index.get(child_id)
+                if not child or child.get("visibility") not in ("public", "default"):
+                    continue
+                inner = child.get("inner") or {}
+                kind = next(iter(inner), None)
+
+                if kind == "use":
+                    used = inner["use"]
+                    target = used.get("id")
+                    if target is None:
+                        continue
+                    # A glob puts the module's contents at this path rather
+                    # than the module itself.
+                    if used.get("is_glob"):
+                        following.append((target, prefix))
+                        continue
+                    here = f"{prefix}::{used.get('name')}"
+                    best.setdefault(str(target), here)
+                    aliased = index.get(str(target)) or index.get(target)
+                    if aliased and "module" in (aliased.get("inner") or {}):
+                        following.append((target, here))
+                    continue
+
+                name = child.get("name")
+                if not name:
+                    continue
+                here = f"{prefix}::{name}"
+                best.setdefault(str(child_id), here)
+                if kind == "module":
+                    following.append((child_id, here))
+
+        frontier = following
+
+    return best
+
+
+def parents(index: dict, paths: dict, reachable: dict) -> dict:
     """Map each child item to the type that owns it.
 
     Methods, fields, and variants have no standalone path in rustdoc's output,
@@ -35,6 +99,9 @@ def parents(index: dict, paths: dict) -> dict:
     owner: dict = {}
 
     def name_of(identifier) -> str | None:
+        reached = reachable.get(str(identifier))
+        if reached:
+            return reached
         summary = paths.get(str(identifier)) or paths.get(identifier)
         if summary and summary.get("path"):
             return "::".join(summary["path"])
@@ -85,7 +152,11 @@ def main(path: str) -> int:
 
     index = doc["index"]
     paths = doc["paths"]
-    owner = parents(index, paths)
+    root = doc["root"]
+    summary = paths.get(str(root)) or paths.get(root) or {}
+    crate = (summary.get("path") or ["crate"])[0]
+    reachable = public_paths(index, root, crate)
+    owner = parents(index, paths, reachable)
     lines = set()
 
     for item in index.values():
@@ -97,12 +168,20 @@ def main(path: str) -> int:
             continue
 
         identifier = item.get("id")
+        reached = reachable.get(str(identifier))
+        held_by = owner.get(str(identifier))
         summary = paths.get(str(identifier)) or paths.get(identifier)
-        if summary and summary.get("path"):
+        # The owner is consulted before rustdoc's own path because rustdoc
+        # carries a path for a method too, and it is the one under the private
+        # module the type was defined in rather than the one it is reached by.
+        if reached:
+            name = reached
+        elif held_by and item.get("name"):
+            name = f"{held_by}::{item['name']}"
+        elif summary and summary.get("path"):
             name = "::".join(summary["path"])
         elif item.get("name"):
-            held_by = owner.get(str(identifier))
-            name = f"{held_by}::{item['name']}" if held_by else item["name"]
+            name = item["name"]
         else:
             continue
 
