@@ -18,6 +18,15 @@ full.
 
 ### Fixed
 
+- `blocking::Runtime` no longer ends the process when it is dropped inside an
+  async context. Dropping a tokio runtime blocks until its tasks stop, and
+  blocking is forbidden inside another runtime, so a runtime built correctly at
+  startup and dropped inside async work aborted: `try_run` reported the nesting
+  as a recoverable error and the value that reported it then killed the caller
+  who handled it. Such a drop now shuts the runtime down in the background,
+  which gives up waiting for the executor to reap its tmux children in that
+  case; a drop outside an async context still waits.
+
 - The `scratch` example runs to completion and removes its socket. It asserted
   its own cleanup with the loud `sessions`, which reports the server tmux
   correctly shut down when its last session died as the failure it is, so the

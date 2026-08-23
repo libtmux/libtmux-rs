@@ -36,7 +36,11 @@ use crate::Error;
 /// dropping it early turns deterministic cleanup into best-effort cleanup.
 #[derive(Debug)]
 pub struct Runtime {
-    inner: tokio::runtime::Runtime,
+    /// Emptied only by [`Drop`], which needs the runtime by value to shut it
+    /// down without blocking. Every other method takes `&self`, and the borrow
+    /// checker does not hand one out during a drop, so no caller can observe
+    /// the gap.
+    inner: Option<tokio::runtime::Runtime>,
 }
 
 impl Runtime {
@@ -56,7 +60,7 @@ impl Runtime {
             .build()
             .map_err(Error::runtime_unavailable)?;
 
-        Ok(Self { inner })
+        Ok(Self { inner: Some(inner) })
     }
 
     /// Run one future to completion.
@@ -66,7 +70,7 @@ impl Runtime {
     /// Panics when called from inside an async context, because a runtime
     /// cannot be driven from within another. Await the future directly there.
     pub fn run<F: Future>(&self, future: F) -> F::Output {
-        self.inner.block_on(future)
+        self.runtime().block_on(future)
     }
 
     /// Run one future to completion, or say why it cannot be run here.
@@ -115,6 +119,35 @@ impl Runtime {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(Error::RuntimeNested);
         }
-        Ok(self.inner.block_on(future))
+        Ok(self.runtime().block_on(future))
+    }
+
+    /// Borrow the runtime this value owns for its whole life.
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        let Some(runtime) = self.inner.as_ref() else {
+            unreachable!("only Drop takes the runtime, and it holds &mut self")
+        };
+        runtime
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        let Some(runtime) = self.inner.take() else {
+            return;
+        };
+
+        // Dropping a tokio runtime blocks until its tasks stop, and blocking
+        // is forbidden inside another runtime, so an ordinary drop there ends
+        // the caller's process. That caller is the one `try_run` exists for:
+        // it told them they were nested, they handled the error, and the value
+        // that told them went out of scope on the next line.
+        //
+        // Shutting down in the background gives that case up on waiting for
+        // the executor to reap its tmux children, which is the cost of not
+        // aborting. A drop outside an async context still waits.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            runtime.shutdown_background();
+        }
     }
 }
