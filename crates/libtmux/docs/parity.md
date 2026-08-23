@@ -396,8 +396,8 @@ returns the global `window_client_mode.default_format`.
 | `session_last_attached` | session | session | all | 3.2a | timestamp | absent | session-info |
 | `session_many_attached` | session | session | all | 3.2a | bool | required | session-info |
 | `session_marked` | session | session | all | 3.2a | bool | required | catalog-only |
-| `session_name` | session | session | all | 3.2a | text | required | session-info |
-| `session_path` | session | session | all | 3.2a | text | required | session-info |
+| `session_name` | session | session | all | 3.2a | text | available | session-info |
+| `session_path` | session | session | all | 3.2a | text | available | session-info |
 | `session_stack` | session | session | all | 3.2a | text | required | catalog-only |
 | `session_windows` | session | session | all | 3.2a | u32 | required | session-info |
 | `socket_path` | server | none | all | 3.2a | text | required | catalog-only |
@@ -427,7 +427,7 @@ returns the global `window_client_mode.default_format`.
 | `window_layout` | window | window | all | 3.2a | text | required | window-info |
 | `window_linked` | window-link | window-link | all | 3.2a | bool | required | catalog-only |
 | `window_linked_sessions` | window | window-link | all | 3.2a | u32 | required | catalog-only |
-| `window_linked_sessions_list` | window | window-link | all | 3.2a | text | required | catalog-only |
+| `window_linked_sessions_list` | window | window-link | all | 3.2a | text | available | catalog-only |
 | `window_marked_flag` | window-link | window-link | all | 3.2a | bool | required | catalog-only |
 | `window_name` | window | window | all | 3.2a | text | available | window-info |
 | `window_offset_x` | client-window-view | client | clients | 3.2a | u32 | absent | catalog-only |

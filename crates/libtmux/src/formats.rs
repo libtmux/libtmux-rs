@@ -494,8 +494,8 @@ macro_rules! format_catalog {
                     (SESSION_CREATED, session_created, "session_created", Session, Session, All, V3_2A, Timestamp, Required),
                     (SESSION_LAST_ATTACHED, session_last_attached, "session_last_attached", Session, Session, All, V3_2A, Timestamp, Absent),
                     (SESSION_MANY_ATTACHED, session_many_attached, "session_many_attached", Session, Session, All, V3_2A, Bool, Required),
-                    (SESSION_NAME, session_name, "session_name", Session, Session, All, V3_2A, Text, Required),
-                    (SESSION_PATH, session_path, "session_path", Session, Session, All, V3_2A, Text, Required),
+                    (SESSION_NAME, session_name, "session_name", Session, Session, All, V3_2A, Text, Available),
+                    (SESSION_PATH, session_path, "session_path", Session, Session, All, V3_2A, Text, Available),
                     (SESSION_WINDOWS, session_windows, "session_windows", Session, Session, All, V3_2A, U32, Required),
                 ];
             }
@@ -678,7 +678,7 @@ macro_rules! format_catalog {
                     (WINDOW_LAST_FLAG, window_last_flag, "window_last_flag", WindowLink, WindowLink, All, V3_2A, Bool, Required),
                     (WINDOW_LINKED, window_linked, "window_linked", WindowLink, WindowLink, All, V3_2A, Bool, Required),
                     (WINDOW_LINKED_SESSIONS, window_linked_sessions, "window_linked_sessions", Window, WindowLink, All, V3_2A, U32, Required),
-                    (WINDOW_LINKED_SESSIONS_LIST, window_linked_sessions_list, "window_linked_sessions_list", Window, WindowLink, All, V3_2A, Text, Required),
+                    (WINDOW_LINKED_SESSIONS_LIST, window_linked_sessions_list, "window_linked_sessions_list", Window, WindowLink, All, V3_2A, Text, Available),
                     (WINDOW_MARKED_FLAG, window_marked_flag, "window_marked_flag", WindowLink, WindowLink, All, V3_2A, Bool, Required),
                     (WINDOW_OFFSET_X, window_offset_x, "window_offset_x", ClientWindowView, Client, Clients, V3_2A, U32, Absent),
                     (WINDOW_OFFSET_Y, window_offset_y, "window_offset_y", ClientWindowView, Client, Clients, V3_2A, U32, Absent),
@@ -3343,8 +3343,8 @@ mod tests {
             count_tokens(rows.iter().map(|row| row.empty)),
             std::collections::BTreeMap::from([
                 ("absent", 30),
-                ("available", 25),
-                ("required", 124),
+                ("available", 28),
+                ("required", 121),
             ])
         );
         assert_eq!(

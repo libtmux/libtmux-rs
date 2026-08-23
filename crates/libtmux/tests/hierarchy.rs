@@ -6,7 +6,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{Client, Command, NewWindowOptions, Pane, Server, Session};
+use libtmux::{Client, Command, NewSessionOptions, NewWindowOptions, Pane, Server, Session};
 use libtmux::{SplitDirection, SplitOptions, Window};
 use static_assertions::assert_impl_all;
 
@@ -705,6 +705,71 @@ async fn a_name_that_would_corrupt_a_tmux_filter_is_still_found() {
             .unwrap_or_else(|| panic!("{name} is found"));
         assert_eq!(found.name().as_bytes().to_vec(), name.as_bytes().to_vec());
     }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A field tmux left empty must not fail the listing that carries it.
+///
+/// tmux allowed empty window and session names in 3.7a; below that
+/// `check_name` refuses one, so no server can hold one. An empty start
+/// directory needs no such gate and reaches `session_path` on every supported
+/// release. Both were declared `Required` in the format catalog, which turns
+/// an empty field into a decode error, and a decode error fails the whole
+/// listing rather than the row that produced it: one such session took the
+/// answer away from every caller of every session listing, including the
+/// lookups that would have found it to kill it.
+#[tokio::test]
+async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let keep = server.new_session("keep").await.expect("a named session");
+    let empty_names = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .meets(&libtmux::since::EMPTY_OBJECT_NAMES);
+
+    let mut expected = 1;
+    if empty_names {
+        let unnamed = server.new_session("").await.expect("an empty name");
+        assert!(unnamed.name().as_bytes().is_empty());
+        expected += 1;
+    } else {
+        let refused = server.new_session("").await;
+        assert!(
+            refused.is_err(),
+            "below {} tmux refuses the name rather than storing it: {refused:?}",
+            libtmux::since::EMPTY_OBJECT_NAMES,
+        );
+    }
+
+    let rootless = server
+        .new_session(NewSessionOptions::new("rootless").start_directory(""))
+        .await
+        .expect("an empty start directory");
+    assert!(rootless.path().as_bytes().is_empty());
+    expected += 1;
+
+    assert_eq!(
+        server.sessions().await.expect("every row decodes").len(),
+        expected,
+    );
+    assert_eq!(
+        server.hierarchy().await.expect("the whole tree").len(),
+        expected,
+    );
+    assert!(server.has_session("keep").await.expect("liveness"));
+    assert_eq!(
+        keep.refreshed()
+            .await
+            .expect("a healthy handle refreshes")
+            .name()
+            .as_bytes(),
+        b"keep",
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
