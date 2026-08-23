@@ -5,9 +5,7 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use std::time::Duration;
-
-use libtmux::test::{TestServer, retry_until};
+use libtmux::test::TestServer;
 use libtmux::{Client, Command, NewSessionOptions, NewWindowOptions, Pane, Server, Session};
 use libtmux::{SplitDirection, SplitOptions, Window};
 use static_assertions::assert_impl_all;
@@ -768,62 +766,55 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A name reaches tmux as a format, and `#(...)` in one runs a shell command.
+/// A name reaches tmux as a format rather than as text.
 ///
 /// tmux expands `-s` through `format_single` before it validates the result
-/// (`cmd-new-session.c`), and `clean_name` only neutralises `#(` for a name
-/// arriving from a pane's own output, never for one a command supplied. That
-/// is coherent for tmux, whose caller is a person who could run the command
-/// anyway. It is a trust boundary this crate's callers have to be told about,
-/// because their names come from arguments and request fields.
+/// (`cmd-new-session.c`), which is what makes `#(command)` in a name run a
+/// shell command: `clean_name` neutralises `#(` only for a name arriving from
+/// a pane's own output, never for one a command supplied. That is coherent for
+/// tmux, whose caller is a person who could run the command anyway, and it is
+/// a trust boundary this crate's callers have to be told about, because their
+/// names come from arguments and request fields.
 ///
-/// Releases disagree about whether the name is accepted at all, and a release
-/// that refuses it is protecting the caller, so the hazard is asserted only
-/// where tmux takes the name. tmux runs a `#()` job asynchronously, so the
-/// evidence that it ran arrives after the command that named it returned.
+/// The expansion is what this asserts, because it is what can be observed
+/// without a race. A `#()` job runs asynchronously and nothing bounds how long
+/// it takes, so waiting for the file one writes is a guess with a number on
+/// it: this test failed exactly that way at load average 21. The execution
+/// follows from the expansion and is documented rather than gated.
 #[tokio::test]
 async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
-    let scratch = tempfile::tempdir().expect("a scratch directory");
-    let marker = scratch.path().join("executed");
-    assert!(!marker.exists());
-
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let Ok(named) = server
-        .new_session(format!("#(touch {})", marker.display()))
-        .await
-    else {
+    // `#{version}` rather than anything about the session: tmux expands the
+    // name before the session it would describe exists, which is why a
+    // templated name so often expands to nothing.
+    let Ok(expanded) = server.new_session("#{version}").await else {
+        // A release that refuses the name is protecting the caller from all
+        // of this, and there is nothing left to observe.
         guard.shutdown().await.expect("tmux fixture shuts down");
         return;
     };
-    let _ = named;
-
-    retry_until(Duration::from_secs(10), async || marker.exists())
-        .await
-        .expect("tmux ran the command in the name rather than storing it");
-
-    // Escaping the `#` is what passes the same text through as a name. Waiting
-    // for the first marker is what makes this absence mean something: the job
-    // that would have written it had at least that long to run.
-    let escaped = scratch.path().join("escaped");
-    let literal = server
-        .new_session(format!("##(touch {})", escaped.display()))
-        .await
-        .expect("tmux accepts the escaped name");
-    // Only the escape is asserted, not the whole name: releases through 3.6b
-    // rewrite `:` and `.` in a name to `_`, and a temporary directory is full
-    // of dots.
-    assert!(
-        literal.name().as_bytes().starts_with(b"#(touch "),
-        "the escaped `##` reached tmux as a literal `#`: {:?}",
-        literal.name(),
+    assert_ne!(
+        expanded.name().as_bytes(),
+        b"#{version}",
+        "tmux expanded the format rather than storing the text it was given",
     );
     assert!(
-        retry_until(Duration::from_secs(1), async || escaped.exists())
-            .await
-            .is_err(),
-        "an escaped name is stored rather than run",
+        !expanded.name().as_bytes().is_empty(),
+        "the expansion had a value to put there",
+    );
+
+    // The escaped form is the same text with the expansion turned off, so the
+    // pair is what proves the first one was expanded rather than mangled.
+    let literal = server
+        .new_session("##{version}")
+        .await
+        .expect("tmux accepts the escaped name");
+    assert_eq!(
+        literal.name().as_bytes(),
+        b"#{version}",
+        "an escaped `##` reaches tmux as a literal `#`",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
