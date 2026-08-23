@@ -5,7 +5,9 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use libtmux::test::TestServer;
+use std::time::Duration;
+
+use libtmux::test::{TestServer, retry_until};
 use libtmux::{Client, Command, NewSessionOptions, NewWindowOptions, Pane, Server, Session};
 use libtmux::{SplitDirection, SplitOptions, Window};
 use static_assertions::assert_impl_all;
@@ -768,13 +770,17 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
 
 /// A name reaches tmux as a format, and `#(...)` in one runs a shell command.
 ///
-/// tmux expands `-s` through `format_single` before `check_name` sees it
-/// (`cmd-new-session.c`), and `clean_name` only neutralises `#(` for names
+/// tmux expands `-s` through `format_single` before it validates the result
+/// (`cmd-new-session.c`), and `clean_name` only neutralises `#(` for a name
 /// arriving from a pane's own output, never for one a command supplied. That
 /// is coherent for tmux, whose caller is a person who could run the command
 /// anyway. It is a trust boundary this crate's callers have to be told about,
-/// because their names come from arguments and request fields, so the
-/// behaviour is pinned here rather than left to be rediscovered.
+/// because their names come from arguments and request fields.
+///
+/// Releases disagree about whether the name is accepted at all, and a release
+/// that refuses it is protecting the caller, so the hazard is asserted only
+/// where tmux takes the name. tmux runs a `#()` job asynchronously, so the
+/// evidence that it ran arrives after the command that named it returned.
 #[tokio::test]
 async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
     let scratch = tempfile::tempdir().expect("a scratch directory");
@@ -784,22 +790,22 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let named = server
+    let Ok(named) = server
         .new_session(format!("#(touch {})", marker.display()))
         .await
-        .expect("tmux accepts the name");
-
-    assert!(
-        marker.exists(),
-        "tmux ran the command in the name rather than storing it literally",
-    );
-
-    // What the session ends up called is a release's own business: the format
-    // expands to nothing, and tmux either stores that or falls back to a
-    // generated name. That it ran at all is the finding.
+    else {
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    };
     let _ = named;
 
-    // Escaping the `#` is what passes the same text through as a name.
+    retry_until(Duration::from_secs(10), async || marker.exists())
+        .await
+        .expect("tmux ran the command in the name rather than storing it");
+
+    // Escaping the `#` is what passes the same text through as a name. Waiting
+    // for the first marker is what makes this absence mean something: the job
+    // that would have written it had at least that long to run.
     let escaped = scratch.path().join("escaped");
     let literal = server
         .new_session(format!("##(touch {})", escaped.display()))
@@ -810,7 +816,9 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
         format!("#(touch {})", escaped.display()).as_bytes(),
     );
     assert!(
-        !escaped.exists(),
+        retry_until(Duration::from_secs(1), async || escaped.exists())
+            .await
+            .is_err(),
         "an escaped name is stored rather than run",
     );
 
