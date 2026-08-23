@@ -108,8 +108,10 @@ Typed field handles build the expression, so a comparison that has no meaning
 for a field is a compile error rather than an empty result:
 
 ```rust
+use std::time::Duration;
+
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::test::TestServer;
+use libtmux::test::{TestServer, retry_until};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,7 +119,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = guard.server();
     server.new_session("work").await?;
 
-    let panes = server.panes().await?;
     let fields = libtmux::Pane::filter_fields();
 
     // `pane_active` is a flag, so `.eq(true)` compiles; `.gt(..)` would not.
@@ -126,8 +127,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .starts_with("sh")
         .and(fields.pane_active.eq(true));
 
-    let found = panes.iter().matching(&active).count();
-    assert_eq!(found, 1, "the session's one pane is active and running a shell");
+    // tmux hands back a pane the moment it forks, before the shell in it has
+    // started, so what a pane is running is worth waiting for rather than
+    // assuming. A wait must assert the outcome it got: this one fails if the
+    // deadline passes without the expression ever matching.
+    retry_until(Duration::from_secs(5), async || {
+        server
+            .panes()
+            .await
+            .is_ok_and(|panes| panes.iter().matching(&active).count() == 1)
+    })
+    .await?;
 
     guard.shutdown().await?;
     Ok(())
