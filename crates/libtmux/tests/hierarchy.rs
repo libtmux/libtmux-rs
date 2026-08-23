@@ -711,39 +711,31 @@ async fn a_name_that_would_corrupt_a_tmux_filter_is_still_found() {
 
 /// A field tmux left empty must not fail the listing that carries it.
 ///
-/// tmux allowed empty window and session names in 3.7a; below that
-/// `check_name` refuses one, so no server can hold one. An empty start
-/// directory needs no such gate and reaches `session_path` on every supported
-/// release. Both were declared `Required` in the format catalog, which turns
-/// an empty field into a decode error, and a decode error fails the whole
-/// listing rather than the row that produced it: one such session took the
-/// answer away from every caller of every session listing, including the
-/// lookups that would have found it to kill it.
+/// Whether tmux stores an empty session name is not stable across the
+/// supported releases: 3.2a through 3.6b accept one because they validate a
+/// name not at all, tmux 3.7 rejects it with "invalid session", and 3.7a
+/// relaxed the check it had just added back to valid UTF-8 only. An empty
+/// start directory needs no such archaeology and reaches `session_path`
+/// everywhere. What this asserts is the part that does not vary: a listing
+/// must be able to read whatever tmux stored. Both fields were declared
+/// `Required` in the format catalog, which turns an empty field into a decode
+/// error, and a decode error fails the whole listing rather than the row that
+/// produced it, so one such session took the answer away from every caller of
+/// every session listing, including the lookups that would have found it to
+/// kill it.
 #[tokio::test]
 async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
     let keep = server.new_session("keep").await.expect("a named session");
-    let empty_names = server
-        .capabilities()
-        .await
-        .expect("capabilities")
-        .tmux_version()
-        .meets(&libtmux::since::EMPTY_OBJECT_NAMES);
 
+    // Asking tmux rather than predicting it: either answer is a release
+    // behaving as it does, and neither may cost another caller its listing.
     let mut expected = 1;
-    if empty_names {
-        let unnamed = server.new_session("").await.expect("an empty name");
+    if let Ok(unnamed) = server.new_session("").await {
         assert!(unnamed.name().as_bytes().is_empty());
         expected += 1;
-    } else {
-        let refused = server.new_session("").await;
-        assert!(
-            refused.is_err(),
-            "below {} tmux refuses the name rather than storing it: {refused:?}",
-            libtmux::since::EMPTY_OBJECT_NAMES,
-        );
     }
 
     let rootless = server
@@ -769,6 +761,57 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
             .name()
             .as_bytes(),
         b"keep",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A name reaches tmux as a format, and `#(...)` in one runs a shell command.
+///
+/// tmux expands `-s` through `format_single` before `check_name` sees it
+/// (`cmd-new-session.c`), and `clean_name` only neutralises `#(` for names
+/// arriving from a pane's own output, never for one a command supplied. That
+/// is coherent for tmux, whose caller is a person who could run the command
+/// anyway. It is a trust boundary this crate's callers have to be told about,
+/// because their names come from arguments and request fields, so the
+/// behaviour is pinned here rather than left to be rediscovered.
+#[tokio::test]
+async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let marker = scratch.path().join("executed");
+    assert!(!marker.exists());
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let named = server
+        .new_session(format!("#(touch {})", marker.display()))
+        .await
+        .expect("tmux accepts the name");
+
+    assert!(
+        marker.exists(),
+        "tmux ran the command in the name rather than storing it literally",
+    );
+
+    // What the session ends up called is a release's own business: the format
+    // expands to nothing, and tmux either stores that or falls back to a
+    // generated name. That it ran at all is the finding.
+    let _ = named;
+
+    // Escaping the `#` is what passes the same text through as a name.
+    let escaped = scratch.path().join("escaped");
+    let literal = server
+        .new_session(format!("##(touch {})", escaped.display()))
+        .await
+        .expect("tmux accepts the escaped name");
+    assert_eq!(
+        literal.name().as_bytes(),
+        format!("#(touch {})", escaped.display()).as_bytes(),
+    );
+    assert!(
+        !escaped.exists(),
+        "an escaped name is stored rather than run",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

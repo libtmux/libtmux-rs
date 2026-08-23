@@ -488,6 +488,9 @@ impl Session {
     ///
     /// Returns an error when tmux refuses the command or its output cannot be
     /// decoded.
+    /// tmux expands the name as a format before it checks it, so `#(command)`
+    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
+    /// before passing text a caller supplied.
     pub async fn new_window(&self, options: impl Into<NewWindowOptions>) -> Result<Window, Error> {
         let options = options.into();
         let session = self.id().to_string();
@@ -504,6 +507,9 @@ impl Session {
     ///
     /// Returns an error when tmux refuses the name, which includes one that
     /// is empty or already taken.
+    /// tmux expands the name as a format before it checks it, so `#(command)`
+    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
+    /// before passing text a caller supplied.
     pub async fn rename(&mut self, name: impl Into<OsString>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,

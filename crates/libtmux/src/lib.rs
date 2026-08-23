@@ -93,6 +93,22 @@
 //! # }
 //! ```
 //!
+//! ## A name reaches tmux as a format
+//!
+//! tmux expands a name through its format machinery before it checks it, so
+//! `#{session_id}` in a name becomes the id and `#(command)` runs `command` in
+//! a shell and becomes its output. That holds for `new_session`,
+//! `Session::rename`, `Window::rename`, and every other name tmux takes from
+//! a command. tmux is consistent here: whoever can run `tmux new-session` can
+//! already run commands, so a name given on a command line is trusted by
+//! construction.
+//!
+//! A library moves that boundary. tmux's caller is a person at a shell; this
+//! crate's caller is a program, and the name it passes may have come from an
+//! argument, a request field, or a configuration file. Passing untrusted text
+//! as a name gives whoever wrote it a shell, so escape `#` as `##` before it
+//! reaches tmux, or refuse the name.
+//!
 //! ## Examples
 //!
 //! Runnable programs live in `examples/`: `inspect` reports what a server is

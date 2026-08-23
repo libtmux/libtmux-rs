@@ -769,6 +769,10 @@ impl Server {
     /// listing, so this costs one round trip rather than a create followed by
     /// a lookup.
     ///
+    /// tmux expands the name as a format before it checks it, so `#(command)`
+    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
+    /// before passing text a caller supplied.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command, which includes a name

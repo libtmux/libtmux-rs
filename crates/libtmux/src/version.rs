@@ -624,13 +624,4 @@ pub mod since {
     /// segfaults. `mute_pane` pauses the pane below this release instead,
     /// which discards the queue on every supported release.
     pub const CONTROL_PANE_OFF: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
-
-    /// An empty window or session name.
-    ///
-    /// Below this release `check_name` rejects an empty name, so
-    /// `new-session -s ''` is refused and no server can hold one. From it
-    /// tmux checks a name for valid UTF-8 and nothing else, which is what
-    /// lets a listing carry an empty `session_name` for a decoder to read.
-    pub const EMPTY_OBJECT_NAMES: ReleaseVersion =
-        ReleaseVersion::new(3, 7, ReleaseSuffix::PATCH_A);
 }

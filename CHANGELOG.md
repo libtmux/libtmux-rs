@@ -19,22 +19,13 @@ full.
 ### Fixed
 
 - `Server::sessions` no longer fails on a session whose name or working
-  directory is empty. tmux 3.7a allowed empty session names and `-c ''` is
-  accepted on every supported release, so both are states a live server
-  reaches, and the snapshot decoder refused the empty field rather than
+  directory is empty. Most supported tmux releases accept both, and the snapshot decoder refused the empty field rather than
   reading it: one such session made `sessions`, `windows`, `hierarchy`,
   `has_session` and `Session::refreshed` fail for every caller, and
   `sessions_or_empty` report no sessions while several existed. The poison row
   could not be reached to be killed either, because looking it up failed the
   same way. `session_name`, `session_path` and `window_linked_sessions_list`
   now decode an empty value as a value.
-
-### Added
-
-- `since::EMPTY_OBJECT_NAMES` names the release that allowed empty window and
-  session names, tmux 3.7a. Below it `check_name` refuses one, so a caller
-  building names from a template can tell a refusal it should expect from a
-  bug.
 
 ## 0.1.0-alpha.8 - 2026-08-22
 
