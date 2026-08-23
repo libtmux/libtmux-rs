@@ -116,7 +116,7 @@ async fn list(
         }
 
         // Anything else is not an empty listing. The lenient accessors turn
-        // this back into an empty Vec; the `try_` forms exist so a caller who
+        // this back into an empty Vec; the loud forms exist so a caller who
         // must not guess gets the reason instead.
         return Err(Error::refused(
             list_command,

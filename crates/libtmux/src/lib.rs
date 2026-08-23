@@ -40,14 +40,14 @@
 //! # }
 //! ```
 //!
-//! Listings come in pairs. The plain form returns an empty `Vec` when the
-//! underlying tmux command fails, which suits a status line; the `try_` form
-//! keeps the reason, which suits anything that must not guess:
+//! Listings come in pairs. The `_or_empty` form returns an empty `Vec` when
+//! the underlying tmux command fails, which suits a status line; the plain
+//! form keeps the reason, which suits anything that must not guess:
 //!
 //! ```no_run
 //! # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! let quiet = server.sessions_or_empty().await;          // empty on failure
-//! let loud = server.sessions().await?;      // Err on failure
+//! let quiet = server.sessions_or_empty().await; // empty on failure
+//! let loud = server.sessions().await?;          // Err on failure
 //! # let _ = (quiet, loud);
 //! # Ok(())
 //! # }

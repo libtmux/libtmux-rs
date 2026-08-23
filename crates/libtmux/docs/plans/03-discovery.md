@@ -22,9 +22,9 @@ These follow [design.md](../design.md) and are not reopened here.
 - `WindowLink` is a first-class edge. Server-wide window and pane listings
   return one row per winlink and never collapse linked windows.
 - Snapshot getters are synchronous. Anything that reaches tmux is `async`.
-- Every listing has a lenient accessor returning `Vec<T>` and a loud `try_*`
-  form returning `Result<Vec<T>, Error>`. Singular relationships, environment
-  reads, and liveness checks are loud.
+- Every listing has a lenient `*_or_empty` accessor returning `Vec<T>` and a
+  loud form under the short name returning `Result<Vec<T>, Error>`. Singular
+  relationships, environment reads, and liveness checks are loud.
 - Listings return ordered `Vec<T>`. No collection wrapper is introduced.
 
 ## Open questions
@@ -107,7 +107,7 @@ observable, a parity-ledger row, and the full crate gate.
    types yet. Revisit only when open question 4 or a caller demands the
    four-way availability evidence.
 4. ~~**`Session` handle and `Server` listings.**~~ Done, apart from
-   `attached_sessions`/`try_attached_sessions`.
+   `attached_sessions_or_empty`/`attached_sessions`.
 5. ~~**`Window`, `Pane`, and `Client` handles.**~~ Done. The winlink contract
    is under real-tmux test: a window linked into two sessions yields two rows
    with equal ids and unequal handles.

@@ -171,8 +171,8 @@ impl PromptKind {
 /// Each reports `Ok(None)` when tmux does not have it.
 ///
 /// **Listing everything.** [`sessions`], [`windows`], [`panes`], and
-/// [`clients`], each with a `try_` twin that keeps the reason for a failure
-/// rather than reporting no rows. [`hierarchy`] gathers the whole tree in
+/// [`clients`], each with an `_or_empty` twin that reports no rows rather
+/// than the reason for a failure. [`hierarchy`] gathers the whole tree in
 /// three tmux commands rather than one per object.
 ///
 /// **Changing things.** [`new_session`], [`kill`], and [`with_session`],
@@ -617,6 +617,9 @@ impl Server {
     ///
     /// Panes under a linked window appear once per link, matching
     /// [`Server::windows_or_empty`].
+    ///
+    /// This is the lenient form; use [`Server::panes`] when the reason for
+    /// an empty result matters.
     pub async fn panes_or_empty(&self) -> Vec<Pane> {
         self.panes().await.unwrap_or_else(|error| {
             Self::trace_lenient_listing("list-panes", &error);
@@ -640,6 +643,9 @@ impl Server {
     }
 
     /// List every client attached to the server, in tmux's own order.
+    ///
+    /// This is the lenient form; use [`Server::clients`] when the reason for
+    /// an empty result matters.
     pub async fn clients_or_empty(&self) -> Vec<Client> {
         self.clients().await.unwrap_or_else(|error| {
             Self::trace_lenient_listing("list-clients", &error);
@@ -2392,8 +2398,8 @@ impl Server {
     ///
     /// The lenient contract hides the cause from the return type, so this is
     /// the only place it survives. Without the `tracing` feature the failure
-    /// is dropped, which is why every lenient accessor has a loud `try_*`
-    /// counterpart.
+    /// is dropped, which is why every lenient accessor has a loud
+    /// counterpart under the short name.
     #[cfg_attr(
         not(feature = "tracing"),
         expect(
