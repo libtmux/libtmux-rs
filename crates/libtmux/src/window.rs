@@ -1839,13 +1839,97 @@ pub enum SplitDirection {
 
 impl SplitDirection {
     /// Return the tmux flags that produce this position.
-    const fn flags(self) -> (&'static str, bool) {
+    pub(crate) const fn flags(self) -> (&'static str, bool) {
         match self {
             Self::Above => ("-v", true),
             Self::Below => ("-v", false),
             Self::Left => ("-h", true),
             Self::Right => ("-h", false),
         }
+    }
+}
+
+/// Where a pane lands when it is moved into another window.
+///
+/// [`Pane::break_out`] takes a pane out into a window of its own and this puts
+/// one back, so between them a pane can be moved anywhere. tmux spawns nothing
+/// here, which is why this carries none of the command, directory, or
+/// environment a [`SplitOptions`] does: the pane already exists and keeps
+/// everything running in it.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{JoinOptions, SplitDirection};
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("moving").await?;
+/// let window = session.active_window().await?.expect("a window");
+/// let second = session.new_window("elsewhere").await?;
+/// let stranded = second.panes().await?.remove(0);
+///
+/// // Put a pane from the other window beside this one.
+/// let here = window.panes().await?.remove(0);
+/// let moved = stranded
+///     .join_into(&here, JoinOptions::new(SplitDirection::Below))
+///     .await?;
+/// assert_eq!(moved.window_id(), window.id());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JoinOptions {
+    direction: SplitDirection,
+    size: Option<PaneSize>,
+    full: bool,
+}
+
+impl JoinOptions {
+    /// Land the pane in one direction from the pane it joins.
+    #[must_use]
+    pub const fn new(direction: SplitDirection) -> Self {
+        Self {
+            direction,
+            size: None,
+            full: false,
+        }
+    }
+
+    /// Ask for a size rather than letting tmux halve the space.
+    #[must_use]
+    pub const fn size(mut self, size: PaneSize) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// Span the window rather than only the pane being joined.
+    #[must_use]
+    pub const fn full(mut self) -> Self {
+        self.full = true;
+        self
+    }
+
+    /// Add this placement to a `join-pane` command.
+    pub(crate) fn apply(self, command: Command) -> Command {
+        let (axis, before) = self.direction.flags();
+        let mut command = command.arg(axis);
+        if before {
+            command = command.arg("-b");
+        }
+        if self.full {
+            command = command.arg("-f");
+        }
+        if let Some(size) = self.size {
+            command = command.arg("-l").arg(size.to_string());
+        }
+        command
     }
 }
 

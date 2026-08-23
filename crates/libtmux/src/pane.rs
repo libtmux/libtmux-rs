@@ -1184,6 +1184,63 @@ impl Pane {
         .await
     }
 
+    /// Move this pane into another window, beside a pane already there.
+    ///
+    /// The inverse of [`Pane::break_out`], and it consumes the handle for the
+    /// same reason: the pane's window changes, so a snapshot of where it used
+    /// to be is wrong. The pane keeps its id and everything running in it, so
+    /// the handle returned is this same pane read again where it now lives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the move, which includes joining a
+    /// pane to its own window.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::{JoinOptions, SplitDirection};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("moving").await?;
+    /// let window = session.active_window().await?.expect("a window");
+    /// let elsewhere = session.new_window("elsewhere").await?;
+    ///
+    /// let stranded = elsewhere.panes().await?.remove(0);
+    /// let here = window.panes().await?.remove(0);
+    /// let moved = stranded
+    ///     .join_into(&here, JoinOptions::new(SplitDirection::Below))
+    ///     .await?;
+    ///
+    /// assert_eq!(moved.window_id(), window.id());
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn join_into(
+        self,
+        beside: &Self,
+        options: crate::JoinOptions,
+    ) -> Result<Self, Error> {
+        let command = options.apply(
+            Command::new("join-pane")
+                .arg("-d")
+                .arg("-s")
+                .arg(self.id().to_string())
+                .arg("-t")
+                .arg(beside.id().to_string()),
+        );
+        listing::mutate(&self.core, "join-pane", command).await?;
+
+        self.refreshed().await
+    }
+
     /// Enter copy mode.
     ///
     /// # Errors

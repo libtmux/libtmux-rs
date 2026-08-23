@@ -934,3 +934,60 @@ async fn a_layout_is_named_saved_or_stepped_through() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// A pane broken out into its own window can be put back.
+///
+/// `break_out` moves a pane away and `join_into` moves one back, so between
+/// them a pane goes anywhere. Both consume the handle, because the pane's
+/// window changes and a snapshot of where it used to be is wrong; the pane
+/// itself keeps its id and whatever is running in it.
+#[tokio::test]
+async fn a_pane_broken_out_can_be_joined_back() {
+    use libtmux::{JoinOptions, SplitDirection};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("moving").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    // Two panes, because tmux has nothing to break a lone pane out of.
+    let leaving = window
+        .split(SplitOptions::new(SplitDirection::Below))
+        .await
+        .expect("a second pane");
+    let staying = window.panes().await.expect("panes").remove(0);
+    let travelled = leaving.id().clone();
+
+    leaving
+        .break_out()
+        .await
+        .expect("the pane leaves its window");
+    assert_eq!(
+        window.panes().await.expect("panes").len(),
+        1,
+        "the window it left keeps the other pane",
+    );
+
+    // The pane still exists, in a window of its own, under the same id.
+    let stranded = server
+        .pane_by_id(&travelled)
+        .await
+        .expect("lookup")
+        .expect("the pane outlived its old window");
+    assert_ne!(stranded.window_id(), window.id());
+
+    let returned = stranded
+        .join_into(&staying, JoinOptions::new(SplitDirection::Below))
+        .await
+        .expect("the pane comes back");
+
+    assert_eq!(returned.id(), &travelled, "the same pane, not a new one");
+    assert_eq!(returned.window_id(), window.id());
+    assert_eq!(window.panes().await.expect("panes").len(), 2);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

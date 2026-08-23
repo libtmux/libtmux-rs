@@ -24,6 +24,13 @@ full.
   on most supported releases. `Session::name` always reports what tmux stored;
   it is the request that can differ from it.
 
+- `Pane::join_into` moves a pane into another window, beside a pane already
+  there. `Pane::break_out` took a pane out into a window of its own and nothing
+  put one back, so a pane could leave and not return without dropping to
+  `Server::cmd`. Placement is a `JoinOptions` carrying a direction, an optional
+  size, and whether to span the window; it carries no command or directory,
+  because tmux spawns nothing here.
+
 - `Window::select_layout` takes a `Layout` naming one of the seven
   arrangements tmux knows, so a layout that does not exist is a compile error
   rather than a refusal at the far end of a round trip. It still takes a saved

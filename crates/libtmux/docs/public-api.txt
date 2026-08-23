@@ -373,6 +373,9 @@ function libtmux::Error::is_transient
 function libtmux::Error::kind
 function libtmux::Error::minimum_version
 function libtmux::IdParseError::expected_sigil
+function libtmux::JoinOptions::full
+function libtmux::JoinOptions::new
+function libtmux::JoinOptions::size
 function libtmux::Layout::as_str
 function libtmux::Layout::minimum_release
 function libtmux::ListingDecodeError::field_name
@@ -426,6 +429,7 @@ function libtmux::Pane::is_at_right
 function libtmux::Pane::is_at_top
 function libtmux::Pane::is_dead
 function libtmux::Pane::is_in_mode
+function libtmux::Pane::join_into
 function libtmux::Pane::kill
 function libtmux::Pane::option_names
 function libtmux::Pane::options
@@ -887,6 +891,7 @@ struct libtmux::ControlLimits
 struct libtmux::DispatchLimits
 struct libtmux::EngineCapabilities
 struct libtmux::IdParseError
+struct libtmux::JoinOptions
 struct libtmux::ListingDecodeError
 struct libtmux::NewSessionOptions
 struct libtmux::NewWindowOptions

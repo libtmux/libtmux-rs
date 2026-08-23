@@ -313,8 +313,8 @@ pub use target::{
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, since};
 pub use window::{
-    Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Rotation, SplitDirection,
-    SplitOptions, Window,
+    JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Rotation,
+    SplitDirection, SplitOptions, Window,
 };
 
 /// Derive a stable typed filter schema for a named struct.
