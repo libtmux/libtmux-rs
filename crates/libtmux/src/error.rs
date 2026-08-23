@@ -454,7 +454,8 @@ pub enum Error {
     /// [`Self::Timeout`](Self::Timeout), which means the work may have run.
     #[non_exhaustive]
     #[error(
-        "{command} was not admitted: {in_flight} dispatches already running (request {request_id})"
+        "a dispatch was not admitted: {in_flight} already running is this endpoint's limit, \
+         and nothing was sent, so retrying is safe (request {request_id}, {command})"
     )]
     Overloaded {
         /// Core-scoped dispatch-request identity.

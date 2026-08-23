@@ -24,6 +24,12 @@ full.
   on most supported releases. `Session::name` always reports what tmux stored;
   it is the request that can differ from it.
 
+- `Error::Overloaded` says what happened before it says which command it
+  happened to. It led with the tmux format string the dispatch carried, which
+  is long enough to be truncated, so the meaning arrived after the part a
+  reader has to scroll past, and it now also says that nothing was sent and a
+  retry is safe.
+
 - `blocking::Runtime` no longer ends the process when it is dropped inside an
   async context. Dropping a tokio runtime blocks until its tasks stop, and
   blocking is forbidden inside another runtime, so a runtime built correctly at
