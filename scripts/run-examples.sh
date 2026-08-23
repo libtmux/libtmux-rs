@@ -32,7 +32,14 @@ tmux -S "$socket" new-window -d -n second
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
 export TMUX="$socket,$server_pid,0"
 
-before=$(find "$dev_root" -mindepth 1 -maxdepth 1 -not -path "$run_dir" | sort)
+# Another run of this script owns its own `examples.*` directory, so those are
+# not leaks even though they are new. Without this, two runs at once each
+# report the other.
+snapshot() {
+    find "$dev_root" -mindepth 1 -maxdepth 1 -not -name 'examples.*' | sort
+}
+
+before=$(snapshot)
 
 failures=()
 run() {
@@ -50,7 +57,7 @@ run scratch --features test-support
 run sweep --features test-support
 run matrix --features plan,control-mode,blocking,test-support,query
 
-after=$(find "$dev_root" -mindepth 1 -maxdepth 1 -not -path "$run_dir" | sort)
+after=$(snapshot)
 leaked=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
 
 status=0
