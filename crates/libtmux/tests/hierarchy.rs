@@ -811,9 +811,13 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
         .new_session(format!("##(touch {})", escaped.display()))
         .await
         .expect("tmux accepts the escaped name");
-    assert_eq!(
-        literal.name().as_bytes(),
-        format!("#(touch {})", escaped.display()).as_bytes(),
+    // Only the escape is asserted, not the whole name: releases through 3.6b
+    // rewrite `:` and `.` in a name to `_`, and a temporary directory is full
+    // of dots.
+    assert!(
+        literal.name().as_bytes().starts_with(b"#(touch "),
+        "the escaped `##` reached tmux as a literal `#`: {:?}",
+        literal.name(),
     );
     assert!(
         retry_until(Duration::from_secs(1), async || escaped.exists())

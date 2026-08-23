@@ -109,6 +109,15 @@
 //! as a name gives whoever wrote it a shell, so escape `#` as `##` before it
 //! reaches tmux, or refuse the name.
 //!
+//! Expansion is not the only way the name you asked for is not the name you
+//! get. tmux releases through 3.6b rewrite `:` and `.` in a session name to
+//! `_`, because a target is split on those, and they do it silently: 3.7
+//! refuses such a name outright, and 3.7a keeps it. So `new_session("a:b")`
+//! succeeds on every supported release except 3.7 and hands back a session
+//! called `a_b` on most of them. The handle reports what tmux stored, so
+//! [`Session::name`] is always the truth; the request is what may differ from
+//! it. Compare the two when the name has to round-trip.
+//!
 //! ## Examples
 //!
 //! Runnable programs live in `examples/`: `inspect` reports what a server is

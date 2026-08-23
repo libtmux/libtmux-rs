@@ -18,6 +18,12 @@ full.
 
 ### Fixed
 
+- Document that tmux may not store the session name it was given. Releases
+  through 3.6b rewrite `:` and `.` to `_` silently, 3.7 refuses such a name,
+  and 3.7a keeps it, so `new_session("a:b")` hands back a session called `a_b`
+  on most supported releases. `Session::name` always reports what tmux stored;
+  it is the request that can differ from it.
+
 - `blocking::Runtime` no longer ends the process when it is dropped inside an
   async context. Dropping a tokio runtime blocks until its tasks stop, and
   blocking is forbidden inside another runtime, so a runtime built correctly at
