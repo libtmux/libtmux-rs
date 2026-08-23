@@ -803,6 +803,93 @@ async fn a_block_carrying_pane_ids_keeps_them_as_output() {
 /// The command's reply arrives behind whatever output tmux has queued, so a
 /// connection that stops reading once its event buffer fills can never finish
 /// the very call that would quieten it.
+/// A slow reader of one pane's output must not be given gaps.
+///
+/// `Pane::stream_output` documents itself as the bytes that pane produced, in
+/// order. Today the connection parking on a full event queue is what makes
+/// that true: the reader stops, tmux stops writing, and nothing is lost. Any
+/// change that keeps the reader moving under backpressure threatens it, and a
+/// gap here is invisible without a counted sequence to check against.
+#[tokio::test]
+async fn a_slow_reader_of_one_pane_is_given_every_byte() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    const LAST: u32 = 50_000;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("counted").await.expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    // The pane waits before it counts and stays alive after, so the stream is
+    // attached for the whole sequence: a pane that has already finished has
+    // nothing left to send, and one that exits takes its window with it.
+    let counted = window
+        .split(
+            SplitOptions::new(SplitDirection::Below)
+                .command(format!("sh -c 'sleep 2; seq 1 {LAST}; sleep 60'")),
+        )
+        .await
+        .expect("pane is created");
+
+    let mut output = counted.stream_output().await.expect("the pane streams");
+
+    // Reading slower than the pane writes is the whole condition: a reader
+    // that keeps up never fills the queue and never exercises the policy.
+    let mut received = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    while tokio::time::Instant::now() < deadline {
+        let Ok(chunk) = tokio::time::timeout(Duration::from_secs(5), output.next_chunk()).await
+        else {
+            break;
+        };
+        let Some(chunk) = chunk else { break };
+        received.extend_from_slice(&chunk);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        if received_reaches(&received, LAST) {
+            break;
+        }
+    }
+
+    // tmux wraps pane output at the pane width, so the bytes carry the
+    // sequence with line endings the terminal chose rather than the ones
+    // `seq` wrote. Checking that every number appears in order tolerates that
+    // without tolerating a missing number.
+    let text = String::from_utf8_lossy(&received);
+    let mut expected = 1u32;
+    for number in text
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+    {
+        if number.parse::<u32>() == Ok(expected) {
+            expected += 1;
+        }
+    }
+    assert_eq!(
+        expected - 1,
+        LAST,
+        "the stream skipped from {} onward; {} bytes arrived",
+        expected,
+        received.len(),
+    );
+
+    output.shutdown().await.expect("the connection shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Whether the counted sequence has been seen through to its last number.
+fn received_reaches(received: &[u8], last: u32) -> bool {
+    let text = String::from_utf8_lossy(received);
+    text.split(|c: char| !c.is_ascii_digit())
+        .any(|piece| piece.parse::<u32>() == Ok(last))
+}
+
 #[tokio::test]
 async fn a_stream_opens_on_a_server_that_is_already_flooding() {
     use libtmux::control::PaneOutput;
