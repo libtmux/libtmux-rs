@@ -624,4 +624,11 @@ pub mod since {
     /// segfaults. `mute_pane` pauses the pane below this release instead,
     /// which discards the queue on every supported release.
     pub const CONTROL_PANE_OFF: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// The mirrored layouts, and so [`crate::Layout::MainHorizontalMirrored`]
+    /// and [`crate::Layout::MainVerticalMirrored`].
+    ///
+    /// Below this release `layout_set_lookup` does not carry those names, and
+    /// tmux refuses one as it would a typo.
+    pub const MIRRORED_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
 }

@@ -6,7 +6,8 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{NewSessionOptions, NewWindowOptions, SplitDirection, SplitOptions, TmuxText};
+use libtmux::{Layout, NewSessionOptions, NewWindowOptions};
+use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
 fn text(value: Option<&TmuxText>) -> Vec<u8> {
     value.expect("tmux reports the value").as_bytes().to_vec()
@@ -863,6 +864,73 @@ async fn directional_focus_follows_the_layout_and_wraps_at_the_edge() {
         left.id(),
         "left from the right",
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A layout is named, saved, or stepped through, and each is a different thing.
+///
+/// tmux takes a name it computes an arrangement from, a string it produced
+/// earlier that restores pane sizes exactly, or a step through its own list.
+/// The step is a flag rather than a name, so `select-layout next` is a refusal
+/// and nothing that takes a layout name could ever express it.
+#[tokio::test]
+async fn a_layout_is_named_saved_or_stepped_through() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("layouts").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    // Two panes, so the arrangements differ from each other.
+    window
+        .split(SplitOptions::new(SplitDirection::Below))
+        .await
+        .expect("a second pane");
+
+    window
+        .select_layout(Layout::EvenHorizontal)
+        .await
+        .expect("tmux arranges the panes");
+    let horizontal = window.layout().to_owned();
+
+    window
+        .select_layout(Layout::EvenVertical)
+        .await
+        .expect("tmux arranges the panes");
+    let vertical = window.layout().to_owned();
+    assert_ne!(
+        horizontal.as_bytes(),
+        vertical.as_bytes(),
+        "the two named layouts arrange two panes differently",
+    );
+
+    // A saved layout restores the exact arrangement, which is what a name
+    // cannot do: it carries the pane sizes rather than a rule for them.
+    window
+        .select_layout(&horizontal)
+        .await
+        .expect("tmux restores the saved layout");
+    assert_eq!(window.layout().as_bytes(), horizontal.as_bytes());
+
+    // Stepping is a flag on the same command, so it is reachable only as its
+    // own method. Passing "next" as a name is what tmux refuses.
+    assert!(
+        window.select_layout("next").await.is_err(),
+        "`next` is a flag rather than a layout name",
+    );
+    // Where a step lands is tmux's own list order, which this does not assert:
+    // that each step moves is the contract, and a saved layout is not
+    // necessarily a position in that list to come back to.
+    window.next_layout().await.expect("tmux steps forward");
+    let stepped = window.layout().to_owned();
+    assert_ne!(stepped.as_bytes(), horizontal.as_bytes());
+
+    window.previous_layout().await.expect("tmux steps back");
+    assert_ne!(window.layout().as_bytes(), stepped.as_bytes());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

@@ -243,6 +243,7 @@ constant libtmux::option_names::WRAP_SEARCH
 constant libtmux::option_names::XTERM_KEYS
 constant libtmux::since::CAPTURE_LINE_FLAGS
 constant libtmux::since::CONTROL_PANE_OFF
+constant libtmux::since::MIRRORED_LAYOUTS
 constant libtmux::since::PROMPT_HISTORY
 constant libtmux::since::SERVER_ACCESS
 enum libtmux::AccessMode
@@ -251,6 +252,8 @@ enum libtmux::ControlModeErrorKind
 enum libtmux::EnvironmentEntry
 enum libtmux::Error
 enum libtmux::ErrorKind
+enum libtmux::Layout
+enum libtmux::LayoutSpec
 enum libtmux::ObjectKind
 enum libtmux::OptionErrorKind
 enum libtmux::OptionKind
@@ -370,6 +373,8 @@ function libtmux::Error::is_transient
 function libtmux::Error::kind
 function libtmux::Error::minimum_version
 function libtmux::IdParseError::expected_sigil
+function libtmux::Layout::as_str
+function libtmux::Layout::minimum_release
 function libtmux::ListingDecodeError::field_name
 function libtmux::ListingDecodeError::row
 function libtmux::NewSessionOptions::command
@@ -670,12 +675,14 @@ function libtmux::Window::linked_sessions
 function libtmux::Window::linked_sessions_or_empty
 function libtmux::Window::move_to
 function libtmux::Window::name
+function libtmux::Window::next_layout
 function libtmux::Window::option_names
 function libtmux::Window::options
 function libtmux::Window::pane_at
 function libtmux::Window::pane_count
 function libtmux::Window::panes
 function libtmux::Window::panes_or_empty
+function libtmux::Window::previous_layout
 function libtmux::Window::refresh
 function libtmux::Window::refreshed
 function libtmux::Window::rename
@@ -1178,6 +1185,15 @@ variant libtmux::ErrorKind::Timeout
 variant libtmux::ErrorKind::Transport
 variant libtmux::ErrorKind::Unreachable
 variant libtmux::ErrorKind::UnsupportedVersion
+variant libtmux::Layout::EvenHorizontal
+variant libtmux::Layout::EvenVertical
+variant libtmux::Layout::MainHorizontal
+variant libtmux::Layout::MainHorizontalMirrored
+variant libtmux::Layout::MainVertical
+variant libtmux::Layout::MainVerticalMirrored
+variant libtmux::Layout::Tiled
+variant libtmux::LayoutSpec::Named
+variant libtmux::LayoutSpec::Saved
 variant libtmux::ObjectKind::Client
 variant libtmux::ObjectKind::Pane
 variant libtmux::ObjectKind::Session

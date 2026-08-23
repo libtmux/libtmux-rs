@@ -706,17 +706,97 @@ impl Window {
 
     /// Set the window's pane layout.
     ///
+    /// Takes a [`Layout`] tmux knows by name, or a layout string tmux itself
+    /// produced through [`LayoutSpec::Saved`]. A `&str`, `String`, or
+    /// `OsString` is read as a saved layout, so a caller who already had one
+    /// keeps working.
+    ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the layout name or specification.
-    pub async fn select_layout(&mut self, layout: impl Into<OsString>) -> Result<&mut Self, Error> {
+    /// Returns an error when tmux refuses the layout, and
+    /// [`crate::ErrorKind::UnsupportedVersion`] when a named layout needs a
+    /// newer tmux than this endpoint runs. See [`Layout::minimum_release`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::Layout;
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("arranged").await?;
+    /// let mut window = session.active_window().await?.expect("a window");
+    ///
+    /// window.select_layout(Layout::Tiled).await?;
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn select_layout(
+        &mut self,
+        layout: impl Into<LayoutSpec>,
+    ) -> Result<&mut Self, Error> {
+        let layout = layout.into();
+        let argument = match &layout {
+            LayoutSpec::Named(named) => {
+                crate::Server::from_core(Arc::clone(&self.core))
+                    .require(named.as_str(), named.minimum_release())
+                    .await?;
+                OsString::from(named.as_str())
+            }
+            LayoutSpec::Saved(saved) => saved.clone(),
+        };
+
         listing::mutate(
             &self.core,
             "select-layout",
             Command::new("select-layout")
                 .arg("-t")
                 .arg(self.id().to_string())
-                .arg(layout.into()),
+                .arg(argument),
+        )
+        .await?;
+
+        self.refresh().await?;
+        Ok(self)
+    }
+
+    /// Move to the next named layout, and return the window.
+    ///
+    /// tmux steps through its own list rather than taking a name, so this is a
+    /// flag on `select-layout` and not something [`Window::select_layout`]
+    /// could express.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn next_layout(&mut self) -> Result<&mut Self, Error> {
+        self.step_layout("-n").await
+    }
+
+    /// Move to the previous named layout, and return the window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn previous_layout(&mut self) -> Result<&mut Self, Error> {
+        self.step_layout("-p").await
+    }
+
+    /// Step through tmux's layout list in one direction.
+    async fn step_layout(&mut self, flag: &'static str) -> Result<&mut Self, Error> {
+        listing::mutate(
+            &self.core,
+            "select-layout",
+            Command::new("select-layout")
+                .arg(flag)
+                .arg("-t")
+                .arg(self.id().to_string()),
         )
         .await?;
 
@@ -1543,6 +1623,179 @@ impl Rotation {
         match self {
             Self::Up => "-U",
             Self::Down => "-D",
+        }
+    }
+}
+
+/// One of the pane arrangements tmux knows by name.
+///
+/// tmux has exactly these, so a layout that does not exist is a compile error
+/// rather than a refusal at the far end of a round trip. A saved layout
+/// string is a different thing and goes through [`LayoutSpec::Saved`].
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::Layout;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("arranged").await?;
+/// let mut window = session.active_window().await?.expect("a window");
+///
+/// window.select_layout(Layout::EvenHorizontal).await?;
+/// assert_eq!(Layout::EvenHorizontal.as_str(), "even-horizontal");
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum Layout {
+    /// Panes side by side, each the full height.
+    EvenHorizontal,
+    /// Panes stacked, each the full width.
+    EvenVertical,
+    /// One large pane above a row of the rest.
+    MainHorizontal,
+    /// The arrangement of [`Layout::MainHorizontal`] with the large pane
+    /// below the row rather than above it.
+    MainHorizontalMirrored,
+    /// One large pane beside a column of the rest.
+    MainVertical,
+    /// The arrangement of [`Layout::MainVertical`] with the large pane on
+    /// the right rather than the left.
+    MainVerticalMirrored,
+    /// Panes in as even a grid as their count allows.
+    Tiled,
+}
+
+impl Layout {
+    /// The name tmux knows this layout by.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EvenHorizontal => "even-horizontal",
+            Self::EvenVertical => "even-vertical",
+            Self::MainHorizontal => "main-horizontal",
+            Self::MainHorizontalMirrored => "main-horizontal-mirrored",
+            Self::MainVertical => "main-vertical",
+            Self::MainVerticalMirrored => "main-vertical-mirrored",
+            Self::Tiled => "tiled",
+        }
+    }
+
+    /// The first tmux release that arranges panes this way.
+    ///
+    /// The mirrored pair arrived in 3.5; the rest predate everything this
+    /// crate supports.
+    #[must_use]
+    pub const fn minimum_release(self) -> crate::ReleaseVersion {
+        match self {
+            Self::MainHorizontalMirrored | Self::MainVerticalMirrored => {
+                crate::version::since::MIRRORED_LAYOUTS
+            }
+            _ => crate::TmuxVersion::MIN_SUPPORTED,
+        }
+    }
+}
+
+impl fmt::Display for Layout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// What to arrange a window's panes as.
+///
+/// A [`Layout`] names an arrangement tmux computes. A saved string is one
+/// tmux already computed: [`Window::layout`] reports one, and handing it back
+/// restores that exact arrangement including the pane sizes, which a named
+/// layout cannot express.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::Layout;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("restored").await?;
+/// let mut window = session.active_window().await?.expect("a window");
+///
+/// // Keep what tmux reports, rearrange, then put it back exactly.
+/// let before = window.layout().to_owned();
+/// window.select_layout(Layout::EvenVertical).await?;
+/// window.select_layout(&before).await?;
+/// assert_eq!(window.layout().as_bytes(), before.as_bytes());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LayoutSpec {
+    /// An arrangement tmux knows by name.
+    Named(Layout),
+    /// A layout string tmux produced, restoring pane sizes exactly.
+    Saved(OsString),
+}
+
+impl From<Layout> for LayoutSpec {
+    fn from(layout: Layout) -> Self {
+        Self::Named(layout)
+    }
+}
+
+impl From<OsString> for LayoutSpec {
+    fn from(saved: OsString) -> Self {
+        Self::Saved(saved)
+    }
+}
+
+impl From<String> for LayoutSpec {
+    fn from(saved: String) -> Self {
+        Self::Saved(saved.into())
+    }
+}
+
+impl From<&str> for LayoutSpec {
+    fn from(saved: &str) -> Self {
+        Self::Saved(saved.into())
+    }
+}
+
+impl From<&OsStr> for LayoutSpec {
+    fn from(saved: &OsStr) -> Self {
+        Self::Saved(saved.to_owned())
+    }
+}
+
+impl From<&TmuxText> for LayoutSpec {
+    /// Take a layout straight from [`Window::layout`].
+    ///
+    /// tmux writes a layout as printable ASCII, and this keeps the bytes
+    /// rather than the lossy text either way, so a layout that round-trips
+    /// through a handle is the one tmux produced.
+    fn from(saved: &TmuxText) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+
+            Self::Saved(OsString::from_vec(saved.as_bytes().to_vec()))
+        }
+        #[cfg(not(unix))]
+        {
+            Self::Saved(OsString::from(saved.to_string_lossy().into_owned()))
         }
     }
 }

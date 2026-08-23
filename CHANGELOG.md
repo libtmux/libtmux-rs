@@ -24,6 +24,19 @@ full.
   on most supported releases. `Session::name` always reports what tmux stored;
   it is the request that can differ from it.
 
+- `Window::select_layout` takes a `Layout` naming one of the seven
+  arrangements tmux knows, so a layout that does not exist is a compile error
+  rather than a refusal at the far end of a round trip. It still takes a saved
+  layout string, now as `LayoutSpec::Saved`, and a `&TmuxText` converts into
+  one so a layout read from `Window::layout` goes straight back.
+  `Layout::MainHorizontalMirrored` and `MainVerticalMirrored` need tmux 3.5 and
+  report `since::MIRRORED_LAYOUTS` below it.
+
+- `Window::next_layout` and `Window::previous_layout` step through tmux's
+  layout list. tmux takes those as flags rather than layout names, so no
+  argument to `select_layout` could reach them and a caller had to drop to
+  `Server::cmd`.
+
 - `Error::Overloaded` says what happened before it says which command it
   happened to. It led with the tmux format string the dispatch carried, which
   is long enough to be truncated, so the meaning arrived after the part a
