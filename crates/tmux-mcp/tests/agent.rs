@@ -14,7 +14,7 @@ use libtmux::{Command, Server};
 use rmcp::ServerHandler as _;
 use rmcp::handler::server::wrapper::Parameters;
 use serde_json::Value;
-use tmux_mcp::{CallerIdentity, TmuxTools};
+use tmux_mcp::{CallerIdentity, Safety, TmuxTools};
 use tokio_util::sync::CancellationToken;
 
 /// Build tool arguments from JSON, as the protocol delivers them.
@@ -74,9 +74,29 @@ async fn identity_for(server: &Server, pane: &str) -> CallerIdentity {
 }
 
 /// A server holding one session, with the tools pointed at it.
+/// Tools whose answers come from their arguments rather than from whoever ran
+/// the suite.
+///
+/// `TmuxTools::new` reads `TMUX`, `TMUX_PANE`, and the safety and confirm
+/// variables, so a test built on it asserts the developer's environment as
+/// much as the code. Inside a tmux pane the caller is a real identity rather
+/// than none, and the pane id will not be the fixture's, so a test expecting
+/// "no caller" saw "some other pane" and failed. CI is not inside tmux, which
+/// is why nothing caught it.
+///
+/// Every value here is the one the environment falls back to when unset, so
+/// this changes nothing about what the tests assert.
+fn bare_tools(server: &Server) -> TmuxTools {
+    TmuxTools::builder(server.clone())
+        .caller(None)
+        .safety(Safety::default())
+        .confirm(false)
+        .build()
+}
+
 async fn fixture(name: &str) -> (TestServer, TmuxTools) {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": name})))
         .await
@@ -154,7 +174,7 @@ async fn typing_fixture(name: &str) -> (TestServer, TmuxTools, String) {
 #[tokio::test]
 async fn a_pane_listing_says_which_pane_the_server_runs_in() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let bare = TmuxTools::new(guard.server().clone());
+    let bare = bare_tools(guard.server());
     bare.create_session(args(serde_json::json!({"name": "work"})))
         .await
         .expect("session is created");
@@ -190,7 +210,7 @@ async fn a_pane_listing_says_which_pane_the_server_runs_in() {
 #[tokio::test]
 async fn the_instructions_say_where_this_server_is_running() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let bare = TmuxTools::new(guard.server().clone());
+    let bare = bare_tools(guard.server());
     bare.create_session(args(serde_json::json!({"name": "work"})))
         .await
         .expect("session is created");
@@ -231,7 +251,7 @@ async fn the_same_pane_id_on_another_socket_is_not_the_callers() {
     let ours = TestServer::builder().start().await.expect("tmux starts");
     let theirs = TestServer::builder().start().await.expect("tmux starts");
     for server in [ours.server(), theirs.server()] {
-        TmuxTools::new(server.clone())
+        bare_tools(server)
             .create_session(args(serde_json::json!({"name": "work"})))
             .await
             .expect("session is created");
@@ -239,7 +259,7 @@ async fn the_same_pane_id_on_another_socket_is_not_the_callers() {
 
     // Both servers hand out pane ids from zero, so the caller's id exists on
     // the other server too. Only the socket tells them apart.
-    let bare = TmuxTools::new(theirs.server().clone());
+    let bare = bare_tools(theirs.server());
     let elsewhere = panes(&bare).await[0]["id"]
         .as_str()
         .expect("a pane id is a string")
@@ -265,7 +285,7 @@ async fn the_same_pane_id_on_another_socket_is_not_the_callers() {
 #[tokio::test]
 async fn killing_the_pane_the_server_runs_in_is_refused() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let bare = TmuxTools::new(guard.server().clone());
+    let bare = bare_tools(guard.server());
     bare.create_session(args(serde_json::json!({"name": "work"})))
         .await
         .expect("session is created");
@@ -318,7 +338,7 @@ async fn killing_the_pane_the_server_runs_in_is_refused() {
 #[tokio::test]
 async fn killing_the_window_or_session_holding_that_pane_is_refused() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let bare = TmuxTools::new(guard.server().clone());
+    let bare = bare_tools(guard.server());
     bare.create_session(args(serde_json::json!({"name": "work"})))
         .await
         .expect("session is created");
@@ -371,13 +391,13 @@ async fn a_pane_id_collision_across_sockets_does_not_block_a_kill() {
     let ours = TestServer::builder().start().await.expect("tmux starts");
     let theirs = TestServer::builder().start().await.expect("tmux starts");
     for server in [ours.server(), theirs.server()] {
-        TmuxTools::new(server.clone())
+        bare_tools(server)
             .create_session(args(serde_json::json!({"name": "work"})))
             .await
             .expect("session is created");
     }
 
-    let bare = TmuxTools::new(theirs.server().clone());
+    let bare = bare_tools(theirs.server());
     let elsewhere = panes(&bare).await[0]["id"]
         .as_str()
         .expect("a pane id is a string")
@@ -1289,7 +1309,7 @@ async fn options_are_read_and_written_at_the_scope_named() {
 #[tokio::test]
 async fn killing_the_server_this_process_runs_on_is_refused() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let bare = TmuxTools::new(guard.server().clone());
+    let bare = bare_tools(guard.server());
     bare.create_session(args(serde_json::json!({"name": "work"})))
         .await
         .expect("session is created");
@@ -1322,12 +1342,12 @@ async fn killing_an_unrelated_server_is_allowed() {
     let ours = TestServer::builder().start().await.expect("tmux starts");
     let theirs = TestServer::builder().start().await.expect("tmux starts");
     for server in [ours.server(), theirs.server()] {
-        TmuxTools::new(server.clone())
+        bare_tools(server)
             .create_session(args(serde_json::json!({"name": "work"})))
             .await
             .expect("session is created");
     }
-    let elsewhere = panes(&TmuxTools::new(theirs.server().clone())).await[0]["id"]
+    let elsewhere = panes(&bare_tools(theirs.server())).await[0]["id"]
         .as_str()
         .expect("a pane id is a string")
         .to_owned();
@@ -1496,7 +1516,7 @@ async fn dropping_the_server_closes_the_tails_it_held() {
     let server = guard.server();
     let baseline = client_count(server).await;
 
-    let tools = TmuxTools::new(server.clone());
+    let tools = bare_tools(server);
     tools
         .create_session(args(serde_json::json!({"name": "work"})))
         .await
