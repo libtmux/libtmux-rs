@@ -176,8 +176,8 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`, `examples`,
-`fixture-root`, `docs`, `doc-blocks`, `format-coverage-check`, `features`,
-`deny`, `msrv`, `package`.
+`fixture-root`, `docs`, `doc-blocks`, `parity-claims`, `format-coverage-check`,
+`features`, `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.
@@ -195,6 +195,13 @@ CI also runs the suite on macOS, but only on `master` or manual dispatch: a
 macOS runner bills at ten times a Linux one and the lints are
 platform-independent. On a pull request, `tests on macOS` and `fuzz parsers`
 report as skipping. That is the design, not a failure.
+
+`just parity-claims` fails when a row of `parity.md` marked `implemented` or
+`verified` names a symbol no crate defines. That document is what this project
+calls its definition of done, so a done row naming a type nobody wrote leaves a
+reader unable to tell a delivered capability from a described one. A row that
+deliberately names something absent -- a Python symbol, or a capability it
+explains is staying out -- is listed in the script with its reason.
 
 `just examples` runs every shipped example against a server it owns and
 fails when one exits nonzero or leaves a socket in `/tmp/libtmux-rs-dev/`.

@@ -2362,7 +2362,7 @@ async fn what_changed_reports_windows_that_wrote_since_the_last_look() {
 async fn confirming_refuses_when_there_is_nobody_to_ask() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = TmuxTools::builder(guard.server().clone())
-        .safety(tmux_mcp::Safety::Destructive)
+        .safety(Safety::Destructive)
         .confirm(true)
         .build();
 
@@ -2395,7 +2395,7 @@ async fn confirming_refuses_when_there_is_nobody_to_ask() {
 
     // Without the setting the same call goes through.
     let permissive = TmuxTools::builder(guard.server().clone())
-        .safety(tmux_mcp::Safety::Destructive)
+        .safety(Safety::Destructive)
         .confirm(false)
         .build();
     permissive

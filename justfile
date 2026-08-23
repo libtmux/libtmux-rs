@@ -226,6 +226,15 @@ docs:
 # ever added -- is invisible: nothing fails, callers just cannot ask for the
 # field. Checking needs no tmux source, so it is part of `just check`.
 #
+# parity.md is what this project calls its definition of done, so a row marked
+# done that names a type nobody wrote is worse than one merely out of date: a
+# reader cannot tell a delivered capability from a described one.
+#
+# Fail when a done parity row names a symbol that does not exist
+[group: 'docs']
+parity-claims:
+    python3 scripts/check-parity-claims.py crates/libtmux/docs/parity.md crates
+
 # Report formats tmux publishes that the catalog does not carry
 [group: 'docs']
 format-coverage-check:
@@ -278,7 +287,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test doctest examples fixture-root docs doc-blocks format-coverage-check features deny msrv package
+check: fmt-check clippy test doctest examples fixture-root docs doc-blocks parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:
