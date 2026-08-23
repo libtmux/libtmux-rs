@@ -18,6 +18,13 @@ full.
 
 ### Fixed
 
+- The `scratch` example runs to completion and removes its socket. It asserted
+  its own cleanup with the loud `sessions`, which reports the server tmux
+  correctly shut down when its last session died as the failure it is, so the
+  example exited nonzero on every run and never reached the line that cleaned
+  up. `just examples` now runs every example and fails on a nonzero exit or a
+  socket left behind.
+
 - `Server::sessions` no longer fails on a session whose name or working
   directory is empty. Most supported tmux releases accept both, and the snapshot decoder refused the empty field rather than
   reading it: one such session made `sessions`, `windows`, `hierarchy`,

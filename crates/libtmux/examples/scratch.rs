@@ -12,8 +12,12 @@ use libtmux::{NewWindowOptions, Server, SplitDirection, SplitOptions};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // An example must not build sessions on whatever server the reader
-    // happens to be using, so this one gets a socket of its own.
-    let socket = std::env::temp_dir().join(format!("{}.sock", unique_name("libtmux-scratch")));
+    // happens to be using, so this one gets a socket of its own. More than one
+    // libtmux runs on a developer's machine, so it goes in a directory this
+    // one owns rather than straight into the temporary directory.
+    let root = std::path::Path::new("/tmp/libtmux-rs-dev");
+    std::fs::create_dir_all(root)?;
+    let socket = root.join(format!("{}.sock", unique_name("libtmux-scratch")));
     let server = Server::builder().socket_path(&socket).build()?;
 
     // The scope kills the session whether the body succeeds or fails, so a
@@ -51,8 +55,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("captured {output} lines");
-    assert!(server.sessions().await?.is_empty(), "the scope cleaned up");
+
+    // The lenient form is the one that answers this question. The scope killed
+    // the only session, so tmux exited with it, and the loud form reports that
+    // as the failure it is rather than as the empty listing this is asking for.
+    assert!(
+        server.sessions_or_empty().await.is_empty(),
+        "the scope cleaned up",
+    );
 
     server.shutdown().await?;
+
+    // tmux does not unlink its socket when the server exits, so whatever named
+    // one owns removing it. Leaving it behind is invisible until /tmp fills up.
+    std::fs::remove_file(&socket)?;
     Ok(())
 }

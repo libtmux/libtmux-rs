@@ -175,7 +175,7 @@ belongs in the test rather than in a rerun.
 $ just check
 ```
 
-That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`,
+That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`, `examples`,
 `fixture-root`, `docs`, `doc-blocks`, `format-coverage-check`, `features`,
 `deny`, `msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
@@ -195,6 +195,13 @@ CI also runs the suite on macOS, but only on `master` or manual dispatch: a
 macOS runner bills at ten times a Linux one and the lints are
 platform-independent. On a pull request, `tests on macOS` and `fuzz parsers`
 report as skipping. That is the design, not a failure.
+
+`just examples` runs every shipped example against a server it owns and
+fails when one exits nonzero or leaves a socket in `/tmp/libtmux-rs-dev/`.
+`cargo test --all-targets` compiles an example and never runs it, so before
+this an example that failed on every run passed every gate. It points `$TMUX`
+at its own socket, which is how `inspect` and `find` find a server without
+reaching the one the reader is using.
 
 The gates worth explaining:
 

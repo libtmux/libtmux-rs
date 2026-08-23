@@ -26,6 +26,15 @@ doctest:
 # terminal fails the gate in another: a fixture records the process that made
 # it, and a socket a server still answers on is in use.
 #
+# `cargo test --all-targets` compiles an example and never runs it, so one that
+# fails at runtime passes every other gate. This runs each against a server it
+# owns and fails when one exits nonzero or leaves a socket behind.
+#
+# Run every example and check it cleaned up
+[group: 'test']
+examples:
+    bash scripts/run-examples.sh
+
 # Report anything the suite left in the fixture root
 [group: 'test']
 fixture-root:
@@ -269,7 +278,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test doctest fixture-root docs doc-blocks format-coverage-check features deny msrv package
+check: fmt-check clippy test doctest examples fixture-root docs doc-blocks format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:
