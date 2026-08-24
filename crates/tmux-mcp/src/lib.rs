@@ -3116,8 +3116,6 @@ impl TmuxTools {
     )]
     pub async fn list_servers(&self) -> Result<Json<ServerListings>, ErrorData> {
         let bound = self.socket().await.map(Path::to_path_buf);
-        let mut searched = Vec::new();
-        let mut found: Vec<PathBuf> = Vec::new();
 
         // tmux puts its sockets in `$TMUX_TMPDIR/tmux-<uid>`, defaulting to
         // /tmp. The directory is per-user, so this never reaches another
@@ -3141,21 +3139,42 @@ impl TmuxTools {
             }
         }
 
-        for root in roots {
-            searched.push(root.display().to_string());
-            let Ok(entries) = std::fs::read_dir(&root) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if std::fs::metadata(&path)
-                    .is_ok_and(|meta| std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type()))
-                    && !found.contains(&path)
-                {
-                    found.push(path);
+        // A `stat` per entry, on a directory whose size belongs to whoever
+        // else uses this machine: a shared /tmp held 836 sockets while this
+        // was written, which is close to two milliseconds with the cache warm
+        // and unbounded without it. That is work for a blocking thread rather
+        // than for the one driving every other request. One handoff covers the
+        // whole scan, where `tokio::fs` would take one per entry.
+        let (scanned, listed) = tokio::task::spawn_blocking(move || {
+            let mut searched = Vec::new();
+            let mut found: Vec<PathBuf> = Vec::new();
+            for root in roots {
+                searched.push(root.display().to_string());
+                let Ok(entries) = std::fs::read_dir(&root) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if std::fs::metadata(&path).is_ok_and(|meta| {
+                        std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type())
+                    }) {
+                        found.push(path);
+                    }
                 }
             }
-        }
+            // Sorted to deduplicate, because two roots can name one socket and
+            // asking `contains` per entry compares every path against every
+            // path kept so far.
+            found.sort();
+            found.dedup();
+            (searched, found)
+        })
+        .await
+        .map_err(|error| {
+            ErrorData::internal_error(format!("the socket scan did not finish: {error}"), None)
+        })?;
+        let searched = scanned;
+        let mut found = listed;
 
         // The bound server may sit outside that directory, which is exactly
         // what --socket is for, so it is added rather than searched for.
