@@ -530,6 +530,15 @@ impl ControlSender {
     /// reported through [`BlockResult::succeeded`], the same way the process
     /// API keeps a nonzero exit status as data.
     ///
+    /// The block says tmux answered the command, not that what the command
+    /// asked for has happened. Almost always those are the same moment. They
+    /// are not for `wait-for <channel>`, which tmux answers at once and then
+    /// parks this client's command queue: the block reports success, the wait
+    /// has not happened, and the connection accepts nothing further until
+    /// something signals the channel. There is no way to tell from here that
+    /// it is waiting, so wait through [`crate::Server::cmd`], where a stalled
+    /// wait costs one process rather than the connection.
+    ///
     /// # Errors
     ///
     /// Returns an error when the command cannot be written as a control-mode
