@@ -120,11 +120,19 @@
 //!
 //! ## Examples
 //!
-//! Runnable programs live in `examples/`: `inspect` reports what a server is
-//! running, `find` selects panes with a typed expression, `scratch` builds a
-//! throwaway session on its own socket and cleans it up, and `watch` reacts to
-//! what a server does over one control-mode connection while driving it down
-//! the same one.
+//! Runnable programs live in `examples/`. `inspect` reports what a server is
+//! running and `find` selects panes with a typed expression, both of which
+//! only read. `scratch` builds a throwaway session on its own socket and
+//! cleans it up, which is the shortest complete tour: a window, a split, keys
+//! sent, output waited for rather than slept on, and a scope that kills the
+//! session whether the body succeeded or not. `watch` reacts to what a server
+//! does over one control-mode connection while driving it down the same one.
+//! `matrix` runs one workload five ways, so the cost of each execution mode is
+//! visible side by side. `sweep` reaps servers that abandoned fixtures left
+//! behind, which is maintenance rather than orchestration.
+//!
+//! `just examples` runs every one of them against a server it owns and fails
+//! if any leaves a socket behind.
 //!
 //! ## Filtering the hierarchy
 //!
