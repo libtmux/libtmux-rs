@@ -1621,8 +1621,15 @@ nothing to copy, which is why the measure is per type rather than per item:
 `Pane::id` inherits the example on `Pane`, and counting accessors separately
 would drown the signal in items nobody needs an example for.
 
-`just example-coverage` reports it. The number is 24 of 67 and is expected to
-keep moving, which is the point of having it.
+`just example-coverage` reports it, and `example-coverage-check` fails when a
+crate-root type has none. The count belongs to that command rather than to
+this page, which cannot be re-read when the number moves.
+
+What "runnable" means here changed after this was written. A counted example
+was one rustdoc would compile, which is not the same as one that runs: eleven
+of them wrapped their body in a hidden function nobody called. `just
+doctests-run` closes that, so the coverage number and the guarantee behind it
+now agree.
 
 Writing them was worth more than the count suggests. Three doctests failed on
 first run and each was a belief this crate held wrongly: `split` is detached by
