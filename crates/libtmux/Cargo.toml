@@ -46,6 +46,12 @@ required-features = ["query"]
 name = "sweep"
 required-features = ["test-support"]
 
+# Control mode is the whole point of this one, and the socket comes from the
+# test helpers rather than from whatever the reader is attached to.
+[[example]]
+name = "watch"
+required-features = ["control-mode", "test-support"]
+
 [[example]]
 name = "matrix"
 required-features = ["plan", "control-mode", "blocking", "test-support", "query"]

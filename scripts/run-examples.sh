@@ -55,6 +55,7 @@ run inspect
 run find --features query -- sh
 run scratch --features test-support
 run sweep --features test-support
+run watch --features control-mode,test-support
 run matrix --features plan,control-mode,blocking,test-support,query
 
 after=$(snapshot)

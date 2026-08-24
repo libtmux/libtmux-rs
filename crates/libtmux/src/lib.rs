@@ -121,8 +121,10 @@
 //! ## Examples
 //!
 //! Runnable programs live in `examples/`: `inspect` reports what a server is
-//! running, `find` selects panes with a typed expression, and `scratch`
-//! builds a throwaway session on its own socket and cleans it up.
+//! running, `find` selects panes with a typed expression, `scratch` builds a
+//! throwaway session on its own socket and cleans it up, and `watch` reacts to
+//! what a server does over one control-mode connection while driving it down
+//! the same one.
 //!
 //! ## Filtering the hierarchy
 //!

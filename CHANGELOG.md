@@ -24,6 +24,11 @@ full.
   on most supported releases. `Session::name` always reports what tmux stored;
   it is the request that can differ from it.
 
+- A `watch` example shows control mode doing what it is for: one connection
+  carrying commands down and the server's own reports back, with the watcher
+  in its own task so neither direction waits for the other. The crate's async
+  story had no runnable example of its own.
+
 - `Window::respawn`, `Client::lock`, and `Server::lock_all` reach the levels
   tmux offers that the crate did not. `Pane::respawn` restarted one pane and
   nothing restarted a window, and `Session::lock` locked one session while
