@@ -319,6 +319,16 @@ pub use window::{
     SplitDirection, SplitOptions, Window,
 };
 
+/// The design notes, compiled.
+///
+/// `design.md` explains why this crate is shaped as it is, and its Rust blocks
+/// had drifted out of the crate they describe: one named an `Error` variant
+/// nobody wrote. Compiling them is what keeps a rationale honest about the
+/// thing it is rationalising.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/design.md")]
+pub struct DesignNotes;
+
 /// Derive a stable typed filter schema for a named struct.
 ///
 /// The generated companion exposes typed field handles through

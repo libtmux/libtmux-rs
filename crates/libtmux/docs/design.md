@@ -461,10 +461,11 @@ Generated field handles make invalid operations fail to compile on downstream
 data through the current public API:
 
 ```rust
+# fn own_struct() -> Result<(), Box<dyn std::error::Error>> {
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 
 #[derive(libtmux::Filterable)]
-#[filterable(target = "task")]
+#[filterable(target = "task", crate = "::libtmux")]
 struct Task {
     name: String,
     done: bool,
@@ -474,6 +475,9 @@ let tasks = vec![Task { name: "build".into(), done: false }];
 let fields = Task::filter_fields();
 let expression = fields.name.starts_with("build").and(fields.done.eq(false));
 let task = tasks.iter().matching(&expression).exactly_one()?;
+# let _ = task;
+# Ok(())
+# }
 ```
 
 String, boolean, integer, enum, to-one, and to-many handles expose only their
@@ -588,12 +592,21 @@ derive. Each keeps the owned handle's fields under a named field -- `session`
 and `window` -- and puts the relation beside it, so a session's own fields and
 a question about its contents compose in one expression:
 
-```rust
+```no_run
+# fn expression() {
+use libtmux::query::Filterable as _;
+use libtmux::{SessionTree, WindowTree};
+
 let sessions = SessionTree::filter_fields();
 let windows = WindowTree::filter_fields();
 
-sessions.session.session_name.starts_with("build")
-    .and(sessions.windows.any(windows.window.window_name.eq("editor")))
+let expression = sessions
+    .session
+    .session_name
+    .starts_with("build")
+    .and(sessions.windows.any(windows.window.window_name.eq("editor")));
+# let _ = expression;
+# }
 ```
 
 Matching delegates: a predicate naming the relation resolves against the
@@ -617,24 +630,34 @@ operations remain methods with ordinary arguments. Operations with several
 optional clauses accept a consuming `#[must_use]` options builder through
 `impl Into<Options>`.
 
-```rust
+```no_run
+# async fn walk() -> Result<(), Box<dyn std::error::Error>> {
+use libtmux::Server;
+
 let server = Server::new()?;
 let session = server.new_session("work").await?;
 let window = session.new_window("editor").await?;
-let pane = window
-    .active_pane()
-    .await?
-    .ok_or(Error::MissingRelation(Relation::ActivePane))?;
+let Some(pane) = window.active_pane().await? else {
+    return Ok(());
+};
 pane.send_keys("cargo test").await?;
+# Ok(())
+# }
 ```
 
 The same method accepts configured options without adding a second operation:
 
-```rust
+```no_run
+# async fn build(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+use libtmux::NewSessionOptions;
+
 let options = NewSessionOptions::new("work")
     .window_name("editor")
     .start_directory("workspace");
 let session = server.new_session(options).await?;
+# let _ = session;
+# Ok(())
+# }
 ```
 
 Options and hooks are exposed as inherent methods on each applicable handle,
@@ -668,9 +691,13 @@ filter values.
 List-shaped object access offers both shapes, and the short name is the loud one. What follows describes the collapsing
 contract:
 
-```rust
-let sessions = server.sessions_or_empty().await;
-let sessions = server.sessions().await?;
+```no_run
+# async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+let lenient = server.sessions_or_empty().await;
+let loud = server.sessions().await?;
+# let _ = (lenient, loud);
+# Ok(())
+# }
 ```
 
 The first returns an empty `Vec` when the underlying tmux list operation fails
