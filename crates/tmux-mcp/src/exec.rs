@@ -214,8 +214,8 @@ impl Patterns {
 ///
 /// The command is bracketed by two sentinels the pane's shell prints, so the
 /// output is exactly what the command wrote and the exit status is the
-/// command's own. See `docs/plans/01-agent-parity.md` for why this shape was
-/// chosen over the alternatives.
+/// command's own. The pane's shell has to cooperate for that, which is why
+/// this reports a pane that is not at a prompt rather than waiting on one.
 ///
 /// # Errors
 ///
