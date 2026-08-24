@@ -10,7 +10,22 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolRequestParams;
 use rmcp::serve_server;
 use serde_json::Value;
-use tmux_mcp::TmuxTools;
+use tmux_mcp::{Safety, TmuxTools};
+
+/// Tools whose answers come from their arguments rather than from whoever ran
+/// the suite.
+///
+/// `TmuxTools::new` reads `TMUX`, `TMUX_PANE`, and the safety and confirm
+/// variables. A `TMUX_PANE` with no `TMUX` is an identity with a pane and no
+/// socket, and `CallerIdentity::may_be_on` answers yes to every case it cannot
+/// resolve, so the server refuses to destroy the fixture the test just made.
+/// Every value here is the one the environment falls back to when unset.
+fn bare_tools(server: &libtmux::Server) -> TmuxTools {
+    TmuxTools::builder(server.clone())
+        .caller(None)
+        .confirm(false)
+        .build()
+}
 
 /// The rows of a listing answer.
 ///
@@ -53,7 +68,7 @@ fn rows<T: serde::Serialize>(answer: rmcp::handler::server::wrapper::Json<T>) ->
 #[tokio::test]
 async fn listing_tools_report_the_live_hierarchy() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
 
     assert!(rows(tools.list_sessions().await.expect("sessions")).is_empty());
 
@@ -95,7 +110,7 @@ async fn listing_tools_report_the_live_hierarchy() {
 #[tokio::test]
 async fn an_unknown_target_is_invalid_input_rather_than_an_internal_failure() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
 
     let error = tools
         .capture_pane(Parameters(
@@ -130,7 +145,7 @@ async fn an_unknown_target_is_invalid_input_rather_than_an_internal_failure() {
 #[tokio::test]
 async fn mutating_tools_change_what_the_listing_tools_report() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
 
     tools
         .create_session(Parameters(
@@ -177,7 +192,9 @@ async fn the_server_advertises_its_tools_over_the_protocol() {
     // The full surface, named explicitly: the default tier withholds the
     // tools that destroy work, and this test is about what is advertised.
     let tools = TmuxTools::builder(guard.server().clone())
-        .safety(tmux_mcp::Safety::Destructive)
+        .safety(Safety::Destructive)
+        .caller(None)
+        .confirm(false)
         .build();
 
     // Drive the real protocol over an in-memory duplex rather than trusting
@@ -255,7 +272,7 @@ async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server.new_session("placed").await.expect("session");
-    let tools = TmuxTools::new(server.clone());
+    let tools = bare_tools(server);
 
     let first = session
         .panes()
@@ -348,7 +365,7 @@ async fn reading_a_pane_can_reach_past_the_visible_screen() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server.new_session("scrolled").await.expect("session");
-    let tools = TmuxTools::new(server.clone());
+    let tools = bare_tools(server);
 
     let pane = session.panes().await.expect("panes").remove(0);
     let id = pane.id().to_string();
@@ -407,7 +424,7 @@ async fn watching_a_pane_reports_what_capture_would_miss() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server.new_session("watched").await.expect("session");
-    let tools = TmuxTools::new(server.clone());
+    let tools = bare_tools(server);
 
     let pane = session
         .panes()
@@ -484,7 +501,7 @@ async fn watching_a_pane_reports_what_capture_would_miss() {
 #[tokio::test]
 async fn a_portable_filter_expression_selects_panes_over_the_protocol() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
 
     tools
         .create_session(Parameters(
@@ -536,7 +553,7 @@ async fn a_session_is_found_by_what_it_contains() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let tools = TmuxTools::new(server.clone());
+    let tools = bare_tools(server);
 
     server
         .new_session(libtmux::NewSessionOptions::new("has-editor").window_name("editor"))
@@ -615,7 +632,7 @@ async fn a_session_is_found_by_what_it_contains() {
 #[tokio::test]
 async fn a_filter_is_narrowed_by_scope_rather_than_by_naming_a_parent() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
 
     for name in ["filtered", "elsewhere"] {
         tools
@@ -662,7 +679,7 @@ async fn a_filter_is_narrowed_by_scope_rather_than_by_naming_a_parent() {
 #[tokio::test]
 async fn scoped_tools_narrow_to_one_parent() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
 
     for name in ["one", "two"] {
         tools
@@ -759,7 +776,7 @@ fn plan_json(session: &str) -> Value {
 #[tokio::test]
 async fn a_plan_runs_as_one_call_instead_of_one_call_per_step() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::new(guard.server().clone());
+    let tools = bare_tools(guard.server());
 
     let answer = tools
         .run_plan(Parameters(
@@ -801,7 +818,9 @@ async fn a_plan_runs_as_one_call_instead_of_one_call_per_step() {
 async fn a_plan_is_refused_per_operation_when_the_tier_does_not_offer_it() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = TmuxTools::builder(guard.server().clone())
-        .safety(tmux_mcp::Safety::Mutating)
+        .safety(Safety::Mutating)
+        .caller(None)
+        .confirm(false)
         .build();
 
     // A tool annotation describes the tool. A plan is a bag of operations, so
