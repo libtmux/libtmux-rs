@@ -991,3 +991,48 @@ async fn a_pane_broken_out_can_be_joined_back() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// The forms tmux has at every level, not only the one that was reachable.
+///
+/// tmux respawns a window as well as a pane, and locks a client and a whole
+/// server as well as a session. Only the narrower of each pair existed, so a
+/// caller wanting the other had to build the command by hand.
+#[tokio::test]
+async fn respawning_and_locking_reach_every_level_tmux_offers() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("levels").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    // A second pane, so respawning the window can be told from respawning one
+    // pane: the window form replaces every pane with the one it runs.
+    window
+        .split(SplitOptions::new(SplitDirection::Below))
+        .await
+        .expect("a second pane");
+    assert_eq!(window.panes().await.expect("panes").len(), 2);
+
+    window
+        .respawn(Some("sh"), true)
+        .await
+        .expect("the window restarts");
+    assert_eq!(
+        window.panes().await.expect("panes").len(),
+        1,
+        "respawning a window leaves the one pane its command runs in",
+    );
+
+    // Locking with nobody attached locks nobody, and tmux accepts that at
+    // every level rather than reporting it as a failure.
+    server.lock_all().await.expect("the server locks");
+    session.lock().await.expect("the session locks");
+    for client in server.clients_or_empty().await {
+        client.lock().await.expect("the client locks");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

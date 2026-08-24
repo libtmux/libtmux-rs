@@ -24,6 +24,11 @@ full.
   on most supported releases. `Session::name` always reports what tmux stored;
   it is the request that can differ from it.
 
+- `Window::respawn`, `Client::lock`, and `Server::lock_all` reach the levels
+  tmux offers that the crate did not. `Pane::respawn` restarted one pane and
+  nothing restarted a window, and `Session::lock` locked one session while
+  neither a single client nor the whole server could be locked at all.
+
 - `Pane::join_into` moves a pane into another window, beside a pane already
   there. `Pane::break_out` took a pane out into a window of its own and nothing
   put one back, so a pane could leave and not return without dropping to

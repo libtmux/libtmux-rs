@@ -788,6 +788,20 @@ impl Server {
         Ok(Session::new(Arc::clone(&self.core), info))
     }
 
+    /// Lock every client on the server.
+    ///
+    /// Runs each client's `lock-command`, which is `lock -np` unless the
+    /// server was told otherwise. Succeeds when nobody is attached, having
+    /// locked nobody. [`crate::Session::lock`] narrows this to one session and
+    /// [`crate::Client::lock`] to one client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn lock_all(&self) -> Result<(), Error> {
+        listing::mutate(&self.core, "lock-server", Command::new("lock-server")).await
+    }
+
     /// Stop the tmux daemon at this endpoint.
     ///
     /// # Errors

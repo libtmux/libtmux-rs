@@ -766,6 +766,36 @@ impl Window {
         Ok(self)
     }
 
+    /// Restart the window's command in place.
+    ///
+    /// Passing `None` reruns whatever the window started with. Every pane in
+    /// the window is replaced by the one the command runs in, which is what
+    /// makes this different from respawning a pane: [`crate::Pane::respawn`]
+    /// restarts one pane and leaves its neighbours alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a pane is still running and `kill` is not set.
+    pub async fn respawn(
+        &mut self,
+        command: Option<impl Into<OsString>>,
+        kill: bool,
+    ) -> Result<&mut Self, Error> {
+        let mut respawn = Command::new("respawn-window")
+            .arg("-t")
+            .arg(self.id().to_string());
+        if kill {
+            respawn = respawn.arg("-k");
+        }
+        if let Some(command) = command {
+            respawn = respawn.arg(command.into());
+        }
+
+        listing::mutate(&self.core, "respawn-window", respawn).await?;
+        self.refresh().await?;
+        Ok(self)
+    }
+
     /// Move to the next named layout, and return the window.
     ///
     /// tmux steps through its own list rather than taking a name, so this is a

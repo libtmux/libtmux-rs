@@ -325,6 +325,7 @@ function libtmux::Client::detach
 function libtmux::Client::height
 function libtmux::Client::is_control_mode
 function libtmux::Client::is_readonly
+function libtmux::Client::lock
 function libtmux::Client::name
 function libtmux::Client::pid
 function libtmux::Client::redraw
@@ -517,6 +518,7 @@ function libtmux::Server::identity
 function libtmux::Server::is_alive
 function libtmux::Server::key_bindings
 function libtmux::Server::kill
+function libtmux::Server::lock_all
 function libtmux::Server::lock_channel
 function libtmux::Server::new
 function libtmux::Server::new_session
@@ -692,6 +694,7 @@ function libtmux::Window::refreshed
 function libtmux::Window::rename
 function libtmux::Window::resize
 function libtmux::Window::resize_by
+function libtmux::Window::respawn
 function libtmux::Window::rotate
 function libtmux::Window::search_panes
 function libtmux::Window::search_panes_or_empty

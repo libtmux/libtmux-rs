@@ -337,6 +337,27 @@ impl Client {
         .await
     }
 
+    /// Lock this client's terminal.
+    ///
+    /// Runs the `lock-command` option, which is `lock -np` unless the server
+    /// was told otherwise. [`crate::Session::lock`] locks every client
+    /// attached to one session and [`crate::Server::lock_all`] locks every
+    /// client on the server; this locks exactly one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn lock(&self) -> Result<(), Error> {
+        listing::mutate(
+            &self.core,
+            "lock-client",
+            Command::new("lock-client")
+                .arg("-t")
+                .arg(self.name().to_string_lossy().into_owned()),
+        )
+        .await
+    }
+
     /// Redraw this client's terminal.
     ///
     /// This is tmux's `refresh-client`. It is named `redraw` because
