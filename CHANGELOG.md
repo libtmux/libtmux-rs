@@ -24,6 +24,13 @@ full.
   on most supported releases. `Session::name` always reports what tmux stored;
   it is the request that can differ from it.
 
+- The `control` module documentation no longer shows a loop that sends a
+  command from inside its own event loop, and no longer says that doing so
+  works. It does not: a reply arrives on the connection the events arrive on,
+  so a loop that stops reading to await one is waiting on the connection it
+  stopped reading. The example now watches from its own task, which is the
+  shape the crate's own concurrency test uses.
+
 - A `watch` example shows control mode doing what it is for: one connection
   carrying commands down and the server's own reports back, with the watcher
   in its own task so neither direction waits for the other. The crate's async

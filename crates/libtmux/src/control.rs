@@ -5,8 +5,8 @@
 //! reports what happens on the server as it happens. That is the difference
 //! between asking tmux what is true and being told when it changes.
 //!
-//! Sending and watching are separate handles, so a task can act on what it
-//! sees without waiting its turn:
+//! Sending and watching are separate handles, so one task can act on what
+//! another sees:
 //!
 //! ```no_run
 //! # async fn watch(server: &libtmux::Server, id: &libtmux::SessionId) -> Result<(), libtmux::Error> {
@@ -18,23 +18,33 @@
 //! let listed = commands.send(libtmux::Command::new("list-windows")).await?;
 //! assert!(listed.succeeded());
 //!
-//! while let Some(event) = events.next_event().await {
-//!     match event {
-//!         Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
-//!         Event::Exit { .. } => break,
-//!         // Reacting to an event by sending a command is the whole point,
-//!         // and works here because the sender is not borrowed by the loop.
-//!         Event::SessionChanged { .. } => {
-//!             commands.send(libtmux::Command::new("list-panes")).await?;
+//! // The watcher reads, and only reads. A reply arrives on the connection
+//! // the events arrive on, so a loop that stops reading in order to await one
+//! // is waiting on the connection it stopped reading.
+//! let watcher = tokio::spawn(async move {
+//!     while let Some(event) = events.next_event().await {
+//!         match event {
+//!             Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
+//!             Event::Exit { .. } => break,
+//!             other => println!("{other:?}"),
 //!         }
-//!         other => println!("{other:?}"),
 //!     }
-//! }
 //!
-//! // The stream ending says the connection is over; this says why.
-//! events.shutdown().await
+//!     // The stream ending says the connection is over; this says why.
+//!     events.shutdown().await
+//! });
+//!
+//! // Acting on what the watcher sees happens out here, on the other handle,
+//! // which is what having two of them is for.
+//! commands.send(libtmux::Command::new("list-panes")).await?;
+//!
+//! let _ = watcher.await;
+//! Ok(())
 //! # }
 //! ```
+//!
+//! `examples/watch.rs` is this as a program that runs, against a server it
+//! starts and cleans up.
 
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -1071,8 +1081,10 @@ impl Connection {
                     }
                     output.push(text);
                 }
-                // Inside a block every other line is output, so reaching a
-                // reply never waits on a caller draining events.
+                // Inside a block every other line is output, so once one is
+                // open its reply never waits on a caller draining events.
+                // Only once it is open: the `%begin` that opens it is read by
+                // the loop above, which does report events.
                 Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
                 None => return Err(Error::control_mode_closed()),
             }
