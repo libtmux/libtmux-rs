@@ -461,7 +461,7 @@ Generated field handles make invalid operations fail to compile on downstream
 data through the current public API:
 
 ```rust
-# fn own_struct() -> Result<(), Box<dyn std::error::Error>> {
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 
 #[derive(libtmux::Filterable)]

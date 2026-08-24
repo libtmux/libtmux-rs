@@ -23,11 +23,27 @@ windows:
 Freeze a session someone built by hand back into one:
 
 ```rust
-# async fn example(session: &libtmux::Session) -> Result<(), libtmux::Error> {
-let workspace = tmux_workspace::freeze(session).await?;
-std::fs::write("dev.yaml", workspace.to_yaml()).ok();
-# Ok(())
-# }
+use libtmux::test::TestServer;
+use tmux_workspace::{freeze, Workspace};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Runs for real, against an isolated tmux under `/tmp/libtmux-rs-test/`.
+    // Your own code reaches a session someone left running through
+    // `libtmux::Server::new()?`.
+    let guard = TestServer::new().await?;
+    let session = guard.server().new_session("dev").await?;
+
+    let workspace = freeze(&session).await?;
+    let yaml = workspace.to_yaml();
+
+    // Keep it wherever the project keeps them:
+    //   std::fs::write("dev.yaml", &yaml)?;
+    assert_eq!(Workspace::from_yaml(&yaml)?, workspace);
+
+    guard.shutdown().await?;
+    Ok(())
+}
 ```
 
 What freezing recovers is the shape -- windows, panes, working directories,

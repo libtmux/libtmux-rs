@@ -260,6 +260,17 @@ format-coverage source:
 doc-blocks:
     python3 scripts/check-doc-blocks.py crates
 
+# rustdoc supplies a doctest's `fn main`, so a block whose body is only a
+# hidden function definition compiles it and then runs an empty main. Every
+# assertion inside is dead, and nothing says so: it renders like any other
+# example and `cargo test --doc` counts it as a pass. Pure text, no toolchain,
+# so it is part of `just check`.
+#
+# Report doctests that compile a definition and execute nothing
+[group: 'docs']
+doctests-run:
+    python3 scripts/check-doctests-run.py crates
+
 # Build documentation including dependencies, so intra-doc links resolve
 [group: 'docs']
 docs-full:
@@ -293,7 +304,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test doctest examples fixture-root docs doc-blocks parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test doctest examples fixture-root docs doc-blocks doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:
