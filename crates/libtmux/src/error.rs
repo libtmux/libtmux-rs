@@ -978,7 +978,11 @@ impl Error {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::ErrorKind;
     ///
     /// // The shape this exists for: use it if it is there, make it if not.
@@ -997,6 +1001,9 @@ impl Error {
     /// let error = stale.rename("gone").await.expect_err("the window was killed");
     /// assert_eq!(error.kind(), ErrorKind::ObjectGone);
     /// assert!(error.is_object_gone());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```

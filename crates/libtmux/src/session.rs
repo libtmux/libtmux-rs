@@ -129,7 +129,11 @@ impl Session {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::{Pane, Session};
     ///
     /// let session = server.new_session("locating-session").await?;
@@ -139,6 +143,9 @@ impl Session {
     /// let found = Session::from_env_value(server, Some(pane.id().as_ref())).await?;
     ///
     /// assert_eq!(found.expect("the session exists").id(), session.id());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```

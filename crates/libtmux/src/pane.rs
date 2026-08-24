@@ -79,7 +79,11 @@ impl Pane {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::Pane;
     ///
     /// let session = server.new_session("locating").await?;
@@ -89,6 +93,9 @@ impl Pane {
     /// let found = Pane::from_env_value(server, Some(expected.id().as_ref())).await?;
     ///
     /// assert_eq!(found.expect("the pane exists").id(), expected.id());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -394,7 +401,11 @@ impl Pane {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::{PaneSize, SplitDirection, SplitOptions};
     ///
     /// let session = server.new_session("split-from-pane").await?;
@@ -410,6 +421,9 @@ impl Pane {
     ///
     /// assert_ne!(above.id(), pane.id());
     /// assert_eq!(above.window_id(), pane.window_id());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -436,7 +450,11 @@ impl Pane {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::{ResizeDirection, SplitDirection, SplitOptions};
     ///
     /// let session = server.new_session("resized-pane").await?;
@@ -448,6 +466,9 @@ impl Pane {
     /// pane.resize_by(ResizeDirection::Down, 2).await?;
     ///
     /// assert_eq!(pane.height(), before + 2);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -483,7 +504,11 @@ impl Pane {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::{SplitDirection, SplitOptions};
     ///
     /// let session = server.new_session("zoomed").await?;
@@ -496,6 +521,9 @@ impl Pane {
     ///
     /// pane.toggle_zoom().await?;
     /// assert!(!pane.window().await?.expect("the window").is_zoomed());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -585,7 +613,11 @@ impl Pane {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::CaptureOptions;
     ///
     /// let session = server.new_session("captured").await?;
@@ -597,6 +629,9 @@ impl Pane {
     ///
     /// let last_ten = pane.capture_with(CaptureOptions::visible().start(-10)).await?;
     /// assert!(last_ten.len() >= visible.len());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```

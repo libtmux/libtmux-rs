@@ -136,7 +136,11 @@ impl Window {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::Window;
     ///
     /// let session = server.new_session("locating-window").await?;
@@ -146,6 +150,9 @@ impl Window {
     /// let found = Window::from_env_value(server, Some(pane.id().as_ref())).await?;
     ///
     /// assert_eq!(found.expect("the window exists").id(), pane.window_id());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1391,7 +1398,11 @@ impl Window {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::ResizeDirection;
     ///
     /// let session = server.new_session("resized-window").await?;
@@ -1400,6 +1411,9 @@ impl Window {
     /// window.resize(80, 24).await?;
     /// window.resize_by(ResizeDirection::Down, 4).await?;
     /// assert_eq!(window.height(), 28);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1439,7 +1453,11 @@ impl Window {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// let source = server.new_session("linking-from").await?;
     /// let target = server.new_session("linking-to").await?;
     /// let window = source.windows().await?.remove(0);
@@ -1448,6 +1466,9 @@ impl Window {
     ///
     /// let linked = target.windows().await?;
     /// assert!(linked.iter().any(|other| other.id() == window.id()));
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1482,12 +1503,19 @@ impl Window {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// let session = server.new_session("sized").await?;
     /// let mut window = session.windows().await?.remove(0);
     ///
     /// window.resize(100, 40).await?;
     /// assert_eq!((window.width(), window.height()), (100, 40));
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
