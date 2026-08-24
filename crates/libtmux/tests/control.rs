@@ -829,12 +829,12 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
         .expect("control mode attaches")
         .split();
 
-    // Bounded, and its own command rather than typed into a shell. Enough to
-    // fill the queue several times over, and it stops on its own: a producer
-    // that outlives the assertion goes on loading the machine for every other
-    // test running beside this one.
+    // Enough to fill the queue many times over and no more. The queue holds
+    // 256, so what matters is exceeding it, not the size of the backlog left
+    // for teardown to kill: a larger flood buys nothing here and costs every
+    // test sharing the machine.
     window
-        .split(SplitOptions::new(SplitDirection::Below).command("seq 1 200000"))
+        .split(SplitOptions::new(SplitDirection::Below).command("seq 1 20000"))
         .await
         .expect("pane is created");
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -866,9 +866,18 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
         "the connection is not closed either way"
     );
 
+    // Bounded, because everything else here is. An unbounded teardown turns a
+    // regression into a run that never ends, and a test that hangs its own
+    // suite reports nothing at all.
     drop(commands);
-    events.shutdown().await.expect("control mode shuts down");
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    tokio::time::timeout(Duration::from_secs(30), events.shutdown())
+        .await
+        .expect("the connection shuts down rather than hanging the suite")
+        .expect("control mode shuts down");
+    tokio::time::timeout(Duration::from_secs(30), guard.shutdown())
+        .await
+        .expect("the fixture shuts down rather than hanging the suite")
+        .expect("tmux fixture shuts down");
 }
 
 /// The same, with no pane output at all.
