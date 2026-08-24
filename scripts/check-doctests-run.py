@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""Fail when a doctest compiles but executes nothing.
+"""Fail when a doctest does not run the example it shows.
 
-rustdoc wraps a doctest's body in `fn main`, so a block whose whole body is a
-hidden function definition compiles that function and then runs an empty main.
-Every assertion inside it is dead. Nothing says so: the block has no marker
-distinguishing it from one that runs, `cargo test --doc` counts it among its
-passes, and a reader sees the same rendered example either way.
+rustdoc supplies a doctest's `fn main` only when the block does not define
+one, so a body that is nothing but a hidden `async fn example` compiles that
+function and then runs an empty main. Every assertion inside it is dead, and
+nothing says so: it renders like any other example and `cargo test --doc`
+counts it among its passes.
 
-This is the defect `just examples` exists for, one level down. There, an
-example was compiled by `--all-targets` and never run; here, a doctest is
-compiled by rustdoc and never run. Both report success while covering nothing.
+Asking which shapes fail to run is the wrong question, and the first version
+of this script asked it. A rule that lists the ways a body can be built and
+never driven -- an uncalled function, an async block nobody awaits, a closure
+bound and never called -- is a blacklist, and a blacklist has a next hole. It
+had four, and two of them were the shapes its own error message pushed a
+reader towards after telling them not to use the third.
 
-`no_run`, `ignore` and `compile_fail` are exempt: each declares what it is.
-The offence is a block that reads as executable and is not.
+So this asks the opposite question: is the line the reader sees reached? A
+scope entered only through something never used is not reached, whatever that
+something is, and a construct nobody here has thought of defaults to
+unreached rather than to fine.
 
-A doctest is not required to *do* anything -- a block that only defines a type
-to prove a derive expands is a compile test, and compiling is the point. What
-fails here is narrower: a block that defines functions, calls none of them,
-and has no statement of its own.
+Two ways a block fails. Some line a reader sees is never reached, or there is
+nothing to see at all -- a body hidden in its entirety renders as an empty
+example and proves nothing to anyone.
+
+`no_run`, `ignore` and `compile_fail` are exempt. Each declares what it is;
+the offence is a block that reads as executable and is not.
 """
 
 from __future__ import annotations
@@ -26,7 +33,6 @@ import pathlib
 import re
 import sys
 
-# A fence whose language is not Rust, or which says it will not run.
 NOT_RUST = {"console", "text", "toml", "yaml", "json", "sh", "bash", "diff", "md"}
 DECLARED = ("no_run", "ignore", "compile_fail")
 
@@ -34,14 +40,20 @@ RUST_FENCE = re.compile(r"^\s*(///|//!)\s*```(.*)$")
 RUST_STRIP = re.compile(r"^\s*(///|//!)\s?")
 INCLUDED = re.compile(r'include_str!\("([^"]+)"\)')
 
-# A line that only declares something. Anything else is a statement, which
-# means main does something and the block runs.
-DECLARATION = re.compile(r"^(use |fn |async fn |pub |struct |enum |impl |trait |mod |type |const |static |\}|\{|#\[)")
+COMMENT = re.compile(r"//.*$")
+STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+CHARLIT = re.compile(r"'(?:[^'\\]|\\.)'")
+FN_DEF = re.compile(r"\b(?:pub\s+)?(?:async\s+)?fn\s+(\w+)")
+MEMBER_OF = re.compile(r"^(pub\s+)?(unsafe\s+)?(impl|trait)\b")
+# A body bound to a name runs only if something later uses the name.
+BOUND = re.compile(
+    r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=]+)?=\s*"
+    r"(?:async\s*(?:move\s*)?\{|(?:async\s*)?(?:move\s*)?\|)"
+)
+# One handed straight to something else is presumed driven by it.
+AS_ARGUMENT = re.compile(r"[(,]\s*(?:async\s*(?:move\s*)?\{|(?:async\s*)?(?:move\s*)?\|[^|]*\|)")
 
-# rustdoc's hidden-line marker, and string bodies, which would otherwise put
-# stray braces into the depth count.
-HIDDEN = re.compile(r"^\s*#\s?")
-STRINGS = re.compile(r'"(?:[^"\\]|\\.)*"')
+NOISE = {"{", "}", "};", ");", "});", "})?;", ")?;"}
 
 
 def rust_blocks(path: pathlib.Path):
@@ -85,8 +97,8 @@ def markdown_blocks(path: pathlib.Path):
 def included_markdown(roots: list[str]) -> set[pathlib.Path]:
     """Every markdown file rustdoc pulls in, found rather than listed.
 
-    Naming them would leave a new one uncovered and silent, which is the shape
-    of the bug this script is here to stop.
+    Listing them would leave the next one uncovered and silent, which is how
+    the examples gate came to miss a whole crate.
     """
     found = set()
     for root in roots:
@@ -98,51 +110,96 @@ def included_markdown(roots: list[str]) -> set[pathlib.Path]:
     return found
 
 
-def never_runs(attribute: str, body: str) -> bool:
-    """Whether this block compiles a definition and then executes nothing."""
-    if attribute.split(",")[0].strip() in NOT_RUST:
-        return False
-    if any(word in attribute for word in DECLARED):
-        return False
+def _clean(line: str) -> str:
+    """Strip what must not contribute braces or identifiers."""
+    return COMMENT.sub("", CHARLIT.sub("''", STRING.sub('""', line)))
 
-    defined = re.findall(r"\b(?:async\s+)?fn (\w+)", body)
-    if not defined:
-        return False
 
-    # rustdoc only supplies a `main` when the block does not define one, so a
-    # block that writes its own is the entry point and runs. That is the whole
-    # difference between the two shapes: `fn main` is called by rustdoc, and
-    # `async fn example` is called by nobody.
-    if "main" in defined:
-        return False
+def _text(line: str) -> str:
+    """A line as the compiler sees it, hidden or not."""
+    stripped = line.strip()
+    return stripped[1:].strip() if stripped.startswith("#") else stripped
 
-    for name in defined:
-        without = re.sub(r"(?:async\s+)?fn " + name, "", body)
-        if re.search(r"\b" + name + r"\s*\(", without):
-            return False
 
-    if any(word in body for word in ("tokio::runtime", "#[tokio::main]", "block_on", "tokio_test")):
-        return False
+def reached(body: str) -> tuple[int, int]:
+    """Return how many of the lines a reader sees are reached, and how many there are."""
+    raw = body.splitlines()
+    lines = [_clean(line) for line in raw]
 
-    # Whether main does anything is a question about nesting, not about lines.
-    # The statements that matter sit at depth zero; the ones inside the hidden
-    # function are the very thing that never runs, and reading them as proof
-    # that it does is how this check first passed a block it should have
-    # failed.
-    depth = 0
-    for line in body.splitlines():
-        text = HIDDEN.sub("", line).strip()
-        if not text or text.startswith("//"):
+    # Which scope openings are gated, and on what name.
+    gate_of: dict[int, str] = {}
+    member = depth = 0
+    for index, line in enumerate(lines):
+        text = _text(line)
+        opening = text.count("{")
+        if MEMBER_OF.match(text) and opening:
+            member = member or depth + 1
+        definition = FN_DEF.search(text)
+        bound = BOUND.search(text)
+        if definition and opening:
+            # A method reaches its caller through the trait rather than by
+            # name, so gating one on its name appearing marks every trait impl
+            # in a doctest dead. Implementing the trait is what such a block
+            # demonstrates, and compiling it is what checks it.
+            if not member:
+                gate_of[index] = definition.group(1)
+        elif bound and not AS_ARGUMENT.search(text):
+            gate_of[index] = bound.group(1)
+        depth += opening - text.count("}")
+        if member and depth < member:
+            member = 0
+
+    def walk(used: set[str]) -> list[bool]:
+        stack = [True]
+        marks = []
+        for index, line in enumerate(lines):
+            text = _text(line)
+            marks.append(stack[-1])
+            opening = text.count("{")
+            if opening:
+                gate = gate_of.get(index)
+                # rustdoc calls `main`; anything else needs a user.
+                entered = stack[-1] and (gate is None or gate == "main" or gate in used)
+                stack.extend([entered] * opening)
+            for _ in range(min(text.count("}"), len(stack) - 1)):
+                stack.pop()
+        return marks
+
+    # A name counts as used only where the use itself is reached, so a call
+    # made from code that never runs does not revive what it calls.
+    names = set(gate_of.values())
+    used: set[str] = set()
+    for _ in range(len(names) + 2):
+        marks = walk(used)
+        found = {
+            name
+            for name in names
+            for index, line in enumerate(lines)
+            if marks[index]
+            and gate_of.get(index) != name
+            and re.search(r"\b" + re.escape(name) + r"\b", line)
+        }
+        if found == used:
+            break
+        used = found
+
+    marks = walk(used)
+    seen = total = 0
+    for index, line in enumerate(raw):
+        if line.strip().startswith("#"):
             continue
-        bare = STRINGS.sub("", text)
-        if depth == 0 and not DECLARATION.match(text):
-            return False
-        depth += bare.count("{") - bare.count("}")
-    return True
+        text = _clean(line).strip()
+        if not text or text in NOISE:
+            continue
+        total += 1
+        seen += marks[index]
+    return seen, total
 
 
 def main(roots: list[str]) -> int:
-    found = []
+    unreached: list[str] = []
+    invisible: list[str] = []
+
     sources = [(path, rust_blocks) for root in roots for path in sorted(pathlib.Path(root).rglob("*.rs"))]
     sources += [(path, markdown_blocks) for path in sorted(included_markdown(roots))]
 
@@ -150,28 +207,46 @@ def main(roots: list[str]) -> int:
         if "/target/" in str(path):
             continue
         for line, attribute, body in reader(path):
-            if never_runs(attribute, body):
-                try:
-                    shown = path.relative_to(pathlib.Path.cwd())
-                except ValueError:
-                    shown = path
-                found.append(f"{shown}:{line}")
+            if attribute.split(",")[0].strip() in NOT_RUST:
+                continue
+            if any(word in attribute for word in DECLARED):
+                continue
+            seen, total = reached(body)
+            try:
+                shown = path.relative_to(pathlib.Path.cwd())
+            except ValueError:
+                shown = path
+            if not total:
+                invisible.append(f"{shown}:{line}")
+            elif seen < total:
+                unreached.append(f"{shown}:{line}  ({total - seen} of {total} lines never reached)")
 
-    if not found:
-        print(f"every doctest runs ({len(sources)} files scanned)")
+    if not unreached and not invisible:
+        print(f"every doctest runs what it shows ({len(sources)} files scanned)")
         return 0
 
-    for line in found:
+    for line in unreached + invisible:
         print(line, file=sys.stderr)
-    print(
-        f"\n{len(found)} doctest(s) compile a definition and run nothing. rustdoc "
-        "puts the body in `fn main`, so a block that only defines a hidden "
-        "function never reaches its own assertions.\n\n"
-        "Give it a runtime and call the work -- `libtmux::test::TestServer` and "
-        "a `block_on`, as the executing doctests do -- or mark it `no_run` if it "
-        "genuinely cannot run here, which says so to the next reader.",
-        file=sys.stderr,
-    )
+
+    if unreached:
+        print(
+            f"\n{len(unreached)} doctest(s) show a reader lines that never run. The "
+            "scope holding them is entered only through something nothing uses -- a "
+            "function nobody calls, an async block nobody awaits, a closure nobody "
+            "invokes -- so rustdoc compiles the body and the assertions inside it "
+            "never happen.\n\n"
+            "Call the work from the top level, or from a `fn main` the block defines. "
+            "Mark it `no_run` if it genuinely cannot run here, which says so to the "
+            "next reader instead of leaving them to find out.",
+            file=sys.stderr,
+        )
+    if invisible:
+        print(
+            f"\n{len(invisible)} doctest(s) hide their whole body, so the example "
+            "renders empty. Whatever it proves, it proves it to nobody: leave at "
+            "least the lines a reader came for visible.",
+            file=sys.stderr,
+        )
     return 1
 
 
