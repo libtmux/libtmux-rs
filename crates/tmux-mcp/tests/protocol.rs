@@ -176,6 +176,8 @@ async fn every_tool_advertises_a_description_and_a_schema() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -370,6 +372,8 @@ async fn every_tool_accepts_the_arguments_its_schema_describes() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -520,6 +524,8 @@ async fn every_tool_declares_what_it_does_to_the_server() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -609,7 +615,13 @@ async fn every_tool_declares_what_it_does_to_the_server() {
 #[tokio::test]
 async fn the_recipes_teach_what_no_single_tool_can_say() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(TmuxTools::new(guard.server().clone())).await;
+    let wire = Wire::connect(
+        TmuxTools::builder(guard.server().clone())
+            .caller(None)
+            .confirm(false)
+            .build(),
+    )
+    .await;
 
     let listed = wire
         .client
@@ -697,6 +709,8 @@ async fn a_tier_withholds_the_tools_above_it() {
         let wire = Wire::connect(
             TmuxTools::builder(guard.server().clone())
                 .safety(tier)
+                .caller(None)
+                .confirm(false)
                 .build(),
         )
         .await;
@@ -754,6 +768,8 @@ async fn the_default_tier_withholds_destruction() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::default())
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -781,6 +797,8 @@ async fn the_discovery_anchors_ask_to_stay_loaded() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -824,6 +842,8 @@ async fn every_tool_answers_with_a_typed_value() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -869,6 +889,8 @@ async fn a_tool_that_does_not_exist_is_refused_over_the_wire() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -898,6 +920,8 @@ async fn a_command_cannot_forge_the_result_of_its_own_run() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -951,6 +975,8 @@ async fn tmux_metacharacters_survive_the_round_trip() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -1046,6 +1072,8 @@ async fn every_advertised_schema_uses_formats_json_schema_defines() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -1101,6 +1129,8 @@ async fn a_failure_says_whether_retrying_could_help() {
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::Destructive)
+            .caller(None)
+            .confirm(false)
             .build(),
     )
     .await;
@@ -1205,7 +1235,13 @@ async fn body(wire: &Wire, uri: String) -> String {
 #[tokio::test]
 async fn the_hierarchy_is_reachable_as_resources() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(TmuxTools::new(guard.server().clone())).await;
+    let wire = Wire::connect(
+        TmuxTools::builder(guard.server().clone())
+            .caller(None)
+            .confirm(false)
+            .build(),
+    )
+    .await;
 
     // A name with a space, because a client fills a template by percent
     // encoding and the server has to undo exactly that.
@@ -1299,7 +1335,13 @@ async fn the_hierarchy_is_reachable_as_resources() {
 #[tokio::test]
 async fn a_resource_that_names_nothing_is_refused_in_the_same_vocabulary() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(TmuxTools::new(guard.server().clone())).await;
+    let wire = Wire::connect(
+        TmuxTools::builder(guard.server().clone())
+            .caller(None)
+            .confirm(false)
+            .build(),
+    )
+    .await;
 
     for (uri, kind) in [
         ("tmux://nope", "invalid_input"),
@@ -1332,7 +1374,13 @@ async fn a_resource_that_names_nothing_is_refused_in_the_same_vocabulary() {
 #[tokio::test]
 async fn an_option_value_may_be_written_as_a_number_or_a_flag() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(TmuxTools::new(guard.server().clone())).await;
+    let wire = Wire::connect(
+        TmuxTools::builder(guard.server().clone())
+            .caller(None)
+            .confirm(false)
+            .build(),
+    )
+    .await;
     wire.json("create_session", json!({"name": "opts"})).await;
 
     // tmux stores every option as text, so a number here is a spelling rather
@@ -1417,7 +1465,10 @@ async fn a_long_wait_reports_progress_to_a_client_that_asked() {
     }
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::builder(guard.server().clone()).build();
+    let tools = TmuxTools::builder(guard.server().clone())
+        .caller(None)
+        .confirm(false)
+        .build();
 
     let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
     let server = tokio::spawn(async move {
@@ -1536,6 +1587,7 @@ async fn a_client_that_can_be_asked_decides_whether_work_is_destroyed() {
     let tools = TmuxTools::builder(guard.server().clone())
         .safety(Safety::Destructive)
         .confirm(true)
+        .caller(None)
         .build();
 
     let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
