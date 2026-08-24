@@ -1681,6 +1681,22 @@ carries escape sequences and can split a word across two of them. Around that
 sit a primed first capture, so output produced while the connection opens is
 not lost; a `#{pane_dead}` subscription, so a dead pane ends the wait instead
 of holding it to the deadline; and coalescing, because an unbatched burst is
-one notification per character. Whether that survives 3.2a, what it costs
-against scrollback polling done properly, how it behaves under a flood, and
-which features each arm needs are what this decision is waiting on.
+one notification per character.
+
+Two of the four questions that shape are measured. The machinery exists on
+every release the lanes build: `%output` and `%subscription-changed` both
+arrive on 3.2a, 3.4, 3.5a, 3.6b, 3.7 and 3.7c, with no errors anywhere, so the
+oldest supported release is not the constraint it might have been -- the
+`#{pane_dead}` half needs `refresh-client -B`, which landed in 3.2.
+
+The feature cost is the constraint instead, and it settles more than it looks
+like it does. A doorbell needs `control-mode`; a capture poll needs only the
+base API, and `default = ["query"]`. So a doorbell-only wait would be absent
+from a default build -- the capability existing, but not for you, decided by a
+flag its signature never mentions. This manifest says a feature is for "API
+surface a caller who only dispatches commands never needs", and a caller who
+dispatches a command does need to know when it finished: `send_keys` without
+that is half of one. Waiting therefore fails the test for being opt-in, which
+makes the polling path the floor and the doorbell an optimisation above it
+rather than an alternative to it. What remains to measure is what the doorbell
+saves, and what a flood does to a wait that rings on every byte.
