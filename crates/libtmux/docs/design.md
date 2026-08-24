@@ -725,7 +725,14 @@ What the earlier framing was right about is kept:
 
 - events are handed over with backpressure, never dropped -- a consumer that
   stops reading stops the connection reading from tmux, which is the
-  backpressure tmux already applies to a slow client;
+  backpressure tmux already applies to a slow client. That pause is available
+  only while nothing is waiting for a reply. A reply arrives on the connection
+  the events arrive on, so pausing with one outstanding would be waiting for
+  something this end had stopped listening for, and it deadlocked: measured
+  identically on 3.2a through 3.7c, with no error and `is_closed` reporting
+  false. While a reply is outstanding the connection keeps reading and holds
+  what the consumer has not taken, which is bounded by how long a reply takes
+  rather than by a number, and resumes pausing the moment none is;
 - the connection lives while either handle is in use and ends when both are
   gone, so a caller who only watches and a caller who only sends are both
   ordinary;

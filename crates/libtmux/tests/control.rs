@@ -803,6 +803,91 @@ async fn a_block_carrying_pane_ids_keeps_them_as_output() {
 /// The command's reply arrives behind whatever output tmux has queued, so a
 /// connection that stops reading once its event buffer fills can never finish
 /// the very call that would quieten it.
+/// A reply must not wait on the caller draining events.
+///
+/// The reply to a command arrives on the connection the events arrive on, so
+/// a connection that stops reading because nobody is taking its events has
+/// stopped reading the reply too. Nothing times out and `is_closed` stays
+/// false, so a caller cannot tell a stalled connection from a quiet server.
+#[tokio::test]
+async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("unread").await.expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    // The pane runs its flood as its own command rather than being typed
+    // into, so the output starts without a shell having to be ready for it.
+    window
+        .split(SplitOptions::new(SplitDirection::Below).command("yes flooding-the-queue"))
+        .await
+        .expect("pane is created");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // `events` is held and never polled, which is what a caller awaiting a
+    // reply does for as long as the await lasts.
+    let answered = tokio::time::timeout(
+        Duration::from_secs(10),
+        commands.send(Command::new("list-windows")),
+    )
+    .await
+    .expect("a reply does not wait on the caller draining events")
+    .expect("the command is answered");
+    assert!(answered.succeeded());
+    assert!(!commands.is_closed(), "the connection is still usable");
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The same, with no pane output at all.
+///
+/// This is what says the stall is not about volume. Every one of these
+/// commands raises notifications of its own, so a caller who subscribes to
+/// nothing and floods nothing still fills the queue with the consequences of
+/// its own work, and the connection it filled is the one carrying its replies.
+#[tokio::test]
+async fn replies_arrive_when_a_caller_only_ever_sends() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("sending").await.expect("session");
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    // Far past the event queue, which is where this used to stop.
+    for index in 0..200 {
+        let created = tokio::time::timeout(
+            Duration::from_secs(10),
+            commands.send(Command::new("new-window").arg("-d")),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("command {index} was answered"))
+        .expect("the command is answered");
+        assert!(created.succeeded(), "command {index} succeeded");
+    }
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A slow reader of one pane's output must not be given gaps.
 ///
 /// `Pane::stream_output` documents itself as the bytes that pane produced, in

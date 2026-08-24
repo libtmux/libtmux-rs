@@ -24,6 +24,16 @@ full.
   on most supported releases. `Session::name` always reports what tmux stored;
   it is the request that can differ from it.
 
+- A control-mode reply no longer waits on the caller draining events. The
+  connection stopped reading when nobody took its events, and a reply arrives
+  on the connection that stopped, so a caller awaiting one deadlocked: no
+  error, no timeout, and `ControlSender::is_closed` reporting false. It needed
+  no pane output to happen — a caller that only sends fills the queue with the
+  notifications its own commands raise. Measured identically on tmux 3.2a
+  through 3.7c. The connection now holds what the caller has not taken and
+  keeps reading while a reply is outstanding, pausing only when none is, so
+  events are still never dropped and never reordered.
+
 - The `control` module documentation no longer shows a loop that sends a
   command from inside its own event loop, and no longer says that doing so
   works. It does not: a reply arrives on the connection the events arrive on,

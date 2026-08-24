@@ -455,6 +455,7 @@ impl ControlMode {
             events,
             stopped,
             awaiting: VecDeque::new(),
+            pending: VecDeque::new(),
         };
 
         // tmux answers the attach with a block of its own. Waiting for it here
@@ -887,6 +888,8 @@ struct Request {
 
 /// What one turn of the connection loop found to do.
 enum Step {
+    /// The watching half has room for one held event, or has gone.
+    Deliver(bool),
     Read(Result<Option<Line>, Error>),
     Send(Option<Request>),
     /// The watching half asked to stop, or went away.
@@ -916,6 +919,12 @@ struct Connection {
     /// tmux answers in order and blocks do not nest, so the front of this
     /// queue owns the next block that completes.
     awaiting: VecDeque<oneshot::Sender<Result<BlockResult, Error>>>,
+    /// Events tmux has reported that the caller has not taken yet.
+    ///
+    /// The reader puts an event here rather than waiting for the caller to
+    /// have room, because waiting would stop it reading the connection, and
+    /// the connection is where a caller's reply comes from.
+    pending: VecDeque<Event>,
 }
 
 impl Connection {
@@ -961,8 +970,26 @@ impl Connection {
             // Unbiased on purpose. Reading first would starve commands under
             // a busy pane, and ordering is the queue's job, not the poll
             // order's.
+            // Reading stops only when the caller has fallen far enough
+            // behind AND nothing is waiting for a reply. That is the
+            // backpressure tmux already applies to a slow client, and it
+            // costs nothing while it is the only thing happening. With a
+            // reply outstanding it is not available: the reply arrives on
+            // the connection that would stop, so pausing would be waiting
+            // for something this end has stopped listening for.
+            // What is held is bounded by how long a reply takes rather than by
+            // a number: reading continues only while one is outstanding, tmux
+            // answers a command's block promptly, and the moment it does this
+            // goes back to pausing. A command tmux accepted and will not
+            // answer would break that, and `wait-for` is the one that behaves
+            // that way -- it answers its block at once and parks the queue,
+            // so it leaves nothing outstanding here either.
+            let held_back = self.pending.len() >= EVENT_QUEUE && self.awaiting.is_empty();
+
             let step = tokio::select! {
-                line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes) => Step::Read(line),
+                line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
+                    if !held_back => Step::Read(line),
+                room = self.events.reserve(), if !self.pending.is_empty() => Step::Deliver(room.is_ok()),
                 request = self.commands.recv(), if sending => Step::Send(request),
                 asked = self.stopped.changed(), if watching => Step::Unwatched {
                     asked: asked.is_ok(),
@@ -986,6 +1013,16 @@ impl Connection {
                     }
                     self.awaiting.push_back(request.result);
                 }
+                // The caller took one, so the next one can go.
+                Step::Deliver(true) => {
+                    if let Some(event) = self.pending.pop_front() {
+                        let _ = self.events.try_send(event);
+                    }
+                }
+                // Nobody is watching any more. What is held becomes
+                // unreachable rather than undelivered, and the connection
+                // carries on for whoever is still sending.
+                Step::Deliver(false) => self.pending.clear(),
                 // Every sender is gone, so no further commands can arrive.
                 Step::Send(None) => sending = false,
                 // The watching handle was dropped rather than asked to stop,
@@ -1014,10 +1051,10 @@ impl Connection {
                     return Ok(true);
                 }
                 Some(Line::Event(exit @ Event::Exit { .. })) => {
-                    self.report(exit).await;
+                    self.report(exit);
                     return Ok(false);
                 }
-                Some(Line::Event(event)) => self.report(event).await,
+                Some(Line::Event(event)) => self.report(event),
                 Some(Line::Text(_) | Line::BlockEnd { .. }) => {}
                 None => return Ok(false),
             }
@@ -1035,11 +1072,11 @@ impl Connection {
                 Ok(true)
             }
             Line::Event(exit @ Event::Exit { .. }) => {
-                self.report(exit).await;
+                self.report(exit);
                 Ok(false)
             }
             Line::Event(event) => {
-                self.report(event).await;
+                self.report(event);
                 Ok(true)
             }
             // A block terminator with no block open, or output outside one.
@@ -1051,8 +1088,26 @@ impl Connection {
     ///
     /// A receiver that has gone away is not a reason to stop: commands may
     /// still be in flight, and a caller who only sends is a valid caller.
-    async fn report(&self, event: Event) {
-        let _ = self.events.send(event).await;
+    fn report(&mut self, event: Event) {
+        // Anything already held goes first. The channel can drain between one
+        // event and the next, so handing this one straight over while older
+        // ones wait would deliver them out of order, and a pane's output is a
+        // byte stream where that reads exactly like loss.
+        if !self.pending.is_empty() {
+            self.pending.push_back(event);
+            return;
+        }
+
+        // Never `send().await`: this runs on the task that reads the
+        // connection, so waiting here stops the reads that a reply arrives on.
+        match self.events.try_send(event) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(event)) => self.pending.push_back(event),
+            // A receiver that has gone away is not a reason to stop: commands
+            // may still be in flight, and a caller who only sends is a valid
+            // caller.
+            Err(mpsc::error::TrySendError::Closed(_)) => {}
+        }
     }
 
     /// Read to the end of a block that has already begun.
