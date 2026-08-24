@@ -55,6 +55,21 @@ AS_ARGUMENT = re.compile(r"[(,]\s*(?:async\s*(?:move\s*)?\{|(?:async\s*)?(?:move
 
 NOISE = {"{", "}", "};", ");", "});", "})?;", ")?;"}
 
+# A line that only declares something. Whatever else a block contains, if no
+# line outside these ever runs at the entry level, nothing in it runs.
+DECLARATION = re.compile(
+    r"^(use |pub |fn |async fn |unsafe fn |struct |enum |union |impl |trait |mod |"
+    r"type |const |static |macro_rules!|extern |#\[|#!\[|\}|\{|where\b|derive)"
+)
+# A scope that holds a definition, or a body waiting to be driven. A bare
+# block, an `if`, a `match` or a `#[cfg] {}` wrapper is none of these: it runs
+# where it stands, and treating it as nesting hides the work inside it.
+ITEM_SCOPE = re.compile(
+    r"^(pub\s+)?(unsafe\s+)?(async\s+)?(fn\s|impl\b|trait\s|mod\s|macro_rules!|"
+    r"struct\s|enum\s|union\s)"
+)
+DEFERRED = re.compile(r"(async\s*(?:move\s*)?\{|(?:async\s*)?(?:move\s*)?\|[^|]*\|\s*\{)")
+
 
 def rust_blocks(path: pathlib.Path):
     """Yield `(line, attribute, body)` for each fenced block in `///` or `//!`."""
@@ -184,6 +199,35 @@ def reached(body: str) -> tuple[int, int]:
         used = found
 
     marks = walk(used)
+
+    # Whether anything runs at the entry level at all. rustdoc's `main` is the
+    # entry, so a `main` the block defines does not count as a scope. This
+    # knows nothing about what constructs exist: if no statement here executes,
+    # nothing the block contains executes, whatever it was built out of.
+    working = 0
+    nested: list[bool] = []
+    for index, line in enumerate(lines):
+        text = _text(line)
+        if (
+            not any(nested)
+            and marks[index]
+            and text
+            and text not in NOISE
+            and not DECLARATION.match(text)
+        ):
+            working += 1
+        opening = text.count("{")
+        if opening:
+            # rustdoc calls the `main` a block defines, so its body is the
+            # entry level rather than a scope below it.
+            item = (
+                gate_of.get(index) != "main"
+                and bool(ITEM_SCOPE.match(text) or DEFERRED.search(text) or index in gate_of)
+            )
+            nested.extend([item] * opening)
+        for _ in range(min(text.count("}"), len(nested))):
+            nested.pop()
+
     seen = total = 0
     for index, line in enumerate(raw):
         if line.strip().startswith("#"):
@@ -193,12 +237,13 @@ def reached(body: str) -> tuple[int, int]:
             continue
         total += 1
         seen += marks[index]
-    return seen, total
+    return seen, total, working
 
 
 def main(roots: list[str]) -> int:
     unreached: list[str] = []
     invisible: list[str] = []
+    inert: list[str] = []
 
     sources = [(path, rust_blocks) for root in roots for path in sorted(pathlib.Path(root).rglob("*.rs"))]
     sources += [(path, markdown_blocks) for path in sorted(included_markdown(roots))]
@@ -211,21 +256,23 @@ def main(roots: list[str]) -> int:
                 continue
             if any(word in attribute for word in DECLARED):
                 continue
-            seen, total = reached(body)
+            seen, total, working = reached(body)
             try:
                 shown = path.relative_to(pathlib.Path.cwd())
             except ValueError:
                 shown = path
             if not total:
                 invisible.append(f"{shown}:{line}")
+            elif not working:
+                inert.append(f"{shown}:{line}")
             elif seen < total:
                 unreached.append(f"{shown}:{line}  ({total - seen} of {total} lines never reached)")
 
-    if not unreached and not invisible:
+    if not unreached and not invisible and not inert:
         print(f"every doctest runs what it shows ({len(sources)} files scanned)")
         return 0
 
-    for line in unreached + invisible:
+    for line in unreached + inert + invisible:
         print(line, file=sys.stderr)
 
     if unreached:
@@ -238,6 +285,17 @@ def main(roots: list[str]) -> int:
             "Call the work from the top level, or from a `fn main` the block defines. "
             "Mark it `no_run` if it genuinely cannot run here, which says so to the "
             "next reader instead of leaving them to find out.",
+            file=sys.stderr,
+        )
+    if inert:
+        print(
+            f"\n{len(inert)} doctest(s) execute no statement at all. Everything in "
+            "them is a definition -- a type, a trait, an impl, a macro -- and "
+            "nothing outside those ever runs, so whatever they assert is never "
+            "reached.\n\n"
+            "This asks nothing about which constructs defer a body, so it holds for "
+            "constructs nobody here has thought of: if the entry level does no work, "
+            "the block does no work. Exercise what it defines, or mark it `no_run`.",
             file=sys.stderr,
         )
     if invisible:
