@@ -675,6 +675,14 @@ impl Server {
     /// spawns, and the session id goes stale as soon as the pane's window is
     /// moved to another session.
     ///
+    /// Being frozen is what makes the pid worth something to a caller who
+    /// wants to know the daemon has not been replaced since. A server that
+    /// restarts on the same socket answers here just as well, and reissues
+    /// ids from the start, so [`Server::generation`] and
+    /// [`Server::require_generation`] are what tell the two apart. This does
+    /// not check on its own initiative, because that would cost a round trip
+    /// on a call documented as running no tmux command.
+    ///
     /// This runs no tmux command and does not check that the server is alive;
     /// use [`Server::is_alive`] for that.
     ///
