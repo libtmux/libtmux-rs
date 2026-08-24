@@ -25,6 +25,28 @@ example and proves nothing to anyone.
 
 `no_run`, `ignore` and `compile_fail` are exempt. Each declares what it is;
 the offence is a block that reads as executable and is not.
+
+What this does not decide, deliberately. A scope can be skipped rather than
+deferred -- `if false`, `while false`, `for _ in 0..0`, a body after
+`process::exit` -- and telling a condition that is always false from one that
+merely might be needs the condition evaluated, not read. Listing the literal
+forms would rebuild the blacklist this replaced: a set of constructs known to
+skip, passing everything not in the set. Nobody writes `while false` by
+accident, so the list would grow without the guarantee growing.
+
+The same limit has one honest consequence worth naming, because it reaches
+real examples rather than contrived ones. A body wrapped in
+`#[cfg(feature = "...")]` does not run when that feature is off, and this
+reads text rather than a build, so what it certifies is relative to the
+features the doctests are compiled with. `just doctest` passes
+`--all-features`, so every gated body there does run and the answer holds for
+that configuration -- and says nothing about a reader who builds with the
+defaults.
+
+Closing the whole class needs a different instrument: an `assert!(false)`
+placed in a body, where a doctest that still passes proves the body never
+ran. That needs no theory about which constructs execute, and it costs a
+compile and a run of the suite rather than a read of it.
 """
 
 from __future__ import annotations
