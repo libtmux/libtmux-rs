@@ -17,6 +17,10 @@ run_dir=$(mktemp -d "$dev_root/examples.XXXXXXXX")
 readonly run_dir
 readonly socket="$run_dir/server.sock"
 
+# Who to ask about, later. A run still going owns its directory; one whose
+# owner is gone left it behind. `just fixture-root` decides the same way.
+printf '%s\n' "$$" > "$run_dir/owner"
+
 cleanup() {
     tmux -S "$socket" kill-server >/dev/null 2>&1 || true
     rm -rf "$run_dir"
@@ -32,14 +36,23 @@ tmux -S "$socket" new-window -d -n second
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
 export TMUX="$socket,$server_pid,0"
 
-# Another run of this script owns its own `examples.*` directory, so those are
-# not leaks even though they are new. Without this, two runs at once each
-# report the other.
-snapshot() {
-    find "$dev_root" -mindepth 1 -maxdepth 1 -not -name 'examples.*' | sort
+# Whatever nobody is still using. A directory belonging to a run in progress is
+# not a leak even though it is new, and one belonging to a run that is gone is
+# a leak even though it is old, so this asks who owns a thing rather than what
+# it is called. Excluding by name got the first case right and made the second
+# invisible: a run killed hard enough to skip its own trap left a live daemon
+# that this gate, `just fixture-root` and `examples/sweep` all called clean.
+abandoned() {
+    local entry owner
+    for entry in "$dev_root"/* "$dev_root"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        owner="$entry/owner"
+        if [ -f "$owner" ] && kill -0 "$(cat "$owner")" 2>/dev/null; then
+            continue
+        fi
+        printf '%s\n' "$entry"
+    done
 }
-
-before=$(snapshot)
 
 failures=()
 run() {
@@ -58,8 +71,7 @@ run sweep --features test-support
 run watch --features control-mode,test-support
 run matrix --features plan,control-mode,blocking,test-support,query
 
-after=$(snapshot)
-leaked=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+leaked=$(abandoned)
 
 status=0
 if [ ${#failures[@]} -ne 0 ]; then
@@ -67,7 +79,11 @@ if [ ${#failures[@]} -ne 0 ]; then
     status=1
 fi
 if [ -n "$leaked" ]; then
-    printf '\nexamples left files in %s:\n%s\n' "$dev_root" "$leaked" >&2
+    printf '\n%s holds what nobody is using:\n%s\n' "$dev_root" "$leaked" >&2
+    printf '\ntmux does not unlink its socket when the server exits, so whatever\n' >&2
+    printf 'named one owns removing it. A daemon may still be answering on one of\n' >&2
+    printf 'these, holding a pseudo-terminal per pane; check with `tmux -S <path>\n' >&2
+    printf 'kill-server` before removing the directory.\n' >&2
     status=1
 fi
 
