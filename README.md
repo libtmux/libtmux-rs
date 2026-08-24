@@ -29,6 +29,8 @@ You may be looking for:
   transport switches, testing
 - [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
   package**, if you want an agent to drive tmux
+- [Examples](crates/libtmux/examples) — six programs that run and clean up
+  after themselves, from reading a server to watching one over control mode
 - [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
 - [Parity ledger](crates/libtmux/docs/parity.md) — capability-by-capability
   against Python libtmux
