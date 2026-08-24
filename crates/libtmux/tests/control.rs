@@ -829,25 +829,42 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
         .expect("control mode attaches")
         .split();
 
-    // The pane runs its flood as its own command rather than being typed
-    // into, so the output starts without a shell having to be ready for it.
+    // Bounded, and its own command rather than typed into a shell. Enough to
+    // fill the queue several times over, and it stops on its own: a producer
+    // that outlives the assertion goes on loading the machine for every other
+    // test running beside this one.
     window
-        .split(SplitOptions::new(SplitDirection::Below).command("yes flooding-the-queue"))
+        .split(SplitOptions::new(SplitDirection::Below).command("seq 1 200000"))
         .await
         .expect("pane is created");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // `events` is held and never polled, which is what a caller awaiting a
     // reply does for as long as the await lasts.
-    let answered = tokio::time::timeout(
+    // Either answer is fine and the point is that one arrives. A caller who
+    // will not read has asked for something the connection cannot always give
+    // -- a reply travels the way the events do -- so past what it can hold it
+    // says so rather than waiting to be rescued by the caller who is waiting
+    // for it. What it must never do is neither.
+    let outcome = tokio::time::timeout(
         Duration::from_secs(10),
         commands.send(Command::new("list-windows")),
     )
     .await
-    .expect("a reply does not wait on the caller draining events")
-    .expect("the command is answered");
-    assert!(answered.succeeded());
-    assert!(!commands.is_closed(), "the connection is still usable");
+    .expect("an answer arrives rather than a wait that never ends");
+
+    match outcome {
+        Ok(answered) => assert!(answered.succeeded()),
+        Err(refused) => assert_eq!(
+            refused.kind(),
+            libtmux::ErrorKind::Refused,
+            "the connection says why rather than stalling: {refused:?}",
+        ),
+    }
+    assert!(
+        !commands.is_closed(),
+        "the connection is not closed either way"
+    );
 
     drop(commands);
     events.shutdown().await.expect("control mode shuts down");

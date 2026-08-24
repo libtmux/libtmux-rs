@@ -533,12 +533,13 @@ impl ControlSender {
     ///
     /// The block says tmux answered the command, not that what the command
     /// asked for has happened. Almost always those are the same moment. They
-    /// are not for `wait-for <channel>`, which tmux answers at once and then
-    /// parks this client's command queue: the block reports success, the wait
-    /// has not happened, and the connection accepts nothing further until
-    /// something signals the channel. There is no way to tell from here that
-    /// it is waiting, so wait through [`crate::Server::cmd`], where a stalled
-    /// wait costs one process rather than the connection.
+    /// are not for the commands tmux answers at once and then parks this
+    /// client's queue behind: `wait-for <channel>` until something signals it,
+    /// and `run-shell` without `-b` for as long as its shell command runs.
+    /// Each reports success, neither has finished, and the next command sent
+    /// waits for it however long that is. Send those through
+    /// [`crate::Server::cmd`], where the wait costs one process rather than
+    /// the connection everything else on it is sharing.
     ///
     /// # Errors
     ///
@@ -761,6 +762,17 @@ const COMMAND_QUEUE: usize = 16;
 /// How many events may buffer before the connection stops reading tmux.
 const EVENT_QUEUE: usize = 256;
 
+/// How many events may be held while a reply is outstanding.
+///
+/// Reading continues while something is waiting for a reply, because the reply
+/// arrives on the connection that would otherwise pause. That is bounded by
+/// how long a reply takes, and tmux answers most commands at once -- but not
+/// all. `run-shell` without `-b` answers its own block immediately and then
+/// parks the queue for as long as its shell command runs, so the next command
+/// sent is outstanding for that long and this end would hold events for the
+/// duration. A ceiling turns that into a pause rather than a memory leak.
+const HELD_WHILE_AWAITING: usize = EVENT_QUEUE * 8;
+
 /// What one pane writes, as it writes it.
 ///
 /// Built by [`crate::Pane::stream_output`]. This is a [`Stream`] of the bytes
@@ -977,14 +989,23 @@ impl Connection {
             // reply outstanding it is not available: the reply arrives on
             // the connection that would stop, so pausing would be waiting
             // for something this end has stopped listening for.
-            // What is held is bounded by how long a reply takes rather than by
-            // a number: reading continues only while one is outstanding, tmux
-            // answers a command's block promptly, and the moment it does this
-            // goes back to pausing. A command tmux accepted and will not
-            // answer would break that, and `wait-for` is the one that behaves
-            // that way -- it answers its block at once and parks the queue,
-            // so it leaves nothing outstanding here either.
-            let held_back = self.pending.len() >= EVENT_QUEUE && self.awaiting.is_empty();
+            // Reading pauses when the caller is behind, which is the
+            // backpressure tmux already applies to a slow client and what
+            // makes a pane's output lossless. It cannot pause while a reply is
+            // outstanding, because the reply arrives on the connection that
+            // would pause.
+            // Past the ceiling with a reply outstanding, stopping would
+            // strand it and only the caller can help: the one who would drain
+            // is the one awaiting. Saying so beats waiting to be rescued by
+            // somebody who is waiting for us. Nothing held is discarded, so
+            // draining and sending again works.
+            if !self.awaiting.is_empty() && self.pending.len() >= HELD_WHILE_AWAITING {
+                while let Some(result) = self.awaiting.pop_front() {
+                    let _ = result.send(Err(Error::control_mode_unread()));
+                }
+            }
+
+            let held_back = self.awaiting.is_empty() && self.pending.len() >= EVENT_QUEUE;
 
             let step = tokio::select! {
                 line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
@@ -1100,14 +1121,15 @@ impl Connection {
 
         // Never `send().await`: this runs on the task that reads the
         // connection, so waiting here stops the reads that a reply arrives on.
-        match self.events.try_send(event) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(event)) => self.pending.push_back(event),
-            // A receiver that has gone away is not a reason to stop: commands
-            // may still be in flight, and a caller who only sends is a valid
-            // caller.
-            Err(mpsc::error::TrySendError::Closed(_)) => {}
-        }
+        //
+        // Anything but a full channel is finished with here. A receiver that
+        // has gone away is not a reason to stop, because commands may still be
+        // in flight and a caller who only sends is a valid caller.
+        let Err(mpsc::error::TrySendError::Full(event)) = self.events.try_send(event) else {
+            return;
+        };
+
+        self.pending.push_back(event);
     }
 
     /// Read to the end of a block that has already begun.

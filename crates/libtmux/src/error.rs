@@ -114,6 +114,17 @@ pub enum ControlModeErrorKind {
     MissingPipes,
     /// The connection closed before the command was answered.
     Closed,
+    /// The caller stopped reading events, so the connection could not reach
+    /// this command's reply.
+    ///
+    /// A reply arrives on the connection the events arrive on. The connection
+    /// holds what a caller has not taken and keeps reading while a reply is
+    /// outstanding, but not without limit, and past that limit it stops rather
+    /// than growing. Nothing is lost and nothing is broken: the events are
+    /// still held, tmux is holding the rest, and the connection carries on the
+    /// moment they are taken. Drain the events and send again, or watch from
+    /// a task of its own so the two never contend.
+    Unread,
     /// The command contains an argument no control-mode line can carry.
     ///
     /// Control mode is a text protocol, so an argument that is not UTF-8
@@ -1029,6 +1040,9 @@ impl Error {
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, .. } => match kind {
                 ControlModeErrorKind::UnrepresentableCommand => ErrorKind::InvalidInput,
+                // A limit was reached and the command was not carried out,
+                // which is what `Refused` says. The connection is fine.
+                ControlModeErrorKind::Unread => ErrorKind::Refused,
                 ControlModeErrorKind::Transport
                 | ControlModeErrorKind::MissingPipes
                 | ControlModeErrorKind::Closed => ErrorKind::Transport,
@@ -1090,6 +1104,15 @@ impl Error {
     #[cfg(feature = "control-mode")]
     pub(crate) const fn control_mode_frame_too_large(frame: &'static str, limit: usize) -> Self {
         Self::ControlModeFrameTooLarge { frame, limit }
+    }
+
+    /// Nobody took the events, so the reply could not be reached.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_unread() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::Unread,
+            source: None,
+        }
     }
 
     /// The connection closed before the command was answered.

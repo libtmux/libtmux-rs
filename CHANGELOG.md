@@ -34,6 +34,15 @@ full.
   keeps reading while a reply is outstanding, pausing only when none is, so
   events are still never dropped and never reordered.
 
+- `ControlModeErrorKind::Unread` says a caller stopped reading events and the
+  connection could not reach that command's reply. Reading continues while a
+  reply is outstanding but not without limit: `run-shell` without `-b` answers
+  its own block at once and parks the queue for as long as its shell command
+  runs, so the next command sent is outstanding for that long. Past what the
+  connection will hold it answers rather than stalling, because the caller who
+  would drain is the one awaiting the reply. Nothing held is discarded, so
+  draining and sending again works, and `Error::kind` reports it as `Refused`.
+
 - The `control` module documentation no longer shows a loop that sends a
   command from inside its own event loop, and no longer says that doing so
   works. It does not: a reply arrives on the connection the events arrive on,
