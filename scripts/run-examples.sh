@@ -115,6 +115,14 @@ abandoned() {
 # Waiting for the reply rather than sleeping a fixed span keeps this from
 # asserting how fast the machine is; the cap only stops a wedge from hanging
 # the gate.
+#
+# The request is written before the polling starts, and that ordering is what
+# makes the cap safe rather than merely generous: the line is already in the
+# pipe, so a poll that gives up still leaves a server that reads it, answers,
+# sees EOF and exits clean. Measured against a 40-second wait on cargo's build
+# lock -- which falls inside this window, where a cold build does not -- the
+# example still exited 0 with its full reply after 39 seconds. Polling before
+# writing would remove that and leave the number looking unchanged.
 mcp_handshake() {
     local out=$1 waited=0
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"run-examples","version":"0"}}}'
