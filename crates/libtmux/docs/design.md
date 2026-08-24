@@ -1638,3 +1638,49 @@ new session does not copy the server environment; and `status` is not a flag,
 because tmux accepts `on`, `off`, and `2` through `5` for it. That last one is
 the argument for generating the option schema from tmux's own table rather
 than inferring a type from the value, and the example now says so.
+
+### Waiting is missing from the production surface
+
+`libtmux::test::retry_until` is the only waiting primitive this crate exposes,
+and `test` sits behind `test-support`, which the manifest calls out as
+belonging "to a dev-dependency, not to a build of the library". A caller who
+needs to wait for anything a pane does writes that loop themselves. It is a
+missing category rather than a missing convenience, and it is inherited rather
+than dropped in the port: the Python library keeps `retry_until` in
+`libtmux/test/retry.py` for the same reason, and of the seven ports only the
+Swift one ships a pane wait a production caller can reach.
+
+What fills the gap downstream is the measure of it. `tmux-mcp` reconstructs
+run-and-report in `exec.rs`: sentinels bracketing the command, a scanner
+reassembling output around them, and separate waits for text and for quiet.
+AGENTS.md says a workaround there is a finding here, and this is the largest
+one.
+
+A rebuilt version is not merely incomplete. Thirty-five lines against the
+public API run a command and report its exit status correctly, and then
+`seq 1 100` returns status 0 with no output: the opening sentinel scrolled off
+the visible screen before the closing one arrived, so the body came back empty
+while the status still parsed. A three-hundred-character line arrives as four,
+wrapped at the pane's width. Both failures report success, which is the
+direction that costs a consumer the most.
+
+So a candidate is constrained before it is designed. It must not report success
+while losing output, and it must survive a line wider than the pane. Those two
+together are what force scrollback capture, `OutputLimits`, and
+width-independent reassembly instead of a screen read.
+
+One decision is settled by precedent rather than by measurement: a wait that
+runs out of time is an outcome, not an error. `RetryTimeout` already says so,
+and a caller who cannot separate "it never happened" from "the connection
+broke" has to guess which of them is worth retrying.
+
+The substrate is not settled, and the question is narrower than it first looks.
+The Swift port does not choose between streaming and polling. It subscribes to
+`%output` as a doorbell and captures for the content, because a notification
+carries escape sequences and can split a word across two of them. Around that
+sit a primed first capture, so output produced while the connection opens is
+not lost; a `#{pane_dead}` subscription, so a dead pane ends the wait instead
+of holding it to the deadline; and coalescing, because an unbatched burst is
+one notification per character. Whether that survives 3.2a, what it costs
+against scrollback polling done properly, how it behaves under a flood, and
+which features each arm needs are what this decision is waiting on.
