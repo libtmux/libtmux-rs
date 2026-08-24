@@ -1905,6 +1905,14 @@ impl Server {
 
     /// Signal a `wait-for` channel, releasing anything waiting on it.
     ///
+    /// What waits is a tmux command elsewhere: `tmux wait-for <channel>` with
+    /// no flag blocks until this releases it, and that form is not offered
+    /// here. A dispatch carries the server's `default_timeout`, so a wait
+    /// would be cut off mid-wait rather than waiting, and a channel that was
+    /// never signalled is a different answer from tmux failing to reply.
+    /// Until those are told apart, the waiting side stays with
+    /// [`Server::cmd`], where the timeout is the caller's to reason about.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the channel name.
