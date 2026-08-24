@@ -156,10 +156,16 @@ api-check:
 # beginning with `%`, so without them the control-mode target spends its whole
 # budget proving that arbitrary input is text.
 #
+# cargo-fuzz builds for the triple it was itself compiled for, so an installed
+# binary rather than a built one -- the installers ship musl -- defaults to a
+# target that links libc statically, which a sanitizer cannot instrument.
+# Naming the host's own triple makes that a property of this recipe.
+#
 # Fuzz one parser, seeded with the shapes it actually sees
 [group: 'test']
 fuzz target="control_line" seconds="60":
-    cargo +nightly fuzz run {{ target }} fuzz/corpus/{{ target }} fuzz/seeds/{{ target }} \
+    cargo +nightly fuzz run --target "$(rustc +nightly -vV | sed -n 's/^host: //p')" \
+        {{ target }} fuzz/corpus/{{ target }} fuzz/seeds/{{ target }} \
         -- -max_total_time={{ seconds }} -rss_limit_mb=4096
 
 # List the fuzz targets
