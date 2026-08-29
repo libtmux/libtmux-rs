@@ -2335,6 +2335,18 @@ async fn what_changed_reports_windows_that_wrote_since_the_last_look() {
     let waited = json(waiting.await.expect("the wait finishes").expect("a result"));
     assert_eq!(waited["outcome"], "matched", "the pane wrote: {waited:?}");
 
+    libtmux::test::retry_until(Duration::from_secs(5), || async {
+        let changed = json(
+            tools
+                .what_changed(args(serde_json::json!({"since": mark})))
+                .await
+                .expect("changes are reported"),
+        );
+        !changed["windows"].as_array().expect("a listing").is_empty()
+    })
+    .await
+    .expect("tmux records the activity");
+
     let after = json(
         tools
             .what_changed(args(serde_json::json!({"since": mark})))
