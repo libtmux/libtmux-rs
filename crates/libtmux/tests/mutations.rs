@@ -1061,6 +1061,11 @@ async fn renumber_after_dropping(
         .expect("the session is renumbered");
 }
 
+/// The window sitting at an index, if anything is.
+fn place_of(windows: &[libtmux::Window], index: i32) -> Option<&libtmux::Window> {
+    windows.iter().find(|window| window.index() == index)
+}
+
 fn place(windows: &[libtmux::Window], id: &str) -> i32 {
     windows
         .iter()
@@ -1140,33 +1145,77 @@ async fn a_rendered_window_target_survives_a_renumber() {
             .expect("window");
     }
 
+    // The subject is a window in the middle, and the one dropped is ahead of
+    // it, so after the renumber the index it cached is still OCCUPIED -- by a
+    // different live window. A subject at the end would leave its old index
+    // vacant, where a stale target fails loudly; this is the quiet case, and
+    // the one worth holding a test.
     let windows = session.windows().await.expect("windows");
-    let last = windows[3].clone();
-    let rendered = last.to_string();
-    let identity = last.id().to_string();
+    let subject = windows[1].clone();
+    let rendered = subject.to_string();
+    let identity = subject.id().to_string();
 
-    renumber_after_dropping(server, &session, &windows, 1).await;
+    renumber_after_dropping(server, &session, &windows, 0).await;
 
     // The handle has not been refreshed: this is the string a caller holds.
-    assert_eq!(rendered, last.to_string(), "the rendering is unchanged");
+    assert_eq!(rendered, subject.to_string(), "the rendering is unchanged");
 
-    let resolved = server
+    let stale = rendered
+        .rsplit(':')
+        .next()
+        .and_then(|half| half.parse::<i32>().ok());
+    if let Some(index) = stale {
+        assert!(
+            place_of(&session.windows().await.expect("windows"), index).is_some(),
+            "the index {index} this rendering cached is occupied by another window",
+        );
+    }
+
+    // Select away from the window under test before asking, so that reaching
+    // it proves the target resolved rather than that it was already current.
+    //
+    // `display-message` is not the oracle here, though it is the obvious one.
+    // Its `-t` is declared `CMD_FIND_PANE, CMD_FIND_CANFAIL`, so a target it
+    // cannot resolve expands against the client's current pane and exits zero:
+    // it answers the same for `home:@99` and for a correct target. Asking it
+    // whether a rendering resolves would pass whenever the window under test
+    // is also the current one, which a fixture that just built it guarantees.
+    // `select-window` has no such permission and refuses.
+    server
         .cmd(
-            libtmux::Command::new("display-message")
-                .arg("-p")
+            libtmux::Command::new("select-window")
                 .arg("-t")
-                .arg(rendered.clone())
-                .arg("#{window_id}"),
+                .arg(windows[3].id().to_string()),
+        )
+        .await
+        .expect("the command runs");
+
+    let selected = server
+        .cmd(
+            libtmux::Command::new("select-window")
+                .arg("-t")
+                .arg(rendered.clone()),
         )
         .await
         .expect("the command runs");
     assert!(
-        resolved.success(),
+        selected.success(),
         "the rendered target still resolves: {rendered} said {:?}",
-        resolved.stderr_lossy(),
+        selected.stderr_lossy(),
     );
+
+    // Read the current window with no target of its own, so this reading
+    // cannot fall back the way the one above would have.
+    let current = server
+        .cmd(
+            libtmux::Command::new("display-message")
+                .arg("-p")
+                .arg("#{window_id}"),
+        )
+        .await
+        .expect("the command runs");
     assert_eq!(
-        resolved.stdout_lossy().trim(),
+        current.stdout_lossy().trim(),
         identity,
         "{rendered} reaches the window it was taken from",
     );

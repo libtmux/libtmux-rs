@@ -1446,6 +1446,38 @@ is never taken. Read from their sources rather than measured. The two answers
 differ and neither is false -- which is the argument for keying on the flag
 rather than on the absence.
 
+### `display-message` answers about a pane you did not ask for
+
+`display-message` is the obvious way to ask tmux what a target resolves to, and
+it is not an oracle. Its entry declares two separate permissions to fail, and
+only one of them is the one above:
+
+    .target = { 't', CMD_FIND_PANE, CMD_FIND_CANFAIL },
+    .flags  = ...|CMD_CLIENT_CANFAIL,
+
+`CMD_CLIENT_CANFAIL` governs `-c`: a client that does not resolve expands every
+format empty, which is what makes the suspended-client probe work.
+`CMD_FIND_CANFAIL` governs `-t` and does something else entirely. An
+unresolvable `-t` leaves the target unresolved, so the formats expand against
+the client's current pane and the command still exits zero:
+
+    current window: @2
+    -t home:@99    -> @2
+    -t home:9      -> @2
+    -t home:nosuch -> @2
+    -t home:%99    -> @2    a pane id in a window target, still @2
+
+Nothing separates "resolved to this" from "resolved to nothing, so here is
+where you happen to be standing". A test that asks `display-message` whether a
+rendering reaches the right window therefore passes whenever the right window
+is also the current one -- which a fixture that just built it guarantees. That
+is a probe that cannot fail, and one shipped here in the first version of
+`a_rendered_window_target_survives_a_renumber`.
+
+A command whose target is not `CMD_FIND_CANFAIL` refuses instead, which is the
+answer a probe wants. `select-window` is the cheap one, and it leaves the
+current window alone when it fails. Measured on tmux 3.7c.
+
 ### A socket path does not identify a tmux server
 
 `ServerIdentity` is a normalized socket path, and object equality includes it,
