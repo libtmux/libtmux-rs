@@ -676,26 +676,39 @@ async fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
         .expect("control mode attaches")
         .split();
 
-    let outcome = tokio::time::timeout(TEST_TIMEOUT, async {
-        let send = commands.send(Command::new("display-message").arg("unanswered"));
-        let shutdown = async {
-            while !commands.is_closed() {
-                tokio::task::yield_now().await;
-            }
-            server.shutdown().await
-        };
-        tokio::join!(send, shutdown)
+    let command = tokio::spawn({
+        let commands = commands.clone();
+        async move {
+            commands
+                .send(Command::new("display-message").arg("unanswered"))
+                .await
+        }
+    });
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        while !commands.is_closed() {
+            tokio::task::yield_now().await;
+        }
     })
     .await
-    .expect("terminal draining observes command and core shutdown");
+    .expect("EOF closes command admission");
 
-    let error = outcome
-        .0
+    let error = tokio::time::timeout(TEST_TIMEOUT, command)
+        .await
+        .expect("EOF releases the committed command")
+        .expect("the command task joins")
         .expect_err("EOF cannot answer the committed command");
-    assert_eq!(error.kind(), ErrorKind::Transport);
-    outcome
-        .1
-        .expect("server shutdown interrupts terminal draining");
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
+
+    tokio::time::timeout(TEST_TIMEOUT, server.shutdown())
+        .await
+        .expect("server shutdown interrupts terminal draining")
+        .expect("server shuts down");
     drop(events);
 }
 
