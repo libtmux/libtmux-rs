@@ -3221,6 +3221,7 @@ pub mod __private {
                 }
                 #[cfg(feature = "serde")]
                 PredicateData::WireEmpty(predicate) => {
+                    validate_non_ordering(predicate.operator)?;
                     resolve_once(&predicate.resolved, WireEmptyResolved::Text)
                 }
                 _ => validation_error(FilterExpressionErrorKind::UnknownOperator),
@@ -3239,9 +3240,10 @@ pub mod __private {
         /// hand-written generated-code expansion.
         pub fn validate_bool(&self) -> Result<(), FilterExpressionError> {
             match &self.data {
-                PredicateData::Bool(predicate) => validate_set_shape(predicate),
+                PredicateData::Bool(predicate) => validate_unordered_set_shape(predicate),
                 #[cfg(feature = "serde")]
                 PredicateData::WireBool(predicate) => {
+                    validate_non_ordering(predicate.operator)?;
                     if !predicate.operator.takes_a_set() && predicate.values.len() != 1 {
                         return validation_error(FilterExpressionErrorKind::InvalidStructure);
                     }
@@ -3257,6 +3259,7 @@ pub mod __private {
                 }
                 #[cfg(feature = "serde")]
                 PredicateData::WireEmpty(predicate) => {
+                    validate_non_ordering(predicate.operator)?;
                     resolve_once(&predicate.resolved, WireEmptyResolved::Bool)
                 }
                 _ => validation_error(FilterExpressionErrorKind::UnknownOperator),
@@ -3396,6 +3399,7 @@ pub mod __private {
                 }
                 #[cfg(feature = "serde")]
                 PredicateData::WireEmpty(predicate) => {
+                    validate_non_ordering(predicate.operator)?;
                     resolve_once(&predicate.resolved, WireEmptyResolved::Enum)
                 }
                 _ => validation_error(FilterExpressionErrorKind::UnknownOperator),
@@ -3484,11 +3488,26 @@ pub mod __private {
         }
     }
 
+    fn validate_non_ordering(operator: SetOperator) -> Result<(), FilterExpressionError> {
+        if operator.is_ordering() {
+            validation_error(FilterExpressionErrorKind::UnknownOperator)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_unordered_set_shape<T: PartialOrd>(
+        predicate: &super::SetPredicate<T>,
+    ) -> Result<(), FilterExpressionError> {
+        validate_non_ordering(predicate.operator)?;
+        validate_set_shape(predicate)
+    }
+
     fn validate_enum_values(
         predicate: &super::SetPredicate<String>,
         variants: &[&str],
     ) -> Result<(), FilterExpressionError> {
-        validate_set_shape(predicate)?;
+        validate_unordered_set_shape(predicate)?;
         if predicate
             .values
             .iter()

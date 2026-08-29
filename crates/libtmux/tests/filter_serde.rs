@@ -1573,6 +1573,34 @@ mod serde_contract {
     }
 
     #[test]
+    fn ordering_operators_are_integer_only() -> TestResult {
+        for operator in ["lt", "lte", "gt", "gte"] {
+            for (field, value) in [("flag", "true"), ("phase", "\"ready\"")] {
+                assert_decode_error::<Record>(
+                    &scalar_document(field, operator, value),
+                    FilterExpressionErrorKind::UnknownOperator,
+                    &[],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn empty_ordering_operands_do_not_escape_field_validation() -> TestResult {
+        for operator in ["lt", "lte", "gt", "gte"] {
+            for field in ["name", "flag", "phase"] {
+                assert_decode_error::<Record>(
+                    &scalar_document(field, operator, "[]"),
+                    FilterExpressionErrorKind::UnknownOperator,
+                    &[],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn resolved_wire_families_drive_equality_and_survive_clone_before_serialization() -> TestResult
     {
         let record = Record {
