@@ -275,6 +275,7 @@ enum libtmux::SplitDirection
 enum libtmux::WindowPlacement
 enum libtmux::WindowTarget
 enum libtmux::control::Event
+enum libtmux::control::Subscription
 enum libtmux::plan::Attribution
 enum libtmux::plan::Op
 enum libtmux::plan::Outcome
@@ -732,7 +733,9 @@ function libtmux::control::ControlSender::mute_pane
 function libtmux::control::ControlSender::pause_after
 function libtmux::control::ControlSender::resume_pane
 function libtmux::control::ControlSender::send
+function libtmux::control::ControlSender::subscribe
 function libtmux::control::ControlSender::unmute_pane
+function libtmux::control::ControlSender::unsubscribe
 function libtmux::control::ControlSender::watch_only
 function libtmux::control::Event::invalidates_listings
 function libtmux::control::Event::may_have_added_a_pane
@@ -1150,6 +1153,7 @@ variant libtmux::Chooser::Client
 variant libtmux::Chooser::Customize
 variant libtmux::Chooser::Tree
 variant libtmux::ControlModeErrorKind::Closed
+variant libtmux::ControlModeErrorKind::InvalidSubscriptionName
 variant libtmux::ControlModeErrorKind::MissingPipes
 variant libtmux::ControlModeErrorKind::Transport
 variant libtmux::ControlModeErrorKind::Unread
@@ -1297,6 +1301,11 @@ variant libtmux::control::Event::WindowAdded
 variant libtmux::control::Event::WindowClosed
 variant libtmux::control::Event::WindowPaneChanged
 variant libtmux::control::Event::WindowRenamed
+variant libtmux::control::Subscription::AllPanes
+variant libtmux::control::Subscription::AllWindows
+variant libtmux::control::Subscription::Pane
+variant libtmux::control::Subscription::Session
+variant libtmux::control::Subscription::Window
 variant libtmux::plan::Attribution::Merged
 variant libtmux::plan::Attribution::PerCommand
 variant libtmux::plan::Op::CapturePane

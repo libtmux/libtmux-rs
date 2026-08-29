@@ -510,6 +510,64 @@ impl ControlMode {
     }
 }
 
+/// What a subscription watches.
+///
+/// tmux reads this from the shape of the argument rather than from a keyword:
+/// `%` introduces a pane, `@` a window, `*` stands for every one of them, and
+/// anything else names the session the control client is attached to. The
+/// session case is therefore spelled as nothing at all, which is the canonical
+/// form rather than a special case.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::control::Subscription;
+///
+/// assert_eq!(Subscription::AllPanes.to_string(), "%*");
+/// assert_eq!(Subscription::AllWindows.to_string(), "@*");
+///
+/// // The session the connection is attached to, named by naming nothing.
+/// assert_eq!(Subscription::Session.to_string(), "");
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Subscription {
+    /// The session this connection is attached to.
+    Session,
+    /// One window.
+    Window(WindowId),
+    /// Every window in the attached session.
+    AllWindows,
+    /// One pane.
+    Pane(PaneId),
+    /// Every pane in the attached session.
+    AllPanes,
+}
+
+impl std::fmt::Display for Subscription {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Session => Ok(()),
+            Self::Window(window) => write!(formatter, "{window}"),
+            Self::AllWindows => formatter.write_str("@*"),
+            Self::Pane(pane) => write!(formatter, "{pane}"),
+            Self::AllPanes => formatter.write_str("%*"),
+        }
+    }
+}
+
+/// Refuse a name tmux would read as something other than a name.
+///
+/// tmux splits the argument on its first colon and treats a name with no colon
+/// after it as a removal, so a name carrying one either renames the request or
+/// deletes a different subscription. Both are accepted silently.
+fn check_subscription_name(name: &str) -> Result<(), Error> {
+    if name.is_empty() || name.contains(':') {
+        return Err(Error::control_mode_invalid_subscription());
+    }
+    Ok(())
+}
+
 /// Sends commands down a control-mode connection.
 ///
 /// Cheap to clone, and every method takes `&self`, so several tasks can issue
@@ -624,6 +682,89 @@ impl ControlSender {
     /// Returns an error when the connection has closed.
     pub async fn resume_pane(&self, pane: &PaneId) -> Result<(), Error> {
         self.set_pane_stream(pane, "continue").await
+    }
+
+    /// Ask tmux to report a format whenever it changes.
+    ///
+    /// tmux answers with [`Event::SubscriptionChanged`] carrying the name given
+    /// here, so one connection can hold several subscriptions and tell them
+    /// apart. Reporting is coalesced to at most once a second, so this says
+    /// what a value became and not every step it took getting there.
+    ///
+    /// A name already in use is replaced rather than added to.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection has closed, or when the name is
+    /// empty or contains a colon.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::control::{ControlMode, Event, Subscription};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("watched").await?;
+    /// let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
+    ///     .await?
+    ///     .split();
+    ///
+    /// commands
+    ///     .subscribe("title", &Subscription::Session, "#{session_name}")
+    ///     .await?;
+    ///
+    /// // The first report arrives without anything having changed, which is
+    /// // what makes a subscription usable for reading the value as well.
+    /// while let Some(event) = events.next_event().await {
+    ///     if let Event::SubscriptionChanged { name, value, .. } = event {
+    ///         assert_eq!(name.as_str()?, "title");
+    ///         assert_eq!(value.as_str()?, "watched");
+    ///         break;
+    ///     }
+    /// }
+    ///
+    /// commands.unsubscribe("title").await?;
+    /// events.shutdown().await?;
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe(
+        &self,
+        name: &str,
+        watching: &Subscription,
+        format: &str,
+    ) -> Result<(), Error> {
+        check_subscription_name(name)?;
+        self.send(
+            Command::new("refresh-client")
+                .arg("-B")
+                .arg(format!("{name}:{watching}:{format}")),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Stop reporting a format this connection subscribed to.
+    ///
+    /// tmux removes a subscription when it is named with no colon after it,
+    /// which is why this cannot be spelled as [`Self::subscribe`] with an empty
+    /// format: that would replace the subscription rather than remove it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection has closed, or when the name is
+    /// empty or contains a colon.
+    pub async fn unsubscribe(&self, name: &str) -> Result<(), Error> {
+        check_subscription_name(name)?;
+        self.send(Command::new("refresh-client").arg("-B").arg(name))
+            .await
+            .map(|_| ())
     }
 
     /// Have tmux pause a pane rather than let this connection fall behind.
