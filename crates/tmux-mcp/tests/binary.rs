@@ -18,6 +18,10 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use libtmux::test::TestServer;
 use serde_json::{Value, json};
 
+mod support;
+
+use support::prompt_ready;
+
 /// The binary under test, as cargo built it for this run.
 const BIN: &str = env!("CARGO_BIN_EXE_tmux-mcp");
 
@@ -141,20 +145,6 @@ impl Process {
     }
 }
 
-async fn wait_for_prompt(pane: &libtmux::Pane) {
-    for _ in 0..600 {
-        let lines = pane.capture().await.expect("pane captures");
-        if lines
-            .iter()
-            .any(|line| matches!(line.as_bytes().last(), Some(b'$' | b'#')))
-        {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("the pane never drew a prompt");
-}
-
 #[test]
 fn the_binary_serves_the_socket_it_was_pointed_at() {
     let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
@@ -202,7 +192,7 @@ fn a_job_handle_from_a_previous_process_is_stale() {
             .await
             .expect("a session is created");
         let pane = session.panes().await.expect("panes list").remove(0);
-        wait_for_prompt(&pane).await;
+        prompt_ready(guard.server(), pane.id().as_ref()).await;
         pane.id().to_string()
     });
     let socket = guard

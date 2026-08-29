@@ -14,21 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 mod support;
 
-use support::{args, bare_tools, json};
-
-async fn wait_for_prompt(pane: &Pane) {
-    for _ in 0..600 {
-        let lines = pane.capture().await.expect("pane captures");
-        if lines
-            .iter()
-            .any(|line| matches!(line.as_bytes().last(), Some(b'$' | b'#')))
-        {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("the pane never drew a prompt");
-}
+use support::{args, bare_tools, json, prompt_ready};
 
 async fn fixture(name: &str) -> (TestServer, Session, Pane, TmuxTools) {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -38,7 +24,7 @@ async fn fixture(name: &str) -> (TestServer, Session, Pane, TmuxTools) {
         .await
         .expect("session starts");
     let pane = session.panes().await.expect("panes list").remove(0);
-    wait_for_prompt(&pane).await;
+    prompt_ready(guard.server(), pane.id().as_ref()).await;
     let tools = bare_tools(guard.server());
     (guard, session, pane, tools)
 }
