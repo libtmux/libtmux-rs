@@ -387,8 +387,11 @@ decides what to do next without reading prose:
 
 `stale` means the target is gone and a fresh listing would say something
 different — the answer is to look again, not to retry. `retryable` means the
-same call could succeed on its own. A pane that closed and a tmux that is not
-running both fail, and only one of them is worth waiting on.
+same call is safe to repeat unchanged and may succeed after the condition
+clears. A pane that closed and a tmux that is not running both fail, and only
+one of them is worth waiting on. `partial_effect` means tmux accepted part of
+a multi-step call before a later step failed; inspect the current state before
+choosing another action.
 
 ## Using it from Rust
 

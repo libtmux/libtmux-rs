@@ -1,5 +1,5 @@
 use libtmux::{
-    Command, NewSessionOptions, PaneSize, ResizeDirection, SplitDirection, SplitOptions,
+    Command, Error, NewSessionOptions, PaneSize, ResizeDirection, SplitDirection, SplitOptions,
 };
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
@@ -13,7 +13,7 @@ use crate::{
     SetEnvironmentArgs, Size, SplitPaneArgs, TmuxTools, WindowArgs, WindowView, Windows,
 };
 
-use super::error::{bad_input, object_gone, tmux_error, vanished};
+use super::error::{EffectBoundary, bad_input, object_gone, tmux_error, vanished};
 use super::{OptionScope, lossy};
 
 #[tool_router(router = control_router, vis = "pub(super)")]
@@ -352,20 +352,18 @@ impl TmuxTools {
         }
 
         let target = self.find_pane(&pane).await?;
+        let mut boundary = EffectBoundary::new("send_keys");
         if let Some(text) = text {
-            target.send_keys(text).await.map_err(|e| tmux_error(&e))?;
+            boundary.tmux(target.send_keys(text).await)?;
+            boundary.mark();
         }
         if !keys.is_empty() {
-            target
-                .send_key_names(keys)
-                .await
-                .map_err(|e| tmux_error(&e))?;
+            boundary.tmux(target.send_key_names(keys).await)?;
+            boundary.mark();
         }
         if enter {
-            target
-                .send_key_names(["Enter"])
-                .await
-                .map_err(|e| tmux_error(&e))?;
+            boundary.tmux(target.send_key_names(["Enter"]).await)?;
+            boundary.mark();
         }
 
         Ok(Json(Sent {
@@ -383,7 +381,7 @@ impl TmuxTools {
         annotations(
             read_only_hint = false,
             destructive_hint = false,
-            idempotent_hint = true,
+            idempotent_hint = false,
             open_world_hint = false
         )
     )]
@@ -421,6 +419,7 @@ impl TmuxTools {
                 chosen
             }
             other => {
+                let mut boundary = EffectBoundary::new("select_pane");
                 let flag = match other {
                     None => None,
                     Some("up") => Some("-U"),
@@ -441,15 +440,19 @@ impl TmuxTools {
                 if let Some(flag) = flag {
                     command = command.arg(flag);
                 }
-                self.server.cmd(command).await.map_err(|e| tmux_error(&e))?;
+                let result = boundary.tmux(self.server.cmd(command).await)?;
+                if let Some(error) = result.refusal_for("select-pane") {
+                    return Err(boundary.error(error));
+                }
+                boundary.mark();
 
                 // Which pane that landed on is tmux's answer, not ours.
-                self.find_window(target.window_id().as_ref())
-                    .await?
-                    .active_pane()
-                    .await
-                    .map_err(|e| tmux_error(&e))?
-                    .ok_or_else(|| vanished("the window reported no active pane"))?
+                let window = boundary
+                    .tmux(self.server.window_by_id(target.window_id()).await)?
+                    .ok_or_else(|| boundary.local("the pane's window is gone"))?;
+                boundary
+                    .tmux(window.active_pane().await)?
+                    .ok_or_else(|| boundary.local("the window reported no active pane"))?
             }
         };
 
@@ -467,7 +470,7 @@ impl TmuxTools {
         annotations(
             read_only_hint = false,
             destructive_hint = false,
-            idempotent_hint = true,
+            idempotent_hint = false,
             open_world_hint = false
         )
     )]
@@ -476,10 +479,12 @@ impl TmuxTools {
         Parameters(SelectWindowArgs { window, direction }): Parameters<SelectWindowArgs>,
     ) -> Result<Json<Windows>, ErrorData> {
         let mut target = self.find_window(&window).await?;
+        let mut boundary = EffectBoundary::new("select_window");
 
         match direction.as_deref() {
             None => {
-                target.select().await.map_err(|e| tmux_error(&e))?;
+                boundary.tmux(target.select().await)?;
+                boundary.mark();
             }
             Some(step) => {
                 let flag = match step {
@@ -502,32 +507,33 @@ impl TmuxTools {
                 // previously active window, so selecting the named one first
                 // would rewrite the very pointer being asked about.
                 if step != "last" {
-                    target.select().await.map_err(|e| tmux_error(&e))?;
+                    boundary.tmux(target.select().await)?;
+                    boundary.mark();
                 }
-                self.server
-                    .cmd(
-                        Command::new("select-window")
-                            .arg(flag)
-                            .arg("-t")
-                            .arg(target.session_id().to_string()),
-                    )
-                    .await
-                    .map_err(|e| tmux_error(&e))?;
+                let result = boundary.tmux(
+                    self.server
+                        .cmd(
+                            Command::new("select-window")
+                                .arg(flag)
+                                .arg("-t")
+                                .arg(target.session_id().to_string()),
+                        )
+                        .await,
+                )?;
+                if let Some(error) = result.refusal_for("select-window") {
+                    return Err(boundary.error(error));
+                }
+                boundary.mark();
             }
         }
 
         // Which window that landed on is tmux's answer, not ours.
-        let session = self
-            .server
-            .session_by_id(target.session_id())
-            .await
-            .map_err(|e| tmux_error(&e))?
-            .ok_or_else(|| vanished("the window's session is gone"))?;
-        let active = session
-            .active_window()
-            .await
-            .map_err(|e| tmux_error(&e))?
-            .ok_or_else(|| vanished("the session reported no active window"))?;
+        let session = boundary
+            .tmux(self.server.session_by_id(target.session_id()).await)?
+            .ok_or_else(|| boundary.local("the window's session is gone"))?;
+        let active = boundary
+            .tmux(session.active_window().await)?
+            .ok_or_else(|| boundary.local("the session reported no active window"))?;
 
         Ok(Json(Self::render_windows(&[active])))
     }
@@ -816,8 +822,8 @@ impl TmuxTools {
             .await
             .map_err(|e| tmux_error(&e))?;
         let pasted = target.paste_buffer(Some(&buffer)).await;
-        let _ = self.server.delete_buffer(&buffer).await;
-        pasted.map_err(|e| tmux_error(&e))?;
+        let deleted = self.server.delete_buffer(&buffer).await;
+        paste_outcome(pasted, deleted).map_err(|error| tmux_error(&error))?;
 
         Ok(Json(Pasted {
             pane: target.id().to_string(),
@@ -846,5 +852,131 @@ impl TmuxTools {
             .map_err(|e| tmux_error(&e))?;
 
         Ok(Json(ChannelSignal { channel }))
+    }
+}
+
+fn paste_outcome(pasted: Result<(), Error>, deleted: Result<(), Error>) -> Result<(), Error> {
+    match deleted {
+        Ok(()) => pasted,
+        Err(cleanup) => {
+            let error = match pasted {
+                Ok(()) => cleanup,
+                Err(paste) => paste,
+            };
+            Err(error.after_effect("paste_text"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use libtmux::test::TestServer;
+    use libtmux::{Command, Error, ErrorKind, Server, ServerGoneKind};
+    use rmcp::handler::server::wrapper::Parameters;
+    use rmcp::model::ErrorCode;
+
+    use crate::{SendKeysArgs, TmuxTools};
+
+    use super::paste_outcome;
+
+    fn cleanup_error() -> Error {
+        Error::ServerGone {
+            command: "delete-buffer",
+            kind: ServerGoneKind::NotRunning,
+        }
+    }
+
+    #[test]
+    fn paste_cleanup_decides_whether_replay_is_safe() {
+        assert!(paste_outcome(Ok(()), Ok(())).is_ok());
+
+        let cleanup = paste_outcome(Ok(()), Err(cleanup_error()))
+            .expect_err("a leaked buffer follows a completed paste");
+        assert_eq!(cleanup.kind(), ErrorKind::PartialEffect);
+
+        let paste = paste_outcome(Err(Error::RuntimeNested), Ok(()))
+            .expect_err("successful cleanup restores the paste error");
+        assert_eq!(paste.kind(), ErrorKind::InvalidInput);
+
+        let both = paste_outcome(Err(Error::RuntimeNested), Err(cleanup_error()))
+            .expect_err("failed cleanup leaves the setup effect behind");
+        assert!(
+            matches!(
+                both,
+                Error::AfterEffect { source, .. }
+                    if source.kind() == ErrorKind::InvalidInput
+            ),
+            "the paste failure remains the source",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_later_send_keys_failure_reports_the_first_effect() {
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let session = guard
+            .server()
+            .new_session("send-boundary")
+            .await
+            .expect("a session starts");
+        session
+            .set_hook(
+                "after-send-keys",
+                "if-shell -F '#{?hook_flag_l,0,1}' \
+                 'wait-for -S retry-send-held; wait-for retry-send-release'",
+            )
+            .await
+            .expect("the Enter reply is held");
+        let pane = session
+            .panes()
+            .await
+            .expect("panes are listed")
+            .into_iter()
+            .next()
+            .expect("the session has a pane");
+        let bounded = Server::builder()
+            .socket_path(guard.socket_path())
+            .config_file(guard.server().config_file().expect("the fixture config"))
+            .tmux_executable(guard.server().tmux_executable())
+            .default_timeout(Duration::from_secs(2))
+            .build()
+            .expect("a bounded handle");
+        let tools = TmuxTools::builder(bounded.clone())
+            .caller(None)
+            .confirm(false)
+            .build();
+
+        let result = tools
+            .send_keys(Parameters(SendKeysArgs {
+                pane: pane.id().to_string(),
+                text: Some(String::from("printf retry-boundary")),
+                keys: None,
+                enter: true,
+            }))
+            .await;
+        let held = guard
+            .server()
+            .wait_for_channel("retry-send-held", Duration::from_secs(2))
+            .await
+            .expect("the hook channel is readable");
+        guard
+            .server()
+            .cmd(Command::new("wait-for").arg("-S").arg("retry-send-release"))
+            .await
+            .expect("the hook is released");
+        drop(tools);
+        bounded.shutdown().await.expect("the bounded handle stops");
+        guard.shutdown().await.expect("tmux fixture shuts down");
+
+        assert_eq!(held, libtmux::ChannelWait::Signalled);
+        let Err(error) = result else {
+            panic!("Enter reached tmux but its held reply did not fail");
+        };
+        assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
+        let detail = error.data.expect("the error carries detail");
+        assert_eq!(detail["kind"], "partial_effect", "{detail}");
+        assert_eq!(detail["retryable"], false, "{detail}");
+        assert_eq!(detail["stale"], false, "{detail}");
     }
 }

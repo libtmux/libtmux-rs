@@ -262,7 +262,13 @@ fn the_instructions_reach_a_client_that_only_ever_initialises() {
     let instructions = answer["result"]["instructions"]
         .as_str()
         .unwrap_or_else(|| panic!("initialize answered with {answer}"));
-    for expected in ["TRIGGERS", "NAMES ARE NOT CONTENTS", "WAIT, DO NOT POLL"] {
+    for expected in [
+        "TRIGGERS",
+        "NAMES ARE NOT CONTENTS",
+        "WAIT, DO NOT POLL",
+        "repeating the same call unchanged is safe",
+        "partial_effect",
+    ] {
         assert!(
             instructions.contains(expected),
             "the instructions still steer with {expected}",

@@ -401,6 +401,8 @@ async fn every_tool_accepts_the_arguments_its_schema_describes() {
         .as_str()
         .expect("a window to destroy")
         .to_owned();
+    wire.json("select_window", json!({"window": doomed_window}))
+        .await;
     wire.json("create_session", json!({"name": "spare-session"}))
         .await;
     let spare_live = wire
@@ -612,6 +614,21 @@ async fn every_tool_declares_what_it_does_to_the_server() {
             (Some(false), Some(false), Some(false)),
             "{name} is not in any named group, so it must be an additive, \
              closed-world change; if it is not, add it to the right list",
+        );
+    }
+
+    for name in ["select_pane", "select_window"] {
+        let tool = listed
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("the focus tool is listed");
+        assert_eq!(
+            tool.annotations
+                .as_ref()
+                .expect("the focus tool carries annotations")
+                .idempotent_hint,
+            Some(false),
+            "{name} can select the previous target, which toggles when repeated",
         );
     }
 
@@ -1129,7 +1146,7 @@ async fn every_advertised_schema_uses_formats_json_schema_defines() {
 }
 
 #[tokio::test]
-async fn a_failure_says_whether_retrying_could_help() {
+async fn a_failure_says_whether_repeating_unchanged_is_safe() {
     let mut guard = TestServer::builder().start().await.expect("tmux starts");
     // Destructive, so the kill tools are offered: a tool the tier withheld
     // would fail as an unknown tool and never reach the classification.
@@ -1214,8 +1231,8 @@ async fn a_failure_says_whether_retrying_could_help() {
     let absent = detail(&wire, "list_sessions", json!({})).await;
     assert_eq!(absent["kind"], "server_gone", "{absent}");
     assert_eq!(
-        absent["retryable"], false,
-        "the same call cannot start a server",
+        absent["retryable"], true,
+        "the unchanged read is safe and may succeed after a server starts",
     );
     assert_eq!(
         absent["stale"], false,

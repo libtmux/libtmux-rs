@@ -197,8 +197,10 @@ const INSTRUCTIONS: &str = concat!(
     "\n\nWHEN A CALL FAILS: every error carries kind, retryable and stale \
      alongside its message. stale means the target is gone — list again and \
      work from what you find, because repeating the call cannot work. \
-     retryable means the same call could succeed on its own; nothing else is \
-     worth repeating unchanged.",
+     retryable means repeating the same call unchanged is safe and may succeed \
+     after the condition clears; nothing else is worth repeating unchanged. \
+     partial_effect means tmux accepted part of the call — inspect current \
+     state before choosing another action.",
     // Absences, so an agent stops hunting for them. These are server-shaped:
     // whole families that are missing rather than one tool's caveat.
     "\n\nNOT HERE: copy mode has no tools; leave it by sending the key q with \

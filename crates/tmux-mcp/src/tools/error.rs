@@ -6,7 +6,8 @@ use rmcp::model::ErrorData;
 // the first wants the listing refreshed, the second wants the agent to stop.
 //
 // * `kind` — a short name for what went wrong.
-// * `retryable` — whether making the same call again could succeed.
+// * `retryable` — whether repeating the same call unchanged is safe and may
+//   succeed.
 // * `stale` — whether the target is gone, so a listing taken now would say
 //   something different.
 //
@@ -23,8 +24,10 @@ pub(super) fn tmux_error(error: &libtmux::Error) -> ErrorData {
     use libtmux::ErrorKind;
 
     let kind = error.kind();
+    let retryable = error.is_transient();
     let detail = serde_json::json!({
         "kind": match kind {
+            ErrorKind::PartialEffect => "partial_effect",
             ErrorKind::ObjectGone => "object_gone",
             ErrorKind::Refused => "refused",
             ErrorKind::ServerGone => "server_gone",
@@ -38,18 +41,66 @@ pub(super) fn tmux_error(error: &libtmux::Error) -> ErrorData {
             // reported rather than mistaken for one of these.
             _ => "other",
         },
-        "retryable": error.is_transient(),
+        "retryable": retryable,
         "stale": error.is_object_gone(),
     });
     let message = error.to_string();
 
-    match kind {
-        // The caller named something. Whether it is gone or was refused, the
-        // request is what needs to change, so it is the caller's error.
-        ErrorKind::ObjectGone | ErrorKind::Refused | ErrorKind::InvalidInput => {
+    match (kind, retryable) {
+        (ErrorKind::PartialEffect, _) | (ErrorKind::Refused, true) => {
+            ErrorData::internal_error(message, Some(detail))
+        }
+        (ErrorKind::ObjectGone | ErrorKind::InvalidInput, _) | (ErrorKind::Refused, false) => {
             ErrorData::invalid_params(message, Some(detail))
         }
         _ => ErrorData::internal_error(message, Some(detail)),
+    }
+}
+
+fn partial_effect(message: impl Into<String>) -> ErrorData {
+    ErrorData::internal_error(
+        message.into(),
+        Some(serde_json::json!({
+            "kind": "partial_effect",
+            "retryable": false,
+            "stale": false,
+        })),
+    )
+}
+
+pub(super) struct EffectBoundary {
+    operation: &'static str,
+    effect_seen: bool,
+}
+
+impl EffectBoundary {
+    pub(super) const fn new(operation: &'static str) -> Self {
+        Self {
+            operation,
+            effect_seen: false,
+        }
+    }
+
+    pub(super) fn mark(&mut self) {
+        self.effect_seen = true;
+    }
+
+    pub(super) fn error(&self, error: libtmux::Error) -> ErrorData {
+        let error = if self.effect_seen {
+            error.after_effect(self.operation)
+        } else {
+            error
+        };
+        tmux_error(&error)
+    }
+
+    pub(super) fn tmux<T>(&self, result: Result<T, libtmux::Error>) -> Result<T, ErrorData> {
+        result.map_err(|error| self.error(error))
+    }
+
+    pub(super) fn local(&self, message: impl Into<String>) -> ErrorData {
+        debug_assert!(self.effect_seen);
+        partial_effect(message)
     }
 }
 
@@ -115,4 +166,102 @@ pub(super) fn at_capacity(limit: usize) -> ErrorData {
             "capacity": limit,
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use libtmux::test::TestServer;
+    use libtmux::{Command, CommandChain, DispatchLimits, ErrorKind, Server};
+    use rmcp::model::ErrorCode;
+
+    use super::{EffectBoundary, tmux_error};
+
+    #[test]
+    fn an_effect_boundary_changes_only_later_failures() {
+        let mut boundary = EffectBoundary::new("send_keys");
+        let first = boundary.error(libtmux::Error::RuntimeNested);
+        assert_eq!(first.code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(
+            first.data.expect("the first error carries detail")["kind"],
+            "invalid_input",
+        );
+
+        boundary.mark();
+        let later = boundary.error(libtmux::Error::RuntimeNested);
+        assert_eq!(later.code, ErrorCode::INTERNAL_ERROR);
+        let detail = later.data.expect("the later error carries detail");
+        assert_eq!(detail["kind"], "partial_effect", "{detail}");
+        assert_eq!(detail["retryable"], false, "{detail}");
+        assert_eq!(detail["stale"], false, "{detail}");
+
+        let local = boundary.local("the selected object vanished");
+        assert_eq!(local.code, ErrorCode::INTERNAL_ERROR);
+        let detail = local.data.expect("the local error carries detail");
+        assert_eq!(detail["kind"], "partial_effect", "{detail}");
+        assert_eq!(detail["retryable"], false, "{detail}");
+        assert_eq!(detail["stale"], false, "{detail}");
+    }
+
+    #[tokio::test]
+    async fn a_transient_refusal_is_a_server_error() {
+        let limits = DispatchLimits::default()
+            .max_in_flight(1)
+            .acquire_timeout(Some(Duration::from_millis(100)));
+        let guard = TestServer::builder()
+            .dispatch_limits(limits)
+            .start()
+            .await
+            .expect("tmux starts");
+        let limited = guard.server().clone();
+        let coordinator = Server::builder()
+            .socket_path(guard.socket_path())
+            .config_file(guard.server().config_file().expect("the fixture config"))
+            .tmux_executable(guard.server().tmux_executable())
+            .build()
+            .expect("a coordination handle");
+
+        let holding = {
+            let server = limited.clone();
+            tokio::spawn(async move {
+                server
+                    .chain(
+                        CommandChain::new(
+                            Command::new("wait-for").arg("-S").arg("retry-refused-held"),
+                        )
+                        .then(Command::new("wait-for").arg("retry-refused-release")),
+                    )
+                    .await
+            })
+        };
+        let held = coordinator
+            .wait_for_channel("retry-refused-held", Duration::from_secs(2))
+            .await
+            .expect("the holding dispatch starts");
+
+        let error = limited
+            .cmd(Command::new("list-sessions"))
+            .await
+            .expect_err("the only dispatch permit is occupied");
+        coordinator
+            .signal_channel("retry-refused-release")
+            .await
+            .expect("the holding dispatch is released");
+        holding
+            .await
+            .expect("the holding task finishes")
+            .expect("the holding dispatch succeeds");
+        coordinator.shutdown().await.expect("the coordinator stops");
+        guard.shutdown().await.expect("tmux fixture shuts down");
+
+        assert_eq!(held, libtmux::ChannelWait::Signalled);
+        assert_eq!(error.kind(), ErrorKind::Refused);
+        let projected = tmux_error(&error);
+        assert_eq!(projected.code, ErrorCode::INTERNAL_ERROR);
+        let detail = projected.data.expect("the refusal carries detail");
+        assert_eq!(detail["kind"], "refused", "{detail}");
+        assert_eq!(detail["retryable"], true, "{detail}");
+        assert_eq!(detail["stale"], false, "{detail}");
+    }
 }
