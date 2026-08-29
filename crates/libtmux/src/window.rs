@@ -2160,7 +2160,7 @@ impl ResizeDirection {
 /// # }
 /// ```
 #[must_use = "options describe a split but do not perform one"]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SplitOptions {
     direction: SplitDirection,
     start_directory: Option<std::path::PathBuf>,
@@ -2170,6 +2170,22 @@ pub struct SplitOptions {
     full: bool,
     zoom: bool,
     select: bool,
+}
+
+impl fmt::Debug for SplitOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SplitOptions")
+            .field("direction", &self.direction)
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("size", &self.size)
+            .field("environment_count", &self.environment.len())
+            .field("full", &self.full)
+            .field("zoom", &self.zoom)
+            .field("select", &self.select)
+            .finish()
+    }
 }
 
 impl SplitOptions {
@@ -2264,10 +2280,10 @@ impl SplitOptions {
             command = command.arg("-c").arg(directory.into_os_string());
         }
         for (name, value) in self.environment {
-            command = command.arg("-e").arg(assignment(&name, &value));
+            command = command.arg("-e").sensitive_arg(assignment(&name, &value));
         }
         if let Some(shell_command) = self.command {
-            command = command.arg(shell_command);
+            command = command.sensitive_arg(shell_command);
         }
         command
     }
@@ -2358,4 +2374,22 @@ async fn link_or_object_gone(
         };
     }
     error
+}
+
+#[cfg(test)]
+mod split_option_tests {
+    use super::{SplitDirection, SplitOptions};
+
+    #[test]
+    fn split_options_redact_process_inputs() {
+        let secret = "sentinel-split-process";
+        let options = SplitOptions::new(SplitDirection::Below)
+            .environment("TOKEN", secret)
+            .command(secret);
+        assert!(!format!("{options:?}").contains(secret));
+
+        let summary = options.into_command("@1", "#{pane_id}").summary();
+        assert_eq!(summary.sensitive_argument_count(), 2);
+        assert!(!summary.to_string().contains(secret));
+    }
 }

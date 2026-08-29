@@ -1417,7 +1417,7 @@ impl Filterable for Session {
 /// # }
 /// ```
 #[must_use = "options describe a window but do not create one"]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NewWindowOptions {
     name: Option<OsString>,
     start_directory: Option<std::path::PathBuf>,
@@ -1427,6 +1427,22 @@ pub struct NewWindowOptions {
     environment: Vec<(OsString, OsString)>,
     replace_existing: bool,
     select: bool,
+}
+
+impl fmt::Debug for NewWindowOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewWindowOptions")
+            .field("has_name", &self.name.is_some())
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("index", &self.index)
+            .field("placement", &self.placement)
+            .field("environment_count", &self.environment.len())
+            .field("replace_existing", &self.replace_existing)
+            .field("select", &self.select)
+            .finish()
+    }
 }
 
 /// Where a new window goes, relative to the index it is given.
@@ -1581,10 +1597,10 @@ impl NewWindowOptions {
         for (name, value) in self.environment {
             command = command
                 .arg("-e")
-                .arg(crate::window::assignment(&name, &value));
+                .sensitive_arg(crate::window::assignment(&name, &value));
         }
         if let Some(shell_command) = self.command {
-            command = command.arg(shell_command);
+            command = command.sensitive_arg(shell_command);
         }
         command
     }
@@ -1600,5 +1616,23 @@ impl<T: Into<OsString>> From<T> for NewWindowOptions {
 impl fmt::Display for Session {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.id())
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::NewWindowOptions;
+
+    #[test]
+    fn new_window_options_redact_process_inputs() {
+        let secret = "sentinel-window-process";
+        let options = NewWindowOptions::new("work")
+            .environment("TOKEN", secret)
+            .command(secret);
+        assert!(!format!("{options:?}").contains(secret));
+
+        let summary = options.into_command("$1", "#{window_id}").summary();
+        assert_eq!(summary.sensitive_argument_count(), 2);
+        assert!(!summary.to_string().contains(secret));
     }
 }

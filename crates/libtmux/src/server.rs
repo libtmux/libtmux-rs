@@ -2944,7 +2944,7 @@ mod tests {
 
     use tokio::sync::{Notify, watch};
 
-    use super::Server;
+    use super::{NewSessionOptions, Server};
     use crate::Error;
     use crate::command::CommandRequest;
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
@@ -3020,6 +3020,17 @@ mod tests {
             .await
             .expect("later clone completes shutdown");
     }
+
+    #[test]
+    fn new_session_options_redact_the_shell_command() {
+        let secret = "sentinel-session-command";
+        let options = NewSessionOptions::new("work").command(secret);
+        assert!(!format!("{options:?}").contains(secret));
+
+        let summary = options.into_command("#{session_id}").summary();
+        assert_eq!(summary.sensitive_argument_count(), 1);
+        assert!(!summary.to_string().contains(secret));
+    }
 }
 
 /// Options for creating a session.
@@ -3052,7 +3063,7 @@ mod tests {
 /// # }
 /// ```
 #[must_use = "options describe a session but do not create one"]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NewSessionOptions {
     name: OsString,
     start_directory: Option<PathBuf>,
@@ -3060,6 +3071,19 @@ pub struct NewSessionOptions {
     command: Option<OsString>,
     width: Option<u32>,
     height: Option<u32>,
+}
+
+impl fmt::Debug for NewSessionOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewSessionOptions")
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_window_name", &self.window_name.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
 }
 
 impl NewSessionOptions {
@@ -3128,7 +3152,7 @@ impl NewSessionOptions {
                 .arg(height.to_string());
         }
         if let Some(shell_command) = self.command {
-            command = command.arg(shell_command);
+            command = command.sensitive_arg(shell_command);
         }
         command
     }
