@@ -33,11 +33,16 @@ fn hold<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 /// How much of one pane's output a tail keeps.
 const RING_BYTES: usize = 256 * 1024;
 
-/// How many panes may be tailed at once.
+/// How many established pane tails may be retained at once.
 ///
 /// Each tail holds a control-mode connection, so this is a real resource. The
-/// least recently read is dropped to make room.
+/// least recently read is dropped after its replacement attaches. One
+/// serialized replacement connection may therefore exist transiently; the
+/// server's persistent-client limit remains the hard process bound.
 const MAX_TAILS: usize = 8;
+
+/// How many new tails may be attaching at once.
+const MAX_TAIL_OPENERS: usize = 1;
 
 /// A place in one pane's output.
 ///
@@ -220,6 +225,7 @@ pub(crate) struct Tails {
 pub(crate) enum TailError {
     Tmux(Error),
     OwnerUnavailable,
+    OpeningAtCapacity { limit: usize },
 }
 
 impl From<Error> for TailError {
@@ -235,7 +241,7 @@ impl Tails {
         Self {
             identity,
             inner: Mutex::new(HashMap::new()),
-            opening: tokio::sync::Semaphore::new(1),
+            opening: tokio::sync::Semaphore::new(MAX_TAIL_OPENERS),
             next_epoch: AtomicU64::new(0),
         }
     }
@@ -293,27 +299,21 @@ impl Tails {
     }
 
     /// Return the ring for a pane, attaching a tail if there is not one.
-    async fn ensure(&self, pane: &Pane, id: &str) -> Result<(Arc<Mutex<Ring>>, u64), Error> {
+    async fn ensure(&self, pane: &Pane, id: &str) -> Result<(Arc<Mutex<Ring>>, u64), TailError> {
         if let Some(found) = self.touch(id) {
             return Ok(found);
         }
 
-        // One opener owns eviction and attachment, so the connection ceiling
-        // remains true while several first reads race.
-        let _opening = self.opening.acquire().await;
+        // Do not retain an unbounded queue of tool calls behind a slow attach.
+        // Existing tails bypass this admission through the fast path above.
+        let _opening = self
+            .opening
+            .try_acquire()
+            .map_err(|_| TailError::OpeningAtCapacity {
+                limit: MAX_TAIL_OPENERS,
+            })?;
         if let Some(found) = self.touch(id) {
             return Ok(found);
-        }
-        {
-            let mut tails = hold(&self.inner);
-            if tails.len() >= MAX_TAILS
-                && let Some(stale) = tails
-                    .iter()
-                    .min_by_key(|(_, tail)| tail.last_read)
-                    .map(|(id, _)| id.clone())
-            {
-                tails.remove(&stale);
-            }
         }
 
         let mut output = pane.stream_output().await?;
@@ -335,7 +335,16 @@ impl Tails {
             })
         };
 
-        hold(&self.inner).insert(
+        let mut tails = hold(&self.inner);
+        if tails.len() >= MAX_TAILS
+            && let Some(stale) = tails
+                .iter()
+                .min_by_key(|(_, tail)| tail.last_read)
+                .map(|(id, _)| id.clone())
+        {
+            tails.remove(&stale);
+        }
+        tails.insert(
             id.to_owned(),
             Tail {
                 epoch,
@@ -564,5 +573,97 @@ mod tests {
         ring.push(b"!\n");
 
         assert_eq!(ring.snapshot_from(cursor).text(), "\ndone!\n");
+    }
+
+    #[tokio::test]
+    async fn opening_is_fail_fast_and_a_failed_replacement_preserves_tails() {
+        use std::time::Duration;
+
+        use libtmux::ControlClientLimits;
+        use libtmux::test::TestServer;
+
+        let guard = TestServer::builder()
+            .control_client_limits(
+                ControlClientLimits::default()
+                    .max_clients(1)
+                    .acquire_timeout(Some(Duration::from_millis(200))),
+            )
+            .start()
+            .await
+            .expect("tmux starts");
+        let server = guard.server();
+        let session = server.new_session("tail-opening").await.expect("session");
+        let pane = session.panes().await.expect("panes").remove(0);
+        let occupied = pane
+            .stream_output()
+            .await
+            .expect("the only persistent-client slot is occupied");
+
+        let opening = Arc::new(tails_with_owner(1));
+        let first = {
+            let opening = Arc::clone(&opening);
+            let pane = pane.clone();
+            let id = pane.id().to_string();
+            tokio::spawn(async move { opening.ensure(&pane, &id).await })
+        };
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while opening.opening.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first open owns admission");
+
+        let second = tokio::time::timeout(
+            Duration::from_millis(50),
+            opening.ensure(&pane, pane.id().as_ref()),
+        )
+        .await;
+        assert!(
+            second.is_ok_and(|result| {
+                matches!(
+                    result,
+                    Err(TailError::OpeningAtCapacity {
+                        limit: MAX_TAIL_OPENERS
+                    })
+                )
+            }),
+            "a second first-time open must fail rather than queue"
+        );
+        first.abort();
+        let _ = first.await;
+
+        let full = tails_with_owner(2);
+        for index in 0..MAX_TAILS {
+            hold(&full.inner).insert(
+                format!("%fake-{index}"),
+                Tail {
+                    epoch: u64::try_from(index).expect("eight indices fit"),
+                    ring: Arc::new(Mutex::new(ring())),
+                    reader: tokio::spawn(std::future::pending()),
+                    last_read: Instant::now(),
+                },
+            );
+        }
+
+        let error = full
+            .ensure(&pane, pane.id().as_ref())
+            .await
+            .expect_err("persistent-client admission is full");
+        assert!(
+            matches!(error, TailError::Tmux(Error::Overloaded { .. })),
+            "{error:?}"
+        );
+        assert_eq!(
+            hold(&full.inner).len(),
+            MAX_TAILS,
+            "a failed replacement must not evict a healthy tail"
+        );
+
+        occupied
+            .shutdown()
+            .await
+            .expect("occupied stream shuts down");
+        guard.shutdown().await.expect("tmux fixture shuts down");
     }
 }

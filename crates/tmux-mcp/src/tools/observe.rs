@@ -106,6 +106,16 @@ fn tail_error(error: TailError) -> ErrorData {
                 "stale": false,
             })),
         ),
+        TailError::OpeningAtCapacity { limit } => ErrorData::internal_error(
+            "another pane tail is opening; retry capture_since after it finishes".to_owned(),
+            Some(serde_json::json!({
+                "kind": "capacity",
+                "retryable": true,
+                "stale": false,
+                "resource": "tail_opening",
+                "capacity": limit,
+            })),
+        ),
     }
 }
 
@@ -640,5 +650,18 @@ mod tests {
         assert_eq!(data["retryable"], true);
         assert_eq!(data["stale"], false);
         assert_eq!(data.as_object().map(serde_json::Map::len), Some(3));
+    }
+
+    #[test]
+    fn a_busy_tail_opener_is_retryable_without_a_partial_effect() {
+        let error = tail_error(TailError::OpeningAtCapacity { limit: 1 });
+        let data = error.data.expect("the failure is classified");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(data["kind"], "capacity");
+        assert_eq!(data["retryable"], true);
+        assert_eq!(data["stale"], false);
+        assert_eq!(data["resource"], "tail_opening");
+        assert_eq!(data["capacity"], 1);
     }
 }
