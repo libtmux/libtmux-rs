@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::process::{ChildStdin, ChildStdout};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWriteExt as _};
+use tokio::process::ChildStdin;
 
 use super::Event;
 use crate::{Error, PaneId, TmuxText, WindowId};
@@ -12,8 +12,8 @@ use crate::{Error, PaneId, TmuxText, WindowId};
 /// before it was cancelled, which is what makes this usable in `select!` --
 /// `read_line` would lose those bytes, and would also reject the pane output
 /// that is not UTF-8.
-pub(super) async fn read_line(
-    stdout: &mut BufReader<ChildStdout>,
+pub(super) async fn read_line<R: AsyncBufRead + Unpin + ?Sized>(
+    stdout: &mut R,
     pending: &mut Vec<u8>,
     limit: usize,
 ) -> Result<Option<Line>, Error> {
@@ -26,8 +26,8 @@ pub(super) async fn read_line(
 /// never appears inside an output block, so every line but its own terminator
 /// is command output -- including one that looks like a notification, which
 /// is what `list-panes -F '#{pane_id}'` produces for every row.
-pub(super) async fn read_line_within(
-    stdout: &mut BufReader<ChildStdout>,
+pub(super) async fn read_line_within<R: AsyncBufRead + Unpin + ?Sized>(
+    stdout: &mut R,
     pending: &mut Vec<u8>,
     limit: usize,
     within: Option<u64>,

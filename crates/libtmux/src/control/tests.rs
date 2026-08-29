@@ -1006,3 +1006,20 @@ fn output_escaping_round_trips_the_bytes_tmux_sends() {
     // it is kept rather than guessed at.
     assert_eq!(unescape_output(br"a\zb"), b"a\\zb");
 }
+
+#[tokio::test]
+async fn a_line_that_never_ends_stops_at_its_budget() {
+    // An endless stream carrying no newline is what a line budget is for, and
+    // what a budget checked after the read never gets to see: `read_until`
+    // does not return, so the check does not run.
+    let mut stream = tokio::io::BufReader::new(tokio::io::repeat(b'a'));
+    let mut pending = Vec::new();
+    let error = super::protocol::read_line(&mut stream, &mut pending, 4096)
+        .await
+        .expect_err("an endless line is refused");
+    assert!(
+        matches!(&error, Error::ControlModeFrameTooLarge { frame, limit, .. }
+            if *frame == "line" && *limit == 4096),
+        "got {error:?}",
+    );
+}
