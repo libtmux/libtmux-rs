@@ -90,6 +90,29 @@ below, so a caller who wants them all does not have to list them.
 | `test-support` | The real-tmux test guard, for your own tests |
 | `full` | Every capability above, but not `test-support` |
 
+## Where to start, by what you came to do
+
+| I want to | Call | Shown in |
+| --- | --- | --- |
+| Make a session and tear it down | `Server::with_session` | `examples/scratch.rs` |
+| Reach a session someone left running | `Server::session`, `Server::sessions` | `examples/inspect.rs` |
+| Find the pane my process is in | `Pane::from_env` | `examples/inspect.rs` |
+| Add a window, split a pane | `Session::new_window`, `Pane::split` | `examples/scratch.rs` |
+| Type into a pane | `Pane::send_keys`, `Pane::send_key_names` | `examples/scratch.rs` |
+| Read what a pane printed | `Pane::capture`, `Pane::capture_with` | `examples/scratch.rs` |
+| Wait for output rather than sleep | `test::retry_until` | `examples/scratch.rs` |
+| Follow a pane as it writes | `Pane::stream_output` | `examples/watch.rs` |
+| Hear about changes as they happen | `ControlMode::attach`, `ControlSender::subscribe` | `examples/watch.rs` |
+| Select panes by a typed expression | `Filterable::filter_fields`, `QueryIteratorExt::matching` | `examples/find.rs` |
+| Send tmux something this crate has no method for | `Server::cmd` | below |
+| Compare what each transport costs | `plan::Plan`, `plan::Planner` | `examples/matrix.rs` |
+| Clean up fixtures a killed run left | `test::reap_abandoned_servers` | `examples/sweep.rs` |
+
+Waiting is the gap worth knowing about before you start: `retry_until` is the
+only one this crate ships and it lives behind `test-support`, so production code
+that waits on a pane writes that loop itself today. `docs/design.md` records why
+and what a real one would have to survive.
+
 ## Choosing how commands reach tmux
 
 Three switches decide what a run costs and what it can prove. They compose:
