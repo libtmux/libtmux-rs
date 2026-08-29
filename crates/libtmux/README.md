@@ -113,6 +113,72 @@ only one this crate ships and it lives behind `test-support`, so production code
 that waits on a pane writes that loop itself today. `docs/design.md` records why
 and what a real one would have to survive.
 
+## Waiting for something to happen
+
+There is no production waiting primitive yet -- `test::retry_until` is behind
+`test-support` -- so this is the loop you write, and these are the parts that
+are easy to get wrong.
+
+```rust
+use std::time::{Duration, Instant};
+use libtmux::test::TestServer;
+
+/// Wait for a pane to print something, or give up.
+async fn wait_for(pane: &libtmux::Pane, needle: &str, within: Duration)
+    -> Result<bool, libtmux::Error>
+{
+    let deadline = Instant::now() + within;
+    loop {
+        // Ask before waiting. "Already true" is a real answer, and holding the
+        // caller for the rest of the timeout to report it is the expensive way
+        // to say yes.
+        let seen = pane.capture().await?;
+        if seen.iter().any(|line| line.to_string_lossy().contains(needle)) {
+            return Ok(true);
+        }
+
+        // A pane whose process has exited will never print it. Without this the
+        // loop runs to the deadline having already lost its subject.
+        let mut pane = pane.clone();
+        pane.refresh().await?;
+        if pane.is_dead() || Instant::now() >= deadline {
+            return Ok(false);
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let session = guard.server().new_session("waiting").await?;
+    let pane = session.panes().await?.remove(0);
+
+    pane.send_keys("printf 'ready\n'").await?;
+    pane.send_key_names(["Enter"]).await?;
+
+    assert!(wait_for(&pane, "ready", Duration::from_secs(10)).await?);
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
+Three things that are not obvious:
+
+- **Every command is already bounded.** A dispatch carries the server's
+  `default_timeout`, 30 seconds unless you change it, so a hung tmux ends the
+  call rather than the loop. The deadline above is for the *condition*, not the
+  transport.
+- **Polling costs a tmux process per tick.** With `control-mode` you can
+  subscribe to a format instead and be told when it changes -- see
+  `ControlSender::subscribe`. tmux coalesces those reports to at most once a
+  second, so a subscription says what a value became, not every step it took.
+- **`command_prompt` and `display_menu` wait for a person**, not for a
+  condition, and the dispatch timeout is what ends that wait. They are not
+  building blocks for this.
+
 ## Choosing how commands reach tmux
 
 Three switches decide what a run costs and what it can prove. They compose:
