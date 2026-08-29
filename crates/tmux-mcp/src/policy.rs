@@ -83,6 +83,18 @@ impl Safety {
         }
     }
 
+    /// Whether this tier carries the tools a prompt asks the client to use.
+    fn admits_prompt(self, name: &str) -> bool {
+        match self {
+            Self::ReadOnly => name == "diagnose_pane",
+            Self::Mutating => matches!(
+                name,
+                "diagnose_pane" | "run_and_wait" | "interrupt_gracefully"
+            ),
+            Self::Destructive => true,
+        }
+    }
+
     /// Describe the most dangerous plan this tier can admit.
     fn annotate_plan(self, tool: &mut rmcp::model::Tool) {
         let hints = tool.annotations.get_or_insert_default();
@@ -206,6 +218,16 @@ impl Builder {
                 schema::strip_unknown_formats(Arc::make_mut(schema));
             }
         }
+        let mut prompt_router = prompts::router();
+        let withheld: Vec<String> = prompt_router
+            .map
+            .keys()
+            .filter(|name| !self.safety.admits_prompt(name))
+            .map(ToString::to_string)
+            .collect();
+        for name in withheld {
+            prompt_router.remove_route(&name);
+        }
 
         TmuxTools {
             server: Arc::new(self.server),
@@ -216,7 +238,7 @@ impl Builder {
             tails: Arc::new(Tails::new(Arc::clone(&identity))),
             jobs: Arc::new(Jobs::new(identity)),
             tool_router: router,
-            prompt_router: prompts::router(),
+            prompt_router,
         }
     }
 }

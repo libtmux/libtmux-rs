@@ -3,7 +3,7 @@ use rmcp::model::{PromptMessage, Role};
 use rmcp::{prompt, prompt_router, schemars};
 use serde::{Deserialize, Serialize};
 
-use crate::TmuxTools;
+use crate::{Safety, TmuxTools};
 
 /// Arguments naming one pane, for a prompt.
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -75,6 +75,12 @@ impl TmuxTools {
         &self,
         Parameters(PanePrompt { pane }): Parameters<PanePrompt>,
     ) -> Vec<PromptMessage> {
+        let last_resort = if self.safety == Safety::Destructive {
+            "\n\nReach for kill_pane only when the pane itself is beyond saving, and remember \
+             that it destroys whatever was in it."
+        } else {
+            ""
+        };
         vec![PromptMessage::new_text(
             Role::User,
             format!(
@@ -86,9 +92,7 @@ impl TmuxTools {
                  send_keys with keys=[\"C-c\"]. Passing \"C-c\" as text types three \
                  characters at the command instead of interrupting it.\n\n\
                  Give it a moment and check again — a shell takes a beat to reclaim the \
-                 terminal. If C-c does not take, C-\\\\ is stronger. Reach for kill_pane \
-                 only when the pane itself is beyond saving, and remember that it destroys \
-                 whatever was in it."
+                 terminal. If C-c does not take, C-\\\\ is stronger.{last_resort}"
             ),
         )]
     }
@@ -104,6 +108,13 @@ impl TmuxTools {
         &self,
         Parameters(PanePrompt { pane }): Parameters<PanePrompt>,
     ) -> Vec<PromptMessage> {
+        let follow = if self.safety == Safety::ReadOnly {
+            ""
+        } else {
+            " To follow it as it goes, take a cursor from capture_since and call again \
+             later with it — that returns only what is new, rather than the whole screen \
+             each time."
+        };
         vec![PromptMessage::new_text(
             Role::User,
             format!(
@@ -113,9 +124,7 @@ impl TmuxTools {
                  cursor at the start of a fresh line usually means a shell waiting; a \
                  pane whose command is not a shell is busy.\n\n\
                  If the visible screen is not enough, capture_pane with history=true \
-                 reaches what has scrolled away. To follow it as it goes, take a cursor \
-                 from capture_since and call again later with it — that returns only what \
-                 is new, rather than the whole screen each time.\n\n\
+                 reaches what has scrolled away.{follow}\n\n\
                  If you are not sure this is even the right pane, search_panes finds which \
                  pane is showing a piece of text. The listing tools will not: they read \
                  names and commands, not what a terminal displays."

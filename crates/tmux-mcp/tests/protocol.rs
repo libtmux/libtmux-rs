@@ -168,6 +168,21 @@ impl Wire {
             .unwrap_or_else(|| panic!("{name} answered without structured content"))
     }
 
+    /// Render one prompt through the protocol.
+    async fn prompt(&self, name: &'static str, arguments: Value) -> String {
+        let mut params = rmcp::model::GetPromptRequestParams::default();
+        params.name = name.into();
+        params.arguments = arguments.as_object().cloned();
+        self.client
+            .get_prompt(params)
+            .await
+            .unwrap_or_else(|error| panic!("{name} failed: {error}"))
+            .messages
+            .iter()
+            .filter_map(|message| message.content.as_text().map(|text| text.text.clone()))
+            .collect()
+    }
+
     async fn shutdown(self) {
         self.client.cancel().await.expect("client shuts down");
         let _ = self.server.await;
@@ -763,23 +778,12 @@ async fn the_recipes_teach_what_no_single_tool_can_say() {
 
     // A recipe is only worth its place if it renders with the caller's
     // arguments in it, so check the text an agent would actually receive.
-    // GetPromptRequestParams is #[non_exhaustive], so it is built from
-    // the default rather than named field by field.
-    let mut params = rmcp::model::GetPromptRequestParams::default();
-    params.name = "run_and_wait".into();
-    params.arguments = json!({"pane": "%7", "command": "cargo test"})
-        .as_object()
-        .cloned();
-    let rendered = wire
-        .client
-        .get_prompt(params)
-        .await
-        .expect("the recipe renders");
-    let text: String = rendered
-        .messages
-        .iter()
-        .filter_map(|message| message.content.as_text().map(|text| text.text.clone()))
-        .collect();
+    let text = wire
+        .prompt(
+            "run_and_wait",
+            json!({"pane": "%7", "command": "cargo test"}),
+        )
+        .await;
 
     assert!(text.contains("%7"), "the pane reaches the text: {text}");
     assert!(text.contains("cargo test"), "so does the command: {text}");
@@ -790,27 +794,81 @@ async fn the_recipes_teach_what_no_single_tool_can_say() {
         "and the two outcomes that are not failures: {text}",
     );
 
-    // GetPromptRequestParams is #[non_exhaustive], so it is built from
-    // the default rather than named field by field.
-    let mut params = rmcp::model::GetPromptRequestParams::default();
-    params.name = "interrupt_gracefully".into();
-    params.arguments = json!({"pane": "%2"}).as_object().cloned();
-    let rendered = wire
-        .client
-        .get_prompt(params)
-        .await
-        .expect("the recipe renders");
-    let text: String = rendered
-        .messages
-        .iter()
-        .filter_map(|message| message.content.as_text().map(|text| text.text.clone()))
-        .collect();
+    let text = wire
+        .prompt("interrupt_gracefully", json!({"pane": "%2"}))
+        .await;
     assert!(
         text.contains("C-c") && text.contains("keys"),
         "the interrupt recipe must say to send the key, not type it: {text}",
     );
 
     wire.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn prompt_recipes_match_the_advertised_tier() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+
+    for (tier, expected) in [
+        (Safety::ReadOnly, &["diagnose_pane"][..]),
+        (
+            Safety::Mutating,
+            &["diagnose_pane", "interrupt_gracefully", "run_and_wait"][..],
+        ),
+        (
+            Safety::Destructive,
+            &["diagnose_pane", "interrupt_gracefully", "run_and_wait"][..],
+        ),
+    ] {
+        let wire = Wire::connect(
+            TmuxTools::builder(guard.server().clone())
+                .safety(tier)
+                .caller(None)
+                .confirm(false)
+                .build(),
+        )
+        .await;
+        let listed = wire
+            .client
+            .list_all_prompts()
+            .await
+            .expect("prompts are listed");
+        let mut names: Vec<&str> = listed.iter().map(|prompt| prompt.name.as_ref()).collect();
+        names.sort_unstable();
+        assert_eq!(names, expected, "{tier:?} prompt surface drifted");
+
+        match tier {
+            Safety::ReadOnly => {
+                let text = wire.prompt("diagnose_pane", json!({"pane": "%1"})).await;
+                assert!(
+                    !text.contains("capture_since"),
+                    "readonly advice names a withheld tool: {text}",
+                );
+            }
+            Safety::Mutating => {
+                let text = wire
+                    .prompt("interrupt_gracefully", json!({"pane": "%1"}))
+                    .await;
+                assert!(
+                    !text.contains("kill_pane"),
+                    "mutating advice names a withheld tool: {text}",
+                );
+            }
+            Safety::Destructive => {
+                let text = wire
+                    .prompt("interrupt_gracefully", json!({"pane": "%1"}))
+                    .await;
+                assert!(
+                    text.contains("kill_pane"),
+                    "destructive advice should retain the last resort: {text}",
+                );
+            }
+        }
+
+        wire.shutdown().await;
+    }
+
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

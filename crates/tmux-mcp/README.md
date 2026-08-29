@@ -224,8 +224,10 @@ offers a route.
 | **Batch** | `run_plan` |
 | **Destroy** | `kill_pane`, `kill_window`, `kill_session`, `kill_server` |
 
-And three prompts — `run_and_wait`, `interrupt_gracefully`, `diagnose_pane` —
-for the combinations that are easy to get wrong.
+The mutating and destructive tiers also offer three prompts — `run_and_wait`,
+`interrupt_gracefully`, and `diagnose_pane` — for combinations that are easy
+to get wrong. Read-only offers `diagnose_pane` alone. Each prompt names only
+tools its tier offers.
 
 ## Resources
 
