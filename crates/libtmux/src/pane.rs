@@ -1242,10 +1242,18 @@ impl Pane {
     /// This consumes the handle, because the pane's window changes and any
     /// snapshot of its old position is now wrong.
     ///
+    /// A pane that is already alone in its window is a no-op, not a refusal.
+    /// tmux relinks the window rather than rejecting the command -- see
+    /// `cmd-break-pane.c`, which links the window into the target session and
+    /// unlinks it from the source when the pane count is one -- so within one
+    /// session nothing moves and the call still succeeds. The handle is
+    /// consumed either way, so a caller who wanted to know whether anything
+    /// happened should count [`crate::Window::panes`] first.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the pane is its window's only one, since tmux
-    /// has nothing to break it out of.
+    /// Returns an error when tmux refuses the command. Being the window's only
+    /// pane is not one of those: tmux accepts that and does nothing.
     pub async fn break_out(self) -> Result<(), Error> {
         listing::mutate(
             &self.core,

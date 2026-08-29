@@ -938,45 +938,49 @@ async fn a_malformed_pane_variable_is_not_being_outside_tmux() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// Two of the six client-drawing commands accept a server with no client.
+/// A chooser opens in a pane, so it needs no client; a popup needs one.
 ///
-/// `choose` and `find_window` return `Ok` where `display_popup`,
-/// `display_menu`, `command_prompt` and `display_panes` all report "no current
-/// client". The difference is tmux's, and both documented an error they do not
-/// return, so this pins the split rather than the wish.
+/// Both kinds are dispatched from `Server` and both take `Option<&Client>`,
+/// which makes them look like one family that disagrees about clients. They
+/// are two families: `choose` and `find_window` put a *pane* into a mode, and
+/// `display_popup` and its three siblings draw *on a client* and cannot
+/// without one.
 ///
-/// Each call is the first thing that touches its own fresh server: an
-/// interactive command left open by one call changes what the next one
-/// answers, which is how this pair was mis-measured the first time.
+/// Asserting the return value alone cannot tell them apart -- that was the
+/// mistake this test replaces. `Ok` from `choose` was read as an empty promise
+/// until somebody looked at the pane, which is in a mode.
 #[tokio::test]
-async fn two_choosers_accept_a_server_nobody_is_watching() {
-    for expect_ok in [true, false] {
-        let guard = TestServer::builder().start().await.expect("tmux starts");
-        let server = guard.server();
-        server.new_session("nobody").await.expect("session");
-        assert!(
-            server.clients().await.expect("clients").is_empty(),
-            "nothing is attached"
-        );
+async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
+    use libtmux::Chooser;
 
-        let outcome = if expect_ok {
-            server.find_window(None, "nobody").await
-        } else {
-            server.display_popup(None, "true").await
-        };
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("nobody").await.expect("session");
+    assert!(
+        server.clients().await.expect("clients").is_empty(),
+        "nothing is attached"
+    );
 
-        if expect_ok {
-            assert!(
-                outcome.is_ok(),
-                "find_window is accepted with no client, and opens nothing"
-            );
-        } else {
-            let refused = outcome.expect_err("display_popup needs a client");
-            assert_eq!(refused.kind(), libtmux::ErrorKind::Refused);
-        }
+    let mut pane = session.panes().await.expect("panes").remove(0);
+    assert!(!pane.is_in_mode(), "the pane starts in no mode");
 
-        guard.shutdown().await.expect("tmux fixture shuts down");
-    }
+    server
+        .choose(Chooser::Tree, None)
+        .await
+        .expect("a chooser needs no client");
+    pane.refresh().await.expect("the pane still exists");
+    assert!(
+        pane.is_in_mode(),
+        "the chooser is open in the pane, which is what the Ok meant"
+    );
+
+    let refused = server
+        .display_popup(None, "true")
+        .await
+        .expect_err("a popup draws on a client and there is none");
+    assert_eq!(refused.kind(), libtmux::ErrorKind::Refused);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
 #[tokio::test]

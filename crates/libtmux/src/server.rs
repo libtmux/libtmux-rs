@@ -2076,21 +2076,20 @@ impl Server {
 
     /// Open one of tmux's interactive choosers on a client.
     ///
-    /// A chooser draws in a terminal, so it needs a client. Unlike the other
-    /// three commands that need one, tmux does not say so: with no client
-    /// attached and no `client` given, this succeeds and opens nothing.
-    /// `display_popup`, `display_menu` and `command_prompt` all answer "no
-    /// current client" in the same state, and the difference is tmux's rather
-    /// than this crate's -- `choose-tree` alone exits zero.
+    /// A chooser opens *in a pane*, which is why this needs no client and
+    /// succeeds on a server nothing is attached to: the pane's `pane_in_mode`
+    /// becomes `1` and its `pane_mode` becomes `tree-mode`, client or not.
     ///
-    /// So `Ok(())` here means the command was accepted, not that a chooser is
-    /// on screen. Pass a client, or check [`Self::clients`] first, when the
-    /// difference matters.
+    /// That is the difference from [`Self::display_popup`],
+    /// [`Self::display_menu`], [`Self::command_prompt`] and
+    /// [`Self::display_panes`], which draw *on a client* and report "no current
+    /// client" without one. Passing `client` here only says which client's
+    /// current pane to open in.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command -- which it does not do
-    /// for a missing client, however the other three behave.
+    /// Returns an error when tmux refuses the command. A missing client is not
+    /// one: this does not need one.
     pub async fn choose(&self, chooser: Chooser, client: Option<&Client>) -> Result<(), Error> {
         let name = chooser.command();
         let mut request = Command::new(name);
@@ -2106,18 +2105,14 @@ impl Server {
     /// Open tmux's window finder for a search string.
     ///
     /// This is separate from [`Server::choose`] because it needs something to
-    /// search for, where the other choosers list what already exists. It shares
-    /// that method's surprise as well: with no client attached and no `client`
-    /// given, tmux accepts the command, exits zero, and opens nothing.
-    /// `display_popup`, `display_menu`, `command_prompt` and `display_panes`
-    /// all report "no current client" in the same state.
-    ///
-    /// So `Ok(())` means accepted, not that a finder is on screen.
+    /// search for, where the other choosers list what already exists. Like them
+    /// it opens in a pane rather than on a client, so it needs no client and
+    /// leaves the pane in `tree-mode` on a server nothing is attached to.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command -- which it does not do
-    /// for a missing client, however the four above behave.
+    /// Returns an error when tmux refuses the command. A missing client is not
+    /// one: this does not need one.
     pub async fn find_window(&self, client: Option<&Client>, search: &str) -> Result<(), Error> {
         let mut request = Command::new("find-window");
         if let Some(client) = client {
