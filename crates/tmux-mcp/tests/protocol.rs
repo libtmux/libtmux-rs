@@ -1221,6 +1221,10 @@ async fn tmux_metacharacters_survive_the_round_trip() {
         "dou\"ble",
         "bra{ce}",
         "ha#sh",
+        // The separator this crate's own format rows are split on. `#{n}`
+        // escapes it in both transport dialects, and nothing exercised that:
+        // a regression there mis-splits every row rather than failing.
+        "per%cent",
     ] {
         wire.call("create_session", json!({"name": name}))
             .await
