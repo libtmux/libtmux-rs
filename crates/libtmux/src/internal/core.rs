@@ -176,6 +176,13 @@ impl CoreConfiguration {
             None => {}
             Some(_) => return Err(ServerConfigurationErrorKind::InvalidColorMode),
         }
+        // tmux replaces every byte outside `0x20..=0x7e` with `_` when it does
+        // not believe its client speaks UTF-8, and it decides that from the
+        // client process's own `TMUX`, `LANG`, `LC_ALL`, and `LC_CTYPE`. This
+        // crate unsets `TMUX` and inherits whatever locale its caller had, so
+        // a listing run from a container or a unit file returned `______` for
+        // a name and no error. `-u` says it directly instead of hoping.
+        global_argv.push(OsString::from("-u"));
 
         let pane = if inherited {
             context.inherited_tmux_pane
@@ -582,6 +589,7 @@ mod tests {
                 b"-f".as_slice(),
                 b"/captured/work/relative-config;".as_slice(),
                 b"-8".as_slice(),
+                b"-u".as_slice(),
             ]
         );
         assert_eq!(
@@ -686,7 +694,10 @@ mod tests {
         )
         .expect("default socket uses the captured fallback");
 
-        assert_eq!(argv(&named), [b"-L".as_slice(), b"named;".as_slice()]);
+        assert_eq!(
+            argv(&named),
+            [b"-L".as_slice(), b"named;".as_slice(), b"-u".as_slice()]
+        );
         assert_eq!(
             named.identity().socket_path(),
             canonical.join("tmux-1000/named;")
@@ -696,7 +707,10 @@ mod tests {
             Some(Some(canonical.as_os_str()))
         );
         assert_eq!(named.environment_value(OsStr::new("TMUX_PANE")), Some(None));
-        assert_eq!(argv(&fallback), [b"-L".as_slice(), b"default".as_slice()]);
+        assert_eq!(
+            argv(&fallback),
+            [b"-L".as_slice(), b"default".as_slice(), b"-u".as_slice()]
+        );
         assert_eq!(
             fallback.environment_value(OsStr::new("TMUX_TMPDIR")),
             Some(Some(OsStr::new("/fallback")))
@@ -734,7 +748,8 @@ mod tests {
             argv(&configuration),
             [
                 b"-S".as_slice(),
-                b"/captured/work/relative/socket".as_slice()
+                b"/captured/work/relative/socket".as_slice(),
+                b"-u".as_slice(),
             ]
         );
         assert_eq!(
@@ -872,7 +887,7 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
         assert_eq!(
             stdout,
             format!(
-                "{}\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<display-message>\n<value\\;>\n<PATH={}>\n<TMUX=unset>\n<TMUX_PANE=unset>\n<TMUX_TMPDIR=unset>\n",
+                "{}\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<display-message>\n<value\\;>\n<PATH={}>\n<TMUX=unset>\n<TMUX_PANE=unset>\n<TMUX_TMPDIR=unset>\n",
                 canonical_workspace.display(),
                 workspace.path().join("socket;").display(),
                 workspace.path().join("config;").display(),

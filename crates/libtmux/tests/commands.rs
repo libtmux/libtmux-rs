@@ -2169,3 +2169,22 @@ async fn a_window_acts_on_itself_after_its_index_moved() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_name_outside_ascii_survives_the_listing() {
+    // tmux replaces every byte outside `0x20..=0x7e` with `_` unless it
+    // believes its client speaks UTF-8, and it decides that from the client
+    // process's own `TMUX` and locale variables. This crate unsets `TMUX` and
+    // inherits whatever locale its caller had, so without saying so directly
+    // this name comes back as six underscores and no error.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let session = server.new_session("日本語").await.expect("session");
+    assert_eq!(session.name().as_bytes(), "日本語".as_bytes());
+
+    let listed = server.sessions().await.expect("sessions");
+    assert_eq!(listed[0].name().as_bytes(), "日本語".as_bytes());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
