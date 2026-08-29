@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
-use libtmux::test::{retry_until, unique_name};
-use libtmux::{NewWindowOptions, Server, SplitDirection, SplitOptions};
+use libtmux::test::unique_name;
+use libtmux::{NewWindowOptions, PaneWait, Server, SplitDirection, SplitOptions};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -48,15 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pane.send_key_names(["Enter"]).await?;
 
             // tmux runs the shell asynchronously, so wait for the output
-            // rather than sleeping and hoping.
-            retry_until(Duration::from_secs(5), async || {
-                pane.capture().await.is_ok_and(|lines| {
-                    lines
-                        .iter()
-                        .any(|line| line.as_bytes().windows(5).any(|window| window == b"hello"))
-                })
-            })
-            .await?;
+            // rather than sleeping and hoping. The outcome is checked because
+            // a wait that reached its deadline still returns successfully.
+            match pane.wait_for_text("hello", Duration::from_secs(5)).await? {
+                PaneWait::Arrived => println!("  the pane printed it"),
+                other => println!("  gave up: {other:?}"),
+            }
 
             let lines = pane.capture().await?;
             for line in lines.iter().filter(|line| !line.as_bytes().is_empty()) {

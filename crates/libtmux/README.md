@@ -100,7 +100,7 @@ below, so a caller who wants them all does not have to list them.
 | Add a window, split a pane | `Session::new_window`, `Pane::split` | `examples/scratch.rs` |
 | Type into a pane | `Pane::send_keys`, `Pane::send_key_names` | `examples/scratch.rs` |
 | Read what a pane printed | `Pane::capture`, `Pane::capture_with` | `examples/scratch.rs` |
-| Wait for output rather than sleep | `test::retry_until` | `examples/scratch.rs` |
+| Wait for output rather than sleep | `Pane::wait_for_text`, `Pane::wait_for_quiet` | `examples/scratch.rs` |
 | Follow a pane as it writes | `Pane::stream_output` | `examples/watch.rs` |
 | Hear about changes as they happen | `ControlMode::attach`, `ControlSender::subscribe` | `examples/watch.rs` |
 | Select panes by a typed expression | `Filterable::filter_fields`, `QueryIteratorExt::matching` | `examples/find.rs` |
@@ -108,10 +108,11 @@ below, so a caller who wants them all does not have to list them.
 | Compare what each transport costs | `plan::Plan`, `plan::Planner` | `examples/matrix.rs` |
 | Clean up fixtures a killed run left | `test::reap_abandoned_servers` | `examples/sweep.rs` |
 
-Waiting is the gap worth knowing about before you start: `retry_until` is the
-only one this crate ships and it lives behind `test-support`, so production code
-that waits on a pane writes that loop itself today. `docs/design.md` records why
-and what a real one would have to survive.
+Waiting needs no feature: `Pane::wait_for_text` and `Pane::wait_for_quiet` are
+in the library, poll the scrollback with wrapped lines joined, and answer
+`PaneWait::Dead` when the pane's process ends rather than running to the
+deadline. `docs/design.md` records what they had to survive, and what a
+control-mode doorbell was measured to buy.
 
 ## Waiting for something to happen
 
@@ -147,39 +148,12 @@ tmux keeps a signal nobody is waiting on, so the job finishing first does not
 lose the race, and nothing polls. `examples/orchestrate.rs` runs three jobs
 this way.
 
-For a pane that was *not* written to announce itself there is no production
-primitive yet -- `test::retry_until` is behind `test-support` -- so this is the
-loop you write, and these are the parts that are easy to get wrong.
+For a pane that was *not* written to announce itself, `Pane::wait_for_text`
+does the same job without a channel:
 
 ```rust
-use std::time::{Duration, Instant};
-use libtmux::test::TestServer;
-
-/// Wait for a pane to print something, or give up.
-async fn wait_for(pane: &libtmux::Pane, needle: &str, within: Duration)
-    -> Result<bool, libtmux::Error>
-{
-    let deadline = Instant::now() + within;
-    loop {
-        // Ask before waiting. "Already true" is a real answer, and holding the
-        // caller for the rest of the timeout to report it is the expensive way
-        // to say yes.
-        let seen = pane.capture().await?;
-        if seen.iter().any(|line| line.to_string_lossy().contains(needle)) {
-            return Ok(true);
-        }
-
-        // A pane whose process has exited will never print it. Without this the
-        // loop runs to the deadline having already lost its subject.
-        let mut pane = pane.clone();
-        pane.refresh().await?;
-        if pane.is_dead() || Instant::now() >= deadline {
-            return Ok(false);
-        }
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
+use libtmux::{PaneWait, test::TestServer};
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -190,12 +164,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     pane.send_keys("printf 'ready\n'").await?;
     pane.send_key_names(["Enter"]).await?;
 
-    assert!(wait_for(&pane, "ready", Duration::from_secs(10)).await?);
+    // Checked rather than discarded: a wait that reached its deadline still
+    // returns successfully, so the outcome is the answer.
+    assert_eq!(
+        pane.wait_for_text("ready", Duration::from_secs(10)).await?,
+        PaneWait::Arrived,
+    );
 
     guard.shutdown().await?;
     Ok(())
 }
 ```
+
+What it handles, and what a loop written by hand usually does not: it looks
+before it sleeps, so text already present is an answer rather than a wait; it
+reads the scrollback with wrapped lines joined, so output that scrolled away
+is still found and a needle spanning a wrap still matches; and it answers
+`PaneWait::Dead` when the pane's process ends rather than holding the
+deadline.
 
 Three things that are not obvious:
 
@@ -581,11 +567,10 @@ they are the ones worth knowing before you start.
 | Filtering | `QueryList` lives in `_internal` | `query` is public, and field handles are generated per type |
 | Transport | one tmux process per command | the same by default, plus control mode and command chaining |
 
-One thing is the same in a way you may not want: waiting. The Python library
-keeps `retry_until` in `libtmux/test/retry.py`, and this crate keeps it behind
-`test-support` for the same reason, so production code that waits on a pane
-writes that loop itself in both. `docs/design.md` records what a real one would
-have to survive.
+One thing differs, and in this crate's favour: waiting. The Python library
+keeps `retry_until` in `libtmux/test/retry.py`, a test helper, so production
+code that waits on a pane writes the loop itself. `Pane::wait_for_text` and
+`Pane::wait_for_quiet` are here in the library and need no feature.
 
 ## Documentation
 
