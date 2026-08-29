@@ -821,11 +821,23 @@ async fn a_client_reports_its_own_terminal_and_type() {
         (client.tty(), "#{client_tty}"),
         (client.term_name(), "#{client_termname}"),
     ] {
+        // `-t` rather than `-c`, because `-c` did not take an argument until
+        // 3.5a: `display-message`'s option string is `acd:INpt:F:v` on 3.2a,
+        // so the client name becomes a positional argument, the command
+        // exceeds its one-argument maximum, and tmux answers with a usage
+        // error. Its own usage line advertises `[-c target-client]` there
+        // anyway, so the help disagrees with the parser.
+        //
+        // `-t` resolves the client on every supported release, and is what
+        // `Client` itself uses. Checked rather than assumed: with the client
+        // attached as `screen-256color` and the asking process at `vt100`,
+        // both 3.2a and 3.7c answer `screen-256color`, so this reports the
+        // target rather than the caller.
         let asked = server
             .cmd(
                 Command::new("display-message")
                     .arg("-p")
-                    .arg("-c")
+                    .arg("-t")
                     .arg(&name)
                     .arg(format),
             )
@@ -855,16 +867,37 @@ async fn a_client_reports_its_own_terminal_and_type() {
 /// that the command is built and accepted, not what it did.
 #[tokio::test]
 async fn dispatch_only_commands_are_accepted() {
+    use libtmux::since;
+
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server.new_session("dispatch").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
     pane.send_prefix().await.expect("the prefix key is sent");
-    server
-        .clear_prompt_history()
+
+    // The prompt history arrived in 3.3, and the crate refuses it below that
+    // rather than dispatching something tmux will reject. Both answers are
+    // asserted, because a skip would leave the refusal untested on exactly
+    // the releases that produce it.
+    let cleared = server.clear_prompt_history().await;
+    if server
+        .capabilities()
         .await
-        .expect("the prompt history is cleared");
+        .expect("capabilities")
+        .tmux_version()
+        .meets(&since::PROMPT_HISTORY)
+    {
+        cleared.expect("the prompt history is cleared");
+    } else {
+        assert!(
+            matches!(
+                cleared.as_ref().map_err(libtmux::Error::kind),
+                Err(libtmux::ErrorKind::UnsupportedVersion),
+            ),
+            "an older tmux reports the version rather than failing some other way: {cleared:?}",
+        );
+    }
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
