@@ -1036,3 +1036,140 @@ async fn respawning_and_locking_reach_every_level_tmux_offers() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Renumber a session, leaving every index after the hole naming a different
+/// window than the handles cached.
+async fn renumber_after_dropping(
+    server: &libtmux::Server,
+    session: &libtmux::Session,
+    windows: &[libtmux::Window],
+    drop: usize,
+) {
+    windows[drop]
+        .clone()
+        .kill()
+        .await
+        .expect("the window is killed");
+    server
+        .cmd(
+            libtmux::Command::new("move-window")
+                .arg("-r")
+                .arg("-t")
+                .arg(session.id().to_string()),
+        )
+        .await
+        .expect("the session is renumbered");
+}
+
+fn place(windows: &[libtmux::Window], id: &str) -> i32 {
+    windows
+        .iter()
+        .find(|window| window.id().to_string() == id)
+        .map(libtmux::Window::index)
+        .expect("the window is listed")
+}
+
+/// Swapping targets an identity, so a renumber cannot redirect it.
+///
+/// `swap-window -t` took `session:index` from a cached handle. Once anything
+/// renumbered the session that index named a different window, or none, so the
+/// swap moved the wrong pair or failed reporting `ObjectGone` with an index
+/// where a window id belongs. `is_object_gone` is the predicate a caller
+/// consults before dropping a handle, and it answered `true` for a window that
+/// was alive and listed.
+#[tokio::test]
+async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("home").await.expect("session");
+    for name in ["second", "third", "fourth"] {
+        session
+            .new_window(NewWindowOptions::new(name))
+            .await
+            .expect("window");
+    }
+
+    let windows = session.windows().await.expect("windows");
+    assert_eq!(windows.len(), 4, "four windows to renumber");
+    let mut first = windows[0].clone();
+    let last = windows[3].clone();
+    let (first_id, last_id) = (first.id().to_string(), last.id().to_string());
+
+    renumber_after_dropping(server, &session, &windows, 1).await;
+
+    let before = session.windows().await.expect("windows");
+    let (was_first, was_last) = (place(&before, &first_id), place(&before, &last_id));
+    assert_ne!(
+        was_last,
+        last.index(),
+        "the renumber moved the window out from under its cached index",
+    );
+
+    // Neither handle has been refreshed: this is what a caller holds.
+    first
+        .swap_with(&last)
+        .await
+        .expect("the windows are swapped");
+
+    let after = session.windows().await.expect("windows");
+    assert_eq!(
+        (place(&after, &first_id), place(&after, &last_id)),
+        (was_last, was_first),
+        "the two windows exchanged places",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A rendered window target is offered for pasting, so it must not go stale.
+///
+/// `Display` rendered `session:index`. An index is a place within a session,
+/// and the window sitting at one moves whenever anything renumbers, so the
+/// rendered target reached a different window -- silently -- or nothing at
+/// all. Display is also what lands in logs and in interpolated error text, so
+/// the stale value travels well away from the handle that produced it.
+#[tokio::test]
+async fn a_rendered_window_target_survives_a_renumber() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("home").await.expect("session");
+    for name in ["second", "third", "fourth"] {
+        session
+            .new_window(NewWindowOptions::new(name))
+            .await
+            .expect("window");
+    }
+
+    let windows = session.windows().await.expect("windows");
+    let last = windows[3].clone();
+    let rendered = last.to_string();
+    let identity = last.id().to_string();
+
+    renumber_after_dropping(server, &session, &windows, 1).await;
+
+    // The handle has not been refreshed: this is the string a caller holds.
+    assert_eq!(rendered, last.to_string(), "the rendering is unchanged");
+
+    let resolved = server
+        .cmd(
+            libtmux::Command::new("display-message")
+                .arg("-p")
+                .arg("-t")
+                .arg(rendered.clone())
+                .arg("#{window_id}"),
+        )
+        .await
+        .expect("the command runs");
+    assert!(
+        resolved.success(),
+        "the rendered target still resolves: {rendered} said {:?}",
+        resolved.stderr_lossy(),
+    );
+    assert_eq!(
+        resolved.stdout_lossy().trim(),
+        identity,
+        "{rendered} reaches the window it was taken from",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

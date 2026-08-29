@@ -354,8 +354,9 @@ Server ──┬── Session ──── Window ──── Pane
 
 The third row is the one that surprises people, and it decides API shape. A
 window has one identity and several *links*, so a command that removes one link
-has to name `session:index` rather than `@id` -- `@id` could not say which link
-to remove. [`Window::unlink`] does exactly that, and reports
+has to name the session too -- `session:@id`, because `@id` alone could not say
+which link to remove, and a bare index names a slot rather than whichever
+window is sitting in it. [`Window::unlink`] does exactly that, and reports
 [`Error::LinkGone`] rather than [`Error::ObjectGone`] when the link is already
 gone, because the window itself may still be running under another session.
 
