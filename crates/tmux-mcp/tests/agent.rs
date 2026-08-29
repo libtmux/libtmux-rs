@@ -1124,6 +1124,51 @@ async fn selecting_moves_focus_between_windows() {
 }
 
 #[tokio::test]
+async fn real_tmux_compat_select_layout_preserves_a_vanished_window() {
+    let (guard, tools) = fixture("layout-refusal").await;
+    let target = json(tools.list_windows().await.expect("windows"))["windows"]
+        .as_array()
+        .expect("a listing wraps an array")[0]["id"]
+        .as_str()
+        .expect("a window id is a string")
+        .to_owned();
+    tools
+        .new_window(args(serde_json::json!({
+            "session": "layout-refusal",
+            "name": "keep"
+        })))
+        .await
+        .expect("a second window keeps the server alive");
+
+    // The alias removes the window after `find_window` lists it and before
+    // the underlying `select-layout` resolves it.
+    guard
+        .server()
+        .set_option(
+            "command-alias[999]",
+            format!("select-layout=kill-window -t {target} ; select-layout"),
+        )
+        .await
+        .expect("the race alias is installed");
+
+    let error = tools
+        .select_layout(args(serde_json::json!({
+            "window": target,
+            "layout": "tiled"
+        })))
+        .await
+        .map(|_| ())
+        .expect_err("the vanished window is refused");
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    let detail = error.data.expect("the error carries detail");
+    assert_eq!(detail["kind"], "object_gone", "{detail}");
+    assert_eq!(detail["retryable"], false, "{detail}");
+    assert_eq!(detail["stale"], true, "{detail}");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn searching_finds_which_pane_is_showing_something() {
     let (guard, tools, pane) = typing_fixture("work").await;
     let other = id(tools

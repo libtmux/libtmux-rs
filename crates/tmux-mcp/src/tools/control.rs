@@ -713,7 +713,8 @@ impl TmuxTools {
         Parameters(SelectLayoutArgs { window, layout }): Parameters<SelectLayoutArgs>,
     ) -> Result<Json<Layout>, ErrorData> {
         let target = self.find_window(&window).await?;
-        self.server
+        let result = self
+            .server
             .cmd(
                 Command::new("select-layout")
                     .arg("-t")
@@ -721,15 +722,10 @@ impl TmuxTools {
                     .arg(layout.clone()),
             )
             .await
-            .map_err(|e| tmux_error(&e))
-            .and_then(|result| {
-                result.success().then_some(()).ok_or_else(|| {
-                    bad_input(format!(
-                        "tmux refused the layout {layout:?}: {}",
-                        result.stderr_lossy().trim()
-                    ))
-                })
-            })?;
+            .map_err(|e| tmux_error(&e))?;
+        if let Some(error) = result.refusal_for("select-layout") {
+            return Err(tmux_error(&error));
+        }
 
         Ok(Json(Layout {
             window: target.id().to_string(),
