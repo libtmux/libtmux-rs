@@ -107,6 +107,21 @@ fn overflow_drops_the_oldest_and_says_so() {
 }
 
 #[test]
+fn one_oversized_chunk_does_not_leave_an_oversized_allocation() {
+    let mut ring = ring();
+    let chunk = vec![b'x'; RING_BYTES * 8];
+
+    ring.push(&chunk);
+
+    assert_eq!(ring.bytes.len(), RING_BYTES);
+    assert_eq!(ring.start, (chunk.len() - RING_BYTES) as u64);
+    assert!(
+        ring.bytes.capacity() <= RING_BYTES * 2,
+        "the physical allocation remains proportional to the logical ring"
+    );
+}
+
+#[test]
 fn a_first_read_resumes_at_the_end_and_has_missed_nothing() {
     let tails = tails_with_owner(1);
     let mut ring = ring();

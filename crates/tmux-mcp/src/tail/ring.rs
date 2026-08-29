@@ -48,6 +48,15 @@ impl Ring {
     }
 
     pub(super) fn push(&mut self, chunk: &[u8]) {
+        if chunk.len() >= RING_BYTES {
+            let retained = chunk.len() - RING_BYTES;
+            self.checkpoint.advance(&self.bytes);
+            self.checkpoint.advance(&chunk[..retained]);
+            self.start += (self.bytes.len() + retained) as u64;
+            self.bytes = chunk[retained..].to_vec();
+            return;
+        }
+
         self.bytes.extend_from_slice(chunk);
         if self.bytes.len() > RING_BYTES {
             let excess = self.bytes.len() - RING_BYTES;
