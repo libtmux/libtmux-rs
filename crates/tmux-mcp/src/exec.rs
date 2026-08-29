@@ -14,7 +14,7 @@ use libtmux::{CaptureOptions, Error, Pane};
 use regex::bytes::Regex;
 use serde::Serialize;
 
-use crate::text::TextFilter;
+use crate::text::{TextFilter, readable_from};
 
 /// The most output either primitive will hold for one call.
 ///
@@ -327,10 +327,17 @@ impl Run {
     /// `publish` receives the command's output so far and how many bytes were
     /// dropped from the front of it, so a poller sees progress rather than
     /// only the answer.
-    pub(crate) async fn collect(mut self, mut publish: impl FnMut(&[u8], u64)) -> RunView {
+    pub(crate) async fn collect(
+        mut self,
+        mut publish: impl FnMut(&[u8], u64, &TextFilter),
+    ) -> RunView {
         while let Some(chunk) = self.output.next_chunk().await {
             let finished = self.scanner.push(&chunk);
-            publish(self.scanner.body(), self.scanner.body_dropped());
+            publish(
+                self.scanner.body(),
+                self.scanner.body_dropped(),
+                self.scanner.body_checkpoint(),
+            );
 
             if let Some(mut view) = finished {
                 view.pane = self.pane.clone();
@@ -446,6 +453,8 @@ struct Scanner {
     body_at: Option<usize>,
     /// How many bytes of the command's output trimming has dropped.
     body_dropped: u64,
+    /// Filter state at the first retained byte of the command's output.
+    body_checkpoint: TextFilter,
     bytes: usize,
     truncated: bool,
 }
@@ -460,6 +469,7 @@ impl Scanner {
             close_at: None,
             body_at: None,
             body_dropped: 0,
+            body_checkpoint: TextFilter::new(),
             bytes: 0,
             truncated: false,
         }
@@ -488,15 +498,18 @@ impl Scanner {
             // not moving the buffer keeps the recorded position true.
             if self.close_at.is_none() && self.collected.len() > OUTPUT_LIMIT {
                 let excess = self.collected.len() - OUTPUT_LIMIT;
-                self.collected.drain(..excess);
-                self.scanned = self.scanned.saturating_sub(excess);
-                self.truncated = true;
                 if let Some(body_at) = self.body_at {
                     // Trimming eats the command's output only once it has
                     // eaten everything before it.
-                    self.body_dropped += excess.saturating_sub(body_at) as u64;
+                    let body_excess = excess.saturating_sub(body_at);
+                    self.body_checkpoint
+                        .advance(&self.collected[body_at..body_at + body_excess]);
+                    self.body_dropped = self.body_dropped.saturating_add(body_excess as u64);
                     self.body_at = Some(body_at.saturating_sub(excess));
                 }
+                self.collected.drain(..excess);
+                self.scanned = self.scanned.saturating_sub(excess);
+                self.truncated = true;
             }
         }
 
@@ -522,6 +535,11 @@ impl Scanner {
     /// How many bytes of the command's output were dropped to bound memory.
     const fn body_dropped(&self) -> u64 {
         self.body_dropped
+    }
+
+    /// Filter state at the first byte returned by [`Self::body`].
+    const fn body_checkpoint(&self) -> &TextFilter {
+        &self.body_checkpoint
     }
 
     /// Report a run that stopped without completing.
@@ -686,10 +704,7 @@ pub(crate) async fn wait_for_text(
 
 /// Render collected bytes as text, with escape sequences removed.
 pub(crate) fn readable(bytes: &[u8]) -> String {
-    let mut filter = TextFilter::new();
-    let mut out = Vec::new();
-    filter.push(bytes, &mut out);
-    String::from_utf8_lossy(&out).into_owned()
+    readable_from(&TextFilter::new(), bytes, 0)
 }
 
 /// Find the first occurrence of `needle` in `haystack`.
@@ -798,6 +813,24 @@ mod tests {
 
         assert_eq!(view.exit_status, Some(42));
         assert_eq!(view.output, "hi\n");
+    }
+
+    #[test]
+    fn scanner_publishes_state_at_a_trimmed_body_start() {
+        let opened = b"\x1b_Ns\x1b\\".to_vec();
+        let mut scanner = Scanner::new(opened.clone(), b"\x1b_Ne;".to_vec());
+        let mut body = b"\x1b[31mred".to_vec();
+        body.resize(OUTPUT_LIMIT + 4, b'x');
+        let mut stream = opened;
+        stream.extend_from_slice(&body);
+
+        assert!(scanner.push(&stream).is_none());
+        assert_eq!(scanner.body_dropped(), 4);
+
+        let text = readable_from(scanner.body_checkpoint(), scanner.body(), 0);
+
+        assert!(text.starts_with("red"));
+        assert_eq!(text.len(), OUTPUT_LIMIT - 1);
     }
 
     #[test]

@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use libtmux::{Error, Pane};
 
-use crate::text::TextFilter;
+use crate::text::{TextFilter, readable_from};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
 ///
@@ -106,7 +106,23 @@ struct Ring {
     bytes: Vec<u8>,
     /// The absolute offset of `bytes[0]`, counting from the tail's start.
     start: u64,
+    /// Filter state immediately before `bytes[0]`.
+    checkpoint: TextFilter,
     closed: bool,
+}
+
+#[derive(Debug)]
+struct RingRead {
+    bytes: Vec<u8>,
+    checkpoint: TextFilter,
+    from: usize,
+    missed: bool,
+}
+
+impl RingRead {
+    fn text(&self) -> String {
+        readable_from(&self.checkpoint, &self.bytes, self.from)
+    }
 }
 
 impl Ring {
@@ -118,6 +134,7 @@ impl Ring {
         self.bytes.extend_from_slice(chunk);
         if self.bytes.len() > RING_BYTES {
             let excess = self.bytes.len() - RING_BYTES;
+            self.checkpoint.advance(&self.bytes[..excess]);
             self.bytes.drain(..excess);
             self.start += excess as u64;
         }
@@ -130,6 +147,24 @@ impl Ring {
         }
         let from = usize::try_from(offset - self.start).unwrap_or(self.bytes.len());
         (self.bytes.get(from..).unwrap_or_default(), false)
+    }
+
+    fn snapshot_from(&self, offset: u64) -> RingRead {
+        let (bytes, missed) = self.read_from(offset);
+        if bytes.is_empty() {
+            return RingRead {
+                bytes: Vec::new(),
+                checkpoint: self.checkpoint.clone(),
+                from: 0,
+                missed,
+            };
+        }
+        RingRead {
+            bytes: self.bytes.clone(),
+            checkpoint: self.checkpoint.clone(),
+            from: self.bytes.len() - bytes.len(),
+            missed,
+        }
     }
 }
 
@@ -194,19 +229,16 @@ impl Tails {
         let opened = self.ensure(pane, &id).await?;
         let (ring, epoch) = opened;
 
-        let (bytes, missed, closed, end) = {
+        let (read, missed, closed, end) = {
             let ring = hold(&ring);
             let (from, stale) = resume_at(&ring, cursor, epoch);
-            let (bytes, dropped) = ring.read_from(from);
-            (bytes.to_vec(), dropped || stale, ring.closed, ring.end())
+            let read = ring.snapshot_from(from);
+            let missed = read.missed || stale;
+            (read, missed, ring.closed, ring.end())
         };
 
-        let mut filter = TextFilter::new();
-        let mut text = Vec::new();
-        filter.push(&bytes, &mut text);
-
         Ok(Since {
-            text: String::from_utf8_lossy(&text).into_owned(),
+            text: read.text(),
             cursor: Cursor {
                 pane: id,
                 epoch,
@@ -230,6 +262,7 @@ impl Tails {
         let ring = Arc::new(Mutex::new(Ring {
             bytes: Vec::new(),
             start: 0,
+            checkpoint: TextFilter::new(),
             closed: false,
         }));
 
@@ -298,6 +331,7 @@ mod tests {
         Ring {
             bytes: Vec::new(),
             start: 0,
+            checkpoint: TextFilter::new(),
             closed: false,
         }
     }
@@ -351,15 +385,19 @@ mod tests {
     #[test]
     fn overflow_drops_the_oldest_and_says_so() {
         let mut ring = ring();
-        ring.push(&vec![b'a'; RING_BYTES]);
-        ring.push(b"tail");
+        let mut stream = b"\x1b[31mred".to_vec();
+        stream.resize(RING_BYTES + 4, b'a');
+        ring.push(&stream);
 
         assert_eq!(ring.start, 4);
         assert_eq!(ring.end(), RING_BYTES as u64 + 4);
         let (bytes, missed) = ring.read_from(0);
         assert!(missed, "the bytes at offset 0 are gone");
         assert_eq!(bytes.len(), RING_BYTES);
-        assert!(bytes.ends_with(b"tail"));
+        let read = ring.snapshot_from(0);
+        let text = read.text();
+        assert!(text.starts_with("red"));
+        assert_eq!(text.len(), RING_BYTES - 1);
     }
 
     #[test]
@@ -409,5 +447,32 @@ mod tests {
         let (bytes, missed) = ring.read_from(ring.end() - 4);
         assert!(!missed);
         assert_eq!(bytes, b"tail");
+    }
+
+    #[test]
+    fn a_cursor_inside_a_control_sequence_resumes_its_state() {
+        let mut ring = ring();
+        ring.push(b"before\x1b[31");
+        let cursor = ring.end();
+        ring.push(b"mred");
+
+        let read = ring.snapshot_from(cursor);
+
+        assert_eq!(read.text(), "red");
+        assert!(!read.missed);
+    }
+
+    #[test]
+    fn reusing_an_old_cursor_preserves_a_pending_return() {
+        let mut ring = ring();
+        ring.push(b"working\r");
+        let cursor = ring.end();
+        ring.push(b"done");
+
+        assert_eq!(ring.snapshot_from(cursor).text(), "\ndone");
+
+        ring.push(b"!\n");
+
+        assert_eq!(ring.snapshot_from(cursor).text(), "\ndone!\n");
     }
 }

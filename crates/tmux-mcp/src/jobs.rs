@@ -21,6 +21,7 @@ use serde::Serialize;
 use tokio::sync::Notify;
 
 use crate::exec::{self, RunOutcome, RunView};
+use crate::text::{TextFilter, readable_from};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
 fn hold<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -123,6 +124,8 @@ struct Progress {
     output: Vec<u8>,
     /// How many bytes were dropped off the front of `output`.
     dropped: u64,
+    /// Filter state immediately before `output[0]`.
+    checkpoint: TextFilter,
 }
 
 impl Progress {
@@ -131,8 +134,9 @@ impl Progress {
     /// The scanner owns the bytes and may trim its own front, so this copies
     /// rather than sharing. `dropped` is how many of the command's bytes went
     /// with that trimming, which is what keeps a cursor meaningful.
-    fn replace(&mut self, body: &[u8], dropped: u64) {
+    fn replace(&mut self, body: &[u8], dropped: u64, checkpoint: &TextFilter) {
         self.dropped = dropped;
+        self.checkpoint = checkpoint.clone();
         self.output.clear();
         self.output.extend_from_slice(body);
     }
@@ -149,6 +153,16 @@ impl Progress {
         }
         let from = usize::try_from(cursor - self.dropped).unwrap_or(self.output.len());
         (self.output.get(from..).unwrap_or_default(), end, false)
+    }
+
+    fn text_from(&self, cursor: u64) -> (String, u64, bool) {
+        let (bytes, end, truncated) = self.read_from(cursor);
+        let from = self.output.len() - bytes.len();
+        (
+            readable_from(&self.checkpoint, &self.output, from),
+            end,
+            truncated,
+        )
     }
 }
 
@@ -305,6 +319,7 @@ impl Jobs {
             exit_status: None,
             output: Vec::new(),
             dropped: 0,
+            checkpoint: TextFilter::new(),
         }));
         let finished = Arc::new(Notify::new());
 
@@ -317,9 +332,9 @@ impl Jobs {
             let finished = Arc::clone(&finished);
             tokio::spawn(async move {
                 let view = run
-                    .collect(|body, dropped| {
+                    .collect(|body, dropped, checkpoint| {
                         let mut held = hold(&progress);
-                        held.replace(body, dropped);
+                        held.replace(body, dropped, checkpoint);
                     })
                     .await;
 
@@ -367,14 +382,14 @@ impl Jobs {
         job.last_read = Instant::now();
         let pane = job.pane.clone();
         let progress = hold(&job.progress);
-        let (bytes, end, truncated) = progress.read_from(cursor.unwrap_or(0));
+        let (output, end, truncated) = progress.text_from(cursor.unwrap_or(0));
 
         Some(JobProgress {
             job: id.to_owned(),
             pane,
             state: progress.state,
             exit_status: progress.exit_status,
-            output: exec::readable(bytes),
+            output,
             cursor: end,
             truncated,
             complete: progress.state != JobState::Running,
@@ -474,6 +489,7 @@ mod tests {
             exit_status: None,
             output: Vec::new(),
             dropped: 0,
+            checkpoint: TextFilter::new(),
         }));
         Job {
             pane: format!("%{index}"),
@@ -506,6 +522,7 @@ mod tests {
             exit_status: None,
             output: output.to_vec(),
             dropped,
+            checkpoint: TextFilter::new(),
         }
     }
 
@@ -538,6 +555,23 @@ mod tests {
         let held = progress(b"hello", 0);
 
         assert_eq!(held.read_from(99), (&b""[..], 5, false));
+    }
+
+    #[test]
+    fn reusing_a_job_cursor_resumes_its_filter_state() {
+        let mut checkpoint = TextFilter::new();
+        checkpoint.advance(b"\x1b[31");
+        let mut held = progress(b"", 0);
+        held.replace(b"mred", 4, &checkpoint);
+        let cursor = 0;
+
+        let (text, _, truncated) = held.text_from(cursor);
+        assert_eq!(text, "red");
+        assert!(truncated);
+
+        held.output.extend_from_slice(b"!");
+
+        assert_eq!(held.text_from(cursor).0, "red!");
     }
 
     #[tokio::test]
@@ -665,6 +699,7 @@ mod tests {
                 exit_status: Some(0),
                 output: Vec::new(),
                 dropped: 0,
+                checkpoint: TextFilter::new(),
             })),
             finished: Arc::new(Notify::new()),
             reader,
