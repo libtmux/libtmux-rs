@@ -28,8 +28,9 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ObjectGone`] when the pane no longer exists, or an
-    /// error when the control-mode connection cannot be opened.
+    /// Returns [`Error::ObjectGone`] when the pane no longer exists, a listing
+    /// error when tmux could not be read, or an error when the control-mode
+    /// connection cannot be opened.
     ///
     /// # Examples
     ///
