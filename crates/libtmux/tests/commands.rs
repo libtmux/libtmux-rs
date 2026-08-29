@@ -1075,6 +1075,64 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A variable nobody set and a session that has ended are different answers.
+///
+/// `environment` returned `Ok(None)` for any refusal, so a dead session read as
+/// a variable that was never there -- and the three other environment methods
+/// on the same handle reported the death correctly, so one struct disagreed
+/// with itself.
+///
+/// tmux says which it is, on the same exit code: "unknown variable: NAME" for
+/// the first, "no such session: NAME" for the second.
+///
+/// The variable is set before the session is killed, so `Ok(None)` afterwards
+/// cannot be read as a legitimate "never set".
+#[tokio::test]
+async fn a_dead_session_is_not_an_unset_variable() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    // A second session keeps the server alive once the first is killed.
+    server.new_session("keeper").await.expect("session");
+    let doomed = server.new_session("doomed").await.expect("session");
+
+    doomed
+        .set_environment("FOO", "bar")
+        .await
+        .expect("the variable is set");
+    assert!(
+        doomed.environment("FOO").await.expect("readable").is_some(),
+        "the positive control: it really is set"
+    );
+    assert!(
+        doomed
+            .environment("NEVER_SET")
+            .await
+            .expect("readable")
+            .is_none(),
+        "a name tmux does not hold is still None"
+    );
+
+    let asking = server
+        .sessions()
+        .await
+        .expect("sessions")
+        .into_iter()
+        .find(|session| session.id() == doomed.id())
+        .expect("the doomed session is listed");
+    doomed.kill().await.expect("the session is killed");
+
+    let refused = asking
+        .environment("FOO")
+        .await
+        .expect_err("the session is gone, not the variable unset");
+    assert!(
+        refused.is_object_gone(),
+        "a gone session must not read as an unset variable: {refused:?}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
