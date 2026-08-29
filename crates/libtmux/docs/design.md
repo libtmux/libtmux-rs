@@ -1452,8 +1452,10 @@ rather than on the absence.
 it is not an oracle. Its entry declares two separate permissions to fail, and
 only one of them is the one above:
 
-    .target = { 't', CMD_FIND_PANE, CMD_FIND_CANFAIL },
-    .flags  = ...|CMD_CLIENT_CANFAIL,
+```text
+.target = { 't', CMD_FIND_PANE, CMD_FIND_CANFAIL },
+.flags  = ...|CMD_CLIENT_CANFAIL,
+```
 
 `CMD_CLIENT_CANFAIL` governs `-c`: a client that does not resolve expands every
 format empty, which is what makes the suspended-client probe work.
@@ -1461,11 +1463,13 @@ format empty, which is what makes the suspended-client probe work.
 unresolvable `-t` leaves the target unresolved, so the formats expand against
 the client's current pane and the command still exits zero:
 
-    current window: @2
-    -t home:@99    -> @2
-    -t home:9      -> @2
-    -t home:nosuch -> @2
-    -t home:%99    -> @2    a pane id in a window target, still @2
+```text
+current window: @2
+-t home:@99    -> @2
+-t home:9      -> @2
+-t home:nosuch -> @2
+-t home:%99    -> @2    a pane id in a window target, still @2
+```
 
 Nothing separates "resolved to this" from "resolved to nothing, so here is
 where you happen to be standing". A test that asks `display-message` whether a
