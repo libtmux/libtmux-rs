@@ -348,13 +348,13 @@ struct Connection {
 impl Connection {
     async fn run(mut self, mut ready: oneshot::Sender<()>) -> Result<(), Error> {
         let opening_deadline = Instant::now().checked_add(self.timeout);
-        let outcome = match self
+        let (outcome, established) = match self
             .discard_opening_block(&mut ready, opening_deadline)
             .await
         {
-            Ok(true) if ready.send(()).is_ok() => self.serve().await,
-            Ok(_) => Ok(()),
-            Err(error) => Err(error),
+            Ok(true) if ready.send(()).is_ok() => (self.serve().await, true),
+            Ok(_) => (Ok(()), false),
+            Err(error) => (Err(error), false),
         };
 
         // Whatever is still waiting will never be answered. It is told why
@@ -373,16 +373,22 @@ impl Connection {
             _ => TerminalError::Closed,
         };
         let child = &self.child;
+        self.commands.close();
         self.awaiting.fail_all(|| reason.build(child));
         while let Ok(request) = self.commands.try_recv() {
             let _ = request.result.send(Err(reason.build(child)));
         }
+        let drained = if established {
+            self.drain_pending_events().await
+        } else {
+            Ok(())
+        };
         drop(self.stdin);
         let cleanup = self.child.terminate().await;
 
         match outcome {
             Err(error) => Err(error),
-            Ok(()) => cleanup,
+            Ok(()) => drained.and(cleanup),
         }
     }
 
@@ -418,10 +424,7 @@ impl Connection {
                 Step::Read(Err(error)) => return Err(error),
                 // tmux hung up, or the watcher asked to stop. Either ends the
                 // connection whatever the other half is doing.
-                Step::Read(Ok(None)) => {
-                    self.drain_terminal_events().await?;
-                    return Ok(());
-                }
+                Step::Read(Ok(None)) => return Ok(()),
                 Step::Unwatched { asked: true } => {
                     return Ok(());
                 }
@@ -429,7 +432,6 @@ impl Connection {
                 Step::TimedOut => return Err(Error::control_mode_timeout()),
                 Step::Read(Ok(Some(line))) => {
                     if !self.dispatch(line, &mut watching).await? {
-                        self.drain_terminal_events().await?;
                         return Ok(());
                     }
                 }
@@ -597,14 +599,8 @@ impl Connection {
         }
     }
 
-    /// Fail work tmux can no longer answer, then deliver its final events.
-    async fn drain_terminal_events(&mut self) -> Result<(), Error> {
-        self.commands.close();
-        self.awaiting.fail_all(Error::control_mode_closed);
-        while let Ok(request) = self.commands.try_recv() {
-            let _ = request.result.send(Err(Error::control_mode_closed()));
-        }
-
+    /// Deliver every parsed event after terminal work has been released.
+    async fn drain_pending_events(&mut self) -> Result<(), Error> {
         while let Some(delivery) = self.pending.pop_front() {
             let permit = tokio::select! {
                 biased;

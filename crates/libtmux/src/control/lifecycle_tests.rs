@@ -660,6 +660,62 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
 }
 
 #[tokio::test]
+async fn terminal_notifications_drain_after_eof_inside_a_reply() {
+    let fixture = directory();
+    let executable = write_script(
+        fixture.path(),
+        &format!(
+            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 2 0\\npartial\\n'",
+            opening_success(),
+            EVENT_QUEUE + 1,
+        ),
+    );
+    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let (commands, mut events) = attach(&server)
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let error = commands
+        .send(Command::new("display-message").arg("unanswered"))
+        .await
+        .expect_err("EOF cannot finish an open reply");
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
+
+    let mut sessions_changed = 0;
+    while let Some(event) = events.next_event().await {
+        match event {
+            Event::SessionsChanged => sessions_changed += 1,
+            other => panic!("unexpected terminal fixture event: {other:?}"),
+        }
+    }
+    assert_eq!(
+        sessions_changed,
+        EVENT_QUEUE + 1,
+        "a malformed final reply must not discard already parsed notifications"
+    );
+
+    let error = events
+        .shutdown()
+        .await
+        .expect_err("the incomplete reply remains the terminal cause");
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
+    server.shutdown().await.expect("server shuts down");
+}
+
+#[tokio::test]
 async fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
     let fixture = directory();
     let executable = write_script(
