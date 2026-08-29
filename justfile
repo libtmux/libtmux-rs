@@ -294,9 +294,10 @@ docs:
 # done that names a type nobody wrote is worse than one merely out of date: a
 # reader cannot tell a delivered capability from a described one.
 #
-# Fail when a done parity row names a symbol that does not exist
+# Fail when a done parity row has no caller-reachable Rust path
 [group: 'docs']
 parity-claims:
+    python3 -m unittest scripts/test_check_parity_claims.py
     python3 scripts/check-parity-claims.py crates/libtmux/docs/parity.md crates
 
 # Report formats tmux publishes that the catalog does not carry

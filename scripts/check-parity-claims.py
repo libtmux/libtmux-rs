@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
-"""Check that a parity row marked done names symbols that exist.
+"""Check that every done parity row names a caller-reachable Rust path.
 
-`parity.md` is what this project calls its definition of done, so a row
-claiming a type nobody wrote is worse than a row that is merely out of date: a
-reader has no way to tell a delivered capability from a described one. Six such
-rows named a capability that does not exist anywhere in the workspace, and
-five more named a type that was never written.
-
-The check is deliberately crude. It takes the identifiers a row's Rust column
-puts in backticks, reduces each to its leaf name, and asks whether that name
-appears anywhere in any crate's `src`. That cannot tell a method on the wrong
-type from one on the right type, and it is not meant to: what it catches is a
-name that exists in the ledger and nowhere else.
-
-A row that deliberately names something absent -- because it records a Python
-symbol, or says why a capability stays out -- goes in EXPECTED_ABSENT with its
-reason, so the exception is stated rather than silently tolerated.
+The checked public-API ledger comes from rustdoc JSON and preserves each
+associated item's owner. Private implementation details may explain a row but
+do not prove a public parity claim.
 """
 
 from __future__ import annotations
@@ -24,63 +12,93 @@ import pathlib
 import re
 import sys
 
+
 DONE = {"implemented", "verified"}
-
-# Names a done row may mention without the workspace defining them, and why.
+# Python names may add context, but none count as Rust evidence.
 EXPECTED_ABSENT = {
-    "LibTmuxException": "the Python exception a row is comparing against",
-    "ValueError": "a Python exception name",
-    "UserWarning": "a Python warning name",
-    "QueryList": "the Python collection a row is comparing against",
-    "exc": "a Python module name",
-    "remove_environment": "recorded as having no separate meaning in Rust",
-    "run_hook": "recorded as deliberately out: a library has no use for firing one",
-    "UnknownOption": "named by a row explaining there are three kinds and not four",
+    "LibTmuxException",
+    "QueryList",
+    "UnknownOption",
+    "UserWarning",
+    "ValueError",
+    "exc",
+    "remove_environment",
+    "run_hook",
 }
-
-# A backticked cell holds prose as often as code. Only leaf names that look
-# like Rust identifiers are worth asking about.
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+CODE_PATH = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*")
+PATH_SUFFIX = re.compile(r"^(?:<|\(|\s*->|\s*\{|::\{|$)")
+def public_paths(roots: list[pathlib.Path]) -> set[str]:
+    """Caller-reachable paths recorded beside the crate source."""
+    paths: set[str] = set()
+    ledgers = [root.parent / "docs/public-api.txt" for root in roots]
+    for ledger in ledgers:
+        if not ledger.is_file():
+            continue
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            _, separator, path = line.partition(" ")
+            if not separator or "::" not in path:
+                continue
+            paths.add(path.split("::", 1)[1])
+    return paths
+
+
+def mentioned_names(roots: list[pathlib.Path]) -> set[str]:
+    """Identifiers present anywhere in Rust source."""
+    names: set[str] = set()
+    for root in roots:
+        for path in root.rglob("*.rs"):
+            names.update(WORD.findall(path.read_text(encoding="utf-8")))
+    return names
 
 
 def named(quoted: str) -> list[str]:
-    """The identifiers a backticked cell names.
-
-    Every `::`-separated part is asked about rather than only the last, because
-    a row writing `CaptureOutput::{Lines, BufferWritten}` names a type whose
-    variant list is not itself an identifier, and the type is the claim.
-    """
+    """Identifier components named by one code span."""
     head = quoted.split("(")[0]
     parts = (part.strip().removesuffix("!").strip() for part in head.split("::"))
     return [part for part in parts if IDENTIFIER.match(part)]
 
 
-def defined_names(roots: list[pathlib.Path]) -> set[str]:
-    """Every identifier the workspace's sources mention."""
-    seen: set[str] = set()
-    word = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-    for root in roots:
-        for path in root.rglob("*.rs"):
-            seen.update(word.findall(path.read_text(encoding="utf-8")))
-    return seen
+def claimed_path(quoted: str) -> str | None:
+    """Return a canonical Rust path when a code span starts with one."""
+    quoted = quoted.removeprefix("libtmux::")
+    match = CODE_PATH.match(quoted)
+    if match is None or PATH_SUFFIX.match(quoted[match.end() :]) is None:
+        return None
+    return match.group().removesuffix("::")
+
+
+def is_public(path: str, available: set[str]) -> bool:
+    """Whether rustdoc records this path directly or below its public module."""
+    if path in available:
+        return True
+    return ("::" in path or path[:1].isupper()) and any(
+        item.endswith(f"::{path}") for item in available
+    )
 
 
 def main(ledger: str, crates: str) -> int:
     document = pathlib.Path(ledger).read_text(encoding="utf-8")
-    roots = sorted(p for p in pathlib.Path(crates).glob("*/src") if p.is_dir())
+    roots = sorted(path for path in pathlib.Path(crates).glob("*/src") if path.is_dir())
     if not roots:
         print(f"no crate sources under {crates}", file=sys.stderr)
         return 2
-    defined = defined_names(roots)
 
+    available = public_paths(roots)
+    if not available:
+        print(f"no public API ledger under {crates}", file=sys.stderr)
+        return 2
+    public_owners: set[str] = set()
+    for path in available:
+        parts = path.split("::")
+        public_owners.update(parts[:-1] or parts)
+    mentioned = mentioned_names(roots)
+
+    invalid: list[tuple[int, str, str]] = []
     missing: list[tuple[int, str, str]] = []
+    unchecked: list[tuple[int, str]] = []
     done = 0
-    unchecked = 0
-    # Which column holds the Rust side is a property of the table, not a
-    # constant. `parity.md` carries two shapes -- one keyed by Python symbol
-    # and one by Python behaviour -- and a fixed index reads the Rust column of
-    # the first and the delivery slice of the second, which names no
-    # identifier and so quietly checked nothing for every row of it.
     rust = 3
     for number, line in enumerate(document.splitlines(), start=1):
         if not line.startswith("|"):
@@ -88,49 +106,52 @@ def main(ledger: str, crates: str) -> int:
         columns = [cell.strip() for cell in line.split("|")]
         if len(columns) < 6:
             continue
-        heading = next(
-            (i for i, cell in enumerate(columns) if "Rust" in cell), None
-        )
-        if heading is not None:
-            rust = heading
+        if columns[-2] == "Status":
+            heading = next((i for i, cell in enumerate(columns) if "Rust" in cell), None)
+            if heading is not None:
+                rust = heading
             continue
-        status = columns[-2].strip("`").strip()
-        if status not in DONE:
+        if columns[-2].strip("`").strip() not in DONE:
             continue
 
         done += 1
-        # A row whose Rust column is prose names nothing to look up, so this
-        # check passes over it without reading anything. Counted rather than
-        # skipped in silence: a row that says `implemented` and nothing this
-        # can verify is exactly where an overclaim survives, and three of them
-        # did -- `list_commands`, `if_shell`, and the `Path` half of the buffer
-        # methods, each sharing a row with a sibling that was implemented.
-        quotes = re.findall(r"`([^`]+)`", columns[rust])
-        if not quotes:
-            unchecked += 1
-        for quoted in quotes:
-            for name in named(quoted):
-                if name in EXPECTED_ABSENT or name in defined:
-                    continue
-                missing.append((number, quoted, columns[1]))
+        found = False
+        for quoted in re.findall(r"`([^`]+)`", columns[rust]):
+            path = claimed_path(quoted)
+            if path is not None and is_public(path, available):
+                found = True
+                continue
+            if (
+                path is not None
+                and "::" in path
+                and path.split("::", 1)[0] in public_owners
+            ):
+                invalid.append((number, path, columns[1]))
+            names = [name for name in named(quoted) if name not in EXPECTED_ABSENT]
+            for name in names:
+                if name not in mentioned:
+                    missing.append((number, quoted, columns[1]))
+        if not found:
+            unchecked.append((number, columns[1]))
 
+    for number, path, row in invalid:
+        print(f"{ledger}:{number}: `{path}` is not a public Rust path ({row})")
     for number, quoted, row in missing:
-        print(f"{ledger}:{number}: `{quoted}` is named by a done row and defined nowhere ({row})")
+        print(f"{ledger}:{number}: `{quoted}` names no Rust source symbol ({row})")
+    for number, row in unchecked:
+        print(f"{ledger}:{number}: done row names no public Rust path ({row})")
 
-    if missing:
+    if invalid or missing or unchecked:
         print(
-            f"\n{len(missing)} name(s) claimed by a row marked done exist only in the ledger.",
+            f"\n{len(invalid)} invalid path(s); {len(missing)} missing symbol(s); "
+            f"{len(unchecked)} done row(s) unchecked.",
             file=sys.stderr,
         )
         return 1
     print(
-        f"every name in a done row is defined "
-        f"({done} done rows, {len(roots)} crate sources scanned)"
+        f"every done row names a public Rust path "
+        f"({done} done rows, {len(available)} public paths checked)"
     )
-    if unchecked:
-        print(
-            f"  {unchecked} of those name no Rust identifier, so nothing in them was checked"
-        )
     return 0
 
 

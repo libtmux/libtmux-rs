@@ -252,11 +252,10 @@ platform-independent. On a pull request, `tests on macOS` and `fuzz parsers`
 report as skipping. That is the design, not a failure.
 
 `just parity-claims` fails when a row of `parity.md` marked `implemented` or
-`verified` names a symbol no crate defines. That document is what this project
-calls its definition of done, so a done row naming a type nobody wrote leaves a
-reader unable to tell a delivered capability from a described one. A row that
-deliberately names something absent -- a Python symbol, or a capability it
-explains is staying out -- is listed in the script with its reason.
+`verified` names no caller-reachable Rust path, or puts an associated item on
+the wrong owner. Paths are checked against `public-api.txt`; private details do
+not satisfy the gate. `just api-check` proves the index still matches rustdoc
+JSON in CI.
 
 `just examples` runs every shipped example against a server it owns and
 fails when one exits nonzero or leaves a socket in `/tmp/libtmux-rs-dev/`.
