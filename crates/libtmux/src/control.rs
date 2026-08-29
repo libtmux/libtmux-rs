@@ -454,7 +454,7 @@ impl ControlMode {
             commands: queue,
             events,
             stopped,
-            awaiting: VecDeque::new(),
+            awaiting: ReplySlots::default(),
             pending: VecDeque::new(),
         };
 
@@ -1039,6 +1039,67 @@ struct Request {
     result: oneshot::Sender<Result<BlockResult, Error>>,
 }
 
+fn admit_request(request: Request, pending_events: usize) -> Option<Request> {
+    if pending_events < HELD_WHILE_AWAITING {
+        return Some(request);
+    }
+
+    let _ = request.result.send(Err(Error::control_mode_unread()));
+    None
+}
+
+/// Reply ownership in the order tmux will answer it.
+#[derive(Debug)]
+enum ReplySlot {
+    Live(oneshot::Sender<Result<BlockResult, Error>>),
+    /// Consume this block without giving it to a later caller.
+    Tombstone,
+}
+
+/// Ordered reply slots, including blocks whose callers were refused.
+#[derive(Debug, Default)]
+struct ReplySlots {
+    slots: VecDeque<ReplySlot>,
+    live: usize,
+}
+
+impl ReplySlots {
+    fn push(&mut self, result: oneshot::Sender<Result<BlockResult, Error>>) {
+        self.slots.push_back(ReplySlot::Live(result));
+        self.live += 1;
+    }
+
+    const fn has_live(&self) -> bool {
+        self.live != 0
+    }
+
+    fn refuse_live(&mut self) {
+        for slot in &mut self.slots {
+            let ReplySlot::Live(result) = std::mem::replace(slot, ReplySlot::Tombstone) else {
+                continue;
+            };
+            let _ = result.send(Err(Error::control_mode_unread()));
+        }
+        self.live = 0;
+    }
+
+    fn complete(&mut self, block: BlockResult) {
+        if let Some(ReplySlot::Live(result)) = self.slots.pop_front() {
+            self.live -= 1;
+            let _ = result.send(Ok(block));
+        }
+    }
+
+    fn fail_all(&mut self, mut reason: impl FnMut() -> Error) {
+        while let Some(slot) = self.slots.pop_front() {
+            if let ReplySlot::Live(result) = slot {
+                let _ = result.send(Err(reason()));
+            }
+        }
+        self.live = 0;
+    }
+}
+
 /// What one turn of the connection loop found to do.
 enum Step {
     /// The watching half has room for one held event, or has gone.
@@ -1071,7 +1132,7 @@ struct Connection {
     ///
     /// tmux answers in order and blocks do not nest, so the front of this
     /// queue owns the next block that completes.
-    awaiting: VecDeque<oneshot::Sender<Result<BlockResult, Error>>>,
+    awaiting: ReplySlots,
     /// Events tmux has reported that the caller has not taken yet.
     ///
     /// The reader puts an event here rather than waiting for the caller to
@@ -1094,17 +1155,16 @@ impl Connection {
             }
             _ => None,
         };
-        while let Some(result) = self.awaiting.pop_front() {
-            let _ = result.send(Err(reason.as_ref().map_or_else(
-                Error::control_mode_closed,
-                |error| match error {
+        self.awaiting.fail_all(|| {
+            reason
+                .as_ref()
+                .map_or_else(Error::control_mode_closed, |error| match error {
                     Error::ControlModeFrameTooLarge { frame, limit } => {
                         Error::control_mode_frame_too_large(frame, *limit)
                     }
                     _ => Error::control_mode_closed(),
-                },
-            )));
-        }
+                })
+        });
         drop(self.stdin);
         let _ = self.child.wait().await;
 
@@ -1138,15 +1198,13 @@ impl Connection {
             // Past the ceiling with a reply outstanding, stopping would
             // strand it and only the caller can help: the one who would drain
             // is the one awaiting. Saying so beats waiting to be rescued by
-            // somebody who is waiting for us. Nothing held is discarded, so
-            // draining and sending again works.
-            if !self.awaiting.is_empty() && self.pending.len() >= HELD_WHILE_AWAITING {
-                while let Some(result) = self.awaiting.pop_front() {
-                    let _ = result.send(Err(Error::control_mode_unread()));
-                }
+            // somebody who is waiting for us. Events stay held; refused reply
+            // blocks are consumed only to preserve later ownership.
+            if self.awaiting.has_live() && self.pending.len() >= HELD_WHILE_AWAITING {
+                self.awaiting.refuse_live();
             }
 
-            let held_back = self.awaiting.is_empty() && self.pending.len() >= EVENT_QUEUE;
+            let held_back = !self.awaiting.has_live() && self.pending.len() >= EVENT_QUEUE;
 
             let step = tokio::select! {
                 line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
@@ -1169,11 +1227,14 @@ impl Connection {
                     }
                 }
                 Step::Send(Some(request)) => {
+                    let Some(request) = admit_request(request, self.pending.len()) else {
+                        continue;
+                    };
                     if let Err(error) = write_line(&mut self.stdin, &request.line).await {
                         let _ = request.result.send(Err(Error::control_mode_closed()));
                         return Err(error);
                     }
-                    self.awaiting.push_back(request.result);
+                    self.awaiting.push(request.result);
                 }
                 // The caller took one, so the next one can go.
                 Step::Deliver(true) => {
@@ -1228,9 +1289,7 @@ impl Connection {
         match line {
             Line::BlockStart(number) => {
                 let block = self.read_block(number).await?;
-                if let Some(result) = self.awaiting.pop_front() {
-                    let _ = result.send(Ok(block));
-                }
+                self.awaiting.complete(block);
                 Ok(true)
             }
             Line::Event(exit @ Event::Exit { .. }) => {
@@ -1769,8 +1828,104 @@ mod tests {
 
     use std::time::Duration;
 
-    use super::{Event, Line, unescape_output};
-    use crate::{PaneId, SessionId, TmuxText, WindowId};
+    use tokio::sync::oneshot;
+
+    use super::{
+        BlockResult, Event, HELD_WHILE_AWAITING, Line, ReplySlots, Request, admit_request,
+        unescape_output,
+    };
+    use crate::{Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId};
+
+    fn reply(number: u64) -> BlockResult {
+        BlockResult {
+            number,
+            succeeded: true,
+            output: Vec::new(),
+        }
+    }
+
+    fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
+        let (result, answer) = oneshot::channel();
+        (
+            Request {
+                line: String::new(),
+                result,
+            },
+            answer,
+        )
+    }
+
+    fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> ErrorKind {
+        answer
+            .try_recv()
+            .expect("the request is answered")
+            .expect_err("the request is refused")
+            .kind()
+    }
+
+    #[test]
+    fn a_refused_reply_keeps_the_next_reply_aligned() {
+        let mut replies = ReplySlots::default();
+        let (b_request, b_reply) = request();
+        replies.push(b_request.result);
+
+        replies.refuse_live();
+        assert_eq!(
+            refused(b_reply),
+            ErrorKind::Refused,
+            "B reports the unread-event cutoff",
+        );
+        assert!(!replies.has_live(), "event reading may pause");
+
+        let (c_request, mut c_reply) = request();
+        let c_request = admit_request(c_request, HELD_WHILE_AWAITING - 1)
+            .expect("C is admitted after the caller drains below the limit");
+        replies.push(c_request.result);
+        assert!(replies.has_live(), "C keeps reply reading unpaused");
+        replies.complete(reply(2));
+        assert!(
+            matches!(c_reply.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "B's block is discarded rather than answering C",
+        );
+
+        replies.complete(reply(3));
+        assert_eq!(
+            c_reply
+                .try_recv()
+                .expect("C is answered")
+                .expect("C succeeds")
+                .number(),
+            3,
+        );
+    }
+
+    #[test]
+    fn retries_at_the_unread_limit_do_not_grow_reply_slots() {
+        let mut replies = ReplySlots::default();
+        let (in_flight, _answer) = request();
+        replies.push(in_flight.result);
+        replies.refuse_live();
+        let slots_at_cutoff = replies.slots.len();
+
+        for _ in 0..64 {
+            let (retry, answer) = request();
+            assert!(
+                admit_request(retry, HELD_WHILE_AWAITING).is_none(),
+                "the retry does not cross the write boundary",
+            );
+            assert_eq!(
+                refused(answer),
+                ErrorKind::Refused,
+                "the retry reports the unread-event cutoff",
+            );
+        }
+
+        assert_eq!(
+            replies.slots.len(),
+            slots_at_cutoff,
+            "retries refused before writing need no reply tombstones",
+        );
+    }
 
     #[test]
     fn block_headers_correlate_by_the_number_tmux_assigns() {
