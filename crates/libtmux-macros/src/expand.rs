@@ -387,7 +387,33 @@ fn schema_kind(kind: &FieldKind, core: &TokenStream2) -> TokenStream2 {
     }
 }
 
+/// Whether a related type is written in terms of this struct's own parameters.
+///
+/// A bound belongs on the impl only when the related type is not yet known:
+/// `Vec<T>` needs one, `Vec<Category>` does not. Adding it anyway makes the
+/// impl require what it is itself proving, which is an overflow rather than a
+/// missing impl, and it takes every tree-shaped struct with it.
+fn mentions_type_param(ty: &syn::Type, parameters: &HashSet<String>) -> bool {
+    fn walk(tokens: TokenStream2, parameters: &HashSet<String>) -> bool {
+        tokens.into_iter().any(|token| match token {
+            proc_macro2::TokenTree::Ident(ident) => parameters.contains(&ident.to_string()),
+            proc_macro2::TokenTree::Group(group) => walk(group.stream(), parameters),
+            _ => false,
+        })
+    }
+
+    !parameters.is_empty() && walk(quote!(#ty), parameters)
+}
+
+fn type_parameters(generics: &syn::Generics) -> HashSet<String> {
+    generics
+        .type_params()
+        .map(|parameter| parameter.ident.to_string())
+        .collect()
+}
+
 fn add_filter_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &TokenStream2) {
+    let parameters = type_parameters(generics);
     let mut seen = HashSet::new();
     for field in fields {
         let (ty, bound) = match &field.kind {
@@ -400,6 +426,9 @@ fn add_filter_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &
             | FieldKind::SignedInteger { .. }
             | FieldKind::UnsignedInteger { .. } => continue,
         };
+        if !mentions_type_param(ty, &parameters) {
+            continue;
+        }
         let key = quote!(#ty: #bound).to_string();
         if seen.insert(key) {
             generics
@@ -411,6 +440,7 @@ fn add_filter_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &
 }
 
 fn add_schema_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &TokenStream2) {
+    let parameters = type_parameters(generics);
     let mut seen = HashSet::new();
     for field in fields {
         let (ty, bound) = match &field.kind {
@@ -423,6 +453,9 @@ fn add_schema_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &
             | FieldKind::SignedInteger { .. }
             | FieldKind::UnsignedInteger { .. } => continue,
         };
+        if !mentions_type_param(ty, &parameters) {
+            continue;
+        }
         let key = quote!(#ty: #bound).to_string();
         if seen.insert(key) {
             generics
