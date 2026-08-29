@@ -679,14 +679,16 @@ impl ControlSender {
         };
 
         if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
-            return Err(Error::control_mode_timeout());
+            return Err(Error::control_mode_dispatch_timeout());
         }
         let permit = tokio::select! {
             biased;
             permit = self.commands.reserve() => {
                 permit.map_err(|_| Error::control_mode_closed())?
             }
-            () = deadline_elapsed(deadline) => return Err(Error::control_mode_timeout()),
+            () = deadline_elapsed(deadline) => {
+                return Err(Error::control_mode_dispatch_timeout());
+            }
         };
         permit.send(Request {
             line,
@@ -703,7 +705,7 @@ impl ControlSender {
                 match commitment.try_recv() {
                     Ok(()) => {}
                     Err(oneshot::error::TryRecvError::Closed | oneshot::error::TryRecvError::Empty) => {
-                        return Err(Error::control_mode_timeout());
+                        return Err(Error::control_mode_dispatch_timeout());
                     }
                 }
             }
@@ -1463,7 +1465,9 @@ impl Connection {
                         .deadline
                         .is_some_and(|deadline| deadline <= Instant::now())
                     {
-                        let _ = request.result.send(Err(Error::control_mode_timeout()));
+                        let _ = request
+                            .result
+                            .send(Err(Error::control_mode_dispatch_timeout()));
                         continue;
                     }
                     let Some(request) = admit_request(request, self.pending.len()) else {
@@ -2220,7 +2224,9 @@ mod tests {
         BlockResult, ControlSender, Event, HELD_WHILE_AWAITING, Line, ReplySlot, ReplySlots,
         Request, admit_request, decode_watched_pane_id, unescape_output,
     };
-    use crate::{Command, Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId};
+    use crate::{
+        Command, ControlModeErrorKind, Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId,
+    };
 
     fn reply(number: u64) -> BlockResult {
         BlockResult {
@@ -2460,6 +2466,20 @@ mod tests {
         .expect("the sender applies its own deadline");
         let error = outcome.expect_err("the full queue exceeds the deadline");
         assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert!(
+            matches!(
+                &error,
+                Error::ControlMode {
+                    kind: ControlModeErrorKind::DispatchTimedOut,
+                    ..
+                }
+            ),
+            "the command did not reach the write boundary",
+        );
+        assert!(
+            error.is_transient(),
+            "the unwritten command is safe to retry"
+        );
 
         let _occupant = requests.recv().await.expect("the first request remains");
         assert!(
@@ -2501,6 +2521,20 @@ mod tests {
             .expect("the caller task joins")
             .expect_err("the held request reaches its deadline");
         assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert!(
+            matches!(
+                &error,
+                Error::ControlMode {
+                    kind: ControlModeErrorKind::DispatchTimedOut,
+                    ..
+                }
+            ),
+            "the held command did not reach the write boundary",
+        );
+        assert!(
+            error.is_transient(),
+            "the unwritten command is safe to retry"
+        );
         assert!(
             request.commit().is_none(),
             "the actor cannot commit the expired request",

@@ -117,13 +117,17 @@ pub enum ControlModeErrorKind {
     ///
     /// This connection cannot reopen; attach another one to continue.
     Closed,
-    /// The attach opening or a command exceeded the server deadline.
+    /// A command's deadline elapsed before it was committed for writing.
+    ///
+    /// Nothing was written, this timeout does not close the connection, and
+    /// retrying the same command is safe once the delay clears.
+    DispatchTimedOut,
+    /// The attach opening or a committed command exceeded its deadline.
     ///
     /// A command's deadline starts before queue admission and runs until tmux
-    /// closes its response block. Before the connection commits it for writing,
-    /// nothing was written and the connection stays open. After that point, the
-    /// connection ends rather than reuse a possibly partial line. This kind
-    /// spans both cases, so it does not prove that retrying a mutation is safe.
+    /// closes its response block. Once the connection commits the command for
+    /// writing, tmux may execute it. The connection ends rather than reuse a
+    /// possibly partial line, so this does not prove a mutation is safe to retry.
     TimedOut,
     /// The caller stopped reading events, so the connection could not reach
     /// this command's reply.
@@ -1283,7 +1287,9 @@ impl Error {
                 // A limit was reached and the command was not carried out,
                 // which is what `Refused` says. The connection is fine.
                 ControlModeErrorKind::Unread => ErrorKind::Refused,
-                ControlModeErrorKind::TimedOut => ErrorKind::Timeout,
+                ControlModeErrorKind::DispatchTimedOut | ControlModeErrorKind::TimedOut => {
+                    ErrorKind::Timeout
+                }
                 ControlModeErrorKind::Transport
                 | ControlModeErrorKind::MissingPipes
                 | ControlModeErrorKind::Closed => ErrorKind::Transport,
@@ -1363,6 +1369,11 @@ impl Error {
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => false,
             #[cfg(feature = "control-mode")]
+            Self::ControlMode {
+                kind: ControlModeErrorKind::DispatchTimedOut,
+                ..
+            } => true,
+            #[cfg(feature = "control-mode")]
             Self::ControlModeFrameTooLarge { .. } | Self::ControlMode { .. } => false,
         }
     }
@@ -1426,6 +1437,15 @@ impl Error {
     pub(crate) const fn control_mode_closed() -> Self {
         Self::ControlMode {
             kind: ControlModeErrorKind::Closed,
+            source: None,
+        }
+    }
+
+    /// The command deadline elapsed before the connection committed a write.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_dispatch_timeout() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::DispatchTimedOut,
             source: None,
         }
     }

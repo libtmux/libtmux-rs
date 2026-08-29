@@ -19,7 +19,7 @@ use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
 use super::ControlMode;
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
-use crate::{Command, Error, ErrorKind, Server, SessionId};
+use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -452,6 +452,14 @@ async fn the_earliest_committed_deadline_ends_the_connection() {
         .expect("the second sender task joins")
         .expect_err("the second command times out");
     assert_eq!(second_error.kind(), ErrorKind::Timeout);
+    assert!(matches!(
+        &second_error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::TimedOut,
+            ..
+        }
+    ));
+    assert!(!second_error.is_transient());
     let first_error = first
         .await
         .expect("the first sender task joins")
