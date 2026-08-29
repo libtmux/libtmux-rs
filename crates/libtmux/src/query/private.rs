@@ -511,6 +511,7 @@ impl Predicate {
             }
             #[cfg(feature = "serde")]
             PredicateData::WireEmpty(predicate) => {
+                validate_non_ordering(predicate.operator)?;
                 let resolved = if kind.signed_bounds().is_some() {
                     WireEmptyResolved::Signed
                 } else if kind.unsigned_max().is_some() {

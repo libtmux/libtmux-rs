@@ -1692,7 +1692,7 @@ mod serde_contract {
     #[test]
     fn empty_ordering_operands_do_not_escape_field_validation() -> TestResult {
         for operator in ["lt", "lte", "gt", "gte"] {
-            for field in ["name", "flag", "phase"] {
+            for field in ["name", "flag", "phase", "i32_value", "u32_value"] {
                 assert_decode_error::<Record>(
                     &scalar_document(field, operator, "[]"),
                     FilterExpressionErrorKind::UnknownOperator,
