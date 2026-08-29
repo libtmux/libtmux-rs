@@ -302,6 +302,11 @@ fn split_at_boundaries(step: Step, boundaries: &BTreeSet<usize>) -> Vec<Step> {
     runs
 }
 
+// Only the control-mode runner reports a step per command; the blocking one
+// reports the runs `plan_runs` cut. So this is dead in a `plan` build with
+// `control-mode` off, which is 80 of the configurations the feature gate now
+// covers.
+#[cfg(feature = "control-mode")]
 impl Step {
     /// One invocation carrying one operation.
     pub(crate) fn single(index: usize) -> Self {

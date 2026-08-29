@@ -200,11 +200,18 @@ fmt:
 clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-# Check the crate builds with no features, and with every pair of them
+# `cargo check` warns and exits zero, so running a configuration is not the
+# same as gating it: `just clippy` and `just docs` deny warnings but each run
+# one configuration -- `--all-features` -- and a warning that appears only when
+# a feature is *off* is not in it. Running clippy here rather than `check` is
+# what makes the combinations count, and it carries the four denied lints
+# across every one of them rather than across the single build clippy ran.
+#
+# Lint every pair of features, denying what `check` would only mention
 [group: 'lint']
 features:
-    cargo check --locked --package libtmux --all-targets --no-default-features
-    cargo hack check --locked --workspace --feature-powerset --depth 2 --all-targets
+    cargo clippy --locked --package libtmux --all-targets --no-default-features -- -D warnings
+    cargo hack clippy --locked --workspace --feature-powerset --depth 2 --all-targets -- -D warnings
 
 # Check dependency licences, advisories, and sources
 [group: 'lint']
