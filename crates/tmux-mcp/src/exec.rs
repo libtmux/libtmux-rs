@@ -268,7 +268,7 @@ pub(crate) async fn run_command(
     Ok(view)
 }
 
-/// A command that has been sent to a pane and is being watched.
+/// A pane stream and the sentinels for one command.
 ///
 /// Held so a caller can decide how long to read for -- to a deadline, as
 /// `run_command` does, or until it ends, as a background job does.
@@ -278,20 +278,67 @@ pub(crate) struct Run {
     pane: String,
 }
 
-/// Send a command to a pane, bracketed by the sentinels that delimit it.
+/// A watched run whose pane has not been changed yet.
+pub(crate) struct PreparedRun {
+    pane: Pane,
+    payload: String,
+    run: Run,
+}
+
+/// Whether tmux confirmed the sends that start a watched run.
+#[must_use = "an unknown dispatch retains the watcher for a command that may be running"]
+pub(crate) enum RunDispatch {
+    /// Both the payload and Enter were acknowledged.
+    Confirmed(Run),
+    /// The first send was rejected before tmux could receive pane input.
+    NotDispatched(Error),
+    /// Delivery cannot be proved either way, so the watcher stays owned.
+    Unknown { run: Run, error: Error },
+}
+
+/// Say whether an error proves that the subprocess dispatch never started.
 ///
-/// Returns once the keys are away and the connection is open. Nothing has been
-/// read yet, so nothing has been missed: the stream was attached first.
+/// Timeout and executor shutdown are deliberately absent: each can occur
+/// before spawn or after tmux accepted the command, and the variants do not
+/// retain which phase produced them.
+fn definitely_not_dispatched(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Overloaded { .. }
+            | Error::InvalidCommandInput { .. }
+            | Error::ExecutableNotFound { .. }
+            | Error::Spawn { .. }
+            | Error::DuplicateRequest { .. }
+    )
+}
+
+impl PreparedRun {
+    /// Send the prepared payload and Enter while retaining its watcher.
+    pub(crate) async fn dispatch(self) -> RunDispatch {
+        let Self { pane, payload, run } = self;
+        if let Err(error) = pane.send_keys(payload).await {
+            if definitely_not_dispatched(&error) {
+                return RunDispatch::NotDispatched(error);
+            }
+            return RunDispatch::Unknown { run, error };
+        }
+        if let Err(error) = pane.send_key_names(["Enter"]).await {
+            return RunDispatch::Unknown { run, error };
+        }
+        RunDispatch::Confirmed(run)
+    }
+}
+
+/// Attach a watcher and construct a run without sending pane input.
 ///
 /// # Errors
 ///
-/// Returns an error when the pane cannot be watched or the keys cannot be
-/// sent.
-pub(crate) async fn start_run(
+/// Returns an error when the pane cannot be watched.
+pub(crate) async fn prepare_run(
     pane: &Pane,
     command: &str,
     suppress_history: bool,
-) -> Result<Run, Error> {
+) -> Result<PreparedRun, Error> {
     let nonce = format!(
         "{:x}{:x}",
         std::process::id(),
@@ -311,14 +358,40 @@ pub(crate) async fn start_run(
         "{lead}printf '\\033_{nonce}s\\033\\\\'; ( {command} ); __tmux_mcp=$?; \
          printf '\\033_{nonce}e;%d\\033\\\\' \"$__tmux_mcp\"; unset __tmux_mcp"
     );
-    pane.send_keys(payload).await?;
-    pane.send_key_names(["Enter"]).await?;
 
-    Ok(Run {
-        output,
-        scanner: Scanner::new(opened, closed),
-        pane: pane.id().to_string(),
+    Ok(PreparedRun {
+        pane: pane.clone(),
+        payload,
+        run: Run {
+            output,
+            scanner: Scanner::new(opened, closed),
+            pane: pane.id().to_string(),
+        },
     })
+}
+
+/// Send a command to a pane, bracketed by the sentinels that delimit it.
+///
+/// Returns once the keys are away and the connection is open. Nothing has been
+/// read yet, so nothing has been missed: the stream was attached first.
+///
+/// # Errors
+///
+/// Returns an error when the pane cannot be watched or the keys cannot be
+/// sent.
+pub(crate) async fn start_run(
+    pane: &Pane,
+    command: &str,
+    suppress_history: bool,
+) -> Result<Run, Error> {
+    match prepare_run(pane, command, suppress_history)
+        .await?
+        .dispatch()
+        .await
+    {
+        RunDispatch::Confirmed(run) => Ok(run),
+        RunDispatch::NotDispatched(error) | RunDispatch::Unknown { error, .. } => Err(error),
+    }
 }
 
 impl Run {

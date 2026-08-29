@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use libtmux::{Error, Pane};
 use serde::Serialize;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 
 use crate::exec::{self, RunOutcome, RunView};
 use crate::text::{TextFilter, readable_from};
@@ -31,8 +31,8 @@ fn hold<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 /// How many jobs this server remembers, running and finished together.
 ///
 /// A finished job is kept so its answer can still be collected; the least
-/// recently touched is dropped to make room. Only a pending start or a
-/// running job can hold a control-mode connection.
+/// recently touched is dropped to make room. Only an active job can hold a
+/// control-mode connection.
 const MAX_JOBS: usize = 32;
 
 /// Why a background command could not be started.
@@ -40,8 +40,28 @@ const MAX_JOBS: usize = 32;
 pub(crate) enum StartError {
     /// Every remembered slot belongs to a command still starting or running.
     AtCapacity { limit: usize },
-    /// tmux could not attach to the pane or send the command.
+    /// The pane could not be watched, or the first send never began.
     Tmux(Error),
+    /// A send may have reached tmux, and the named job retains ownership.
+    DispatchUnknown { job: String, cause: DispatchFailure },
+    /// The published worker stopped before it reported a retained outcome.
+    WorkerStopped,
+}
+
+/// Why a published job could not establish whether tmux accepted its input.
+#[derive(Debug)]
+pub(crate) enum DispatchFailure {
+    /// A pane-input dispatch failed without delivery certainty.
+    Tmux(Box<Error>),
+    /// The owned worker ended before reporting its dispatch result.
+    WorkerStopped,
+}
+
+/// What the owned worker learned from sending the command.
+enum DispatchReport {
+    Confirmed,
+    NotDispatched(Error),
+    Unknown(Error),
 }
 
 impl From<Error> for StartError {
@@ -57,8 +77,20 @@ static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
+    /// The watcher is attached and the command is being sent.
+    Starting,
     /// The command is still running.
     Running,
+    /// tmux did not confirm a send, so the command may be running.
+    ///
+    /// The watcher stays attached. Read its output and inspect the pane before
+    /// retrying, or cancel the job to stop whatever reached the pane.
+    DispatchUnknown,
+    /// The first send was rejected before tmux could receive pane input.
+    ///
+    /// Normally the failed start is removed before its caller returns. This
+    /// remains observable only when that caller was cancelled first.
+    NotStarted,
     /// The command finished and reported a status.
     Finished,
     /// The pane closed before the command finished.
@@ -69,6 +101,12 @@ pub enum JobState {
     /// sentinel never came back, so the text went into whatever the pane was
     /// running rather than to a prompt.
     NoShell,
+}
+
+impl JobState {
+    const fn is_active(self) -> bool {
+        matches!(self, Self::Starting | Self::Running | Self::DispatchUnknown)
+    }
 }
 
 /// One job, as the protocol sees it.
@@ -84,7 +122,7 @@ pub struct JobView {
     pub state: JobState,
     /// The command's exit status, once it has finished.
     ///
-    /// Absent while running, and when a signal killed the command rather than
+    /// Absent while active, and when a signal killed the command rather than
     /// it exiting.
     pub exit_status: Option<i32>,
     /// How many seconds ago the job was started.
@@ -183,7 +221,7 @@ impl Drop for Job {
     fn drop(&mut self) {
         // A terminal state is published before its notification. Let that
         // reader finish the handoff rather than stranding a waiter.
-        if matches!(hold(&self.progress).state, JobState::Running) {
+        if hold(&self.progress).state.is_active() {
             self.reader.abort();
         }
     }
@@ -192,7 +230,7 @@ impl Drop for Job {
 /// One slot in the bounded job table.
 #[derive(Debug)]
 enum JobSlot {
-    /// Reserved before tmux is touched, but not yet visible to callers.
+    /// Reserved while the watcher attaches, before any pane input is sent.
     Pending,
     /// A command visible to callers and owned by the table.
     Ready(Job),
@@ -220,9 +258,7 @@ impl JobTable {
                 .slots
                 .iter()
                 .filter_map(|(id, slot)| match slot {
-                    JobSlot::Ready(job)
-                        if !matches!(hold(&job.progress).state, JobState::Running) =>
-                    {
+                    JobSlot::Ready(job) if !hold(&job.progress).state.is_active() => {
                         Some((id, job.last_read))
                     }
                     JobSlot::Pending | JobSlot::Ready(_) => None,
@@ -304,8 +340,8 @@ impl Jobs {
     ///
     /// # Errors
     ///
-    /// Returns an error when every job slot is active, the pane cannot be
-    /// watched, or the keys cannot be sent.
+    /// Returns an error when every job slot is active or the pane cannot be
+    /// watched. A send that tmux does not confirm returns the retained job id.
     pub(crate) async fn start(
         &self,
         pane: &Pane,
@@ -314,8 +350,10 @@ impl Jobs {
     ) -> Result<JobView, StartError> {
         let reservation = self.reserve()?;
         let id = reservation.id().to_owned();
+        let pane_id = pane.id().to_string();
+        let command = command.to_owned();
         let progress = Arc::new(Mutex::new(Progress {
-            state: JobState::Running,
+            state: JobState::Starting,
             exit_status: None,
             output: Vec::new(),
             dropped: 0,
@@ -323,52 +361,68 @@ impl Jobs {
         }));
         let finished = Arc::new(Notify::new());
 
-        // Attaching happens here rather than in the reader so a pane that
-        // cannot be watched fails this call, where the caller can see it.
-        let run = exec::start_run(pane, command, suppress_history).await?;
-
-        let reader = {
-            let progress = Arc::clone(&progress);
-            let finished = Arc::clone(&finished);
-            tokio::spawn(async move {
-                let view = run
-                    .collect(|body, dropped, checkpoint| {
-                        let mut held = hold(&progress);
-                        held.replace(body, dropped, checkpoint);
-                    })
-                    .await;
-
-                {
-                    let mut held = hold(&progress);
-                    let (state, exit_status) = ended(&view);
-                    held.state = state;
-                    held.exit_status = exit_status;
-                }
-                finished.notify_waiters();
-            })
-        };
+        // Setup is still request-owned because it has not touched the pane.
+        // Publication gates the worker immediately before its first send.
+        let prepared = exec::prepare_run(pane, &command, suppress_history).await?;
+        let (publish, published) = oneshot::channel();
+        let (report, reported) = oneshot::channel();
+        let worker_progress = Arc::clone(&progress);
+        let worker_finished = Arc::clone(&finished);
+        let reader = tokio::spawn(async move {
+            if published.await.is_ok() {
+                drive(prepared, worker_progress, worker_finished, report).await;
+            }
+        });
 
         let started = Instant::now();
-        let view = JobView {
-            job: id.clone(),
-            pane: pane.id().to_string(),
-            command: command.to_owned(),
-            state: JobState::Running,
-            exit_status: None,
-            age_seconds: 0,
-        };
-
         reservation.commit(Job {
-            pane: pane.id().to_string(),
-            command: command.to_owned(),
+            pane: pane_id.clone(),
+            command: command.clone(),
             started,
-            progress,
+            progress: Arc::clone(&progress),
             finished,
             reader,
             last_read: started,
         });
 
-        Ok(view)
+        if publish.send(()).is_err() {
+            self.forget(&id);
+            return Err(StartError::WorkerStopped);
+        }
+
+        match reported.await {
+            Ok(DispatchReport::Confirmed) => Ok(JobView {
+                job: id,
+                pane: pane_id,
+                command,
+                state: JobState::Running,
+                exit_status: None,
+                age_seconds: 0,
+            }),
+            Ok(DispatchReport::NotDispatched(error)) => {
+                self.forget(&id);
+                Err(StartError::Tmux(error))
+            }
+            Ok(DispatchReport::Unknown(error)) => {
+                if !self.holds(&id) {
+                    return Err(StartError::WorkerStopped);
+                }
+                Err(StartError::DispatchUnknown {
+                    job: id,
+                    cause: DispatchFailure::Tmux(Box::new(error)),
+                })
+            }
+            Err(_) => {
+                if !self.holds(&id) {
+                    return Err(StartError::WorkerStopped);
+                }
+                hold(&progress).state = JobState::DispatchUnknown;
+                Err(StartError::DispatchUnknown {
+                    job: id,
+                    cause: DispatchFailure::WorkerStopped,
+                })
+            }
+        }
     }
 
     /// Report what a job has written since `cursor`.
@@ -392,7 +446,7 @@ impl Jobs {
             output,
             cursor: end,
             truncated,
-            complete: progress.state != JobState::Running,
+            complete: !progress.state.is_active(),
         })
     }
 
@@ -418,7 +472,7 @@ impl Jobs {
         // miss a job that finished in between and then wait for a
         // notification that has already been sent.
         let notified = finished.notified();
-        if hold(&progress).state != JobState::Running {
+        if !hold(&progress).state.is_active() {
             return true;
         }
 
@@ -450,20 +504,66 @@ impl Jobs {
         views
     }
 
-    /// Report whether a job is still running, and which pane it is in.
-    pub(crate) fn running_in(&self, id: &str) -> Option<(String, bool)> {
+    /// Report whether a job is active, and which pane it is in.
+    pub(crate) fn active_in(&self, id: &str) -> Option<(String, bool)> {
         let table = hold(&self.inner);
         let JobSlot::Ready(job) = table.slots.get(id)? else {
             return None;
         };
-        let running = hold(&job.progress).state == JobState::Running;
-        Some((job.pane.clone(), running))
+        let active = hold(&job.progress).state.is_active();
+        Some((job.pane.clone(), active))
+    }
+
+    /// Report whether this table still owns a published job.
+    fn holds(&self, id: &str) -> bool {
+        matches!(hold(&self.inner).slots.get(id), Some(JobSlot::Ready(_)))
     }
 
     /// Forget a job, ending its reader.
     pub(crate) fn forget(&self, id: &str) -> bool {
         matches!(hold(&self.inner).slots.remove(id), Some(JobSlot::Ready(_)))
     }
+}
+
+/// Dispatch and read one job after its table entry is visible.
+async fn drive(
+    prepared: exec::PreparedRun,
+    progress: Arc<Mutex<Progress>>,
+    finished: Arc<Notify>,
+    report: oneshot::Sender<DispatchReport>,
+) {
+    let run = match prepared.dispatch().await {
+        exec::RunDispatch::Confirmed(run) => {
+            hold(&progress).state = JobState::Running;
+            let _ = report.send(DispatchReport::Confirmed);
+            run
+        }
+        exec::RunDispatch::NotDispatched(error) => {
+            hold(&progress).state = JobState::NotStarted;
+            finished.notify_waiters();
+            let _ = report.send(DispatchReport::NotDispatched(error));
+            return;
+        }
+        exec::RunDispatch::Unknown { run, error } => {
+            hold(&progress).state = JobState::DispatchUnknown;
+            let _ = report.send(DispatchReport::Unknown(error));
+            run
+        }
+    };
+
+    let view = run
+        .collect(|body, dropped, checkpoint| {
+            hold(&progress).replace(body, dropped, checkpoint);
+        })
+        .await;
+
+    {
+        let mut held = hold(&progress);
+        let (state, exit_status) = ended(&view);
+        held.state = state;
+        held.exit_status = exit_status;
+    }
+    finished.notify_waiters();
 }
 
 /// Translate a finished run into the two fields a job records.
@@ -514,6 +614,32 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
         panic!("the pane never drew a prompt");
+    }
+
+    async fn session_fixture(name: &str) -> (libtmux::test::TestServer, libtmux::Session) {
+        let guard = libtmux::test::TestServer::builder()
+            .start()
+            .await
+            .expect("tmux starts");
+        let session = guard
+            .server()
+            .new_session(name)
+            .await
+            .expect("session starts");
+        (guard, session)
+    }
+
+    async fn block_enter(session: &libtmux::Session, sent: &str, release: &str) {
+        session
+            .set_hook(
+                "after-send-keys",
+                format!(
+                    "if-shell -F '#{{==:#{{hook_argument_0}},Enter}}' \
+                     'wait-for -S {sent}; wait-for {release}'"
+                ),
+            )
+            .await
+            .expect("the start gate is installed");
     }
 
     fn progress(output: &[u8], dropped: u64) -> Progress {
@@ -599,7 +725,7 @@ mod tests {
             matches!(started, Err(StartError::AtCapacity { limit: 1 })),
             "a full running table accepted a job: {started:?}",
         );
-        assert!(jobs.running_in(&first).is_some(), "the first job remains");
+        assert!(jobs.active_in(&first).is_some(), "the first job remains");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let reached_pane = pane
             .capture()
@@ -636,6 +762,229 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_first_send_is_not_an_unknown_dispatch() {
+        let (guard, session) = session_fixture("job-start-invalid-input").await;
+        let pane = session.panes().await.expect("panes list").remove(0);
+        wait_for_prompt(&pane).await;
+        let jobs = Jobs::with_limit(1);
+
+        let started = jobs.start(&pane, "printf untouched\0", false).await;
+
+        assert!(
+            matches!(
+                started,
+                Err(StartError::Tmux(Error::InvalidCommandInput { .. }))
+            ),
+            "input rejected before dispatch was reported as uncertain: {started:?}",
+        );
+        assert!(jobs.list().is_empty(), "an untouched start was retained");
+        assert!(
+            !pane
+                .capture()
+                .await
+                .expect("pane captures")
+                .iter()
+                .any(|line| line.to_string_lossy().contains("untouched")),
+            "invalid input reached the pane",
+        );
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+
+    #[tokio::test]
+    async fn cancelling_after_send_keeps_the_start_visible() {
+        let (guard, session) = session_fixture("job-start-cancel").await;
+        let pane = session.panes().await.expect("panes list").remove(0);
+        wait_for_prompt(&pane).await;
+
+        let jobs = Arc::new(Jobs::with_limit(1));
+        let sent = "job-start-cancel-sent";
+        let release = "job-start-cancel-release";
+        block_enter(&session, sent, release).await;
+        let marker = "job-start-crossed-tmux";
+        let starting = tokio::spawn({
+            let jobs = Arc::clone(&jobs);
+            let pane = pane.clone();
+            async move {
+                jobs.start(&pane, &format!("printf '{marker}\\n'; sleep 60"), false)
+                    .await
+            }
+        });
+
+        assert_eq!(
+            guard
+                .server()
+                .wait_for_channel(sent, std::time::Duration::from_secs(5))
+                .await
+                .expect("the gate channel can be read"),
+            libtmux::ChannelWait::Signalled,
+            "the Enter hook did not run",
+        );
+        assert_eq!(
+            pane.wait_for_text(marker, std::time::Duration::from_secs(5))
+                .await
+                .expect("the pane can be read"),
+            libtmux::PaneWait::Arrived,
+            "the command did not begin while its reply was blocked",
+        );
+
+        starting.abort();
+        assert!(
+            starting
+                .await
+                .expect_err("the caller's start future was cancelled")
+                .is_cancelled(),
+        );
+        let visible = jobs.list();
+        guard
+            .server()
+            .signal_channel(release)
+            .await
+            .expect("the blocked tmux command is released");
+
+        let owned = visible
+            .into_iter()
+            .next()
+            .expect("the cancelled start remains visible");
+        assert_eq!(owned.pane, pane.id().to_string());
+        assert_eq!(owned.state, JobState::Starting);
+        assert!(jobs.active_in(&owned.job).is_some_and(|(_, active)| active));
+        libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
+            jobs.read(&owned.job, None)
+                .is_some_and(|progress| progress.output.contains(marker))
+        })
+        .await
+        .expect("the owned watcher retains output written before publication");
+        assert!(jobs.forget(&owned.job));
+        assert!(jobs.read(&owned.job, None).is_none());
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+
+    #[tokio::test]
+    async fn forgetting_a_start_does_not_claim_that_it_was_retained() {
+        let (guard, session) = session_fixture("job-start-forget").await;
+        let pane = session.panes().await.expect("panes list").remove(0);
+        wait_for_prompt(&pane).await;
+
+        let jobs = Arc::new(Jobs::with_limit(1));
+        let sent = "job-start-forget-sent";
+        let release = "job-start-forget-release";
+        block_enter(&session, sent, release).await;
+        let starting = tokio::spawn({
+            let jobs = Arc::clone(&jobs);
+            let pane = pane.clone();
+            async move { jobs.start(&pane, "sleep 60", false).await }
+        });
+
+        assert_eq!(
+            guard
+                .server()
+                .wait_for_channel(sent, std::time::Duration::from_secs(5))
+                .await
+                .expect("the gate channel can be read"),
+            libtmux::ChannelWait::Signalled,
+            "the Enter hook did not run",
+        );
+        let owned = jobs
+            .list()
+            .into_iter()
+            .next()
+            .expect("the starting job is visible");
+        assert!(jobs.forget(&owned.job));
+        guard
+            .server()
+            .signal_channel(release)
+            .await
+            .expect("the blocked tmux command is released");
+
+        assert!(
+            matches!(
+                starting.await.expect("the start task remains healthy"),
+                Err(StartError::WorkerStopped)
+            ),
+            "a removed job was reported as retained",
+        );
+        assert!(jobs.read(&owned.job, None).is_none());
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_send_retains_an_inspectable_job() {
+        let (guard, session) = session_fixture("job-start-timeout").await;
+        let short = libtmux::Server::builder()
+            .socket_path(guard.server().socket_path())
+            .config_file(guard.server().config_file().expect("the fixture config"))
+            .tmux_executable(guard.server().tmux_executable())
+            .default_timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("a short-deadline handle builds");
+        let pane = short
+            .session("job-start-timeout")
+            .await
+            .expect("the session can be listed")
+            .expect("the session exists")
+            .panes()
+            .await
+            .expect("panes list")
+            .remove(0);
+        wait_for_prompt(&pane).await;
+
+        let sent = "job-start-timeout-sent";
+        let release = "job-start-timeout-release";
+        block_enter(&session, sent, release).await;
+        let marker = "job-start-timeout-crossed-tmux";
+        let jobs = Jobs::with_limit(1);
+        let started = jobs
+            .start(&pane, &format!("printf '{marker}\\n'; sleep 60"), false)
+            .await;
+
+        let Err(StartError::DispatchUnknown {
+            job: retained_id,
+            cause: DispatchFailure::Tmux(error),
+        }) = started
+        else {
+            panic!("the blocked reply is a retained dispatch error: {started:?}");
+        };
+        assert_eq!(error.kind(), libtmux::ErrorKind::Timeout);
+        assert_eq!(
+            pane.wait_for_text(marker, std::time::Duration::from_secs(5))
+                .await
+                .expect("the pane can be read"),
+            libtmux::PaneWait::Arrived,
+            "tmux began the command before its client timed out",
+        );
+        let visible = jobs.list();
+        guard
+            .server()
+            .signal_channel(release)
+            .await
+            .expect("the timed-out hook is released");
+
+        let owned = visible
+            .into_iter()
+            .next()
+            .expect("an uncertain dispatch remains visible");
+        assert_eq!(owned.job, retained_id);
+        assert_eq!(owned.state, JobState::DispatchUnknown);
+        libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
+            jobs.read(&owned.job, None)
+                .is_some_and(|progress| progress.output.contains(marker))
+        })
+        .await
+        .expect("the watcher retains output after dispatch times out");
+        assert!(jobs.active_in(&owned.job).is_some_and(|(_, active)| active));
+        pane.send_key_names(["C-c"])
+            .await
+            .expect("an uncertain job can be interrupted");
+        assert!(jobs.forget(&owned.job));
+        assert!(jobs.read(&owned.job, None).is_none());
+        short
+            .shutdown()
+            .await
+            .expect("the short executor shuts down");
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+
+    #[tokio::test]
     async fn a_finished_lru_is_evicted_before_a_running_job() {
         let jobs = Jobs::with_limit(3);
         let now = Instant::now();
@@ -665,16 +1014,13 @@ mod tests {
 
         let next = jobs.reserve().expect("a finished slot makes room");
 
+        assert!(jobs.active_in(&ids[0]).is_some(), "the running job remains");
         assert!(
-            jobs.running_in(&ids[0]).is_some(),
-            "the running job remains",
-        );
-        assert!(
-            jobs.running_in(&ids[1]).is_none(),
+            jobs.active_in(&ids[1]).is_none(),
             "the least recently read finished job is evicted",
         );
         assert!(
-            jobs.running_in(&ids[2]).is_some(),
+            jobs.active_in(&ids[2]).is_some(),
             "the newer finished job remains",
         );
         drop(next);
@@ -682,8 +1028,8 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_a_finished_job_does_not_abort_its_reader() {
-        let (release, released) = tokio::sync::oneshot::channel::<()>();
-        let (complete, completed) = tokio::sync::oneshot::channel::<()>();
+        let (release, released) = oneshot::channel::<()>();
+        let (complete, completed) = oneshot::channel::<()>();
         let reader = tokio::spawn(async move {
             if released.await.is_ok() {
                 let _ = complete.send(());

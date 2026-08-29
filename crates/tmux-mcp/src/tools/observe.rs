@@ -44,6 +44,35 @@ fn start_error(error: jobs::StartError) -> ErrorData {
     match error {
         jobs::StartError::AtCapacity { limit } => at_capacity(limit),
         jobs::StartError::Tmux(error) => tmux_error(&error),
+        jobs::StartError::DispatchUnknown { job, cause } => {
+            let cause = match cause {
+                jobs::DispatchFailure::Tmux(error) => error.to_string(),
+                jobs::DispatchFailure::WorkerStopped => "the startup worker stopped".to_owned(),
+            };
+            ErrorData::internal_error(
+                format!(
+                    "tmux did not confirm whether it started {job}: {cause}; the job remains \
+                     tracked, so inspect it with job_status or stop it with cancel_job before \
+                     retrying"
+                ),
+                Some(serde_json::json!({
+                    "kind": "dispatch_unknown",
+                    "retryable": false,
+                    "stale": false,
+                    "job": job,
+                })),
+            )
+        }
+        jobs::StartError::WorkerStopped => ErrorData::internal_error(
+            "background job startup stopped without a retained result; pane input may have been \
+             sent, so do not retry automatically"
+                .to_owned(),
+            Some(serde_json::json!({
+                "kind": "startup_stopped",
+                "retryable": false,
+                "stale": false,
+            })),
+        ),
     }
 }
 
@@ -177,7 +206,8 @@ impl TmuxTools {
                        Poll with job_status, which returns only what is new. Prefer \
                        run_command when the command is quick and you want its answer now. If \
                        every job slot is active, this refuses before sending anything to the \
-                       pane.",
+                       pane. An unconfirmed send returns the retained job id in the error; \
+                       inspect or cancel that job instead of retrying.",
         title = "Start Command In Background",
         annotations(
             read_only_hint = false,
@@ -215,11 +245,10 @@ impl TmuxTools {
 
     /// Report how a background command is getting on.
     #[tool(
-        description = "Report whether a job started with start_command is still running, its \
-                       exit status once it is not, and what it has written since the cursor \
-                       you were given last. Pass that cursor back to read only what is new. \
-                       Give seconds to wait for it to finish, which returns as soon as it \
-                       does rather than at the deadline.",
+        description = "Report a job's state, its exit status once finished, and what it has \
+                       written since the cursor you were given last. Pass that cursor back \
+                       to read only what is new. Give seconds to wait for it to finish, \
+                       which returns as soon as it does rather than at the deadline.",
         title = "Check Background Command",
         annotations(
             read_only_hint = true,
@@ -248,10 +277,11 @@ impl TmuxTools {
 
     /// List the background commands this server is holding.
     #[tool(
-        description = "List every job started with start_command, running and finished, \
-                       newest first. A finished job is kept so its answer can still be \
-                       collected. The least recently read finished job is forgotten when a \
-                       new job needs its slot; a running job is never forgotten.",
+        description = "List every job started with start_command, including starts whose \
+                       dispatch was not confirmed, newest first. A finished job is kept so \
+                       its answer can still be collected. The least recently read finished \
+                       job is forgotten when a new job needs its slot; an active job is \
+                       never forgotten.",
         title = "List Background Commands",
         annotations(
             read_only_hint = true,
@@ -268,10 +298,10 @@ impl TmuxTools {
 
     /// Stop a background command and forget it.
     #[tool(
-        description = "Interrupt a running job with C-c and forget it. A job that has already \
-                       finished is forgotten without touching its pane. This sends the \
-                       interrupt to the pane the job runs in, so anything else that pane is \
-                       doing is interrupted too.",
+        description = "Interrupt an active or unconfirmed job with C-c and forget it. A job \
+                       that has already finished is forgotten without touching its pane. \
+                       This sends the interrupt to the pane the job runs in, so anything \
+                       else that pane is doing is interrupted too.",
         title = "Cancel Background Command",
         annotations(
             read_only_hint = false,
@@ -284,12 +314,9 @@ impl TmuxTools {
         &self,
         Parameters(CancelJobArgs { job }): Parameters<CancelJobArgs>,
     ) -> Result<Json<JobCancelled>, ErrorData> {
-        let (pane, running) = self
-            .jobs
-            .running_in(&job)
-            .ok_or_else(|| unknown_job(&job))?;
+        let (pane, active) = self.jobs.active_in(&job).ok_or_else(|| unknown_job(&job))?;
 
-        if running {
+        if active {
             let target = self.find_pane(&pane).await?;
             target
                 .send_key_names(["C-c"])
@@ -301,7 +328,7 @@ impl TmuxTools {
         Ok(Json(JobCancelled {
             job,
             pane,
-            interrupted: running,
+            interrupted: active,
         }))
     }
 
@@ -527,5 +554,37 @@ mod tests {
         assert_eq!(data["retryable"], true);
         assert_eq!(data["stale"], false);
         assert_eq!(data["capacity"], 3);
+    }
+
+    #[test]
+    fn an_uncertain_start_names_the_retained_job() {
+        let source = libtmux::Server::builder()
+            .socket_name("conflicting")
+            .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
+            .build()
+            .expect_err("two socket selectors are refused");
+        let error = start_error(jobs::StartError::DispatchUnknown {
+            job: "job-7".to_owned(),
+            cause: jobs::DispatchFailure::Tmux(Box::new(source)),
+        });
+        let data = error.data.as_ref().expect("the failure carries metadata");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(data["kind"], "dispatch_unknown");
+        assert_eq!(data["retryable"], false);
+        assert_eq!(data["stale"], false);
+        assert_eq!(data["job"], "job-7");
+        assert!(error.message.contains("job_status"));
+        assert!(error.message.contains("cancel_job"));
+    }
+
+    #[test]
+    fn a_stopped_start_does_not_claim_that_the_pane_was_untouched() {
+        let error = start_error(jobs::StartError::WorkerStopped);
+        let data = error.data.as_ref().expect("the failure carries metadata");
+
+        assert_eq!(data["kind"], "startup_stopped");
+        assert_eq!(data["retryable"], false);
+        assert!(error.message.contains("pane input may have been sent"));
     }
 }
