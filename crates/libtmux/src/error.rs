@@ -695,26 +695,32 @@ pub enum Error {
         id: String,
     },
 
-    /// A session's link to an object was not there to remove.
+    /// A target found nothing, which does not prove the object is gone.
     ///
-    /// Distinct from [`Self::ObjectGone`], and the distinction matters to a
-    /// caller holding a handle: the object may be perfectly alive, linked into
-    /// another session or sitting at another index. What was missing is this
-    /// session's link to it, which is what a link-scoped command targets.
+    /// Distinct from [`Self::ObjectGone`], and the distinction decides whether
+    /// a caller may discard a handle: the object may be perfectly alive,
+    /// linked into another session or sitting at another index. What is known
+    /// is only that this target resolved to nothing.
     ///
-    /// tmux names such a target `session:index`, and answers a missing one by
-    /// echoing the index. An index is not an identity -- `@4` and index 4 are
-    /// different things, and both can exist at once -- so reporting it as one
-    /// would name some other window, or name a live one as gone.
+    /// tmux answers a missing target by echoing it back, and the echo settles
+    /// which of the two happened for some target forms and not others. A
+    /// coordinate -- an index, or a window name, written `session:index` --
+    /// is scoped to one session and is not unique on the server, so its
+    /// absence is always this error and never the other. An identity carries
+    /// its kind's sigil (`@` a window, `%` a pane) and echoes identically
+    /// whether the object died or merely lives under another session's link,
+    /// so telling those apart costs a lookup and belongs to the caller that
+    /// can afford one.
+    ///
+    /// [`Self::is_object_gone`] answers `false`: a handle whose object is
+    /// still running must not be dropped on this evidence.
     #[non_exhaustive]
-    #[error("{session} has no {kind} at index {index}")]
+    #[error("tmux has no {kind} at {target}")]
     LinkGone {
-        /// The kind of object the link pointed at.
+        /// The kind of object the target named.
         kind: ObjectKind,
-        /// The session whose link was targeted.
-        session: String,
-        /// The index within that session.
-        index: i32,
+        /// The target that found nothing, spelled as it was sent.
+        target: String,
     },
 
     /// A client is stopped rather than gone, so listings leave it out.
@@ -917,6 +923,27 @@ impl fmt::Display for ListingDecodeError {
 
 impl std::error::Error for ListingDecodeError {}
 
+/// Say whether a target tmux echoed back names an object or a place.
+///
+/// tmux gives every object an id carrying a sigil -- `$` a session, `@` a
+/// window, `%` a pane -- unique for the life of the server. Every other
+/// spelling is scoped to something that can be renumbered or reused: an index
+/// belongs to a session, a window name belongs to a session, and neither
+/// survives as a way to name one particular object.
+///
+/// A session is the exception, because `-t` takes a session's name and tmux
+/// keeps those unique, so a bare word there is still an identity. So is a
+/// client, which tmux names by its terminal.
+///
+/// Measured against tmux 3.2a through 3.7b; see `docs/design.md`.
+const fn is_identity(kind: ObjectKind, target: &str) -> bool {
+    match kind {
+        ObjectKind::Session | ObjectKind::Client => true,
+        ObjectKind::Window => matches!(target.as_bytes().first(), Some(b'@')),
+        ObjectKind::Pane => matches!(target.as_bytes().first(), Some(b'%')),
+    }
+}
+
 impl Error {
     /// Classify a refused tmux command, recognizing a target that has gone.
     ///
@@ -1008,12 +1035,34 @@ impl Error {
         }
 
         for (prefix, kind) in MISSING {
-            if let Some(id) = stderr.trim_end().strip_prefix(prefix) {
+            let Some(echo) = stderr.trim_end().strip_prefix(prefix) else {
+                continue;
+            };
+            let echo = echo.trim();
+
+            // tmux echoes the part of the target it could not resolve, and
+            // that echo says which fact it established. A coordinate -- an
+            // index, or a window name -- is scoped to one session, so its
+            // absence means that session holds nothing there and says nothing
+            // about any object. Reporting it as an identity would name a
+            // different object, and `is_object_gone` would tell the caller to
+            // drop a handle that still works.
+            if is_identity(kind, echo) {
                 return Self::ObjectGone {
                     kind,
-                    id: id.trim().to_owned(),
+                    id: echo.to_owned(),
                 };
             }
+
+            // The echo drops the session, so the request is what still knows
+            // the whole target. Without one, the echo alone is what is true.
+            return Self::LinkGone {
+                kind,
+                target: target.map_or_else(
+                    || echo.to_owned(),
+                    |sent| sent.to_string_lossy().into_owned(),
+                ),
+            };
         }
 
         Self::CommandFailed {
@@ -1568,15 +1617,10 @@ impl fmt::Debug for Error {
                 .field("request_id", request_id)
                 .field("command", command)
                 .finish(),
-            Self::LinkGone {
-                kind,
-                session,
-                index,
-            } => formatter
+            Self::LinkGone { kind, target } => formatter
                 .debug_struct("LinkGone")
                 .field("kind", kind)
-                .field("session", session)
-                .field("index", index)
+                .field("target", target)
                 .finish(),
             Self::ClientSuspended { name } => formatter
                 .debug_struct("ClientSuspended")
@@ -1692,6 +1736,65 @@ mod tests {
             None,
         );
         assert_eq!(error.kind(), ErrorKind::Refused, "{error:?}");
+    }
+
+    /// What tmux echoes back decides whether an object died or a place is
+    /// empty, and only one of those lets a caller drop a handle.
+    ///
+    /// A window or pane coordinate -- an index, or a window name -- is scoped
+    /// to one session and is not unique on the server, so its absence cannot
+    /// mean the object is gone. Reporting one as an identity answered
+    /// `is_object_gone` with `true` for a window that was alive and merely
+    /// renumbered, which is the one predicate a caller consults before
+    /// discarding a handle.
+    ///
+    /// A session is the exception: `-t` takes a session's name, so a bare word
+    /// there is still an identity. Wording measured on tmux 3.2a to 3.7b.
+    #[test]
+    fn a_missing_coordinate_is_not_a_missing_object() {
+        for (stderr, gone) in [
+            // A sigil means tmux resolved a name that belongs to one object.
+            ("can't find window: @99", true),
+            ("can't find pane: %99", true),
+            ("can't find session: $99", true),
+            // A name is how tmux lets a caller target a session.
+            ("can't find session: nosuchsession", true),
+            // Coordinates: a place within one session, not an object.
+            ("can't find window: 9", false),
+            ("can't find window: nosuchname", false),
+            ("can't find pane: 9", false),
+        ] {
+            let error = Error::refused(
+                "unlink-window",
+                Some(1),
+                stderr.to_owned(),
+                Some(std::ffi::OsStr::new("home:9")),
+            );
+            assert_eq!(
+                error.is_object_gone(),
+                gone,
+                "{stderr} should report gone={gone}, got {error:?}",
+            );
+        }
+    }
+
+    /// tmux drops the session half of a coordinate, so the request keeps it.
+    ///
+    /// `-t home:9` is answered by `can't find window: 9`. Reporting the echo
+    /// alone would leave a reader holding half a target they cannot act on.
+    #[test]
+    fn a_missing_coordinate_reports_the_target_that_was_sent() {
+        let error = Error::refused(
+            "unlink-window",
+            Some(1),
+            "can't find window: 9".to_owned(),
+            Some(std::ffi::OsStr::new("home:9")),
+        );
+        assert!(
+            matches!(&error, Error::LinkGone { target, .. } if target == "home:9"),
+            "{error:?}",
+        );
+        assert_eq!(error.to_string(), "tmux has no window at home:9");
     }
 }
 
@@ -1878,6 +1981,56 @@ mod compat_tests {
             !error.is_object_gone(),
             "an absent server is not a missing object: {error}",
         );
+
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+    /// Pin the half of tmux's answer that says how much a miss proves.
+    ///
+    /// tmux echoes back the part of a target it could not resolve, and drops
+    /// the session from it when that part is a coordinate. `Error::refused`
+    /// reads the sigil on what comes back to tell a place from an object, so a
+    /// release that echoed the whole target, or that stripped the sigil, would
+    /// change what `is_object_gone` answers -- and that is the predicate a
+    /// caller consults before discarding a handle. Asserted against whichever
+    /// tmux the lane is running.
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn real_tmux_compat_a_coordinate_miss_is_not_an_object_miss() {
+        use crate::test::TestServer;
+
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let server = guard.server();
+        let session = server.new_session("compat-echo").await.expect("session");
+
+        for (target, gone) in [
+            // A place in a session that holds nothing there.
+            (format!("{}:9", session.id()), false),
+            // A window id no server ever issued.
+            (format!("{}:@4242", session.id()), true),
+        ] {
+            let result = server
+                .cmd(
+                    crate::Command::new("unlink-window")
+                        .arg("-t")
+                        .arg(target.clone()),
+                )
+                .await
+                .expect("the command runs");
+            assert!(!result.success(), "{target} resolves to nothing");
+
+            let stderr = result.stderr_lossy().into_owned();
+            let error = crate::Error::refused(
+                "unlink-window",
+                result.exit_code(),
+                stderr.clone(),
+                Some(std::ffi::OsStr::new(&target)),
+            );
+            assert_eq!(
+                error.is_object_gone(),
+                gone,
+                "{target} answered {stderr:?}, classified {error:?}",
+            );
+        }
 
         guard.shutdown().await.expect("tmux fixture shuts down");
     }

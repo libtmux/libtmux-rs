@@ -1013,6 +1013,43 @@ listing has nothing to list, while a listing or mutation under a target could
 not resolve it. The scope, and the request's own `-t`, are what tell them
 apart.
 
+How much a miss proves depends on what tmux echoes back, and the echo is
+self-describing. tmux returns the part of the target it could not resolve, so
+an identity comes back carrying its sigil and a coordinate comes back without
+the session it belonged to:
+
+| sent | echoed | what it establishes |
+| --- | --- | --- |
+| `-t home:@99` | `can't find window: @99` | no window `@99` is reachable |
+| `-t home:9` | `can't find window: 9` | `home` holds nothing at index 9 |
+| `-t home:nosuch` | `can't find window: nosuch` | `home` holds no window of that name |
+| `-t nosuch` | `can't find session: nosuch` | no session of that name |
+
+A coordinate is scoped to one session and is not unique on the server, so its
+absence never establishes that an object died. Reading one as an identity
+reported index 3 as window `@3` -- a different object, often a live one -- and
+`Error::is_object_gone` answered `true`, which is the single predicate a caller
+consults before discarding a handle. Those misses are `Error::LinkGone`, which
+answers `false`. A session is the exception, because `-t` takes a session's
+name and tmux keeps those unique, so a bare word there is still an identity.
+
+The sigil does not settle everything. `unlink-window -t home:@3` answers
+`can't find window: @3` whether `@3` is dead or merely linked into some other
+session, so the two produce the same string and no reading of it can separate
+them. `Window::unlink` and `Window::swap_with` buy that distinction with a
+lookup, on the failure path only and only where the answer changes what a
+caller should do. They ask the server rather than refreshing the handle: a
+window refreshes within its own session, and a window whose link to that
+session is gone is the case being told apart, so refreshing would answer the
+question with its own premise.
+
+`real_tmux_compat_a_coordinate_miss_is_not_an_object_miss` pins both halves
+against whichever tmux the lane runs, for the same reason the wording test
+exists. If a future release echoed the whole target, or dropped the sigil, the
+unrecognized form classifies as `LinkGone` -- the reading that does not license
+discarding a live handle -- so the cost of being wrong is a distinction rather
+than a destroyed handle.
+
 Listing accessors come in pairs, and the split is load-bearing here. The
 `*_or_empty` form returns an empty `Vec` for any failure, which suits a status
 line. The short form propagates, which is the whole reason it exists -- a

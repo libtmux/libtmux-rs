@@ -26,6 +26,33 @@ full.
   success. `unlink` still reports `Error::LinkGone` rather than
   `Error::ObjectGone` when the link is gone and the window is not.
 
+- A tmux target naming a place no longer reports the object there as gone.
+  tmux answers an unresolved target by echoing it back, and the echo carries a
+  sigil only for an identity: `can't find window: @3` names a window, while
+  `can't find window: 3` names index 3 of whichever session was asked. Reading
+  the second as the first reported index 3 as window `@3`, a different object
+  that is often alive, and `Error::is_object_gone` then answered `true` -- the
+  one predicate a caller consults before discarding a handle. Such a miss is
+  now `Error::LinkGone`, which answers `false`.
+
+- `Error::LinkGone` carries `target: String`, the whole target as sent, in
+  place of `session: String` and `index: i32`. It is now also raised where
+  nothing established an index, and tmux drops the session half when it echoes
+  a coordinate back, so the pair could not be filled truthfully. `unlink` had
+  been quoting the index its own handle cached, which is the value the variant
+  documents as unsafe to report.
+
+- `Window::swap_with` targets the other window by id rather than by its cached
+  index, the fix already applied to `select` and `unlink`. After a renumber the
+  cached index named a different window, so the swap moved the wrong pair or
+  failed reporting `ObjectGone` for a window that was alive and listed one line
+  above.
+
+- `Display for Window` renders `session:@id` rather than `session:index`. The
+  rendering is offered for pasting into a tmux command; carrying an index it
+  reached a different window after a renumber, without saying so, and Display
+  is also what reaches logs and interpolated error text.
+
 ### Added
 
 - `Pane::wait_for_text` and `Pane::wait_for_quiet`, with `PaneWait` naming the

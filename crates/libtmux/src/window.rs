@@ -933,7 +933,6 @@ impl Window {
     /// Returns an error when tmux refuses the command, which includes
     /// unlinking a window that only one session holds.
     pub async fn unlink(self) -> Result<(), Error> {
-        let (session, index) = (self.session_id().to_string(), self.index());
         // `session:id` rather than `session:index`. A link is what this
         // removes, so the session half is needed; the window half is an
         // identity, and a cached index stops being one the moment anything
@@ -952,29 +951,7 @@ impl Window {
             return Ok(());
         };
 
-        // Targeting by id costs the distinction the message used to carry: a
-        // link that is gone and a window that is gone read the same. So it is
-        // settled by asking, on the failure path only.
-        //
-        // Asked of the server rather than of this handle. A window refreshes
-        // within its own session, and a window whose link to that session is
-        // gone is exactly the case being told apart -- so refreshing would
-        // report it missing and answer the question with its own premise.
-        let alive = crate::Server::from_core(Arc::clone(&self.core))
-            .window_by_id(self.id())
-            .await
-            .is_ok_and(|window| window.is_some());
-        if error.is_object_gone() && alive {
-            return Err(link_gone(
-                Error::ObjectGone {
-                    kind: ObjectKind::Window,
-                    id: index.to_string(),
-                },
-                &session,
-                index,
-            ));
-        }
-        Err(error)
+        Err(link_or_object_gone(&self.core, error, &[(self.session_id(), self.id())]).await)
     }
 
     /// Read one option's exact stored value.
@@ -1389,16 +1366,32 @@ impl Window {
     ///
     /// Returns an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
-        listing::mutate(
+        if let Err(error) = listing::mutate(
             &self.core,
             "swap-window",
             Command::new("swap-window")
                 .arg("-s")
                 .arg(self.id().to_string())
                 .arg("-t")
-                .arg(format!("{}:{}", other.session_id(), other.index())),
+                // `session:id`, not `session:index`: the session half says
+                // which of the target's links to swap, and the id half cannot
+                // go stale under a renumber the way a cached index does.
+                .arg(format!("{}:{}", other.session_id(), other.id())),
         )
-        .await?;
+        .await
+        {
+            // Either half can be the one tmux could not resolve, and a window
+            // still linked elsewhere is not a window that is gone.
+            return Err(link_or_object_gone(
+                &self.core,
+                error,
+                &[
+                    (self.session_id(), self.id()),
+                    (other.session_id(), other.id()),
+                ],
+            )
+            .await);
+        }
 
         self.refresh().await?;
         Ok(self)
@@ -2300,38 +2293,69 @@ pub(crate) fn assignment(name: &OsStr, value: &OsStr) -> OsString {
     OsString::from_vec(bytes)
 }
 
-/// Renders `session:index`, the form tmux targets a window by.
+/// Renders `session:id`, the form tmux targets one of a window's links by.
 ///
-/// The id alone would be ambiguous about which link is meant, and this is
-/// the spelling that can be pasted into a tmux command.
+/// The id alone would be ambiguous about which link is meant, and this is the
+/// spelling that can be pasted into a tmux command. It names the window by
+/// identity rather than by index: an index is a place within a session, and
+/// the window sitting at one changes whenever anything renumbers or unlinks,
+/// so a rendered coordinate goes stale in a handle that has not refreshed and
+/// reaches a different window rather than nothing.
 impl fmt::Display for Window {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}:{}", self.session_id(), self.index())
+        write!(formatter, "{}:{}", self.session_id(), self.id())
     }
 }
 
-/// Say that a link was missing rather than that an object is gone.
+/// Tell a missing link from a missing window, on the failure path only.
 ///
-/// A link-scoped command targets `session:index`, because a window linked into
-/// three sessions has one id and three links and `-t @5` could not say which
-/// to act on. When tmux cannot resolve such a target it answers by echoing the
-/// index, and the generic classifier reads that echo as an identity -- so
-/// `index 4` is reported as window `@4`, which is a different object that may
-/// well be alive, or the same one still living under another link.
+/// A link-scoped command targets `session:@id`: a window linked into three
+/// sessions has one id and three links, so the session half says which link to
+/// act on, while the window half stays an identity because a cached index
+/// stops being one the moment anything renumbers the session.
 ///
-/// Here the index is known to be an index, so the error can say so, and
-/// [`Error::is_object_gone`] answers `false`: a caller must not drop a handle
-/// whose window is still there.
-fn link_gone(error: Error, session: &str, index: i32) -> Error {
-    match &error {
-        Error::ObjectGone {
+/// tmux echoes such a target back unresolved whether the window died or is
+/// merely linked somewhere else -- the two are the same string -- so the
+/// classifier cannot separate them and reports the stronger fact. This buys
+/// the weaker one for a lookup, and only when the answer changes what a caller
+/// should do with the handle.
+///
+/// Asked of the server rather than of a handle. A window refreshes within its
+/// own session, and a window whose link to that session is gone is exactly the
+/// case being told apart -- so refreshing would report it missing and answer
+/// the question with its own premise.
+/// `links` are the `session:id` targets the command sent, so the one tmux
+/// named is the one to ask about: a command carrying both a source and a
+/// destination fails on whichever it could not resolve, and probing the other
+/// would answer about a window that was never in question.
+async fn link_or_object_gone(
+    core: &Arc<Core>,
+    error: Error,
+    links: &[(&SessionId, &WindowId)],
+) -> Error {
+    let Error::ObjectGone {
+        kind: ObjectKind::Window,
+        ref id,
+    } = error
+    else {
+        return error;
+    };
+
+    let Some(&(session, window)) = links.iter().find(|(_, window)| window.to_string() == *id)
+    else {
+        return error;
+    };
+
+    let alive = crate::Server::from_core(Arc::clone(core))
+        .window_by_id(window)
+        .await
+        .is_ok_and(|found| found.is_some());
+
+    if alive {
+        return Error::LinkGone {
             kind: ObjectKind::Window,
-            id,
-        } if id.parse::<i32>() == Ok(index) => Error::LinkGone {
-            kind: ObjectKind::Window,
-            session: session.to_owned(),
-            index,
-        },
-        _ => error,
+            target: format!("{session}:{window}"),
+        };
     }
+    error
 }
