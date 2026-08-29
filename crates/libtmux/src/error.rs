@@ -920,11 +920,20 @@ impl Error {
             ("server exited", ServerGoneKind::Stopped),
         ];
 
-        const MISSING: [(&str, ObjectKind); 4] = [
+        // tmux has two vocabularies for the same fact and they come from
+        // different files. `cmd-find.c` resolves a target and says "can't
+        // find"; `options.c` and the environment commands resolve their own
+        // and say "no such". A caller asking `is_object_gone` about one dead
+        // session got `true` from `windows()` and `false` from `get_option`
+        // until both were matched here.
+        const MISSING: [(&str, ObjectKind); 7] = [
             ("can't find session:", ObjectKind::Session),
             ("can't find window:", ObjectKind::Window),
             ("can't find pane:", ObjectKind::Pane),
             ("can't find client:", ObjectKind::Client),
+            ("no such session:", ObjectKind::Session),
+            ("no such window:", ObjectKind::Window),
+            ("no such pane:", ObjectKind::Pane),
         ];
 
         // tmux spells "no such option name" two ways. `set-option` and

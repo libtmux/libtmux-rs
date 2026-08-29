@@ -983,6 +983,97 @@ async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// One dead object must answer the same way whichever call asks.
+///
+/// tmux has two vocabularies for it. `cmd-find.c` resolves a target and says
+/// "can't find pane"; `options.c` resolves its own and says "no such pane".
+/// Matching only the first meant `is_object_gone` answered `true` from
+/// `capture` and `false` from `get_option` about the same dead pane.
+///
+/// The `@` branch made it worse than inconsistent. A user option that is not
+/// set is unknown to tmux, so that failure is the answer `None` -- but the
+/// branch swallowed *every* failure for an `@` name, so a pane that had gone
+/// away read as a pane whose option was never set.
+///
+/// The option is set before the pane is killed. Without that, `Ok(None)` is
+/// indistinguishable from a legitimate "never set" and the test proves
+/// nothing.
+#[tokio::test]
+async fn a_dead_pane_says_so_however_the_question_is_asked() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("gone").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a session has a window");
+    let doomed = window
+        .panes()
+        .await
+        .expect("panes")
+        .remove(0)
+        .split(SplitOptions::new(SplitDirection::Below))
+        .await
+        .expect("a second pane to kill");
+
+    // The positive control: the option is really set, on a pane that is really
+    // there, so a later `None` cannot mean "never set".
+    doomed
+        .set_option("@marker", "here")
+        .await
+        .expect("the user option is set");
+    assert_eq!(
+        doomed
+            .get_option("@marker")
+            .await
+            .expect("readable")
+            .expect("set")
+            .as_str()
+            .expect("text"),
+        "here"
+    );
+
+    // `kill` consumes the handle, so the questions afterwards are asked
+    // through a second one taken before it.
+    let asking = window
+        .panes()
+        .await
+        .expect("panes")
+        .into_iter()
+        .find(|pane| pane.id() == doomed.id())
+        .expect("the doomed pane is listed");
+    doomed.kill().await.expect("the pane is killed");
+    let doomed = asking;
+
+    // Every route to the same fact agrees.
+    let by_capture = doomed.capture().await.expect_err("the pane is gone");
+    assert!(
+        by_capture.is_object_gone(),
+        "capture says so: {by_capture:?}"
+    );
+
+    let by_option = doomed
+        .get_option("remain-on-exit")
+        .await
+        .expect_err("the pane is gone");
+    assert!(
+        by_option.is_object_gone(),
+        "a built-in option says so too: {by_option:?}"
+    );
+
+    let by_user_option = doomed
+        .get_option("@marker")
+        .await
+        .expect_err("the pane is gone, not the option unset");
+    assert!(
+        by_user_option.is_object_gone(),
+        "a user option must not report a gone pane as an unset option: {by_user_option:?}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
