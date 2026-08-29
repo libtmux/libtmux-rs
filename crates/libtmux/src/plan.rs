@@ -802,6 +802,14 @@ impl Op {
         }
     }
 
+    /// Where a step tells tmux to keep an option, for the steps that write one.
+    pub(crate) fn declared_option_scope(&self) -> Option<(&std::ffi::OsStr, crate::OptionScope)> {
+        match self {
+            Self::SetOption(op) => op.declared_scope(),
+            _ => None,
+        }
+    }
+
     /// Lower this operation into the tmux command that performs it.
     ///
     /// `resolve` supplies the concrete id for a target that names an earlier

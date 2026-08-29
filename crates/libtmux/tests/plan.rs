@@ -684,3 +684,42 @@ async fn a_creation_the_run_can_name_is_not_reported_as_unproven() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_plan_will_not_write_an_option_where_tmux_keeps_another() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("scoped"));
+    let window = plan.add(NewWindow::new(session));
+    // `mouse` is a session option. A plan renders its own commands, so this
+    // reached tmux without the check the direct path makes, and the whole
+    // plan reported success for a change that landed on the session.
+    plan.add(SetOption::window(window, "mouse", "on"));
+
+    let error = plan
+        .run(server, Planner::Sequential)
+        .await
+        .map(|_| ())
+        .expect_err("the plan names a scope tmux would not use");
+    assert!(
+        matches!(
+            error,
+            libtmux::Error::OptionScopeMismatch {
+                requested: libtmux::OptionScope::Window,
+                ..
+            }
+        ),
+        "and says so before anything ran: {error:?}",
+    );
+
+    // Nothing was dispatched, so the session the first step would have made
+    // is not there either.
+    assert!(
+        server.sessions().await.expect("sessions").is_empty(),
+        "validation happens before the first command",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

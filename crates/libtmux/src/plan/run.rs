@@ -298,6 +298,7 @@ impl Plan {
     pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
+        self.validate_option_scopes()?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -404,6 +405,38 @@ impl Plan {
     }
 
     /// Lower one invocation's operations into commands.
+    /// Refuse a plan that writes an option where tmux would not keep it.
+    ///
+    /// The direct path checks this as the write is built. A plan renders its
+    /// own commands, so it reached tmux without passing that check, and a
+    /// workspace file naming a session option under a window's `options:` had
+    /// the whole plan report success for a change that landed somewhere else.
+    ///
+    /// Checked here rather than in `validate`, whose error describes a
+    /// dependency between two steps; this is one step disagreeing with tmux.
+    /// Before the first command either way.
+    fn validate_option_scopes(&self) -> Result<(), Error> {
+        for operation in self.steps() {
+            let Some((name, requested)) = operation.declared_option_scope() else {
+                continue;
+            };
+            // A name tmux cannot read is not one this can resolve either, and
+            // tmux names it better in its own refusal.
+            let Some(schema) = name.to_str().and_then(crate::option_schema) else {
+                continue;
+            };
+            if !schema.accepts(requested) {
+                return Err(Error::OptionScopeMismatch {
+                    option: schema.name().to_owned(),
+                    requested,
+                    declared: schema.scopes(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn render_step(
         &self,
         step: &Step,

@@ -237,6 +237,8 @@ constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS: libtmux::ReleaseVersion
 constant libtmux::since::CLIENTS_HIDE_STOPPED: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
 constant libtmux::since::MIRRORED_LAYOUTS: libtmux::ReleaseVersion
+constant libtmux::since::PANE_BORDER_FORMAT_PER_PANE: libtmux::ReleaseVersion
+constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PROMPT_HISTORY: libtmux::ReleaseVersion
 constant libtmux::since::SERVER_ACCESS: libtmux::ReleaseVersion
 enum libtmux::AccessMode
@@ -382,9 +384,10 @@ function libtmux::NewWindowOptions::replace_existing: const fn(self) -> Self
 function libtmux::NewWindowOptions::select: const fn(self) -> Self
 function libtmux::NewWindowOptions::start_directory: fn(self, directory: impl Into<std::path::PathBuf>) -> Self
 function libtmux::NewWindowOptions::unnamed: const fn() -> Self
+function libtmux::OptionSchema::accepts: fn(&self, scope: libtmux::OptionScope) -> bool
 function libtmux::OptionSchema::kind: const fn(&self) -> libtmux::OptionKind
 function libtmux::OptionSchema::name: const fn(&self) -> &'static str
-function libtmux::OptionSchema::scope: const fn(&self) -> libtmux::OptionScope
+function libtmux::OptionSchema::scopes: const fn(&self) -> &'static [libtmux::OptionScope]
 function libtmux::OutputLimits::max_stderr_bytes: const fn(self, bytes: usize) -> Self
 function libtmux::OutputLimits::max_stdout_bytes: const fn(self, bytes: usize) -> Self
 function libtmux::OutputLimits::stderr_bytes: const fn(self) -> usize
@@ -950,6 +953,7 @@ function libtmux::test::TestServerError::kind: const fn(&self) -> libtmux::test:
 function libtmux::test::TestServerError::stage: fn(&self) -> Option<&str>
 function libtmux::test::reap_abandoned_servers: fn(older_than: std::time::Duration) -> Result<Vec<std::path::PathBuf>, libtmux::test::TestServerError>
 function libtmux::test::retry_until: async fn(within: std::time::Duration, condition: impl AsyncFnMut() -> bool) -> Result<(), libtmux::test::RetryTimeout>
+function libtmux::test::scaled: fn(base: std::time::Duration) -> std::time::Duration
 function libtmux::test::unique_name: fn(prefix: &str) -> String
 impl AsRef<str> for libtmux::PaneId
 impl AsRef<str> for libtmux::SessionId
@@ -1871,6 +1875,9 @@ struct_field libtmux::Error::ObjectGone::id: String
 struct_field libtmux::Error::ObjectGone::kind: libtmux::ObjectKind
 struct_field libtmux::Error::OptionRejected::detail: String
 struct_field libtmux::Error::OptionRejected::kind: libtmux::OptionErrorKind
+struct_field libtmux::Error::OptionScopeMismatch::declared: &'static [libtmux::OptionScope]
+struct_field libtmux::Error::OptionScopeMismatch::option: String
+struct_field libtmux::Error::OptionScopeMismatch::requested: libtmux::OptionScope
 struct_field libtmux::Error::OutputLimitExceeded::command: libtmux::CommandSummary
 struct_field libtmux::Error::OutputLimitExceeded::limit: usize
 struct_field libtmux::Error::OutputLimitExceeded::request_id: u64
@@ -2141,6 +2148,7 @@ variant libtmux::Error::InvalidVersionOutput
 variant libtmux::Error::LinkGone
 variant libtmux::Error::ObjectGone
 variant libtmux::Error::OptionRejected
+variant libtmux::Error::OptionScopeMismatch
 variant libtmux::Error::OutputLimitExceeded
 variant libtmux::Error::Overloaded
 variant libtmux::Error::ReadOutput

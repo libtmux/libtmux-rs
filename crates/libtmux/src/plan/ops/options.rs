@@ -1,6 +1,6 @@
 //! Operations that set tmux options.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 
 use super::Resolver;
@@ -49,6 +49,20 @@ enum OptionScope {
 }
 
 impl SetOption {
+    /// Where this step tells tmux to keep the option, when it names a place.
+    ///
+    /// `None` for a global write: tmux keeps a `-g` write in the global table
+    /// belonging to whatever scope the option has, so "global" is true of
+    /// wherever it lands and there is nothing to be wrong about.
+    pub(crate) fn declared_scope(&self) -> Option<(&OsStr, crate::OptionScope)> {
+        let scope = match &self.scope {
+            OptionScope::Global => return None,
+            OptionScope::Session(_) => crate::OptionScope::Session,
+            OptionScope::Window(_) => crate::OptionScope::Window,
+        };
+        Some((self.name.as_os_str(), scope))
+    }
+
     /// Set a server-global option.
     #[must_use]
     pub fn global(name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
