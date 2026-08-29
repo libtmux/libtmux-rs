@@ -3932,4 +3932,59 @@ mod tests {
 
         guard.shutdown().await.expect("tmux fixture shuts down");
     }
+
+    /// Record which format names each listing asks tmux for.
+    ///
+    /// The supplement arrays are macro-generated, so the answer exists in the
+    /// source and cannot be read out of it: the only way to learn what a
+    /// listing requests has been to intercept the `-F` string of a running
+    /// command. This writes the answer down and fails when it drifts.
+    ///
+    /// Regenerate with `just list-profiles`.
+    #[test]
+    fn each_listing_records_the_fields_it_requests() {
+        use super::{FormatPlan, ListProfile};
+        use crate::version::TmuxVersion;
+        use std::fmt::Write as _;
+
+        let version = TmuxVersion::parse_output(b"tmux 3.7\n").expect("a supported release");
+        let mut recorded = String::from(
+            "# Which format names each listing asks tmux for, at the newest\n\
+             # release the lanes build. The supplement arrays this comes from\n\
+             # are macro-generated; without this file the only way to learn a\n\
+             # listing's fields is to intercept its `-F` string.\n\
+             #\n\
+             # Regenerate with `just list-profiles`.\n\n",
+        );
+        for (label, profile) in [
+            ("sessions", ListProfile::Sessions),
+            ("windows", ListProfile::Windows),
+            ("panes", ListProfile::Panes),
+            ("clients", ListProfile::Clients),
+        ] {
+            let plan = FormatPlan::for_profile(profile, &version);
+            let mut names: Vec<&str> = plan
+                .descriptors_for_test()
+                .iter()
+                .map(|descriptor| descriptor.name())
+                .collect();
+            names.sort_unstable();
+            let _ = writeln!(recorded, "{label} ({} fields)", names.len());
+            for name in names {
+                let _ = writeln!(recorded, "  {name}");
+            }
+            recorded.push('\n');
+        }
+
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/list-profiles.txt");
+        if std::env::var_os("LIBTMUX_RERECORD").is_some() {
+            std::fs::write(path, &recorded).expect("the ledger is writable");
+            return;
+        }
+        let stored = std::fs::read_to_string(path).unwrap_or_default();
+        assert_eq!(
+            stored, recorded,
+            "the fields a listing requests changed; run `just list-profiles`",
+        );
+    }
 }

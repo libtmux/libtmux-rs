@@ -3,6 +3,10 @@
 # Regenerate with `just format-coverage <path to a tmux checkout>`.
 # A `missing` entry is a field a listing could carry and does not; an
 # `excluded` entry names why no listing can ever answer it.
+#
+# `catalogued` says the crate can decode the field, not that any listing asks
+# for it. For which names each listing actually requests, see
+# `list-profiles.txt`.
 
 active_window_index catalogued
 alternate_on missing: pane
