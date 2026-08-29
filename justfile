@@ -12,10 +12,23 @@ default:
 test *args:
     cargo test --locked --workspace --all-targets --all-features {{ args }}
 
+# `--all-features` alone is not enough, and the powerset does not cover the
+# difference: `cargo hack --all-targets` builds libs, bins, tests, benches and
+# examples, and compiles no doctest at all. So a doctest reaching for an item
+# behind a feature it does not declare is invisible to every gate -- which is
+# how two of them survived, one since the tree was imported.
+#
+# The second run is the configuration a contributor types, because the
+# doctests need the fixture: defaults on, `control-mode` and `derive` off. A
+# doctest that fails there is reaching past its own feature into a
+# neighbour's. One that needs `test-support` to reach a real server is not,
+# which is why this keeps the defaults rather than dropping to none.
+#
 # Run documentation tests, including the examples on the front page
 [group: 'test']
 doctest:
     cargo test --locked --workspace --doc --all-features
+    cargo test --locked --package libtmux --doc --features test-support
 
 # tmux never unlinks its socket when the server exits, so whatever named one
 # owns removing it. `TestServer` does; a test that hand-rolls a socket path
