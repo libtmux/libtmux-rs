@@ -18,6 +18,13 @@ full.
 
 ### Fixed
 
+- `libtmux::test::TestServer` now takes its tmux from `LIBTMUX_TEST_TMUX`
+  before falling back to `PATH`. The variable previously steered only the
+  format-compatibility tests, so pointing it at a pinned build and running the
+  suite produced a green run against whatever `PATH` held -- a pass about the
+  wrong binary, which reports nothing and looks exactly like a pass about the
+  right one. `TestServer::builder().tmux_executable(...)` still overrides it.
+
 - A stopped client is no longer reported as a gone one. tmux leaves a
   suspended or locked client out of `list-clients` -- from 3.7 the listing
   screens out the dead, the exiting and the suspended together -- so reading

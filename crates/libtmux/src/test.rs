@@ -248,6 +248,18 @@ pub struct TestServerBuilder {
     dispatch_limits: DispatchLimits,
 }
 
+/// The tmux to run, unless a caller names one.
+///
+/// `LIBTMUX_TEST_TMUX` first, then `tmux` resolved through `PATH`. The
+/// variable is what the compatibility lane sets to pin a release, and reading
+/// it here is what makes the name true: before this, it steered only the tests
+/// that read it directly, so pointing it at a pinned build and running the
+/// suite produced a green run against whatever `PATH` happened to hold. A pass
+/// about the wrong binary is worse than a failure, because nothing says so.
+fn default_executable() -> OsString {
+    std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| OsString::from("tmux"))
+}
+
 impl fmt::Debug for TestServerBuilder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -260,7 +272,7 @@ impl fmt::Debug for TestServerBuilder {
 impl TestServerBuilder {
     fn new() -> Self {
         Self {
-            executable: OsString::from("tmux"),
+            executable: default_executable(),
             lifecycle_timeout: Duration::from_secs(5),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
@@ -284,6 +296,11 @@ impl TestServerBuilder {
     }
 
     /// Configure the tmux executable used by the daemon and every client.
+    ///
+    /// Defaults to `LIBTMUX_TEST_TMUX`, and to `tmux` resolved through `PATH`
+    /// when that is unset -- so pinning a release across a whole run is the
+    /// variable's job, and this is for a test that needs a particular build
+    /// whatever the run was pointed at.
     ///
     /// ```
     /// use libtmux::test::TestServer;
