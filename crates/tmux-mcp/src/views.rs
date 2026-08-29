@@ -12,6 +12,7 @@
 use serde::Serialize;
 
 use crate::caller::Relation;
+use crate::schema::{ChannelWaitOutcomeSchema, OptionScopeSchema, WatchStopSchema};
 
 /// One session, as the protocol sees it.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -265,6 +266,7 @@ pub struct Watch {
     /// How many bytes arrived.
     pub bytes: usize,
     /// Why watching stopped.
+    #[schemars(with = "WatchStopSchema")]
     pub stopped: String,
 }
 
@@ -283,6 +285,7 @@ pub struct OptionSet {
     /// The option name.
     pub name: String,
     /// The scope it was written at.
+    #[schemars(with = "OptionScopeSchema")]
     pub scope: String,
 }
 
@@ -292,6 +295,7 @@ pub struct ChannelWait {
     /// The channel that was waited on.
     pub channel: String,
     /// `signalled` or `deadline`.
+    #[schemars(with = "ChannelWaitOutcomeSchema")]
     pub outcome: String,
 }
 

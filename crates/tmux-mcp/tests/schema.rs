@@ -76,6 +76,19 @@ fn advertised_operations(schema: &serde_json::Value) -> BTreeSet<&str> {
         .collect()
 }
 
+fn output_schema(tools: &TmuxTools, name: &str) -> Result<serde_json::Value, Box<dyn Error>> {
+    let tool = tools
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == name)
+        .ok_or_else(|| std::io::Error::other(format!("{name} is not offered")))?;
+    let schema = tool
+        .output_schema
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other(format!("{name} has no output schema")))?;
+    Ok(serde_json::to_value(schema)?)
+}
+
 #[test]
 fn each_safety_tier_advertises_exactly_the_operations_it_accepts() -> TestResult {
     const READ_ONLY: &[&str] = &["CapturePane"];
@@ -242,6 +255,127 @@ fn tool_schemas_close_every_documented_choice_vocabulary() -> TestResult {
         assert!(
             !validator.is_valid(&invalid),
             "{name} advertised an open vocabulary: {invalid}",
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn plan_output_schema_closes_every_documented_choice_vocabulary() -> TestResult {
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .safety(Safety::Destructive)
+        .build();
+
+    let schema = output_schema(&tools, "run_plan")?;
+    let validator = jsonschema::draft202012::new(&schema)?;
+    let operation = |kind: &str, outcome: &str, attribution: serde_json::Value| {
+        json!({
+            "operations": [{
+                "index": 0,
+                "kind": kind,
+                "outcome": outcome,
+                "attribution": attribution,
+                "value": null,
+            }],
+            "failures": [],
+            "dispatches": 1,
+            "complete": outcome == "complete",
+        })
+    };
+    for kind in [
+        "new-session",
+        "new-window",
+        "split-window",
+        "send-keys",
+        "select-pane",
+        "select-window",
+        "rename-window",
+        "set-option",
+        "set-environment",
+        "select-layout",
+        "capture-pane",
+        "kill-pane",
+        "kill-window",
+    ] {
+        assert!(
+            validator.is_valid(&operation(kind, "complete", json!("per_command"))),
+            "run_plan rejected operation kind {kind}",
+        );
+    }
+    for (outcome, attribution) in [
+        ("complete", json!("per_command")),
+        ("failed", json!("merged")),
+        ("skipped", serde_json::Value::Null),
+        ("unknown", json!("merged")),
+    ] {
+        assert!(
+            validator.is_valid(&operation("send-keys", outcome, attribution)),
+            "run_plan rejected outcome {outcome}",
+        );
+    }
+    for invalid in [
+        operation("unknown-operation", "complete", json!("per_command")),
+        operation("send-keys", "pending", json!("per_command")),
+        operation("send-keys", "complete", json!("batched")),
+    ] {
+        assert!(
+            !validator.is_valid(&invalid),
+            "run_plan advertised an open output vocabulary: {invalid}",
+        );
+    }
+    let failure = json!({
+        "operations": [],
+        "failures": [{
+            "operations": [0],
+            "attribution": "merged",
+            "kind": "refused",
+            "stderr_bytes": 0,
+            "stderr_withheld": false,
+        }],
+        "dispatches": 1,
+        "complete": false,
+    });
+    assert!(validator.is_valid(&failure), "run_plan rejected {failure}");
+    let mut invalid = failure;
+    invalid["failures"][0]["attribution"] = json!("batched");
+    assert!(
+        !validator.is_valid(&invalid),
+        "run_plan advertised an open failure attribution: {invalid}",
+    );
+
+    Ok(())
+}
+
+#[test]
+fn other_output_schemas_close_documented_choice_vocabularies() -> TestResult {
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .safety(Safety::Destructive)
+        .build();
+
+    for (name, valid, invalid) in [
+        (
+            "watch_pane",
+            json!({"pane": "%1", "output": "", "bytes": 0, "stopped": "deadline"}),
+            json!({"pane": "%1", "output": "", "bytes": 0, "stopped": "quiet"}),
+        ),
+        (
+            "set_option",
+            json!({"name": "status", "scope": "global-session"}),
+            json!({"name": "status", "scope": "planet"}),
+        ),
+        (
+            "wait_for_channel",
+            json!({"channel": "ready", "outcome": "signalled"}),
+            json!({"channel": "ready", "outcome": "waiting"}),
+        ),
+    ] {
+        let schema = output_schema(&tools, name)?;
+        let validator = jsonschema::draft202012::new(&schema)?;
+        assert!(validator.is_valid(&valid), "{name} rejected {valid}");
+        assert!(
+            !validator.is_valid(&invalid),
+            "{name} advertised an open output vocabulary: {invalid}",
         );
     }
 

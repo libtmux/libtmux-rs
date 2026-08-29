@@ -1,3 +1,11 @@
+mod vocabulary;
+
+pub(super) use vocabulary::{
+    ChannelWaitOutcomeSchema, OptionScopeSchema, PlanAttributionSchema, PlanGroupingSchema,
+    PlanOperationKindSchema, PlanOutcomeSchema, ResizeDirectionSchema, SelectPaneDirectionSchema,
+    SelectWindowDirectionSchema, SplitDirectionSchema, WatchStopSchema,
+};
+
 /// Keep selected variants in one generated externally tagged enum.
 ///
 /// A malformed schema returns `false` without changing any variants.

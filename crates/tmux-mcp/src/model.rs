@@ -2,93 +2,17 @@ use libtmux::plan::{OperationValue as CoreOperationValue, Plan};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
+use crate::schema::{
+    OptionScopeSchema, PlanAttributionSchema, PlanGroupingSchema, PlanOperationKindSchema,
+    PlanOutcomeSchema, ResizeDirectionSchema, SelectPaneDirectionSchema,
+    SelectWindowDirectionSchema, SplitDirectionSchema,
+};
+
 #[cfg(test)]
 use libtmux::TmuxText;
 
 /// The shared text budget for all evidence in one plan response.
 const PLAN_EVIDENCE_BYTES: usize = 64 * 1024;
-
-/// Closed vocabularies used only to describe string fields in JSON Schema.
-#[allow(
-    dead_code,
-    reason = "schemars reads these types through field attributes"
-)]
-#[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
-#[schemars(rename_all = "snake_case")]
-enum PlanGroupingSchema {
-    Sequential,
-    Folding,
-    Marked,
-}
-
-#[allow(
-    dead_code,
-    reason = "schemars reads these types through field attributes"
-)]
-#[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
-#[schemars(rename_all = "snake_case")]
-enum SplitDirectionSchema {
-    Above,
-    Below,
-    Left,
-    Right,
-}
-
-#[allow(
-    dead_code,
-    reason = "schemars reads these types through field attributes"
-)]
-#[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
-#[schemars(rename_all = "snake_case")]
-enum ResizeDirectionSchema {
-    Up,
-    Down,
-    Left,
-    Right,
-}
-
-#[allow(
-    dead_code,
-    reason = "schemars reads these types through field attributes"
-)]
-#[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
-#[schemars(rename_all = "snake_case")]
-enum SelectPaneDirectionSchema {
-    Up,
-    Down,
-    Left,
-    Right,
-    Last,
-    Next,
-    Previous,
-}
-
-#[allow(
-    dead_code,
-    reason = "schemars reads these types through field attributes"
-)]
-#[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
-#[schemars(rename_all = "snake_case")]
-enum SelectWindowDirectionSchema {
-    Next,
-    Previous,
-    Last,
-}
-
-#[allow(
-    dead_code,
-    reason = "schemars reads these types through field attributes"
-)]
-#[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
-#[schemars(rename_all = "kebab-case")]
-enum OptionScopeSchema {
-    Server,
-    GlobalSession,
-    GlobalWindow,
-    Session,
-    Window,
-    Pane,
-}
 
 /// Arguments naming one session.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -161,14 +85,17 @@ pub struct PlanOperationReport {
     /// The operation's zero-based index in the plan.
     pub index: usize,
     /// The tmux command the operation runs.
+    #[schemars(with = "PlanOperationKindSchema")]
     pub kind: String,
     /// `complete`, `failed`, `skipped`, or `unknown`.
     ///
     /// `unknown` means the operation shared a tmux invocation with a failure
     /// and nothing distinguishes them. Re-run with `grouping: "sequential"`
     /// to find out which one failed.
+    #[schemars(with = "PlanOutcomeSchema")]
     pub outcome: String,
     /// `per_command` or `merged`, or `null` when nothing was dispatched.
+    #[schemars(with = "Option<PlanAttributionSchema>")]
     pub attribution: Option<String>,
     /// The operation's typed answer, or `null` when it produced none.
     pub value: Option<PlanValue>,
@@ -180,6 +107,7 @@ pub struct PlanFailure {
     /// The operation indices that shared the refused invocation.
     pub operations: Vec<usize>,
     /// `per_command` or `merged`.
+    #[schemars(with = "PlanAttributionSchema")]
     pub attribution: String,
     /// The stable failure category.
     pub kind: PlanFailureKind,
