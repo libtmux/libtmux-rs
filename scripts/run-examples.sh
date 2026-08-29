@@ -18,20 +18,28 @@ set -euo pipefail
 
 readonly dev_root=/tmp/libtmux-rs-dev
 
-# crate | example | features | arguments | stdin driver
+# crate | example | features | arguments | stdin driver | must print
 #
 # Blank lines and `#` comments are ignored; every other row must name an
 # example that exists, and every example must have a row.
+#
+# The last column is a containment assertion, and it exists because a leak
+# check cannot make one. `inspect` and `find` resolve their server with
+# `Server::from_env().or_else(|_| Server::new())`, so a `$TMUX` this script
+# failed to set would send them to the reader's own default server -- where
+# they would run perfectly, create nothing, and leave no socket behind for a
+# leak check to notice. Naming a session this script made is the positive
+# half: it can only be printed by the server this script owns.
 readonly table="
-libtmux  | inspect  |                                               |    |
-libtmux  | find     | query                                         | sh |
-libtmux  | scratch  | test-support                                  |    |
-libtmux  | sweep    | test-support                                  |    |
-libtmux  | watch    | control-mode,test-support                     |    |
-libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |
-tmux-mcp | budget   |                                               |    |
-tmux-mcp | surface  |                                               |    |
-tmux-mcp | readonly |                                               |    | mcp_handshake
+libtmux  | inspect  |                                               |    |               | examples
+libtmux  | find     | query                                         | sh |               |
+libtmux  | scratch  | test-support                                  |    |               |
+libtmux  | sweep    | test-support                                  |    |               |
+libtmux  | watch    | control-mode,test-support                     |    |               |
+libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               |
+tmux-mcp | budget   |                                               |    |               |
+tmux-mcp | surface  |                                               |    |               |
+tmux-mcp | readonly |                                               |    | mcp_handshake |
 "
 
 rows() {
@@ -138,20 +146,28 @@ mcp_handshake() {
 # A driven example measures how long its server takes to answer, and a cold
 # build inside that window reads as a server that never did.
 printf 'building %s examples\n' "$(rows | wc -l | tr -d ' ')"
-while IFS='|' read -r crate name features args driver; do
+while IFS='|' read -r crate name features args driver expect; do
     opts=(--quiet --manifest-path "crates/$crate/Cargo.toml" --example "$name")
     if [ -n "$features" ]; then opts+=(--features "$features"); fi
     cargo build "${opts[@]}"
 done < <(rows)
 
 failures=()
-while IFS='|' read -r crate name features args driver; do
+while IFS='|' read -r crate name features args driver expect; do
     printf '\n=== example %s/%s\n' "$crate" "$name"
     opts=(--quiet --manifest-path "crates/$crate/Cargo.toml" --example "$name")
     if [ -n "$features" ]; then opts+=(--features "$features"); fi
     # shellcheck disable=SC2086 # arguments are a field, and are meant to split
     if [ -z "$driver" ]; then
-        cargo run "${opts[@]}" -- $args </dev/null || failures+=("$crate/$name")
+        out="$run_dir/$name.out"
+        if cargo run "${opts[@]}" -- $args </dev/null | tee "$out"; then
+            if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
+                printf 'did not print %s, so it did not see this run'"'"'s server\n' "$expect" >&2
+                failures+=("$crate/$name")
+            fi
+        else
+            failures+=("$crate/$name")
+        fi
     else
         out="$run_dir/$name.out"
         : > "$out"
