@@ -160,6 +160,15 @@ impl Default for DispatchLimits {
 ///
 /// Kept separate from [`DispatchLimits`]: a watcher may live for minutes,
 /// while an ordinary command should still get a short-lived client process.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::ControlClientLimits;
+///
+/// let limits = ControlClientLimits::default().max_clients(4);
+/// assert_eq!(limits.clients(), 4);
+/// ```
 #[cfg(feature = "control-mode")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ControlClientLimits {

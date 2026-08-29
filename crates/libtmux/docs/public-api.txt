@@ -2,6 +2,7 @@ assoc_const EFFECTS
 assoc_const FILTER_TARGET
 assoc_const FILTER_VARIANTS
 assoc_const SAFETY
+assoc_const libtmux::ControlClientLimits::DEFAULT_CLIENTS
 assoc_const libtmux::ControlLimits::DEFAULT_BLOCK_BYTES
 assoc_const libtmux::ControlLimits::DEFAULT_LINE_BYTES
 assoc_const libtmux::DispatchLimits::DEFAULT_IN_FLIGHT
@@ -374,6 +375,9 @@ function libtmux::CommandResult::success
 function libtmux::CommandSummary::argument_count
 function libtmux::CommandSummary::public_argument_count
 function libtmux::CommandSummary::sensitive_argument_count
+function libtmux::ControlClientLimits::acquire_timeout
+function libtmux::ControlClientLimits::clients
+function libtmux::ControlClientLimits::max_clients
 function libtmux::ControlLimits::block_bytes
 function libtmux::ControlLimits::line_bytes
 function libtmux::ControlLimits::max_block_bytes
@@ -587,6 +591,7 @@ function libtmux::Server::with_session
 function libtmux::ServerBuilder::build
 function libtmux::ServerBuilder::colors
 function libtmux::ServerBuilder::config_file
+function libtmux::ServerBuilder::control_client_limits
 function libtmux::ServerBuilder::default_timeout
 function libtmux::ServerBuilder::dispatch_limits
 function libtmux::ServerBuilder::output_limits
@@ -901,6 +906,7 @@ function libtmux::test::TestServer::server
 function libtmux::test::TestServer::session
 function libtmux::test::TestServer::shutdown
 function libtmux::test::TestServer::socket_path
+function libtmux::test::TestServerBuilder::control_client_limits
 function libtmux::test::TestServerBuilder::dispatch_limits
 function libtmux::test::TestServerBuilder::lifecycle_timeout
 function libtmux::test::TestServerBuilder::output_limits
@@ -932,6 +938,7 @@ struct libtmux::Command
 struct libtmux::CommandChain
 struct libtmux::CommandResult
 struct libtmux::CommandSummary
+struct libtmux::ControlClientLimits
 struct libtmux::ControlLimits
 struct libtmux::DispatchLimits
 struct libtmux::EngineCapabilities
