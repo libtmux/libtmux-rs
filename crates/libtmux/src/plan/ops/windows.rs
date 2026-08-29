@@ -113,6 +113,9 @@ impl NewWindow {
     }
 
     /// Name the window.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     #[must_use]
     pub fn name(mut self, name: impl Into<OsString>) -> Self {
         self.name = Some(name.into());
@@ -120,6 +123,9 @@ impl NewWindow {
     }
 
     /// Start the window's pane in this directory.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     #[must_use]
     pub fn start_directory(mut self, directory: impl Into<OsString>) -> Self {
         self.start_directory = Some(directory.into());

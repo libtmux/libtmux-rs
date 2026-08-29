@@ -90,6 +90,9 @@ impl SplitWindow {
     }
 
     /// Start the new pane in this directory.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     #[must_use]
     pub fn start_directory(mut self, directory: impl Into<OsString>) -> Self {
         self.start_directory = Some(directory.into());

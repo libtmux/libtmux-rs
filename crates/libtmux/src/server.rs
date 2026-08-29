@@ -1815,6 +1815,9 @@ impl NewSessionOptions {
     }
 
     /// Set the working directory for the session's first window.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     pub fn start_directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.start_directory = Some(directory.into());
         self
