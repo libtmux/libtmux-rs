@@ -1111,15 +1111,20 @@ impl Error {
         result: &crate::CommandResult,
         target: Option<&std::ffi::OsStr>,
     ) -> Self {
+        let stderr = result.stderr_lossy().into_owned();
         if result.command().sensitive_argument_count() > 0 {
+            let classified = Self::refused(command, result.exit_code(), stderr, target);
+            if matches!(
+                &classified,
+                Self::ObjectGone { id, .. }
+                    if target.is_some_and(|target| id == &target.to_string_lossy())
+            ) || matches!(classified, Self::ServerGone { .. })
+            {
+                return classified;
+            }
             Self::refused_withheld(command, result.exit_code())
         } else {
-            Self::refused(
-                command,
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
-                target,
-            )
+            Self::refused(command, result.exit_code(), stderr, target)
         }
     }
 
@@ -1738,7 +1743,12 @@ impl fmt::Debug for Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, ErrorKind, ServerGoneKind};
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+
+    use super::{Error, ErrorKind, SENSITIVE_OUTPUT_WITHHELD, ServerGoneKind};
+    use crate::Command;
+    use crate::command::{CommandResult, ProcessStatus, RequestId};
 
     /// The three server-gone wordings a live fixture cannot produce on demand.
     ///
@@ -1807,6 +1817,37 @@ mod tests {
 
         assert!(matches!(&error, Error::CommandFailed { .. }), "{error:?}");
         assert_eq!(error.kind(), ErrorKind::Refused);
+    }
+
+    #[test]
+    fn a_sensitive_mismatched_target_echo_stays_withheld() {
+        let secret = "sentinel-sensitive-echo";
+        let target = std::ffi::OsStr::new("%9");
+        let command = Command::new("send-keys")
+            .arg("-t")
+            .arg(target)
+            .sensitive_arg("sentinel-sensitive-input");
+        let result = CommandResult::new(
+            RequestId::new(1),
+            command.summary(),
+            ProcessStatus::from_exit_status(ExitStatus::from_raw(1 << 8)),
+            Vec::new(),
+            format!("can't find pane: %9 {secret}\n").into_bytes(),
+        );
+
+        let error = Error::from_refused_result("send-keys", &result, Some(target));
+
+        assert!(
+            matches!(
+                &error,
+                Error::CommandFailed { stderr, .. } if stderr == SENSITIVE_OUTPUT_WITHHELD
+            ),
+            "{error:?}",
+        );
+        let diagnostic = format!("{error:?} {error}");
+        for sensitive in [secret, "sentinel-sensitive-input"] {
+            assert!(!diagnostic.contains(sensitive), "{diagnostic}");
+        }
     }
 
     /// What tmux echoes back decides whether an object died or a place is

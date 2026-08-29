@@ -86,8 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window = session.new_window("editor").await?;
     let pane = window.active_pane().await?.expect("a window has a pane");
 
-    pane.send_keys("echo built").await?;
-    pane.send_key_names(["Enter"]).await?;
+    pane.send_line("echo built").await?;
 
     assert_eq!(server.sessions().await?.len(), 1);
 

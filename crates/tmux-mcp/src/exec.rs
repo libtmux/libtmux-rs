@@ -285,12 +285,12 @@ pub(crate) struct PreparedRun {
     run: Run,
 }
 
-/// Whether tmux confirmed the sends that start a watched run.
+/// Whether tmux confirmed the line dispatch that starts a watched run.
 #[must_use = "an unknown dispatch retains the watcher for a command that may be running"]
 pub(crate) enum RunDispatch {
-    /// Both the payload and Enter were acknowledged.
+    /// The payload and its terminating Enter were acknowledged.
     Confirmed(Run),
-    /// The first send was rejected before tmux could receive pane input.
+    /// The line dispatch was rejected before tmux could receive pane input.
     NotDispatched(Error),
     /// Delivery cannot be proved either way, so the watcher stays owned.
     Unknown { run: Run, error: Error },
@@ -316,13 +316,10 @@ impl PreparedRun {
     /// Send the prepared payload and Enter while retaining its watcher.
     pub(crate) async fn dispatch(self) -> RunDispatch {
         let Self { pane, payload, run } = self;
-        if let Err(error) = pane.send_keys(payload).await {
+        if let Err(error) = pane.send_line(payload).await {
             if definitely_not_dispatched(&error) {
                 return RunDispatch::NotDispatched(error);
             }
-            return RunDispatch::Unknown { run, error };
-        }
-        if let Err(error) = pane.send_key_names(["Enter"]).await {
             return RunDispatch::Unknown { run, error };
         }
         RunDispatch::Confirmed(run)

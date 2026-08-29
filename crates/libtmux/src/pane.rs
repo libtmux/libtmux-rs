@@ -37,8 +37,7 @@ use crate::{Command, CommandResult, Error, IndexedHooks, ObjectKind, OptionValue
 /// let window = session.active_window().await?.expect("a session has a window");
 /// let pane = window.active_pane().await?.expect("a window has a pane");
 ///
-/// pane.send_keys("echo hello").await?;
-/// pane.send_key_names(["Enter"]).await?;
+/// pane.send_line("echo hello").await?;
 ///
 /// // Capture returns `TmuxText`, because a pane can print any bytes.
 /// let lines = pane.capture().await?;
@@ -54,6 +53,15 @@ use crate::{Command, CommandResult, Error, IndexedHooks, ObjectKind, OptionValue
 pub struct Pane {
     core: Arc<Core>,
     projection: PaneProjection,
+}
+
+fn send_line_command(target: &PaneId, mut text: OsString) -> Command {
+    text.push("\r");
+    Command::new("send-keys")
+        .arg("-t")
+        .arg(target.to_string())
+        .arg("-l")
+        .sensitive_arg(text)
 }
 
 impl Pane {
@@ -607,6 +615,24 @@ impl Pane {
         .await
     }
 
+    /// Send literal text followed by Enter as one dispatch.
+    ///
+    /// The text and Enter are submitted together, so cancelling this future
+    /// cannot leave a completed text send without its Enter. The text is
+    /// sensitive and stays out of diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the line.
+    pub async fn send_line(&self, text: impl Into<OsString>) -> Result<(), Error> {
+        listing::mutate(
+            &self.core,
+            "send-keys",
+            send_line_command(self.id(), text.into()),
+        )
+        .await
+    }
+
     /// Send tmux key names, such as `C-c` or `Enter`.
     ///
     /// # Errors
@@ -803,8 +829,7 @@ impl Pane {
     /// # let guard = libtmux::test::TestServer::builder().start().await?;
     /// # let session = guard.server().new_session("waiting").await?;
     /// # let pane = session.panes().await?.remove(0);
-    /// pane.send_keys("printf 'ready\\n'").await?;
-    /// pane.send_key_names(["Enter"]).await?;
+    /// pane.send_line("printf 'ready\\n'").await?;
     ///
     /// let seen = pane.wait_for_text("ready", Duration::from_secs(10)).await?;
     /// assert_eq!(seen, PaneWait::Arrived);
@@ -2043,4 +2068,20 @@ fn parse_env_id(value: Option<&OsStr>) -> Result<PaneId, Error> {
                 crate::ServerConfigurationErrorKind::MalformedTmuxVariable,
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::send_line_command;
+
+    #[test]
+    fn a_line_keeps_one_length_independent_sensitive_argument() {
+        let target = "%7".parse().expect("a pane id");
+        for secret in ["short-secret", "a-much-longer-secret-value"] {
+            let summary = send_line_command(&target, secret.into()).summary();
+
+            assert_eq!(summary.sensitive_argument_count(), 1);
+            assert!(!summary.to_string().contains(secret));
+        }
+    }
 }

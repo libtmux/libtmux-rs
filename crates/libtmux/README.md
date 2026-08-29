@@ -33,8 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window = session.new_window("editor").await?;
     let pane = window.active_pane().await?.expect("a window has a pane");
 
-    pane.send_keys("echo hello").await?;
-    pane.send_key_names(["Enter"]).await?;
+    pane.send_line("echo hello").await?;
 
     for line in pane.capture().await? {
         println!("{}", line.to_string_lossy());
@@ -98,7 +97,7 @@ below, so a caller who wants them all does not have to list them.
 | Reach a session someone left running | `Server::session`, `Server::sessions` | `examples/inspect.rs` |
 | Find the pane my process is in | `Pane::from_env` | `examples/inspect.rs` |
 | Add a window, split a pane | `Session::new_window`, `Pane::split` | `examples/scratch.rs` |
-| Type into a pane | `Pane::send_keys`, `Pane::send_key_names` | `examples/scratch.rs` |
+| Type into a pane | `Pane::send_line`, `Pane::send_keys`, `Pane::send_key_names` | `examples/scratch.rs` |
 | Read what a pane printed | `Pane::capture`, `Pane::capture_with` | `examples/scratch.rs` |
 | Wait for output rather than sleep | `Pane::wait_for_text`, `Pane::wait_for_quiet` | `examples/scratch.rs` |
 | Follow a pane as it writes | `Pane::stream_output` | `examples/watch.rs` |
@@ -162,8 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let session = guard.server().new_session("waiting").await?;
     let pane = session.panes().await?.remove(0);
 
-    pane.send_keys("printf 'ready\n'").await?;
-    pane.send_key_names(["Enter"]).await?;
+    pane.send_line("printf 'ready\n'").await?;
 
     // Checked rather than discarded: a wait that reached its deadline still
     // returns successfully, so the outcome is the answer.

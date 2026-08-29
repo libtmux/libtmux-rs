@@ -31,8 +31,7 @@
 //! if let Some(session) = server.session("work").await? {
 //!     if let Some(window) = session.window("editor").await? {
 //!         if let Some(pane) = window.active_pane().await? {
-//!             pane.send_keys("cargo test").await?;
-//!             pane.send_key_names(["Enter"]).await?;
+//!             pane.send_line("cargo test").await?;
 //!         }
 //!     }
 //! }

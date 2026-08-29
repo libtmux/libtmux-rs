@@ -40,7 +40,7 @@ const MAX_JOBS: usize = 32;
 pub(crate) enum StartError {
     /// Every remembered slot belongs to a command still starting or running.
     AtCapacity { limit: usize },
-    /// The pane could not be watched, or the first send never began.
+    /// The pane could not be watched, or the line dispatch never began.
     Tmux(Error),
     /// A send may have reached tmux, and the named job retains ownership.
     DispatchUnknown { job: String, cause: DispatchFailure },
@@ -86,7 +86,7 @@ pub enum JobState {
     /// The watcher stays attached. Read its output and inspect the pane before
     /// retrying, or cancel the job to stop whatever reached the pane.
     DispatchUnknown,
-    /// The first send was rejected before tmux could receive pane input.
+    /// The line dispatch was rejected before tmux could receive pane input.
     ///
     /// Normally the failed start is removed before its caller returns. This
     /// remains observable only when that caller was cancelled first.
@@ -362,7 +362,7 @@ impl Jobs {
         let finished = Arc::new(Notify::new());
 
         // Setup is still request-owned because it has not touched the pane.
-        // Publication gates the worker immediately before its first send.
+        // Publication gates the worker immediately before its line dispatch.
         let prepared = exec::prepare_run(pane, &command, suppress_history).await?;
         let (publish, published) = oneshot::channel();
         let (report, reported) = oneshot::channel();
@@ -629,12 +629,12 @@ mod tests {
         (guard, session)
     }
 
-    async fn block_enter(session: &libtmux::Session, sent: &str, release: &str) {
+    async fn block_line_reply(session: &libtmux::Session, sent: &str, release: &str) {
         session
             .set_hook(
                 "after-send-keys",
                 format!(
-                    "if-shell -F '#{{==:#{{hook_argument_0}},Enter}}' \
+                    "if-shell -F '#{{==:#{{hook_flag_l}},1}}' \
                      'wait-for -S {sent}; wait-for {release}'"
                 ),
             )
@@ -762,7 +762,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_first_send_is_not_an_unknown_dispatch() {
+    async fn invalid_line_is_not_an_unknown_dispatch() {
         let (guard, session) = session_fixture("job-start-invalid-input").await;
         let pane = session.panes().await.expect("panes list").remove(0);
         wait_for_prompt(&pane).await;
@@ -799,7 +799,7 @@ mod tests {
         let jobs = Arc::new(Jobs::with_limit(1));
         let sent = "job-start-cancel-sent";
         let release = "job-start-cancel-release";
-        block_enter(&session, sent, release).await;
+        block_line_reply(&session, sent, release).await;
         let marker = "job-start-crossed-tmux";
         let starting = tokio::spawn({
             let jobs = Arc::clone(&jobs);
@@ -817,7 +817,7 @@ mod tests {
                 .await
                 .expect("the gate channel can be read"),
             libtmux::ChannelWait::Signalled,
-            "the Enter hook did not run",
+            "the line hook did not run",
         );
         assert_eq!(
             pane.wait_for_text(marker, std::time::Duration::from_secs(5))
@@ -868,7 +868,7 @@ mod tests {
         let jobs = Arc::new(Jobs::with_limit(1));
         let sent = "job-start-forget-sent";
         let release = "job-start-forget-release";
-        block_enter(&session, sent, release).await;
+        block_line_reply(&session, sent, release).await;
         let starting = tokio::spawn({
             let jobs = Arc::clone(&jobs);
             let pane = pane.clone();
@@ -882,7 +882,7 @@ mod tests {
                 .await
                 .expect("the gate channel can be read"),
             libtmux::ChannelWait::Signalled,
-            "the Enter hook did not run",
+            "the line hook did not run",
         );
         let owned = jobs
             .list()
@@ -930,7 +930,7 @@ mod tests {
 
         let sent = "job-start-timeout-sent";
         let release = "job-start-timeout-release";
-        block_enter(&session, sent, release).await;
+        block_line_reply(&session, sent, release).await;
         let marker = "job-start-timeout-crossed-tmux";
         let jobs = Jobs::with_limit(1);
         let started = jobs

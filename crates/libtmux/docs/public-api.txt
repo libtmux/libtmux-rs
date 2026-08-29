@@ -460,6 +460,7 @@ function libtmux::Pane::respawn
 function libtmux::Pane::select
 function libtmux::Pane::send_key_names
 function libtmux::Pane::send_keys
+function libtmux::Pane::send_line
 function libtmux::Pane::send_prefix
 function libtmux::Pane::session_id
 function libtmux::Pane::set_hook

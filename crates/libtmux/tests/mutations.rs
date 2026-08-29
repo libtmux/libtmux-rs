@@ -13,6 +13,20 @@ fn text(value: Option<&TmuxText>) -> Vec<u8> {
     value.expect("tmux reports the value").as_bytes().to_vec()
 }
 
+async fn wait_for_prompt(pane: &libtmux::Pane) {
+    for _ in 0..600 {
+        let lines = pane.capture().await.expect("pane captures");
+        if lines
+            .iter()
+            .any(|line| matches!(line.as_bytes().last(), Some(b'$' | b'#')))
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the pane never drew a prompt");
+}
+
 #[tokio::test]
 async fn creating_an_object_returns_it_hydrated_in_one_command() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -325,6 +339,150 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
     // The handle reports what tmux did, not what was requested.
     assert_eq!(pane.width(), 20);
     assert!(full_width > 20, "the split left room to shrink into");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("line-cancellation")
+        .await
+        .expect("session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    wait_for_prompt(&pane).await;
+
+    let accepted = "send-line-accepted";
+    let release = "send-line-release";
+    let ran = "send-line-ran";
+    session
+        .set_hook(
+            "after-send-keys",
+            format!(
+                "if-shell -F '#{{==:#{{hook_flag_l}},1}}' \
+                 'wait-for -S {accepted}; wait-for {release}'"
+            ),
+        )
+        .await
+        .expect("the dispatch gate is installed");
+
+    let sending = tokio::spawn({
+        let pane = pane.clone();
+        async move { pane.send_line(format!("tmux wait-for -S {ran}")).await }
+    });
+    assert_eq!(
+        server
+            .wait_for_channel(accepted, std::time::Duration::from_secs(5))
+            .await
+            .expect("the send can signal"),
+        libtmux::ChannelWait::Signalled,
+        "the line did not reach tmux",
+    );
+
+    sending.abort();
+    assert!(
+        sending
+            .await
+            .expect_err("the line send is cancelled")
+            .is_cancelled(),
+    );
+    server
+        .signal_channel(release)
+        .await
+        .expect("the send is released");
+
+    assert_eq!(
+        server
+            .wait_for_channel(ran, std::time::Duration::from_secs(1))
+            .await
+            .expect("the command signal can be read"),
+        libtmux::ChannelWait::Signalled,
+        "cancellation stranded the literal text without Enter",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_line_send_preserves_adversarial_literal_text() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("literal-line")
+        .await
+        .expect("session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    wait_for_prompt(&pane).await;
+
+    pane.send_keys(
+        r#"stty -echo; printf 'reader-ready\n'; while IFS= read -r line; do printf 'got:<%s>\n' "$line"; done"#,
+    )
+    .await
+    .expect("the reader is typed");
+    pane.send_key_names(["Enter"])
+        .await
+        .expect("the reader is started");
+    assert_eq!(
+        pane.wait_for_text("reader-ready", std::time::Duration::from_secs(5))
+            .await
+            .expect("the reader can be watched"),
+        libtmux::PaneWait::Arrived,
+    );
+
+    for payload in [
+        "C-c Enter -l",
+        r#"; \; '#{pane_id}' "$()" `x`;"#,
+        "unicode-🦀-空",
+    ] {
+        pane.send_line(payload).await.expect("the line is sent");
+        let expected = format!("got:<{payload}>");
+        assert_eq!(
+            pane.wait_for_text(&expected, std::time::Duration::from_secs(5))
+                .await
+                .expect("the reader can be watched"),
+            libtmux::PaneWait::Arrived,
+        );
+        assert!(
+            pane.capture()
+                .await
+                .expect("the pane captures")
+                .iter()
+                .any(|line| line.as_bytes() == expected.as_bytes()),
+            "the captured line differs from the payload: {payload:?}",
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_line_send_redacts_input_and_classifies_a_gone_pane() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("line-error")
+        .await
+        .expect("session is created");
+    let window = session
+        .active_window()
+        .await
+        .expect("the window resolves")
+        .expect("a session has a window");
+    let pane = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("a second pane is created");
+    let stale = pane.clone();
+    pane.kill().await.expect("the pane is killed");
+
+    let secret = "sentinel-line-secret";
+    let error = stale.send_line(secret).await.expect_err("the pane is gone");
+
+    assert_eq!(error.kind(), libtmux::ErrorKind::ObjectGone);
+    let diagnostic = format!("{error:?} {error}");
+    assert!(!diagnostic.contains(secret), "{diagnostic}");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

@@ -44,8 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(0);
             };
             println!("  typing into {}", pane.id());
-            pane.send_keys("printf 'hello from tmux\\n'").await?;
-            pane.send_key_names(["Enter"]).await?;
+            pane.send_line("printf 'hello from tmux\\n'").await?;
 
             // tmux runs the shell asynchronously, so wait for the output
             // rather than sleeping and hoping. The outcome is checked because
