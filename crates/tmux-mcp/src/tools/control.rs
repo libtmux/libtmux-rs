@@ -747,6 +747,11 @@ impl TmuxTools {
                 Command::new("select-layout")
                     .arg("-t")
                     .arg(target.id().to_string())
+                    // `select-layout` has flags of its own, and a layout is
+                    // the caller's text. Without the separator, asking for
+                    // `-E` spread the panes evenly and reported `-E` back as
+                    // the layout that had been applied.
+                    .arg("--")
                     .arg(layout.clone()),
             )
             .await

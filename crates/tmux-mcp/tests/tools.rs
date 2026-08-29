@@ -1149,3 +1149,48 @@ async fn a_rename_reports_the_name_tmux_stored_not_the_one_asked_for() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_layout_shaped_like_a_flag_is_refused_not_obeyed() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = bare_tools(guard.server());
+
+    tools
+        .create_session(Parameters(
+            serde_json::from_value(serde_json::json!({"name": "work"}))
+                .expect("arguments deserialize"),
+        ))
+        .await
+        .expect("session is created");
+    let window = rows(
+        tools
+            .list_session_windows(Parameters(
+                serde_json::from_value(serde_json::json!({"session": "work"}))
+                    .expect("arguments deserialize"),
+            ))
+            .await
+            .expect("windows"),
+    )
+    .first()
+    .and_then(|row| row["id"].as_str().map(str::to_owned))
+    .expect("the session has a window");
+
+    // `-E` is a `select-layout` flag that rearranges the panes. Reaching it
+    // through the layout argument performed a change nobody asked for, and
+    // the answer named `-E` as the layout now in force.
+    let error = tools
+        .select_layout(Parameters(
+            serde_json::from_value(serde_json::json!({"window": window, "layout": "-E"}))
+                .expect("arguments deserialize"),
+        ))
+        .await
+        .map(|_| ())
+        .expect_err("a flag is not a layout");
+    assert!(
+        error.message.contains("-E"),
+        "the caller learns which layout was refused: {}",
+        error.message,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
