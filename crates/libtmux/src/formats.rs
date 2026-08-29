@@ -992,10 +992,6 @@ static CATALOG: [&FormatDescriptor; 179] = [
 ];
 
 /// Tmux list command profile represented by a format plan.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ListProfile {
     /// Session rows.
