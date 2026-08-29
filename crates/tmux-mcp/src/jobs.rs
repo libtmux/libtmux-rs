@@ -630,7 +630,10 @@ impl Jobs {
     pub(crate) fn forget(&self, id: &str) -> Option<String> {
         let job = {
             let mut table = hold(&self.inner);
-            let JobSlot::Ready(job) = table.slots.remove(id)? else {
+            let JobSlot::Ready(_) = table.slots.get(id)? else {
+                return None;
+            };
+            let Some(JobSlot::Ready(job)) = table.slots.remove(id) else {
                 return None;
             };
             job

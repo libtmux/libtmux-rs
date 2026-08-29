@@ -571,6 +571,13 @@ fn forgetting_an_absent_or_unpublished_job_returns_none() {
     assert_eq!(jobs.forget("job-missing"), None);
     let reservation = jobs.reserve().expect("the slot is available");
     assert_eq!(jobs.forget(reservation.id()), None);
+    assert!(
+        matches!(
+            hold(&jobs.inner).slots.get(reservation.id()),
+            Some(JobSlot::Pending)
+        ),
+        "forgetting an unpublished job leaves its reservation intact",
+    );
 }
 
 #[tokio::test]
