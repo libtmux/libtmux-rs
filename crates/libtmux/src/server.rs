@@ -1973,10 +1973,16 @@ impl Server {
     /// This needs a client with a terminal, so it fails on a server nothing is
     /// attached to.
     ///
+    /// Unlike [`Self::command_prompt`] and [`Self::display_menu`], this does
+    /// not wait for a person -- but it does wait for the command. The popup is
+    /// opened with `-E`, so it closes when what runs inside it exits, and this
+    /// returns then. A command that does not end holds the call until the
+    /// dispatch timeout does.
+    ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists or tmux refuses the
-    /// command.
+    /// Returns an error when no suitable client exists, when tmux refuses the
+    /// command, and when the dispatch timeout expires before it exits.
     pub async fn display_popup(
         &self,
         client: Option<&Client>,
@@ -1997,10 +2003,14 @@ impl Server {
     /// Items are `(label, key, command)` triples in the order tmux should show
     /// them. This needs a client with a terminal.
     ///
+    /// Like [`Self::command_prompt`], this waits for the person: tmux holds the
+    /// invocation until an item is chosen or the menu is dismissed, and the
+    /// dispatch timeout is what ends the wait when nobody does.
+    ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists or tmux refuses an
-    /// item.
+    /// Returns an error when no suitable client exists, when tmux refuses an
+    /// item, and when the dispatch timeout expires before anyone chooses.
     pub async fn display_menu(
         &self,
         client: Option<&Client>,
@@ -2028,12 +2038,23 @@ impl Server {
     /// Open a command prompt on a client.
     ///
     /// The prompt runs `command` once the user answers, with `%%` replaced by
-    /// what they typed. Success means tmux opened the prompt, not that anyone
-    /// answered it.
+    /// what they typed.
+    ///
+    /// This does not return when the prompt opens. tmux holds the invocation
+    /// until somebody answers or dismisses it, so a caller is waiting on a
+    /// person -- and on a server nobody is watching, on nobody. The dispatch
+    /// timeout is what ends that wait: with the default it fails after thirty
+    /// seconds having opened a prompt that is still there. Give the call a
+    /// server whose `default_timeout` suits a human, or drive it from a task
+    /// that may take that long.
+    ///
+    /// Passing a client is not what decides this. Both forms wait; naming one
+    /// only decides which terminal the prompt appears on.
     ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists or tmux refuses.
+    /// Returns an error when no suitable client exists, when tmux refuses, and
+    /// when the dispatch timeout expires before the prompt is answered.
     pub async fn command_prompt(
         &self,
         client: Option<&Client>,
