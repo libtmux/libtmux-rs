@@ -2,9 +2,9 @@
 
 This repository is a Cargo workspace of four published crates, and the gates
 below are what a change has to pass. It was extracted from the Python libtmux
-repository; a convention you recognise from that project does not apply here
-unless a file here says so, and none of its commands do — nothing here uses
-`uv`, `pytest`, `ruff`, or `mypy`.
+repository; its `uv`, `pytest`, `ruff`, and `mypy` conventions do not apply to
+the Rust crates. The `mcp_swap.py` maintenance utility is the exception: `uv`
+supplies its dependencies, and `pytest` tests it under `just check`.
 
 For how the prose reads — README, changelog, release notes, commit messages,
 rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
@@ -15,7 +15,8 @@ You need tmux 3.2a or newer on `PATH` and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
 `rust-toolchain.toml` pins the toolchain, so rustup installs it on the first
-cargo command. The gate also needs the two MSRV floors and three tools:
+cargo command. The gate also needs the two MSRV floors, `uv`, and three Cargo
+tools:
 
 ```console
 $ rustup toolchain install 1.85.0 1.88.0
@@ -24,6 +25,9 @@ $ rustup toolchain install 1.85.0 1.88.0
 ```console
 $ cargo install just cargo-hack cargo-deny
 ```
+
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+separately; Cargo does not manage the Python test environment.
 
 Nightly is needed only for `just api-check`, `just example-coverage-check`,
 and `just fuzz`, none of which are part of the local gate.
@@ -222,12 +226,16 @@ directions, so the rule is worth the extra minute: send what the code sends.
 $ just check
 ```
 
-That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`, `examples`,
-`fixture-root`, `docs`, `doc-blocks`, `parity-claims`, `format-coverage-check`,
-`features`, `deny`, `msrv`, `package`.
+That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
+`compat-supervisor-test`, `doctest`, `examples`, `fixture-root`, `docs`,
+`doc-blocks`, `parity-claims`, `format-coverage-check`, `features`, `deny`,
+`msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.
+
+`compat-supervisor-test` exercises the Linux pidfd containment used by the
+slow compatibility lane. It skips on other Unix targets; CI runs it on Linux.
 
 Four gates are **not** in `just check` and run only in CI:
 

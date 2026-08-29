@@ -114,12 +114,25 @@ msrv:
 
 # Test the script that points every agent CLI at a build of this server
 #
-# Needs pytest and tomlkit. -c and --confcutdir keep pytest from walking up
-# into the Python project above this directory, whose config and conftest
-# would otherwise be applied to a Rust workspace.
+# uv supplies pytest and tomlkit without turning this Cargo workspace into a
+# Python project. -c and --confcutdir keep pytest from walking up into a Python
+# project above this directory.
 [group: 'test']
 swap-test *args:
-    python3 -m pytest scripts/test_mcp_swap.py -c /dev/null --confcutdir=. {{ args }}
+    uv run --no-project --with pytest --with 'tomlkit>=0.13' \
+        python -m pytest scripts/test_mcp_swap.py -c /dev/null --confcutdir=. \
+        --rootdir=. -p no:cacheprovider {{ args }}
+
+# Exercise the Linux-only pidfd supervisor without building five tmux releases.
+[group: 'test']
+compat-supervisor-test *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != Linux ]]; then
+        echo "compatibility supervisor tests require Linux; skipped"
+        exit 0
+    fi
+    python3 scripts/test-tmux-format-compat-supervisor.py {{ args }}
 
 # Build every pinned tmux release and run the suite against each
 [group: 'test']
@@ -349,7 +362,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test doctest examples fixture-root docs doc-blocks doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test doctest examples fixture-root docs doc-blocks doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:
