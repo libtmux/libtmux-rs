@@ -18,6 +18,17 @@ full.
 
 ### Fixed
 
+- A stopped client is no longer reported as a gone one. tmux leaves a
+  suspended or locked client out of `list-clients` -- from 3.7 the listing
+  screens out the dead, the exiting and the suspended together -- so reading
+  through the handle gave `Error::ObjectGone` and `Error::is_object_gone`
+  answered true for a client that comes back the moment its process continues.
+  `Client::refresh` now asks tmux on that path and reports the new
+  `Error::ClientSuspended`, which maps to `ErrorKind::Refused`, so the handle
+  survives. `Client::lock`, `Session::lock`, `Server::lock_all` and a server
+  with `lock-after-time` set all reach the same state. Releases below 3.7 keep
+  such a client listed and are unaffected.
+
 - Document that tmux may not store the session name it was given. Releases
   through 3.6b rewrite `:` and `.` to `_` silently, 3.7 refuses such a name,
   and 3.7a keeps it, so `new_session("a:b")` hands back a session called `a_b`

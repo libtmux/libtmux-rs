@@ -1369,6 +1369,42 @@ session reports the same one, and one client changing it changes it for all of
 them. The pane follows from the window, because tmux keeps no per-client
 focus.
 
+### `list-clients` collapses three ways of being absent
+
+A client that is suspended, one that is locked, one that is dying and one that
+has already gone all look the same from `list-clients`: absent. `sort.c`'s
+`sort_get_clients` skips any client carrying `CLIENT_UNATTACHEDFLAGS`, and
+`tmux.h` defines that as `CLIENT_DEAD|CLIENT_SUSPENDED|CLIENT_EXIT`. So the
+listing answers "not attached right now", and the crate was reading it as "not
+there any more".
+
+The two are a different instruction to a caller. `Error::is_object_gone` is
+what decides whether to discard a handle, and a suspended client is listed
+again the moment its process continues -- `SIGCONT` for a suspended one, the
+`lock-command` exiting for a locked one. Locking is the larger half: it sets
+the same flag through `server_lock_client`, so `Client::lock`, `Session::lock`
+and `Server::lock_all` all reach it, and `lock-after-time` reaches it with
+nobody asking.
+
+tmux does publish the difference; it is just not in the listing.
+`server_client_get_flags` puts `suspended` in `#{client_flags}`, and
+`display-message` carries `CMD_CLIENT_CANFAIL`, so a target it cannot resolve
+expands every format empty and exits zero rather than erroring. A client that
+is merely stopped still resolves and names itself. `Client::refresh` asks only
+on the miss path, and only tmux's own answer counts: a name that comes back
+matching, carrying that flag, is `Error::ClientSuspended`; every other shape,
+including a probe that fails outright, stays `Error::ObjectGone`. The probe can
+turn a suspended client into something other than gone, never a gone client
+into a live one.
+
+Both mechanisms date to 3.2a, which is `MIN_SUPPORTED`, so this needs no
+version gate. The filter does not: 3.2a and 3.5a screen `list-clients` on
+`c->session == NULL` alone, and `server_client_suspend` never clears the
+session, so a suspended client stays listed on those releases and the miss path
+is never taken. Read from their sources rather than measured. The two answers
+differ and neither is false -- which is the argument for keying on the flag
+rather than on the absence.
+
 ### A socket path does not identify a tmux server
 
 `ServerIdentity` is a normalized socket path, and object equality includes it,

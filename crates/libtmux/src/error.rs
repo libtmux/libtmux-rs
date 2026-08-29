@@ -681,6 +681,11 @@ pub enum Error {
     /// This is distinct from a connection failure: tmux answered, and the
     /// object was not among the results. It has been closed or killed since
     /// the handle was created.
+    ///
+    /// For a client, absence from a listing has one other cause that is not
+    /// this: a stopped client is left out of the same listing and comes back.
+    /// That is [`Self::ClientSuspended`], reported separately so that
+    /// [`Self::is_object_gone`] keeps meaning "stop using this handle".
     #[non_exhaustive]
     #[error("tmux no longer has {kind} {id}")]
     ObjectGone {
@@ -710,6 +715,29 @@ pub enum Error {
         session: String,
         /// The index within that session.
         index: i32,
+    },
+
+    /// A client is stopped rather than gone, so listings leave it out.
+    ///
+    /// Distinct from [`Self::ObjectGone`], and the distinction decides whether
+    /// to drop the handle: a suspended client is still on the server and is
+    /// listed again once it resumes, so the same handle keeps working.
+    /// [`Self::ObjectGone`] means it will not.
+    ///
+    /// tmux omits a suspended client from `list-clients` while still resolving
+    /// it as a command target, which is what makes the two tellable apart. The
+    /// listing filters the dead, the exiting and the suspended together, so
+    /// absence from it does not say which of the three happened.
+    ///
+    /// Both [`crate::Client::suspend`] and locking a client arrive here,
+    /// because tmux marks them with one flag. A client resumes when its
+    /// process continues -- the suspended one on `SIGCONT`, the locked one
+    /// when its `lock-command` exits.
+    #[non_exhaustive]
+    #[error("client {name} is suspended, not gone")]
+    ClientSuspended {
+        /// The client's tmux name, which is the path of its terminal.
+        name: String,
     },
 
     /// A control-mode connection failed.
@@ -1056,6 +1084,10 @@ impl Error {
             // Not `ObjectGone`: the object may still exist, so a caller must
             // not read this as a reason to drop the handle.
             Self::LinkGone { .. } => ErrorKind::Refused,
+            // tmux carried out neither a read nor a change: the client is
+            // there but not answering. `Refused` rather than `ObjectGone`
+            // so a caller keeps the handle.
+            Self::ClientSuspended { .. } => ErrorKind::Refused,
             Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
             | Self::OutputLimitExceeded { .. }
@@ -1545,6 +1577,10 @@ impl fmt::Debug for Error {
                 .field("kind", kind)
                 .field("session", session)
                 .field("index", index)
+                .finish(),
+            Self::ClientSuspended { name } => formatter
+                .debug_struct("ClientSuspended")
+                .field("name", name)
                 .finish(),
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, source } => formatter

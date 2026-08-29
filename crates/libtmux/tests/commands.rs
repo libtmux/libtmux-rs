@@ -1508,3 +1508,118 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// A client stopped in place is not a client that went away.
+///
+/// tmux leaves a suspended client out of `list-clients` -- the listing filters
+/// the dead, the exiting and the suspended together -- while still resolving
+/// it as a command target. Reading absence from that listing as `ObjectGone`
+/// told a caller to discard a handle that works again the moment the client
+/// resumes, which is the opposite of what `is_object_gone` is consulted for.
+///
+/// The client is spawned here rather than taken from `ControlMode`, because
+/// suspending a client stops its process and a crate-held connection would
+/// then be one this test cannot take down. A child it owns can be killed
+/// outright, stopped or not.
+#[tokio::test]
+async fn a_suspended_client_is_not_reported_gone() {
+    use libtmux::since;
+    use std::process;
+
+    /// SIGKILL rather than closing stdin: a stopped process never reads its
+    /// stdin to notice EOF, so the polite shutdown is the one that hangs.
+    struct KillOnDrop(process::Child);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            drop(self.0.kill());
+            drop(self.0.wait());
+        }
+    }
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("suspendable").await.expect("session");
+
+    let hides_stopped = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .meets(&since::CLIENTS_HIDE_STOPPED);
+
+    let child = process::Command::new("tmux")
+        .arg("-S")
+        .arg(guard.socket_path())
+        .arg("-C")
+        .arg("attach")
+        .arg("-t")
+        .arg("suspendable")
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .spawn()
+        .expect("a control-mode client attaches");
+    let _client_process = KillOnDrop(child);
+
+    retry_until(Duration::from_secs(10), async || {
+        server
+            .clients()
+            .await
+            .is_ok_and(|clients| !clients.is_empty())
+    })
+    .await
+    .expect("the attached client is listed");
+
+    let client = server.clients().await.expect("clients").remove(0);
+    client.suspend().await.expect("the client suspends");
+
+    if !hides_stopped {
+        // Before 3.7 the listing screens on the session alone, and suspending
+        // never clears that, so the client stays listed and reads back with
+        // no miss path to take. Asserted rather than skipped: the fix must
+        // not have invented an error on a release that has no problem.
+        let same = client
+            .refreshed()
+            .await
+            .expect("the client is still listed");
+        assert_eq!(same.name(), client.name());
+        assert!(
+            !server.clients().await.expect("clients").is_empty(),
+            "an older tmux lists a suspended client",
+        );
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    }
+
+    // Leaving the listing is the condition that used to read as gone, so the
+    // test asserts it happened rather than assuming the command took effect.
+    retry_until(Duration::from_secs(10), async || {
+        server
+            .clients()
+            .await
+            .is_ok_and(|clients| clients.is_empty())
+    })
+    .await
+    .expect("the suspended client leaves the listing");
+
+    let Err(error) = client.refreshed().await else {
+        panic!("the suspended client is not in the listing to be found")
+    };
+    assert!(
+        matches!(error, libtmux::Error::ClientSuspended { .. }),
+        "a suspended client resolves and says so: {error:?}",
+    );
+    assert!(
+        !error.is_object_gone(),
+        "this is what a caller consults before discarding the handle",
+    );
+
+    // And the reason the misreading was tempting: every count a caller might
+    // consult goes quiet at once. The client still carries tmux's `attached`
+    // flag, but the session stops reporting it, so nothing in the listing
+    // surface distinguishes this from a client that left.
+    assert!(
+        !session.refreshed().await.expect("session").is_attached(),
+        "a suspended client stops counting toward its session",
+    );
+}
