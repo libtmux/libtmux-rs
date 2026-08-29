@@ -32,7 +32,7 @@ readonly dev_root=/tmp/libtmux-rs-dev
 # half: it can only be printed by the server this script owns.
 readonly table="
 libtmux  | inspect  |                                               |    |               | examples
-libtmux  | find     | query                                         | sh |               |
+libtmux  | find     | query                                         | sh |               | in window
 libtmux  | scratch  | test-support                                  |    |               |
 libtmux  | sweep    | test-support                                  |    |               |
 libtmux  | watch    | control-mode,test-support                     |    |               |
@@ -94,8 +94,11 @@ trap cleanup EXIT
 # the server it belongs to. Pointing that at a socket this script owns is what
 # keeps them off the reader's own server while still exercising the path they
 # document.
+# The second window runs `sh` rather than the login shell because `find`
+# searches for it: a fixture whose panes run zsh makes that example print
+# "nothing here is running sh" and demonstrate none of what it is for.
 tmux -S "$socket" new-session -d -s examples
-tmux -S "$socket" new-window -d -n second
+tmux -S "$socket" new-window -d -n second sh
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
 export TMUX="$socket,$server_pid,0"
 
