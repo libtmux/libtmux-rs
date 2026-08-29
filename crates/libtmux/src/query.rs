@@ -370,6 +370,9 @@ use std::sync::OnceLock;
 use caseless::default_case_fold_str;
 use regex::{Regex, RegexBuilder};
 
+mod grammar;
+use grammar::{RelationQuantifier, SetOperator, TextOperator};
+
 /// A predicate that evaluates a borrowed candidate.
 ///
 /// Functions and closures with the same signature implement this trait.
@@ -1099,148 +1102,6 @@ impl PartialEq for PredicateIdentity {
 
 impl Eq for PredicateIdentity {}
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-#[cfg_attr(
-    not(feature = "serde"),
-    allow(
-        dead_code,
-        reason = "ordering reaches text only from the wire, which serde gates"
-    )
-)]
-enum TextOperator {
-    Eq,
-    EqIgnoreCase,
-    Contains,
-    ContainsIgnoreCase,
-    StartsWith,
-    StartsWithIgnoreCase,
-    EndsWith,
-    EndsWithIgnoreCase,
-    In,
-    NotIn,
-    Regex,
-    RegexIgnoreCase,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-}
-
-impl TextOperator {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Eq => "eq",
-            Self::EqIgnoreCase => "eq_ignore_case",
-            Self::Contains => "contains",
-            Self::ContainsIgnoreCase => "contains_ignore_case",
-            Self::StartsWith => "starts_with",
-            Self::StartsWithIgnoreCase => "starts_with_ignore_case",
-            Self::EndsWith => "ends_with",
-            Self::EndsWithIgnoreCase => "ends_with_ignore_case",
-            Self::In => "in",
-            Self::NotIn => "not_in",
-            Self::Regex => "regex",
-            Self::RegexIgnoreCase => "regex_ignore_case",
-            Self::Lt => "lt",
-            Self::Lte => "lte",
-            Self::Gt => "gt",
-            Self::Gte => "gte",
-        }
-    }
-
-    /// Report whether this operator compares order, which text cannot.
-    const fn is_ordering(self) -> bool {
-        matches!(self, Self::Lt | Self::Lte | Self::Gt | Self::Gte)
-    }
-
-    const fn is_regex(self) -> bool {
-        matches!(self, Self::Regex | Self::RegexIgnoreCase)
-    }
-
-    #[cfg(feature = "serde")]
-    const fn set_operator(self) -> Option<SetOperator> {
-        match self {
-            Self::Eq => Some(SetOperator::Eq),
-            Self::In => Some(SetOperator::In),
-            Self::NotIn => Some(SetOperator::NotIn),
-            Self::Lt => Some(SetOperator::Lt),
-            Self::Lte => Some(SetOperator::Lte),
-            Self::Gt => Some(SetOperator::Gt),
-            Self::Gte => Some(SetOperator::Gte),
-            Self::EqIgnoreCase
-            | Self::Contains
-            | Self::ContainsIgnoreCase
-            | Self::StartsWith
-            | Self::StartsWithIgnoreCase
-            | Self::EndsWith
-            | Self::EndsWithIgnoreCase
-            | Self::Regex
-            | Self::RegexIgnoreCase => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum SetOperator {
-    Eq,
-    In,
-    NotIn,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-}
-
-impl SetOperator {
-    /// Report whether this operator compares order rather than membership.
-    ///
-    /// An ordering operator takes exactly one bound, where `in` takes a set.
-    const fn is_ordering(self) -> bool {
-        matches!(self, Self::Lt | Self::Lte | Self::Gt | Self::Gte)
-    }
-
-    /// Report whether this operator's operand is a set rather than one value.
-    ///
-    /// Only the wire cares: the typed handles fix the arity at the call site.
-    #[cfg(feature = "serde")]
-    const fn takes_a_set(self) -> bool {
-        matches!(self, Self::In | Self::NotIn)
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum RelationQuantifier {
-    Any,
-    All,
-    None,
-    Is,
-}
-
-impl RelationQuantifier {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Any => "any",
-            Self::All => "all",
-            Self::None => "none",
-            Self::Is => "is",
-        }
-    }
-}
-
-impl SetOperator {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Eq => "eq",
-            Self::In => "in",
-            Self::NotIn => "not_in",
-            Self::Lt => "lt",
-            Self::Lte => "lte",
-            Self::Gt => "gt",
-            Self::Gte => "gte",
-        }
-    }
-}
-
 #[derive(Clone)]
 struct TextPredicate {
     operator: TextOperator,
@@ -1489,23 +1350,6 @@ impl PredicateData {
             | Self::Unsigned(_)
             | Self::Enum(_)
             | Self::Relation(_) => true,
-        }
-    }
-}
-
-impl TextOperator {
-    /// Return the text operator matching a set operator, when one exists.
-    ///
-    /// Text has no ordering, so an ordering operator has no text form. One
-    /// cannot reach here in practice: this converts an empty operand list,
-    /// and an ordering operator with no bound fails its shape check first.
-    #[cfg(feature = "serde")]
-    const fn from_set(operator: SetOperator) -> Option<Self> {
-        match operator {
-            SetOperator::Eq => Some(Self::Eq),
-            SetOperator::In => Some(Self::In),
-            SetOperator::NotIn => Some(Self::NotIn),
-            SetOperator::Lt | SetOperator::Lte | SetOperator::Gt | SetOperator::Gte => None,
         }
     }
 }

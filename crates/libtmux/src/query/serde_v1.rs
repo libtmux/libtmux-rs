@@ -6,17 +6,13 @@ use serde::de::{
 };
 use serde::ser::{Error as _, Serialize, SerializeSeq, SerializeStruct, Serializer};
 
+use super::grammar::{MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_NODES, MAX_SET_VALUES, VERSION};
 use super::{
     ExprData, FilterExpr, FilterExpressionError, FilterExpressionErrorKind, Filterable,
     PredicateData, RelationPredicate, RelationQuantifier, ResolvedScalar, SetOperator,
     TextOperator, WireBoolPredicate, WireEmptyPredicate, WireStringPredicate,
     expression_is_resolved, validate_expression,
 };
-
-const VERSION: u8 = 1;
-const MAX_EXPRESSION_DEPTH: usize = 64;
-const MAX_EXPRESSION_NODES: usize = 4_096;
-const MAX_SET_VALUES: usize = 4_096;
 
 fn expression_error(kind: FilterExpressionErrorKind) -> FilterExpressionError {
     FilterExpressionError::new(kind)
@@ -672,17 +668,9 @@ impl RawNode {
     }
 
     fn into_relation(self) -> Result<ExprData, FilterExpressionError> {
-        let quantifier = match Self::take_string(self.quantifier)?.as_str() {
-            "any" => RelationQuantifier::Any,
-            "all" => RelationQuantifier::All,
-            "none" => RelationQuantifier::None,
-            "is" => RelationQuantifier::Is,
-            _ => {
-                return Err(expression_error(
-                    FilterExpressionErrorKind::UnknownQuantifier,
-                ));
-            }
-        };
+        let quantifier =
+            RelationQuantifier::from_label(Self::take_string(self.quantifier)?.as_str())
+                .ok_or_else(|| expression_error(FilterExpressionErrorKind::UnknownQuantifier))?;
         let field = Self::take_string(self.field)?;
         if !super::valid_wire_name(&field) {
             return Err(expression_error(FilterExpressionErrorKind::UnknownField));
@@ -1028,25 +1016,7 @@ impl<'de, T: Filterable> Deserialize<'de> for FilterExpr<T> {
 }
 
 fn parse_scalar_operator(value: &str) -> Option<TextOperator> {
-    Some(match value {
-        "eq" => TextOperator::Eq,
-        "eq_ignore_case" => TextOperator::EqIgnoreCase,
-        "contains" => TextOperator::Contains,
-        "contains_ignore_case" => TextOperator::ContainsIgnoreCase,
-        "starts_with" => TextOperator::StartsWith,
-        "starts_with_ignore_case" => TextOperator::StartsWithIgnoreCase,
-        "ends_with" => TextOperator::EndsWith,
-        "ends_with_ignore_case" => TextOperator::EndsWithIgnoreCase,
-        "in" => TextOperator::In,
-        "not_in" => TextOperator::NotIn,
-        "regex" => TextOperator::Regex,
-        "regex_ignore_case" => TextOperator::RegexIgnoreCase,
-        "lt" => TextOperator::Lt,
-        "lte" => TextOperator::Lte,
-        "gt" => TextOperator::Gt,
-        "gte" => TextOperator::Gte,
-        _ => return None,
-    })
+    TextOperator::from_label(value)
 }
 
 struct ExpressionRef<'a>(&'a ExprData);
