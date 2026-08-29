@@ -1706,10 +1706,26 @@ so a needle spanning the wrap never matches. A dead pane ends the wait rather
 than holding it to the deadline, and running out of time is
 `PaneWait::TimedOut` rather than an error.
 
-What is still unmeasured is what the doorbell would save, and what a flood
-does to a wait that rings on every byte. The polling floor exists now; the
-optimisation above it does not, and the numbers that would justify it have not
-been taken.
+Both numbers that would justify a doorbell have now been taken, and neither
+argues for one.
+
+Latency is a capture round-trip rather than a fraction of the poll interval,
+because the loop looks before it sleeps: twelve waits for a marker printed into
+a pane answered in 12ms at the fastest, 22ms median, 31ms at the slowest,
+measured from dispatching the key that produces the text. A doorbell removes
+the round trip, not an interval, so it is worth tens of milliseconds rather
+than the hundreds the interval suggests.
+
+A flood is where the two paths diverge, and not in the doorbell's favour.
+`seq 1 200000` into a pane, waiting for the last line: 460ms, found, nothing
+lost. Polling costs one capture per interval whatever the pane is doing, so a
+flood does not reach it. A doorbell rings per notification, which is where the
+Swift port's coalescing comes from -- machinery this path does not need
+because it does not have the problem.
+
+So the doorbell stays unbuilt, and this is the reason rather than the absence
+of one. It buys tens of milliseconds and brings a failure mode the floor does
+not have.
 
 `libtmux::test::retry_until` is the only waiting primitive this crate exposes,
 and `test` sits behind `test-support`, which the manifest calls out as
