@@ -397,8 +397,11 @@ async fn a_hook_set_on_a_window_is_read_back_by_name() {
         .expect("active window")
         .expect("a session has a window");
 
+    // A pane hook, because those are the hooks tmux keeps at window scope.
+    // `alert-bell` is a session hook, and setting it here would land on the
+    // session while this test read it back through the window and agreed.
     window
-        .set_hook("alert-bell", "display-message window")
+        .set_hook("pane-died", "display-message window")
         .await
         .expect("window hook");
 
@@ -409,7 +412,7 @@ async fn a_hook_set_on_a_window_is_read_back_by_name() {
     // is why `Window` and `Pane` offer `hook` and no listing: a listing there
     // could answer nothing but empty, which reads as "none set".
     let read = window
-        .hook("alert-bell")
+        .hook("pane-died")
         .await
         .expect("read")
         .expect("the window holds what was set on it");
@@ -1143,6 +1146,59 @@ async fn the_schema_agrees_with_where_tmux_accepts_a_write() {
             .is_some(),
         "and reads it back there",
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_write_tmux_would_place_elsewhere_is_refused() {
+    use libtmux::{ErrorKind, OptionScope};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("scoped").await.expect("a session");
+    let pane = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session has a window")
+        .active_pane()
+        .await
+        .expect("active pane")
+        .expect("a window has a pane");
+
+    // tmux keeps `mouse` per session and picks that table from the name, so it
+    // would carry this out for the whole session and exit 0. Reading it back
+    // through the same pane resolves the same way and agrees, which is why
+    // this has to be refused before it is sent rather than checked after.
+    let error = pane
+        .set_option("mouse", "on")
+        .await
+        .expect_err("a session option is not the pane's to set");
+    assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    assert!(
+        matches!(
+            error,
+            libtmux::Error::OptionScopeMismatch {
+                requested: OptionScope::Pane,
+                ..
+            }
+        ),
+        "the error names the scope that was asked for: {error:?}",
+    );
+
+    // The control: tmux keeps this one at window and pane both, so the same
+    // handle writes it, and a guard that refused here would be refusing what
+    // tmux accepts.
+    pane.set_option("remain-on-exit", "on")
+        .await
+        .expect("a pane option is the pane's to set");
+
+    // A user option has no entry in tmux's table and tmux honours the flags
+    // literally for one, so nothing is guessed about where it belongs.
+    pane.set_option("@mine", "value")
+        .await
+        .expect("a user option is written wherever it was aimed");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

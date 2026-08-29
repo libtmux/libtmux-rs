@@ -6,6 +6,28 @@ use crate::formats::TmuxText;
 use crate::internal::{environment, options};
 use crate::{EnvironmentEntry, Error, IndexedHooks, OptionValue, ReplaceMode, SparseValues};
 
+/// The table tmux keeps an array option in, reached from a `Server` handle.
+///
+/// tmux's eight array options span three tables: `command-alias` and the
+/// terminal ones are server options, `status-format` and `update-environment`
+/// session ones, and `pane-colours` belongs to a window and a pane both. This
+/// handle offers one family of methods for all of them, so the name has to
+/// pick the table. Sending one scope for every name reached the right table
+/// only because tmux resolves an option by its name and ignored the flag.
+///
+/// For an option that is not the server's, the global table is the
+/// server-wide default this handle can address; a particular session's or
+/// window's copy is reached through that object's own handle.
+fn array_scope(name: &str) -> options::Scope<'static> {
+    match crate::option_schema(name).map(crate::OptionSchema::scopes) {
+        Some(scopes) if scopes.contains(&crate::OptionScope::Server) => options::Scope::Server,
+        Some(scopes) if scopes.contains(&crate::OptionScope::Window) => {
+            options::Scope::GlobalWindow
+        }
+        _ => options::Scope::GlobalSession,
+    }
+}
+
 impl Server {
     /// Read one server option's exact stored value.
     ///
@@ -283,7 +305,7 @@ impl Server {
     /// ```
     pub async fn array_option(&self, name: &str) -> Result<SparseValues<TmuxText>, Error> {
         Ok(SparseValues::from(
-            options::indexed(&self.core, options::Scope::GlobalSession, name).await?,
+            options::indexed(&self.core, array_scope(name), name).await?,
         ))
     }
 
@@ -300,7 +322,7 @@ impl Server {
     ) -> Result<(), Error> {
         options::set(
             &self.core,
-            options::Scope::GlobalSession,
+            array_scope(name),
             &format!("{name}[{index}]"),
             value,
             false,
@@ -324,7 +346,7 @@ impl Server {
     ) -> Result<(), Error> {
         options::set(
             &self.core,
-            options::Scope::GlobalSession,
+            array_scope(name),
             &format!("{name}[{index}]"),
             value,
             true,
@@ -338,12 +360,7 @@ impl Server {
     ///
     /// Returns an error when tmux refuses the option name.
     pub async fn unset_array_option(&self, name: &str, index: u32) -> Result<(), Error> {
-        options::unset(
-            &self.core,
-            options::Scope::GlobalSession,
-            &format!("{name}[{index}]"),
-        )
-        .await
+        options::unset(&self.core, array_scope(name), &format!("{name}[{index}]")).await
     }
 
     /// Read one global window option.

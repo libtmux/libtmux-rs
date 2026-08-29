@@ -18,7 +18,7 @@ use crate::formats::TmuxText;
 use crate::hooks::IndexedHooks;
 use crate::hooks::ReplaceMode;
 use crate::internal::core::Core;
-use crate::options::OptionValue;
+use crate::options::{OptionScope, OptionValue};
 use crate::{Command, CommandChain, Error};
 
 /// Which option table an operation reads or writes.
@@ -39,6 +39,16 @@ pub(crate) enum Scope<'target> {
 }
 
 impl Scope<'_> {
+    /// Which of tmux's option tables this scope names.
+    fn option_scope(self) -> OptionScope {
+        match self {
+            Self::Server => OptionScope::Server,
+            Self::GlobalSession | Self::Session(_) => OptionScope::Session,
+            Self::GlobalWindow | Self::Window(_) => OptionScope::Window,
+            Self::Pane(_) => OptionScope::Pane,
+        }
+    }
+
     /// Apply this scope's flags to an option command.
     fn apply(self, command: Command) -> Command {
         match self {
@@ -145,6 +155,8 @@ pub(crate) async fn set(
         command = command.arg("-a");
     }
 
+    ensure_scope(core, scope, name).await?;
+
     run(
         core,
         "set-option",
@@ -159,6 +171,8 @@ pub(crate) async fn set(
 
 /// Remove one option, restoring whatever it inherits.
 pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
     run(
         core,
         "set-option",
@@ -190,6 +204,8 @@ pub(crate) async fn set_hook(
     name: &str,
     command_text: impl Into<OsString>,
 ) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
     let slot = if name.contains('[') {
         OsString::from(name)
     } else {
@@ -211,6 +227,8 @@ pub(crate) async fn set_hook(
 
 /// Remove one hook.
 pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
     run(
         core,
         "set-hook",
@@ -222,6 +240,77 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
             .arg(OsString::from(name)),
     )
     .await
+}
+
+/// Options tmux started keeping at a second scope after the supported floor.
+///
+/// Gating on the current table alone would allow a write that an older tmux
+/// silently places at the other scope, which is the defect this guard exists
+/// to stop.
+const LATE_SCOPES: &[(&str, OptionScope, crate::version::ReleaseVersion)] = &[
+    (
+        "pane-border-format",
+        OptionScope::Pane,
+        crate::version::since::PANE_BORDER_FORMAT_PER_PANE,
+    ),
+    (
+        "pane-active-border-style",
+        OptionScope::Pane,
+        crate::version::since::PANE_BORDER_STYLE_PER_PANE,
+    ),
+    (
+        "pane-border-style",
+        OptionScope::Pane,
+        crate::version::since::PANE_BORDER_STYLE_PER_PANE,
+    ),
+];
+
+/// Refuse a write tmux would carry out somewhere other than the handle says.
+///
+/// tmux picks an option's table from its name, not from the flags the command
+/// carried, so a mismatch is not refused: `mouse` sent with `-p` becomes the
+/// session's `mouse`, tmux exits 0, and reading it back through the same
+/// handle resolves the same way and agrees. Nothing downstream can tell.
+async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    // A user option has no entry in tmux's table, and tmux honours the flags
+    // literally for one. Nothing to check, and nothing to get wrong.
+    if name.starts_with('@') {
+        return Ok(());
+    }
+
+    // An indexed name addresses the option the index belongs to.
+    let bare = name.split('[').next().unwrap_or(name);
+    let Some(schema) = crate::option_schema(bare) else {
+        // tmux will answer "unknown option" itself, and its message names what
+        // it could not resolve better than a guess here would.
+        return Ok(());
+    };
+
+    let requested = scope.option_scope();
+    if !schema.accepts(requested) {
+        return Err(Error::OptionScopeMismatch {
+            option: bare.to_owned(),
+            requested,
+            declared: schema.scopes(),
+        });
+    }
+
+    // The schema is built from one tmux. Where a scope arrived later than the
+    // floor, the running server decides.
+    for (option, late, needs) in LATE_SCOPES {
+        if *option == bare && *late == requested {
+            let found = core.capabilities().await?.tmux_version();
+            if !found.meets(needs) {
+                return Err(Error::UnsupportedCapability {
+                    capability: option,
+                    needs: *needs,
+                    found: found.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Run an option mutation, requiring tmux to accept it.
@@ -436,6 +525,8 @@ pub(crate) async fn set_hooks(
     hooks: &IndexedHooks,
     replace: ReplaceMode,
 ) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
     let mut commands = Vec::with_capacity(hooks.len() + 1);
     if replace == ReplaceMode::Replace {
         // Clearing first is what makes this a replacement rather than a

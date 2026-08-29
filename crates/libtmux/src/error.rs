@@ -472,6 +472,26 @@ pub enum Error {
         detail: String,
     },
 
+    /// The handle's scope is not one tmux keeps this option in.
+    ///
+    /// Raised instead of sending the write, because tmux would not refuse it.
+    /// tmux resolves an option by name rather than by the flags it was sent
+    /// with, so `mouse` through a pane handle becomes the whole session's
+    /// `mouse` and reports success. Reading it back through the same handle
+    /// resolves the same way and agrees, so nothing downstream notices.
+    #[error(
+        "tmux keeps {option} in {declared:?}, so writing it through a \
+         {requested:?} handle would land there instead"
+    )]
+    OptionScopeMismatch {
+        /// The option that was asked for.
+        option: String,
+        /// The scope the handle implies.
+        requested: crate::OptionScope,
+        /// Every scope tmux will actually store the option at.
+        declared: &'static [crate::OptionScope],
+    },
+
     /// tmux answered a format query with a value this crate cannot read.
     ///
     /// Reports a disagreement between the crate and the tmux that answered,
@@ -1272,6 +1292,16 @@ impl fmt::Debug for Error {
                 .debug_struct("AfterEffect")
                 .field("operation", operation)
                 .field("source", source)
+                .finish(),
+            Self::OptionScopeMismatch {
+                option,
+                requested,
+                declared,
+            } => formatter
+                .debug_struct("OptionScopeMismatch")
+                .field("option", option)
+                .field("requested", requested)
+                .field("declared", declared)
                 .finish(),
             Self::RuntimeNested => formatter.debug_struct("RuntimeNested").finish(),
             Self::InvalidServerConfiguration { kind } => formatter

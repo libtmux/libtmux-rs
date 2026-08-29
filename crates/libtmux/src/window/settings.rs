@@ -91,6 +91,11 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name or value.
+    ///
+    /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
+    /// option in another table, because it would carry such a write out
+    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
+    /// before the call.
     pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
@@ -108,6 +113,11 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name or value.
+    ///
+    /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
+    /// option in another table, because it would carry such a write out
+    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
+    /// before the call.
     pub async fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
@@ -125,6 +135,11 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name.
+    ///
+    /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
+    /// option in another table, because it would carry such a write out
+    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
+    /// before the call.
     pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
         options::unset(&self.core, options::Scope::Window(&target), name).await
@@ -139,6 +154,11 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the hook name or command.
+    ///
+    /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
+    /// option in another table, because it would carry such a write out
+    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
+    /// before the call.
     pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set_hook(&self.core, options::Scope::Window(&target), name, command).await
@@ -149,6 +169,11 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux rejects the hook name.
+    ///
+    /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
+    /// option in another table, because it would carry such a write out
+    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
+    /// before the call.
     pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
         options::unset_hook(&self.core, options::Scope::Window(&target), name).await
@@ -169,6 +194,11 @@ impl Window {
     ///
     /// Returns an error when tmux rejects the name or any command.
     ///
+    /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
+    /// option in another table, because it would carry such a write out
+    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
+    /// before the call.
+    ///
     /// # Examples
     ///
     /// ```
@@ -187,10 +217,10 @@ impl Window {
     /// entries.insert(3, TmuxText::from(b"display-message fourth".to_vec()));
     ///
     /// window
-    ///     .set_hooks("alert-bell", &IndexedHooks::from(entries), ReplaceMode::Replace)
+    ///     .set_hooks("pane-died", &IndexedHooks::from(entries), ReplaceMode::Replace)
     ///     .await?;
     ///
-    /// let written = window.hook("alert-bell").await?.expect("the hook is set");
+    /// let written = window.hook("pane-died").await?.expect("the hook is set");
     /// assert_eq!(written.len(), 2);
     /// assert!(written.get(1).is_none(), "the gap is kept");
     ///
@@ -241,9 +271,9 @@ impl Window {
     /// let session = guard.server().new_session("hooked").await?;
     /// let window = session.new_window("w").await?;
     ///
-    /// assert!(window.hook("alert-bell").await?.is_none());
-    /// window.set_hook("alert-bell", "display-message rang").await?;
-    /// assert!(window.hook("alert-bell").await?.is_some());
+    /// assert!(window.hook("pane-died").await?.is_none());
+    /// window.set_hook("pane-died", "display-message rang").await?;
+    /// assert!(window.hook("pane-died").await?.is_some());
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())

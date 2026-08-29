@@ -611,6 +611,20 @@ pub mod since {
     /// The prompt history, and so [`crate::Server::prompt_history`].
     pub const PROMPT_HISTORY: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
 
+    /// `pane-border-format` becoming a pane option as well as a window one.
+    ///
+    /// Below this release tmux stores it only per window, and a write sent
+    /// with `-p` lands there instead -- reporting success for a change the
+    /// caller did not ask for. See [`crate::OptionSchema::accepts`].
+    pub const PANE_BORDER_FORMAT_PER_PANE: ReleaseVersion =
+        ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    /// `pane-border-style` and `pane-active-border-style` becoming pane
+    /// options as well as window ones, with the same consequence below it as
+    /// [`PANE_BORDER_FORMAT_PER_PANE`].
+    pub const PANE_BORDER_STYLE_PER_PANE: ReleaseVersion =
+        ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
     /// `capture-pane -F`, and so [`crate::Pane::capture_lines`].
     pub const CAPTURE_LINE_FLAGS: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 

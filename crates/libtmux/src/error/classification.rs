@@ -91,9 +91,9 @@ impl Error {
             Self::UnsupportedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
-            Self::InvalidCommandInput { .. } | Self::ServerMismatch { .. } => {
-                ErrorKind::InvalidInput
-            }
+            Self::InvalidCommandInput { .. }
+            | Self::ServerMismatch { .. }
+            | Self::OptionScopeMismatch { .. } => ErrorKind::InvalidInput,
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => ErrorKind::InvalidInput,
             Self::Spawn { .. }
@@ -177,6 +177,7 @@ impl Error {
             | Self::CapabilityDefective { .. }
             | Self::VersionProbeFailed { .. }
             | Self::InvalidCommandInput { .. }
+            | Self::OptionScopeMismatch { .. }
             | Self::ServerMismatch { .. }
             | Self::ExecutableNotFound { .. }
             | Self::ExecutorShutdown { .. }
