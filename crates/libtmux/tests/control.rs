@@ -1332,3 +1332,43 @@ async fn a_subscription_name_tmux_would_misread_is_refused() {
     events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// The pause threshold and the resume that answers it must both dispatch.
+///
+/// `pause_after` asks tmux to pause a pane rather than disconnect a client
+/// that falls behind, and `resume_pane` is what restarts one it paused --
+/// which is a different thing from `unmute_pane`, that being the counterpart
+/// to a mute the caller asked for.
+///
+/// What is covered here is that both are built and accepted. Driving a real
+/// pause means falling far enough behind for tmux to notice, which is a
+/// wall-clock race, and a test that sometimes does not pause would report a
+/// broken resume as a passing one.
+#[tokio::test]
+async fn the_pause_threshold_and_its_resume_are_accepted() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("paused").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .pause_after(Duration::from_secs(1))
+        .await
+        .expect("the pause threshold is accepted");
+
+    // A pane tmux never paused is not an error to resume: the flag says what
+    // the stream should do from here, not what it was doing.
+    commands
+        .resume_pane(pane.id())
+        .await
+        .expect("resuming is accepted");
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
