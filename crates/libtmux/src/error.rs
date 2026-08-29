@@ -117,11 +117,13 @@ pub enum ControlModeErrorKind {
     ///
     /// This connection cannot reopen; attach another one to continue.
     Closed,
-    /// The attach opening or a command response exceeded the server deadline.
+    /// The attach opening or a command exceeded the server deadline.
     ///
-    /// A command's deadline starts before it is written and runs until tmux
-    /// closes its response block.
-    /// The connection ends at this boundary; attach another one to continue.
+    /// A command's deadline starts before queue admission and runs until tmux
+    /// closes its response block. Before the connection commits it for writing,
+    /// nothing was written and the connection stays open. After that point, the
+    /// connection ends rather than reuse a possibly partial line. This kind
+    /// spans both cases, so it does not prove that retrying a mutation is safe.
     TimedOut,
     /// The caller stopped reading events, so the connection could not reach
     /// this command's reply.
@@ -1428,7 +1430,7 @@ impl Error {
         }
     }
 
-    /// The connection did not attach or answer a command in time.
+    /// The connection did not attach or resolve a command in time.
     #[cfg(feature = "control-mode")]
     pub(crate) const fn control_mode_timeout() -> Self {
         Self::ControlMode {

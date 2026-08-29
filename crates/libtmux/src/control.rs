@@ -520,6 +520,7 @@ impl ControlMode {
         Ok(Self {
             sender: ControlSender {
                 commands,
+                timeout: server.default_timeout(),
                 pane_off_is_safe,
             },
             events: ControlEvents {
@@ -541,8 +542,9 @@ impl ControlMode {
     /// # Errors
     ///
     /// Returns an error when the command cannot be written as a control-mode
-    /// line, the connection has closed, or its response exceeds the server
-    /// deadline.
+    /// line, the connection has closed, or its deadline elapses while queued,
+    /// being written, or awaiting a response. Cancellation has the same write
+    /// boundary as [`ControlSender::send`].
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
         self.sender.send(command).await
     }
@@ -628,6 +630,7 @@ fn check_subscription_name(name: &str) -> Result<(), Error> {
 #[derive(Clone, Debug)]
 pub struct ControlSender {
     commands: mpsc::Sender<Request>,
+    timeout: Duration,
     /// Whether this tmux can take a pane out of the stream with `off`.
     ///
     /// Read once at attach rather than per call: the server cannot change
@@ -652,26 +655,66 @@ impl ControlSender {
     /// [`crate::Server::cmd`], where the wait costs one process rather than
     /// the connection everything else on it is sharing.
     ///
+    /// Dropping this future while it is queued prevents the command from being
+    /// written. Once the connection commits it for writing, tmux may execute
+    /// it; its reply position stays reserved so later replies remain aligned.
+    ///
     /// # Errors
     ///
     /// Returns an error when the command cannot be written as a control-mode
-    /// line, the connection has closed, or its response exceeds the server
-    /// deadline.
+    /// line, the connection has closed, or its deadline elapses while queued,
+    /// being written, or awaiting a response.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
+        let deadline = Instant::now().checked_add(self.timeout);
         let sensitive_input = command.summary().sensitive_argument_count() > 0;
         let line = command
             .control_mode_line()
             .ok_or_else(Error::control_mode_unrepresentable)?;
-        let (result, answer) = oneshot::channel();
+        let (result, mut answer) = oneshot::channel();
+        let (commit, mut commitment) = oneshot::channel();
+        let finish = |answer: Result<Result<BlockResult, Error>, oneshot::error::RecvError>| {
+            let mut block = answer.map_err(|_| Error::control_mode_closed())??;
+            block.sensitive_input = sensitive_input;
+            Ok(block)
+        };
 
-        self.commands
-            .send(Request { line, result })
-            .await
-            .map_err(|_| Error::control_mode_closed())?;
+        if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
+            return Err(Error::control_mode_timeout());
+        }
+        let permit = tokio::select! {
+            biased;
+            permit = self.commands.reserve() => {
+                permit.map_err(|_| Error::control_mode_closed())?
+            }
+            () = deadline_elapsed(deadline) => return Err(Error::control_mode_timeout()),
+        };
+        permit.send(Request {
+            line,
+            deadline,
+            result,
+            commit,
+        });
 
-        let mut block = answer.await.map_err(|_| Error::control_mode_closed())??;
-        block.sensitive_input = sensitive_input;
-        Ok(block)
+        tokio::select! {
+            biased;
+            answer = &mut answer => return finish(answer),
+            () = deadline_elapsed(deadline) => {
+                commitment.close();
+                match commitment.try_recv() {
+                    Ok(()) => {}
+                    Err(oneshot::error::TryRecvError::Closed | oneshot::error::TryRecvError::Empty) => {
+                        return Err(Error::control_mode_timeout());
+                    }
+                }
+            }
+            committed = &mut commitment => {
+                if committed.is_err() {
+                    return finish(answer.await);
+                }
+            }
+        }
+
+        finish(answer.await)
     }
 
     /// Stop tmux sending this connection what a pane writes.
@@ -1124,7 +1167,34 @@ impl Stream for PaneOutput {
 #[derive(Debug)]
 struct Request {
     line: String,
+    deadline: Option<Instant>,
     result: oneshot::Sender<Result<BlockResult, Error>>,
+    commit: oneshot::Sender<()>,
+}
+
+/// A request whose caller can no longer prevent the first write.
+#[derive(Debug)]
+struct CommittedRequest {
+    line: String,
+    deadline: Option<Instant>,
+    result: oneshot::Sender<Result<BlockResult, Error>>,
+}
+
+impl Request {
+    fn commit(self) -> Option<CommittedRequest> {
+        let Self {
+            line,
+            deadline,
+            result,
+            commit,
+        } = self;
+        commit.send(()).ok()?;
+        Some(CommittedRequest {
+            line,
+            deadline,
+            result,
+        })
+    }
 }
 
 fn admit_request(request: Request, pending_events: usize) -> Option<Request> {
@@ -1160,6 +1230,7 @@ impl ReplySlot {
 struct ReplySlots {
     slots: VecDeque<ReplySlot>,
     live: usize,
+    earliest: Option<Instant>,
 }
 
 impl ReplySlots {
@@ -1168,8 +1239,13 @@ impl ReplySlots {
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
     ) {
-        self.slots.push_back(ReplySlot::Live { result, deadline });
-        self.live += 1;
+        self.earliest = earliest_deadline(self.earliest, deadline);
+        if result.is_closed() {
+            self.slots.push_back(ReplySlot::Tombstone { deadline });
+        } else {
+            self.slots.push_back(ReplySlot::Live { result, deadline });
+            self.live += 1;
+        }
     }
 
     const fn has_live(&self) -> bool {
@@ -1180,14 +1256,16 @@ impl ReplySlots {
         !self.slots.is_empty()
     }
 
-    fn front_deadline(&self) -> Option<Instant> {
-        self.slots.front().and_then(ReplySlot::deadline)
+    const fn earliest_deadline(&self) -> Option<Instant> {
+        self.earliest
     }
 
     fn block_deadline(&self, timeout: Duration) -> Option<Instant> {
-        self.slots
-            .front()
-            .map_or_else(|| Instant::now().checked_add(timeout), ReplySlot::deadline)
+        if self.has_slots() {
+            self.earliest
+        } else {
+            Instant::now().checked_add(timeout)
+        }
     }
 
     fn refuse_live(&mut self) {
@@ -1204,9 +1282,16 @@ impl ReplySlots {
     }
 
     fn complete(&mut self, block: BlockResult) {
-        if let Some(ReplySlot::Live { result, .. }) = self.slots.pop_front() {
+        let Some(slot) = self.slots.pop_front() else {
+            return;
+        };
+        let deadline = slot.deadline();
+        if let ReplySlot::Live { result, .. } = slot {
             self.live -= 1;
             let _ = result.send(Ok(block));
+        }
+        if deadline == self.earliest {
+            self.earliest = self.slots.iter().filter_map(ReplySlot::deadline).min();
         }
     }
 
@@ -1217,6 +1302,7 @@ impl ReplySlots {
             }
         }
         self.live = 0;
+        self.earliest = None;
     }
 }
 
@@ -1344,7 +1430,7 @@ impl Connection {
             }
 
             let held_back = !self.awaiting.has_live() && self.pending.len() >= EVENT_QUEUE;
-            let reply_deadline = self.awaiting.front_deadline();
+            let reply_deadline = self.awaiting.earliest_deadline();
 
             let step = tokio::select! {
                 line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
@@ -1373,11 +1459,20 @@ impl Connection {
                     }
                 }
                 Step::Send(Some(request)) => {
+                    if request
+                        .deadline
+                        .is_some_and(|deadline| deadline <= Instant::now())
+                    {
+                        let _ = request.result.send(Err(Error::control_mode_timeout()));
+                        continue;
+                    }
                     let Some(request) = admit_request(request, self.pending.len()) else {
                         continue;
                     };
-                    let deadline = Instant::now().checked_add(self.timeout);
-                    let write_deadline = earliest_deadline(reply_deadline, deadline);
+                    let Some(request) = request.commit() else {
+                        continue;
+                    };
+                    let write_deadline = earliest_deadline(reply_deadline, request.deadline);
                     let write = write_line(&mut self.stdin, &request.line);
                     tokio::pin!(write);
                     loop {
@@ -1407,7 +1502,7 @@ impl Connection {
                         }
                         break;
                     }
-                    self.awaiting.push(request.result, deadline);
+                    self.awaiting.push(request.result, request.deadline);
                 }
                 // The caller took one, so the next one can go.
                 Step::Deliver(true) => {
@@ -2122,8 +2217,8 @@ mod tests {
     use tokio::sync::{mpsc, oneshot};
 
     use super::{
-        BlockResult, ControlSender, Event, HELD_WHILE_AWAITING, Line, ReplySlots, Request,
-        admit_request, decode_watched_pane_id, unescape_output,
+        BlockResult, ControlSender, Event, HELD_WHILE_AWAITING, Line, ReplySlot, ReplySlots,
+        Request, admit_request, decode_watched_pane_id, unescape_output,
     };
     use crate::{Command, Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId};
 
@@ -2138,13 +2233,24 @@ mod tests {
 
     fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
         let (result, answer) = oneshot::channel();
+        let (commit, _commitment) = oneshot::channel();
         (
             Request {
                 line: String::new(),
+                deadline: None,
+                commit,
                 result,
             },
             answer,
         )
+    }
+
+    fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
+        ControlSender {
+            commands,
+            timeout,
+            pane_off_is_safe: true,
+        }
     }
 
     fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> Error {
@@ -2191,6 +2297,7 @@ mod tests {
         let (commands, mut requests) = mpsc::channel(4);
         let sender = ControlSender {
             commands,
+            timeout: Duration::from_secs(1),
             pane_off_is_safe: true,
         };
         let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
@@ -2241,6 +2348,7 @@ mod tests {
         let (commands, mut requests) = mpsc::channel(2);
         let sender = ControlSender {
             commands,
+            timeout: Duration::from_secs(1),
             pane_off_is_safe: true,
         };
         let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
@@ -2270,6 +2378,7 @@ mod tests {
         let (commands, mut requests) = mpsc::channel(1);
         let sender = ControlSender {
             commands,
+            timeout: Duration::from_secs(1),
             pane_off_is_safe: true,
         };
         let pane: PaneId = "%1".parse().expect("a pane id");
@@ -2332,6 +2441,139 @@ mod tests {
                 .number(),
             3,
         );
+    }
+
+    #[tokio::test]
+    async fn queue_wait_counts_toward_the_command_deadline() {
+        let (commands, mut requests) = mpsc::channel(1);
+        let sender = sender(commands.clone(), Duration::from_millis(20));
+        let (occupant, _answer) = request();
+        commands
+            .try_send(occupant)
+            .expect("the command queue has its one slot filled");
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(1),
+            sender.send(Command::new("list-sessions")),
+        )
+        .await
+        .expect("the sender applies its own deadline");
+        let error = outcome.expect_err("the full queue exceeds the deadline");
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+
+        let _occupant = requests.recv().await.expect("the first request remains");
+        assert!(
+            requests.try_recv().is_err(),
+            "the expired request never enters the queue",
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_actor_commit_refuses_the_request() {
+        let (commands, mut requests) = mpsc::channel(1);
+        let sender = sender(commands, Duration::from_secs(1));
+        let sending = tokio::spawn(async move { sender.send(Command::new("list-sessions")).await });
+
+        let request = requests.recv().await.expect("the request is queued");
+        sending.abort();
+        assert!(
+            sending
+                .await
+                .expect_err("the caller was cancelled")
+                .is_cancelled(),
+        );
+        assert!(
+            request.commit().is_none(),
+            "the actor cannot commit a cancelled request",
+        );
+    }
+
+    #[tokio::test]
+    async fn deadline_before_actor_commit_refuses_the_request() {
+        let timeout = Duration::from_millis(20);
+        let (commands, mut requests) = mpsc::channel(1);
+        let sender = sender(commands, timeout);
+        let sending = tokio::spawn(async move { sender.send(Command::new("list-sessions")).await });
+
+        let request = requests.recv().await.expect("the request is queued");
+        let error = sending
+            .await
+            .expect("the caller task joins")
+            .expect_err("the held request reaches its deadline");
+        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert!(
+            request.commit().is_none(),
+            "the actor cannot commit the expired request",
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_commit_keeps_reply_alignment() {
+        let (commands, mut requests) = mpsc::channel(1);
+        let sender = sender(commands, Duration::from_secs(1));
+        let sending = tokio::spawn(async move { sender.send(Command::new("list-sessions")).await });
+
+        let request = requests.recv().await.expect("the request is queued");
+        let request = request.commit().expect("the actor commits the request");
+        sending.abort();
+        assert!(
+            sending
+                .await
+                .expect_err("the caller was cancelled")
+                .is_cancelled(),
+        );
+
+        let mut replies = ReplySlots::default();
+        replies.push(request.result, request.deadline);
+        assert!(
+            matches!(replies.slots.front(), Some(ReplySlot::Tombstone { .. })),
+            "the committed command keeps its reply slot",
+        );
+
+        let (next, mut next_answer) = oneshot::channel();
+        replies.push(next, None);
+        replies.complete(reply(1));
+        assert!(
+            matches!(
+                next_answer.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "the cancelled command consumes its own block",
+        );
+        replies.complete(reply(2));
+        assert_eq!(
+            next_answer
+                .try_recv()
+                .expect("the next caller is answered")
+                .expect("the next command succeeds")
+                .number(),
+            2,
+        );
+    }
+
+    #[test]
+    fn reply_deadline_is_the_earliest_pending_deadline() {
+        let now = tokio::time::Instant::now();
+        let earlier = now + Duration::from_secs(1);
+        let later = now + Duration::from_secs(2);
+        let mut replies = ReplySlots::default();
+        let (first, _first_answer) = oneshot::channel();
+        let (second, _second_answer) = oneshot::channel();
+
+        replies.push(first, later.into());
+        replies.push(second, earlier.into());
+        assert_eq!(replies.earliest_deadline(), Some(earlier));
+        replies.complete(reply(1));
+        assert_eq!(replies.earliest_deadline(), Some(earlier));
+        replies.complete(reply(2));
+        assert_eq!(replies.earliest_deadline(), None);
+
+        let (first, _first_answer) = oneshot::channel();
+        let (second, _second_answer) = oneshot::channel();
+        replies.push(first, earlier.into());
+        replies.push(second, later.into());
+        replies.complete(reply(3));
+        assert_eq!(replies.earliest_deadline(), Some(later));
     }
 
     #[test]

@@ -402,6 +402,73 @@ async fn a_reply_deadline_starts_before_begin() {
 }
 
 #[tokio::test]
+async fn the_earliest_committed_deadline_ends_the_connection() {
+    let fixture = directory();
+    let parent = fixture.path().join("parent.pid");
+    let descendant = fixture.path().join("descendant.pid");
+    let first_seen = fixture.path().join("first-command");
+    let second_seen = fixture.path().join("second-command");
+    let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
+    let prefix = format!(
+        "{}\nIFS= read -r _first\n: > {}\nIFS= read -r _second\n: > {}",
+        opening_success(),
+        shell_quote(&first_seen),
+        shell_quote(&second_seen),
+    );
+    let executable = write_script(
+        fixture.path(),
+        &process_script(&parent, &descendant, &prefix),
+    );
+    let server = basic_server(fixture.path(), executable, Duration::from_secs(2));
+    let (mut later, events) = attach(&server)
+        .await
+        .expect("control mode attaches")
+        .split();
+    later.timeout = Duration::from_secs(2);
+    let mut earlier = later.clone();
+    earlier.timeout = Duration::from_millis(100);
+
+    let first = tokio::spawn(async move { later.send(Command::new("list-sessions")).await });
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        while !first_seen.exists() {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("the first command reaches the client");
+
+    let second = tokio::spawn(async move { earlier.send(Command::new("list-windows")).await });
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        while !second_seen.exists() {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("the second command reaches the client");
+
+    let second_error = tokio::time::timeout(Duration::from_secs(1), second)
+        .await
+        .expect("the earlier deadline ends the actor")
+        .expect("the second sender task joins")
+        .expect_err("the second command times out");
+    assert_eq!(second_error.kind(), ErrorKind::Timeout);
+    let first_error = first
+        .await
+        .expect("the first sender task joins")
+        .expect_err("the shared connection ends");
+    assert_eq!(first_error.kind(), ErrorKind::Timeout);
+    let shutdown = events
+        .shutdown()
+        .await
+        .expect_err("the actor reports its deadline");
+    assert_eq!(shutdown.kind(), ErrorKind::Timeout);
+    assert_process_gone(wait_for_pid(&parent).await).await;
+    assert_process_gone(wait_for_pid(&descendant).await).await;
+
+    server.shutdown().await.expect("server shuts down");
+}
+
+#[tokio::test]
 async fn a_blocked_write_uses_the_reply_deadline() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
