@@ -2582,11 +2582,6 @@ impl Server {
             .any(|session| session.name() == name))
     }
 
-    /// Record a listing failure that a lenient accessor is about to discard.
-    ///
-    /// The lenient contract hides the cause from the return type, so this is
-    /// the only place it survives. Without the `tracing` feature the failure
-    /// is dropped, which is why every lenient accessor has a loud
     /// List every session on the server, preserving any failure.
     ///
     /// # Errors
