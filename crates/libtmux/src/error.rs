@@ -1814,7 +1814,7 @@ impl fmt::Debug for Error {
             Self::ControlMode { kind, source } => formatter
                 .debug_struct("ControlMode")
                 .field("kind", kind)
-                .field("kind", &source.as_ref().map(io::Error::kind))
+                .field("source_kind", &source.as_ref().map(io::Error::kind))
                 .finish(),
             Self::RuntimeUnavailable { source } => formatter
                 .debug_struct("RuntimeUnavailable")
@@ -1928,6 +1928,17 @@ mod tests {
                 "{kind:?} needs repair, not replay",
             );
         }
+    }
+
+    #[cfg(feature = "control-mode")]
+    #[test]
+    fn control_mode_debug_distinguishes_the_source_kind() {
+        let error = Error::control_mode(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+
+        assert_eq!(
+            format!("{error:?}"),
+            "ControlMode { kind: Transport, source_kind: Some(PermissionDenied) }",
+        );
     }
 
     #[test]
