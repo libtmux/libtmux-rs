@@ -297,6 +297,7 @@ enum libtmux::query::ExactlyOneError
 enum libtmux::query::FilterExpressionErrorKind
 enum libtmux::test::DaemonState
 enum libtmux::test::TestServerErrorKind
+function __clone_box
 function as_ref
 function borrow
 function borrow_mut
@@ -315,8 +316,10 @@ function from
 function from_step
 function from_str
 function hash
+function inline_schema
 function into
 function into_iter
+function json_schema
 function libtmux::AccessRule::mode
 function libtmux::AccessRule::user
 function libtmux::CaptureOptions::end
@@ -907,6 +910,8 @@ function libtmux::test::unique_name
 function matches
 function partial_cmp
 function poll_next
+function schema_id
+function schema_name
 function serialize
 function source
 function to_owned
@@ -1470,6 +1475,7 @@ variant libtmux::plan::PaneTarget::Slot
 variant libtmux::plan::PlanValidationErrorKind::SourceMissing
 variant libtmux::plan::PlanValidationErrorKind::SourceNotEarlier
 variant libtmux::plan::PlanValidationErrorKind::SourceOutputMissing
+variant libtmux::plan::PlanValidationErrorKind::SourceProvenanceMismatch
 variant libtmux::plan::PlanValidationErrorKind::SourceScopeMismatch
 variant libtmux::plan::Planner::Folding
 variant libtmux::plan::Planner::Marked
