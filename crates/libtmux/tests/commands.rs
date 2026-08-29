@@ -912,6 +912,52 @@ async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A `TMUX_PANE` that is set and wrong is not the same as one that is unset.
+///
+/// Both used to answer "not inside tmux", which sends a caller who *is* inside
+/// tmux to check the wrong thing entirely. `Server::from_env_value` already
+/// drew this line for `TMUX`, ten lines away, with a comment making the case.
+#[tokio::test]
+async fn a_malformed_pane_variable_is_not_being_outside_tmux() {
+    use libtmux::ServerConfigurationErrorKind as Kind;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    server.new_session("env").await.expect("session");
+
+    let absent = libtmux::Pane::from_env_value(server, None::<std::ffi::OsString>)
+        .await
+        .expect_err("nothing set the variable");
+    assert!(
+        matches!(
+            &absent,
+            libtmux::Error::InvalidServerConfiguration {
+                kind: Kind::NotInsideTmux,
+                ..
+            }
+        ),
+        "an unset variable means this process was not started by tmux, got {absent:?}"
+    );
+
+    for wrong in ["%abc", "@0", "%-1", "#{pane_id}", ""] {
+        let malformed = libtmux::Pane::from_env_value(server, Some(wrong))
+            .await
+            .expect_err("the variable is set and does not name a pane");
+        assert!(
+            matches!(
+                &malformed,
+                libtmux::Error::InvalidServerConfiguration {
+                    kind: Kind::MalformedTmuxVariable,
+                    ..
+                }
+            ),
+            "{wrong:?} is a variable written wrongly, not an absent one, got {malformed:?}"
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

@@ -1638,13 +1638,26 @@ impl fmt::Display for CaptureBound {
 
 /// Read a pane ID out of an environment value tmux set.
 ///
-/// An absent or malformed value is the same failure a caller cares about:
-/// this process was not started by tmux, or not by this tmux.
+/// Absent and malformed are different answers. Nothing set the variable means
+/// this process was not started by tmux; a variable that is set and does not
+/// name a pane means something else wrote it, or wrote it wrongly, and telling
+/// a caller they are not inside tmux sends them to check the wrong thing.
+///
+/// [`Server::from_env_value`] already draws this line for `TMUX`, which is the
+/// same variable family and the same question.
 fn parse_env_id(value: Option<&OsStr>) -> Result<PaneId, Error> {
+    let Some(value) = value else {
+        return Err(Error::invalid_server_configuration(
+            crate::ServerConfigurationErrorKind::NotInsideTmux,
+        ));
+    };
+
     value
-        .and_then(|value| value.to_str())
+        .to_str()
         .and_then(|value| value.parse().ok())
         .ok_or_else(|| {
-            Error::invalid_server_configuration(crate::ServerConfigurationErrorKind::NotInsideTmux)
+            Error::invalid_server_configuration(
+                crate::ServerConfigurationErrorKind::MalformedTmuxVariable,
+            )
         })
 }
