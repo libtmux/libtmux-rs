@@ -3,11 +3,49 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::error::IdParseError;
+
+/// Escape a name so tmux stores the text it was given.
+///
+/// tmux expands a name through its format machinery before it stores it, so
+/// `#(command)` runs `command` in a shell and `#{session_id}` becomes the id.
+/// Doubling `#` is what tmux's parser reads as one literal `#`, so the name
+/// arrives as itself.
+///
+/// This is not applied for you, because a name is sometimes meant as a
+/// format. Use it for the names a program did not write: an argument, a
+/// request field, a configuration file. Passing that text through unescaped
+/// gives whoever wrote it a shell.
+///
+/// # Examples
+///
+/// ```
+/// use std::ffi::OsString;
+///
+/// use libtmux::escape_name;
+///
+/// // A name that would otherwise run a command.
+/// assert_eq!(escape_name("#(id)"), OsString::from("##(id)"));
+///
+/// // Ordinary names are unchanged.
+/// assert_eq!(escape_name("editor"), OsString::from("editor"));
+/// ```
+#[must_use]
+pub fn escape_name(name: impl AsRef<OsStr>) -> OsString {
+    let bytes = name.as_ref().as_bytes();
+    let mut escaped = Vec::with_capacity(bytes.len());
+    for byte in bytes {
+        if *byte == b'#' {
+            escaped.push(b'#');
+        }
+        escaped.push(*byte);
+    }
+    OsString::from_vec(escaped)
+}
 
 fn parse_id(value: &str, sigil: char) -> Result<(u32, Box<str>), IdParseError> {
     let error = || IdParseError::new(sigil);

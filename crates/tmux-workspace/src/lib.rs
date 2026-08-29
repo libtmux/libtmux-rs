@@ -42,7 +42,7 @@ use libtmux::plan::{
     KillWindow, NewSession, NewWindow, PaneSlot, Plan, Planner, SelectLayout, SelectPane,
     SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow,
 };
-use libtmux::{Server, Session, SessionId};
+use libtmux::{Server, Session, SessionId, escape_name};
 
 /// A failure while building a workspace.
 #[derive(Debug, thiserror::Error)]
@@ -297,7 +297,10 @@ impl<'server> WorkspaceBuilder<'server> {
     }
 
     fn session_op(workspace: &Workspace) -> NewSession {
-        let mut session = NewSession::new(workspace.session_name.as_str());
+        // A workspace file is not this program's own text. tmux expands a name
+        // as a format before storing it, so an unescaped `#(command)` here
+        // would run a shell for whoever wrote the file.
+        let mut session = NewSession::new(escape_name(workspace.session_name.as_str()));
         if let Some(directory) = workspace.start_directory.as_deref() {
             session = session.start_directory(directory);
         }
@@ -312,7 +315,7 @@ impl<'server> WorkspaceBuilder<'server> {
     ) -> NewWindow {
         let mut window = NewWindow::new(session);
         if let Some(name) = config.window_name.as_deref() {
-            window = window.name(name);
+            window = window.name(escape_name(name));
         }
         if let Some(directory) = directory {
             window = window.start_directory(directory);

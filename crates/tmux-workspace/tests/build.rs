@@ -719,3 +719,41 @@ windows:
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_name_from_the_file_cannot_run_a_command() {
+    // tmux expands a name as a format before storing it, so `#(command)` runs
+    // a shell. A workspace file is not this program's own text: whoever wrote
+    // it would otherwise choose what runs.
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let marker = directory.path().join("marker");
+    let workspace = Workspace::from_yaml(&format!(
+        "
+session_name: \"#(touch {0})\"
+windows:
+  - window_name: \"#(touch {0})\"
+    panes:
+      - sleep 300
+",
+        marker.display()
+    ))
+    .expect("configuration parses");
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    assert!(!marker.exists(), "a name from the file ran a command");
+
+    // The name survives as the text it was, rather than being dropped.
+    let windows = session.windows().await.expect("windows");
+    assert_eq!(
+        text(windows[0].name()),
+        format!("#(touch {})", marker.display()),
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
