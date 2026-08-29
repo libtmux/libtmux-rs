@@ -62,6 +62,11 @@ required-features = ["plan", "control-mode", "blocking", "test-support", "query"
 name = "orchestrate"
 required-features = ["test-support"]
 
+# Same: `unique_name` only. Telling the failures apart needs no feature.
+[[example]]
+name = "recover"
+required-features = ["test-support"]
+
 [[bench]]
 name = "hierarchy"
 harness = false

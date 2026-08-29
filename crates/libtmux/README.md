@@ -107,6 +107,7 @@ below, so a caller who wants them all does not have to list them.
 | Send tmux something this crate has no method for | `Server::cmd` | below |
 | Compare what each transport costs | `plan::Plan`, `plan::Planner` | `examples/matrix.rs` |
 | Clean up fixtures a killed run left | `test::reap_abandoned_servers` | `examples/sweep.rs` |
+| Tell a gone object from a gone link | `Error::is_object_gone`, `Error::is_transient` | `examples/recover.rs` |
 
 Waiting needs no feature: `Pane::wait_for_text` and `Pane::wait_for_quiet` are
 in the library, poll the scrollback with wrapped lines joined, and answer
@@ -493,6 +494,11 @@ assert_eq!(text.to_string_lossy(), "editor");
 decision a caller makes. `Error::is_object_gone` is the branch most programs
 write, because an object disappearing is an ordinary race rather than a failed
 request.
+
+The block below shows the shape against a healthy server, so its interesting
+arms do not run. `examples/recover.rs` makes each failure happen instead --
+including the one that costs people, where a link is gone and the window it
+pointed at is still running.
 
 ```rust
 use libtmux::test::TestServer;
