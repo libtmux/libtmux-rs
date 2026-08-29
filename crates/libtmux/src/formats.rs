@@ -808,193 +808,6 @@ macro_rules! define_format_catalog {
 }
 format_catalog!(define_format_catalog);
 
-/// Lexicographic identifier-only catalog index.
-#[allow(
-    dead_code,
-    reason = "catalog-only metadata is verified by the checked parity fixture"
-)]
-static CATALOG: [&FormatDescriptor; 179] = [
-    &ACTIVE_WINDOW_INDEX,
-    &ALTERNATE_SAVED_X,
-    &ALTERNATE_SAVED_Y,
-    &BRACKET_PASTE_FLAG,
-    &BUFFER_NAME,
-    &BUFFER_SAMPLE,
-    &BUFFER_SIZE,
-    &CLIENT_ACTIVITY,
-    &CLIENT_CELL_HEIGHT,
-    &CLIENT_CELL_WIDTH,
-    &CLIENT_CONTROL_MODE,
-    &CLIENT_CREATED,
-    &CLIENT_DISCARDED,
-    &CLIENT_FLAGS,
-    &CLIENT_HEIGHT,
-    &CLIENT_KEY_TABLE,
-    &CLIENT_LAST_SESSION,
-    &CLIENT_MODE_FORMAT,
-    &CLIENT_NAME,
-    &CLIENT_PID,
-    &CLIENT_PREFIX,
-    &CLIENT_READONLY,
-    &CLIENT_SESSION,
-    &CLIENT_TERMFEATURES,
-    &CLIENT_TERMNAME,
-    &CLIENT_TERMTYPE,
-    &CLIENT_TTY,
-    &CLIENT_UID,
-    &CLIENT_USER,
-    &CLIENT_UTF8,
-    &CLIENT_WIDTH,
-    &CLIENT_WRITTEN,
-    &COMMAND_LIST_ALIAS,
-    &COMMAND_LIST_NAME,
-    &COMMAND_LIST_USAGE,
-    &CONFIG_FILES,
-    &COPY_CURSOR_LINE,
-    &COPY_CURSOR_WORD,
-    &COPY_CURSOR_X,
-    &COPY_CURSOR_Y,
-    &CURRENT_FILE,
-    &CURSOR_CHARACTER,
-    &CURSOR_FLAG,
-    &CURSOR_X,
-    &CURSOR_Y,
-    &HISTORY_BYTES,
-    &HISTORY_LIMIT,
-    &HISTORY_SIZE,
-    &INSERT_FLAG,
-    &KEYPAD_CURSOR_FLAG,
-    &KEYPAD_FLAG,
-    &LAST_WINDOW_INDEX,
-    &LINE,
-    &MOUSE_ALL_FLAG,
-    &MOUSE_ANY_FLAG,
-    &MOUSE_BUTTON_FLAG,
-    &MOUSE_SGR_FLAG,
-    &MOUSE_STANDARD_FLAG,
-    &NEXT_SESSION_ID,
-    &ORIGIN_FLAG,
-    &PANE_ACTIVE,
-    &PANE_AT_BOTTOM,
-    &PANE_AT_LEFT,
-    &PANE_AT_RIGHT,
-    &PANE_AT_TOP,
-    &PANE_BG,
-    &PANE_BOTTOM,
-    &PANE_CURRENT_COMMAND,
-    &PANE_CURRENT_PATH,
-    &PANE_DEAD,
-    &PANE_DEAD_SIGNAL,
-    &PANE_DEAD_STATUS,
-    &PANE_DEAD_TIME,
-    &PANE_FG,
-    &PANE_FLAGS,
-    &PANE_FLOATING_FLAG,
-    &PANE_FORMAT,
-    &PANE_HEIGHT,
-    &PANE_ID,
-    &PANE_IN_MODE,
-    &PANE_INDEX,
-    &PANE_INPUT_OFF,
-    &PANE_LAST,
-    &PANE_LEFT,
-    &PANE_MARKED,
-    &PANE_MARKED_SET,
-    &PANE_MODE,
-    &PANE_PATH,
-    &PANE_PB_PROGRESS,
-    &PANE_PB_STATE,
-    &PANE_PID,
-    &PANE_PIPE,
-    &PANE_PIPE_PID,
-    &PANE_RIGHT,
-    &PANE_SEARCH_STRING,
-    &PANE_START_COMMAND,
-    &PANE_START_PATH,
-    &PANE_SYNCHRONIZED,
-    &PANE_TABS,
-    &PANE_TITLE,
-    &PANE_TOP,
-    &PANE_TTY,
-    &PANE_UNSEEN_CHANGES,
-    &PANE_WIDTH,
-    &PANE_X,
-    &PANE_Y,
-    &PANE_Z,
-    &PANE_ZOOMED_FLAG,
-    &PID,
-    &SCROLL_POSITION,
-    &SCROLL_REGION_LOWER,
-    &SCROLL_REGION_UPPER,
-    &SEARCH_MATCH,
-    &SELECTION_END_X,
-    &SELECTION_END_Y,
-    &SELECTION_START_X,
-    &SELECTION_START_Y,
-    &SESSION_ACTIVITY,
-    &SESSION_ALERTS,
-    &SESSION_ATTACHED,
-    &SESSION_ATTACHED_LIST,
-    &SESSION_CREATED,
-    &SESSION_FORMAT,
-    &SESSION_GROUP,
-    &SESSION_GROUP_ATTACHED,
-    &SESSION_GROUP_ATTACHED_LIST,
-    &SESSION_GROUP_LIST,
-    &SESSION_GROUP_MANY_ATTACHED,
-    &SESSION_GROUP_SIZE,
-    &SESSION_GROUPED,
-    &SESSION_ID,
-    &SESSION_LAST_ATTACHED,
-    &SESSION_MANY_ATTACHED,
-    &SESSION_MARKED,
-    &SESSION_NAME,
-    &SESSION_PATH,
-    &SESSION_STACK,
-    &SESSION_WINDOWS,
-    &SOCKET_PATH,
-    &START_TIME,
-    &SYNCHRONIZED_OUTPUT_FLAG,
-    &UID,
-    &USER,
-    &VERSION,
-    &WINDOW_ACTIVE,
-    &WINDOW_ACTIVE_CLIENTS,
-    &WINDOW_ACTIVE_CLIENTS_LIST,
-    &WINDOW_ACTIVE_SESSIONS,
-    &WINDOW_ACTIVE_SESSIONS_LIST,
-    &WINDOW_ACTIVITY,
-    &WINDOW_ACTIVITY_FLAG,
-    &WINDOW_BELL_FLAG,
-    &WINDOW_BIGGER,
-    &WINDOW_CELL_HEIGHT,
-    &WINDOW_CELL_WIDTH,
-    &WINDOW_END_FLAG,
-    &WINDOW_FLAGS,
-    &WINDOW_FORMAT,
-    &WINDOW_HEIGHT,
-    &WINDOW_ID,
-    &WINDOW_INDEX,
-    &WINDOW_LAST_FLAG,
-    &WINDOW_LAYOUT,
-    &WINDOW_LINKED,
-    &WINDOW_LINKED_SESSIONS,
-    &WINDOW_LINKED_SESSIONS_LIST,
-    &WINDOW_MARKED_FLAG,
-    &WINDOW_NAME,
-    &WINDOW_OFFSET_X,
-    &WINDOW_OFFSET_Y,
-    &WINDOW_PANES,
-    &WINDOW_RAW_FLAGS,
-    &WINDOW_SILENCE_FLAG,
-    &WINDOW_STACK_INDEX,
-    &WINDOW_START_FLAG,
-    &WINDOW_VISIBLE_LAYOUT,
-    &WINDOW_WIDTH,
-    &WINDOW_ZOOMED_FLAG,
-    &WRAP_FLAG,
-];
-
 /// Tmux list command profile represented by a format plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ListProfile {
@@ -2052,9 +1865,9 @@ mod tests {
     #[cfg(feature = "test-support")]
     use super::decode_text;
     use super::{
-        CATALOG, CLIENT_INFO_DESCRIPTORS, CLIENT_INFO_SUPPLEMENTS, CLIENT_NAME, DecoderKind,
-        EmptyPolicy, FormatCodecError, FormatCodecErrorKind, FormatCodecPhase, FormatDescriptor,
-        FormatPlan, GROUPED_CATALOG, InfoPlacement, ListProfile, PANE_ID, PANE_INFO_DESCRIPTORS,
+        CLIENT_INFO_DESCRIPTORS, CLIENT_INFO_SUPPLEMENTS, CLIENT_NAME, DecoderKind, EmptyPolicy,
+        FormatCodecError, FormatCodecErrorKind, FormatCodecPhase, FormatDescriptor, FormatPlan,
+        GROUPED_CATALOG, InfoPlacement, ListProfile, PANE_ID, PANE_INFO_DESCRIPTORS,
         PANE_INFO_SUPPLEMENTS, ParsedRow, ParsedSlot, PlanFieldState, PlanPurpose, PlanVersion,
         ProfileSet, QUOTE_SHELL_SPECIALS, RequiredContext, SESSION_ID, SESSION_INFO_DESCRIPTORS,
         SESSION_INFO_SUPPLEMENTS, SemanticOwner, TransportDialect, WINDOW_ID,
@@ -3244,7 +3057,7 @@ mod tests {
     }
 
     fn descriptor(name: &str) -> &'static FormatDescriptor {
-        CATALOG
+        catalog()
             .iter()
             .copied()
             .find(|descriptor| descriptor.name() == name)
@@ -3292,19 +3105,26 @@ mod tests {
         std::ptr::from_ref(descriptor) as usize
     }
 
+    fn catalog() -> Vec<&'static FormatDescriptor> {
+        let mut catalog = GROUPED_CATALOG.to_vec();
+        catalog.sort_unstable_by_key(|descriptor| descriptor.name());
+        catalog
+    }
+
     #[test]
     fn format_catalog_checked_parity_is_an_exact_sorted_bijection() {
         let rows = checked_catalog_rows();
-        assert_eq!(CATALOG.len(), 179);
+        let catalog = catalog();
+        assert_eq!(catalog.len(), 179);
         assert_eq!(GROUPED_CATALOG.len(), 179);
 
         let mut names = std::collections::BTreeSet::new();
         let mut pointers = std::collections::BTreeSet::new();
-        for (index, (row, descriptor)) in rows.iter().zip(CATALOG).enumerate() {
+        for (index, (row, descriptor)) in rows.iter().zip(&catalog).enumerate() {
             assert!(names.insert(descriptor.name()));
             assert!(pointers.insert(descriptor_address(descriptor)));
             if let Some(previous) = index.checked_sub(1) {
-                assert!(CATALOG[previous].name() < descriptor.name());
+                assert!(catalog[previous].name() < descriptor.name());
             }
             assert_eq!(descriptor.name(), row.field);
             assert_eq!(owner_token(descriptor.owner()), row.owner);
@@ -3580,9 +3400,8 @@ mod tests {
             "user",
         ];
 
-        for descriptor in CATALOG
-            .iter()
-            .copied()
+        for descriptor in catalog()
+            .into_iter()
             .filter(|descriptor| descriptor.minimum_release() > TmuxVersion::MIN_SUPPORTED)
         {
             let profile = if descriptor.profiles().contains(ListProfile::Sessions) {
@@ -3626,7 +3445,7 @@ mod tests {
             }
         }
 
-        for descriptor in CATALOG.iter().copied().filter(|descriptor| {
+        for descriptor in catalog().into_iter().filter(|descriptor| {
             descriptor.minimum_release() == TmuxVersion::MIN_SUPPORTED
                 && profiles_token(descriptor.profiles()) != "none"
         }) {
