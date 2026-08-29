@@ -1667,6 +1667,17 @@ variants have no standalone path in that JSON, so they are attributed to the
 type that owns them: an unqualified `sessions` would say nothing about which
 handle it belongs to, and a move between types would not show at all.
 
+That attribution reached one level, and an enum's variants sit one level
+further down. A struct-like variant's fields are items in their own right and
+nothing mapped them to the variant holding them, so `Error::LinkGone` recorded
+its fields as `kind` and `index` -- bare names that seven other variants of the
+same enum also spell. The record carried 42 such lines. Removing both of
+`LinkGone`'s fields and adding one produced a diff of one inserted line,
+because something else still spelled `kind` and `index`: the gate whose whole
+purpose is saying that a change happened could not see the change described
+two sections above. Variant fields are attributed like everything else now,
+which named 121 of them and left no bare field records.
+
 ### The MCP server bounds the tmux side, not just its own answers
 
 `tmux-mcp` already capped what it returns: 256 KiB of captured output, eight
