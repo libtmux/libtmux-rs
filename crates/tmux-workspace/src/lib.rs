@@ -260,18 +260,24 @@ impl<'server> WorkspaceBuilder<'server> {
                 .steps()
                 .iter()
                 .find_map(libtmux::plan::StepOutcome::refusal);
-            if matches!(refusal, Some(libtmux::Error::SessionExists { .. })) {
+            if matches!(refusal.as_ref(), Some(libtmux::Error::SessionExists { .. })) {
                 return Err(BuildError::SessionExists {
                     name: workspace.session_name.clone(),
                 });
             }
-            return Err(BuildError::Refused {
-                name: workspace.session_name.clone(),
-                detail: refusal.map_or_else(
-                    || String::from("tmux refused a step without saying why"),
-                    |error| error.to_string(),
-                ),
-            });
+            return match refusal {
+                Some(error) if result.created(0).is_some() => {
+                    Err(error.after_effect("workspace-build").into())
+                }
+                Some(error) => Err(BuildError::Refused {
+                    name: workspace.session_name.clone(),
+                    detail: error.to_string(),
+                }),
+                None => Err(BuildError::Refused {
+                    name: workspace.session_name.clone(),
+                    detail: String::from("tmux refused a step without saying why"),
+                }),
+            };
         }
 
         let created = result
@@ -283,7 +289,8 @@ impl<'server> WorkspaceBuilder<'server> {
             })?;
         self.server
             .session_by_id(&created)
-            .await?
+            .await
+            .map_err(|error| error.after_effect("workspace-build"))?
             .ok_or_else(|| BuildError::MissingInitialWindow {
                 name: workspace.session_name.clone(),
             })

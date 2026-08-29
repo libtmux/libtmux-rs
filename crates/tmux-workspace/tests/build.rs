@@ -194,6 +194,80 @@ async fn building_over_an_existing_session_is_refused() {
 }
 
 #[tokio::test]
+async fn failed_lookup_after_a_completed_build_is_a_partial_effect() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    server
+        .set_hook("after-new-session", "kill-server")
+        .await
+        .expect("hook is installed");
+
+    let workspace = Workspace::from_yaml("session_name: committed").expect("configuration parses");
+    let error = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect_err("the completed build cannot be looked up");
+
+    let BuildError::Tmux(error) = error else {
+        panic!("lookup failure must remain a libtmux error");
+    };
+    assert_eq!(error.kind(), libtmux::ErrorKind::PartialEffect);
+
+    let libtmux::Error::AfterEffect {
+        operation, source, ..
+    } = error
+    else {
+        panic!("the post-build lookup must identify its committed boundary");
+    };
+    assert_eq!(operation, "workspace-build");
+    assert_eq!(source.kind(), libtmux::ErrorKind::ServerGone);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn refusal_after_session_creation_is_a_partial_effect() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let workspace = Workspace::from_yaml(
+        "
+session_name: committed-refusal
+options:
+  option-that-tmux-does-not-have: on
+",
+    )
+    .expect("configuration parses");
+
+    let error = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect_err("the option is refused after the session is created");
+
+    let BuildError::Tmux(error) = error else {
+        panic!("a refusal after creation must remain a libtmux error");
+    };
+    assert_eq!(error.kind(), libtmux::ErrorKind::PartialEffect);
+    assert!(matches!(
+        error,
+        libtmux::Error::AfterEffect {
+            operation: "workspace-build",
+            source,
+            ..
+        } if source.kind() == libtmux::ErrorKind::Refused
+    ));
+    assert!(
+        server
+            .session("committed-refusal")
+            .await
+            .expect("the server remains queryable")
+            .is_some(),
+        "the failed build left the session it created",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn a_window_is_placed_and_started_as_the_file_says() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
