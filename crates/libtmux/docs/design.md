@@ -1679,7 +1679,7 @@ because tmux accepts `on`, `off`, and `2` through `5` for it. That last one is
 the argument for generating the option schema from tmux's own table rather
 than inferring a type from the value, and the example now says so.
 
-### Waiting is missing from the production surface
+### Waiting was missing from the production surface
 
 One kind of waiting is now offered, and it is worth naming so the gap below is
 not read as wider than it is. `Server::wait_for_channel` is the blocking half
@@ -1691,10 +1691,10 @@ signal releases every waiter present, and the latch then releases one later
 wait -- so signalling before the wait starts is safe, measured on 3.7c. That
 removed the `Server::cmd(wait-for)` workaround from `tmux-mcp`.
 
-It closes none of what follows. `wait-for` is a rendezvous between commands:
-something has to signal it, so it answers "tell me when this is done" only for
-work that was written to announce itself. Watching a pane that was not is the
-missing category, and it stays missing.
+It answers a narrower question than the section it sits in. `wait-for` is a
+rendezvous between commands: something has to signal it, so it serves "tell me
+when this is done" only for work written to announce itself. Watching a pane
+that was not is the case below, and a different mechanism answers it.
 
 `Pane::wait_for_text` and `Pane::wait_for_quiet` now answer the pane case, on
 the polling path this section argued for: no feature, because a caller who
@@ -1727,16 +1727,19 @@ So the doorbell stays unbuilt, and this is the reason rather than the absence
 of one. It buys tens of milliseconds and brings a failure mode the floor does
 not have.
 
-`libtmux::test::retry_until` is the only waiting primitive this crate exposes,
-and `test` sits behind `test-support`, which the manifest calls out as
+What follows is why, and it is kept because the constraints it records are the
+ones the implementation had to meet.
+
+`libtmux::test::retry_until` was the only waiting primitive this crate
+exposed, and `test` sits behind `test-support`, which the manifest calls out as
 belonging "to a dev-dependency, not to a build of the library". A caller who
-needs to wait for anything a pane does writes that loop themselves. It is a
-missing category rather than a missing convenience, and it is inherited rather
+needed to wait for anything a pane did wrote that loop themselves. It was a
+missing category rather than a missing convenience, and it was inherited rather
 than dropped in the port: the Python library keeps `retry_until` in
 `libtmux/test/retry.py` for the same reason, and of the seven ports only the
-Swift one ships a pane wait a production caller can reach.
+Swift one shipped a pane wait a production caller could reach.
 
-What fills the gap downstream is the measure of it. `tmux-mcp` reconstructs
+What filled the gap downstream is the measure of it. `tmux-mcp` reconstructs
 run-and-report in `exec.rs`: sentinels bracketing the command, a scanner
 reassembling output around them, and separate waits for text and for quiet.
 AGENTS.md says a workaround there is a finding here, and this is the largest
