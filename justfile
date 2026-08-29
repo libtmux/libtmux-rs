@@ -101,6 +101,7 @@ fixture-root:
 # say so; tmux-mcp cannot, because rmcp and darling require 1.88. A crate
 # tested only at the workspace floor can publish a rust-version it does not
 # meet, which is what happened before this covered it.
+[doc("Run the suite on each crate's minimum supported Rust version")]
 [group: 'test']
 msrv:
     rustup run 1.85.0 cargo test --locked \
@@ -117,13 +118,14 @@ msrv:
 # uv supplies pytest and tomlkit without turning this Cargo workspace into a
 # Python project. -c and --confcutdir keep pytest from walking up into a Python
 # project above this directory.
+[doc('Test the script that points every agent CLI at a build of this server')]
 [group: 'test']
 swap-test *args:
     uv run --no-project --with pytest --with 'tomlkit>=0.13' \
         python -m pytest scripts/test_mcp_swap.py -c /dev/null --confcutdir=. \
         --rootdir=. -p no:cacheprovider {{ args }}
 
-# Exercise the Linux-only pidfd supervisor without building five tmux releases.
+# Exercise the Linux-only pidfd supervisor without building five tmux releases
 [group: 'test']
 compat-supervisor-test *args:
     #!/usr/bin/env bash
@@ -166,6 +168,7 @@ example-coverage-check:
 # source and cannot be read out of it. `each_listing_records_the_fields_it_requests`
 # is both the recorder and the gate: it fails under `just test` when the set
 # drifts, so nothing extra runs in `just check`.
+[doc('Which format names each listing asks tmux for')]
 [group: 'release']
 list-profiles:
     LIBTMUX_RERECORD=1 cargo test --locked --package libtmux --all-features \
@@ -174,6 +177,7 @@ list-profiles:
 # Regenerate the recorded public API surface
 #
 # Needs nightly for rustdoc's JSON output, so it is not part of `just check`.
+[doc('Regenerate the recorded public API surface')]
 [group: 'release']
 api:
     cargo +nightly rustdoc -p libtmux --all-features \
@@ -354,6 +358,7 @@ bench *args:
 #
 # Cargo treats staged registry versions as immutable. A fresh target keeps
 # same-version edits from reusing source extracted by an earlier run.
+[doc('Build the crates that get published, and verify what they contain')]
 [group: 'release']
 package:
     #!/usr/bin/env bash
