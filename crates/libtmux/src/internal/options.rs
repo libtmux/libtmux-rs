@@ -155,6 +155,8 @@ pub(crate) async fn set(
 
     run(
         core,
+        "set-option",
+        Some(name),
         command
             .arg(OsString::from(name))
             .sensitive_arg(value.into()),
@@ -166,6 +168,8 @@ pub(crate) async fn set(
 pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
     run(
         core,
+        "set-option",
+        None,
         scope
             .apply(Command::new("set-option"))
             .arg("-u")
@@ -183,6 +187,8 @@ pub(crate) async fn set_hook(
 ) -> Result<(), Error> {
     run(
         core,
+        "set-hook",
+        None,
         scope
             .apply(Command::new("set-hook"))
             .arg(OsString::from(name))
@@ -195,6 +201,8 @@ pub(crate) async fn set_hook(
 pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
     run(
         core,
+        "set-hook",
+        None,
         scope
             .apply(Command::new("set-hook"))
             .arg("-u")
@@ -204,18 +212,56 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
 }
 
 /// Run an option mutation, requiring tmux to accept it.
-async fn run(core: &Core, command: Command) -> Result<(), Error> {
+async fn run(
+    core: &Core,
+    command_name: &'static str,
+    option_name: Option<&str>,
+    command: Command,
+) -> Result<(), Error> {
     let result = core.execute(command).await?;
     if result.success() {
         return Ok(());
     }
 
-    Err(Error::refused(
-        "set-option",
-        result.exit_code(),
+    Err(mutation_failure(command_name, option_name, &result))
+}
+
+fn mutation_failure(
+    command_name: &'static str,
+    option_name: Option<&str>,
+    result: &crate::CommandResult,
+) -> Error {
+    let exit_code = result.exit_code();
+    let failure = Error::refused(
+        command_name,
+        exit_code,
         result.stderr_lossy().into_owned(),
         None,
-    ))
+    );
+    if result.command().sensitive_argument_count() == 0 {
+        return failure;
+    }
+
+    match (option_name, failure) {
+        (Some(name), Error::OptionRejected { kind, .. }) => Error::OptionRejected {
+            kind,
+            detail: name.to_owned(),
+        },
+        (Some(name), Error::CommandFailed { .. }) => Error::OptionRejected {
+            kind: crate::OptionErrorKind::BadValue,
+            detail: name.to_owned(),
+        },
+        (None, Error::OptionRejected { .. } | Error::CommandFailed { .. }) => {
+            Error::CommandFailed {
+                command: command_name,
+                exit_code,
+                stderr: String::from(
+                    "tmux output withheld because the request contained sensitive input",
+                ),
+            }
+        }
+        (_, other) => other,
+    }
 }
 
 /// List the hook slots that are set at one scope, as `name[index]`.
@@ -438,10 +484,5 @@ pub(crate) async fn set_hooks(
         return Ok(());
     }
 
-    Err(Error::refused(
-        "set-hook",
-        result.exit_code(),
-        result.stderr_lossy().into_owned(),
-        None,
-    ))
+    Err(mutation_failure("set-hook", None, &result))
 }

@@ -677,6 +677,45 @@ async fn tmux_refusing_an_option_says_which_of_three_things_went_wrong() {
 }
 
 #[tokio::test]
+async fn rejected_sensitive_values_are_absent_from_errors() {
+    use libtmux::{Error, OptionErrorKind};
+
+    const SECRET: &str = "libtmux-sentinel-sensitive-value";
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    for name in ["mouse", "status-keys"] {
+        let error = server
+            .set_global_option(name, SECRET)
+            .await
+            .expect_err("tmux refuses the value");
+        assert!(
+            matches!(
+                &error,
+                Error::OptionRejected {
+                    kind: OptionErrorKind::BadValue,
+                    detail,
+                } if detail == name
+            ),
+            "the error names the option and classifies its value: {error:?}",
+        );
+        assert!(!error.to_string().contains(SECRET), "{error}");
+        assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
+    }
+
+    let error = server
+        .set_hook("after-new-window", SECRET)
+        .await
+        .expect_err("tmux refuses an unknown hook command");
+    assert!(error.to_string().contains("set-hook"), "{error}");
+    assert!(!error.to_string().contains(SECRET), "{error}");
+    assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn the_server_environment_is_separate_from_every_session_one() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();

@@ -414,7 +414,7 @@ pub enum Error {
     OptionRejected {
         /// Which of the three answers tmux gave.
         kind: OptionErrorKind,
-        /// The name tmux could not resolve, or the value it would not take.
+        /// The option name tmux could not resolve or whose value it rejected.
         detail: String,
     },
 
@@ -802,7 +802,8 @@ pub enum Error {
         command: &'static str,
         /// The process exit code, when it exited normally.
         exit_code: Option<i32>,
-        /// The message tmux printed, which explains the refusal.
+        /// The message tmux printed, or a fixed explanation when retaining it
+        /// could disclose sensitive input.
         stderr: String,
     },
 
