@@ -74,19 +74,34 @@ pub(crate) async fn get(
     let result = core.execute(command).await?;
 
     if !result.success() {
-        // A user option that is not set is not merely empty, it is unknown.
-        // For a built-in name, failure means the caller named something tmux
-        // does not have.
-        if name.starts_with('@') {
-            return Ok(None);
-        }
-
-        return Err(Error::refused(
+        let failure = Error::refused(
             "show-options",
             result.exit_code(),
             result.stderr_lossy().into_owned(),
             None,
-        ));
+        );
+
+        // A user option that is not set is not merely empty, it is unknown to
+        // tmux, so that one failure is the answer `None`.
+        //
+        // Only that one. The earlier version asked what the caller had named
+        // and swallowed every failure for an `@` name, which made a pane that
+        // had gone away read as a pane whose option was never set -- tmux says
+        // "invalid option: @x" for the first and "no such pane: %1" for the
+        // second, in the stderr this already holds.
+        if name.starts_with('@')
+            && matches!(
+                failure,
+                Error::OptionRejected {
+                    kind: crate::OptionErrorKind::Unknown,
+                    ..
+                }
+            )
+        {
+            return Ok(None);
+        }
+
+        return Err(failure);
     }
 
     let stdout = result.stdout();
