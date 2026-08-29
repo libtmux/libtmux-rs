@@ -547,6 +547,30 @@ fn a_present_but_invalid_value_is_refused_rather_than_defaulted() {
     assert!(!workspace.windows[0].focus);
 }
 
+#[test]
+fn rendered_scalars_round_trip_control_and_line_separator_characters() {
+    let mut workspace =
+        Workspace::from_yaml("session_name: seed\n").expect("the seed workspace parses");
+    let controls = (0_u8..=31)
+        .chain(127..=159)
+        .map(char::from)
+        .chain(['\u{2028}', '\u{2029}'])
+        .collect::<String>();
+    workspace.session_name = format!("before{controls}after");
+
+    let rendered = workspace.to_yaml();
+    let reparsed = Workspace::from_yaml(&rendered).expect("the rendered YAML parses");
+
+    assert_eq!(reparsed, workspace);
+    assert!(
+        !rendered.chars().any(|character| {
+            character != '\n'
+                && (character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+        }),
+        "rendered scalars escape control characters",
+    );
+}
+
 /// The two directions have to meet: a session built from a file, frozen back
 /// to a workspace, and built again must produce the same shape. Anything the
 /// freeze cannot recover shows up here as a difference.

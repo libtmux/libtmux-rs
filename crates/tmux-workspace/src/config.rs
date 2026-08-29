@@ -634,6 +634,19 @@ fn path(value: &std::path::Path) -> String {
 /// shell, and deciding which of YAML's bare-scalar rules it trips is a larger
 /// job than quoting everything.
 fn quoted(value: &str) -> String {
-    let escaped = value.replace('\\', r"\\").replace('"', r#"\""#);
-    format!("\"{escaped}\"")
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str(r#"\""#),
+            '\\' => escaped.push_str(r"\\"),
+            character if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') => {
+                let code = u32::from(character);
+                let _ = write!(escaped, r"\u{code:04x}");
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    escaped
 }
