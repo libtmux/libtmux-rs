@@ -177,12 +177,29 @@ the test, and two shapes account for most of them:
   without it passes on an idle machine and not on a loaded one.
 - **A fixed sleep standing in for a wait.** A duration chosen to cover a
   latency that has no upper bound is a guess, and load is what collects on it.
-  Wait for the observable instead — this workspace ships `wait_for_text` and
-  `wait_for_idle` for exactly that, and a wait must assert the outcome it got,
-  since one that runs to its deadline still returns successfully.
+  Wait for the observable instead — `Pane::wait_for_text` and
+  `Pane::wait_for_quiet` are in the library and need no feature, and
+  `tmux-mcp` exposes the same shapes as tools. A wait must assert the outcome
+  it got, since one that runs to its deadline still returns successfully.
 
 A test that only passes on an idle machine is a broken test, and the fix
 belongs in the test rather than in a rerun.
+
+### Asking tmux what it does
+
+Establish a behaviour with the command the code sends, not with a convenient
+one. `display-message` carries `CMD_CLIENT_CANFAIL`, so it resolves a target
+it cannot find by falling back rather than refusing: `display-message -t
+<session>:<vacated index>` answers about some other window, while
+`select-window` with the same target exits 1. A probe built on it reports a
+behaviour the real command does not have.
+
+The same flag makes the reverse true. An absent target expands every format
+empty and exits zero, so a probe that counts an empty answer as absence cannot
+tell it from a command that failed.
+
+Two investigations here have been decided by that difference, in both
+directions, so the rule is worth the extra minute: send what the code sends.
 
 ## Checks that must pass
 
