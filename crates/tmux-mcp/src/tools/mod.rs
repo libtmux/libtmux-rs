@@ -13,8 +13,8 @@ use rmcp::model::ErrorData;
 
 use crate::caller::Relation;
 use crate::{
-    Capture, Marks, PaneView, Panes, ServerView, SessionView, Sessions, TmuxTools, WindowView,
-    Windows, resources,
+    Capture, Marks, OptionScopeName, PaneView, Panes, ServerView, SessionView, Sessions, TmuxTools,
+    WindowView, Windows, resources,
 };
 
 use error::{bad_input, object_gone, tmux_error};
@@ -180,16 +180,16 @@ impl TmuxTools {
     /// Resolve the object an option belongs to.
     async fn option_scope(
         &self,
-        scope: Option<&str>,
+        scope: Option<&OptionScopeName>,
         target: Option<&str>,
     ) -> Result<OptionScope, ErrorData> {
         let needs = |what: &str| bad_input(format!("scope {what} needs a target id"));
 
-        match scope.unwrap_or("global-session") {
-            "server" => Ok(OptionScope::Server),
-            "global-session" => Ok(OptionScope::GlobalSession),
-            "global-window" => Ok(OptionScope::GlobalWindow),
-            "session" => {
+        match scope {
+            Some(OptionScopeName::Server) => Ok(OptionScope::Server),
+            None | Some(OptionScopeName::GlobalSession) => Ok(OptionScope::GlobalSession),
+            Some(OptionScopeName::GlobalWindow) => Ok(OptionScope::GlobalWindow),
+            Some(OptionScopeName::Session) => {
                 let target = target.ok_or_else(|| needs("session"))?;
                 let session = self
                     .server
@@ -203,14 +203,14 @@ impl TmuxTools {
                     .ok_or_else(|| bad_input(format!("no session {target}")))?;
                 Ok(OptionScope::Session(Box::new(session)))
             }
-            "window" => Ok(OptionScope::Window(Box::new(
+            Some(OptionScopeName::Window) => Ok(OptionScope::Window(Box::new(
                 self.find_window(target.ok_or_else(|| needs("window"))?)
                     .await?,
             ))),
-            "pane" => Ok(OptionScope::Pane(Box::new(
+            Some(OptionScopeName::Pane) => Ok(OptionScope::Pane(Box::new(
                 self.find_pane(target.ok_or_else(|| needs("pane"))?).await?,
             ))),
-            unknown => Err(bad_input(format!(
+            Some(OptionScopeName::Other(unknown)) => Err(bad_input(format!(
                 "scope must be server, global-session, global-window, session, window, \
                      or pane, not {unknown}"
             ))),

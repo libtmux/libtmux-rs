@@ -190,6 +190,62 @@ fn run_plan_schema_matches_every_operation_and_rejects_malformed_plans() -> Test
 }
 
 #[test]
+fn tool_schemas_close_every_documented_choice_vocabulary() -> TestResult {
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .safety(Safety::Destructive)
+        .build();
+
+    for (name, valid, invalid) in [
+        (
+            "run_plan",
+            json!({"plan": [], "grouping": "marked"}),
+            json!({"plan": [], "grouping": "parallel"}),
+        ),
+        (
+            "split_pane",
+            json!({"pane": "%1", "direction": "above"}),
+            json!({"pane": "%1", "direction": "sideways"}),
+        ),
+        (
+            "resize_pane",
+            json!({"pane": "%1", "direction": "left", "cells": 1}),
+            json!({"pane": "%1", "direction": "inward", "cells": 1}),
+        ),
+        (
+            "select_pane",
+            json!({"pane": "%1", "direction": "previous"}),
+            json!({"pane": "%1", "direction": "sideways"}),
+        ),
+        (
+            "select_window",
+            json!({"window": "@1", "direction": "last"}),
+            json!({"window": "@1", "direction": "first"}),
+        ),
+        (
+            "show_option",
+            json!({"name": "status", "scope": "pane", "target": "%1"}),
+            json!({"name": "status", "scope": "planet", "target": "%1"}),
+        ),
+    ] {
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} is offered"));
+        let schema = serde_json::to_value(tool.input_schema)?;
+        let validator = jsonschema::draft202012::new(&schema)?;
+
+        assert!(validator.is_valid(&valid), "{name} rejected {valid}");
+        assert!(
+            !validator.is_valid(&invalid),
+            "{name} advertised an open vocabulary: {invalid}",
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn portable_filter_schemas_reject_target_field_and_operator_mismatches() -> TestResult {
     let tools = TmuxTools::builder(libtmux::Server::new()?).build();
 
