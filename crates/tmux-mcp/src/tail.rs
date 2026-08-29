@@ -36,9 +36,11 @@ const RING_BYTES: usize = 256 * 1024;
 /// How many established pane tails may be retained at once.
 ///
 /// Each tail holds a control-mode connection, so this is a real resource. The
-/// least recently read is dropped after its replacement attaches. One
-/// serialized replacement connection may therefore exist transiently; the
-/// server's persistent-client limit remains the hard process bound.
+/// least recently read is dropped after its replacement attaches. Replacement
+/// attachment is serialized, but evicted clients close asynchronously, so the
+/// server's persistent-client limit remains the hard process bound. A limit
+/// with no replacement headroom refuses the new tail and preserves the old
+/// ones.
 const MAX_TAILS: usize = 8;
 
 /// How many new tails may be attaching at once.
