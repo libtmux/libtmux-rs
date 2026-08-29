@@ -328,6 +328,15 @@ impl Plan {
             if succeeded || (marked_creation && !result.stdout().is_empty()) {
                 bind(&mut bound, self.steps(), &step, result.stdout())
                     .map_err(|error| after_plan_effect(error, effect_through_step))?;
+                // A merged step reports `Unknown` because nothing distinguishes
+                // its members. A creation whose id came back is distinguished:
+                // tmux prints the id only once it has made the object, so the
+                // evidence that names the object also settles its outcome.
+                for index in step.indices() {
+                    if bound.contains_key(&(*index, Part::Created)) {
+                        outcomes[*index] = Outcome::Complete;
+                    }
+                }
             }
 
             reported.push(StepOutcome {

@@ -644,3 +644,43 @@ fn deserialization_rejects_a_slot_with_the_wrong_scope() {
     let failure = serde_json::from_value::<Plan>(wire).expect_err("window is not a session");
     assert!(failure.to_string().contains("not Session"), "{failure}");
 }
+
+#[tokio::test]
+async fn a_creation_the_run_can_name_is_not_reported_as_unproven() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("named"));
+    // The split's id comes back on stdout. Killing the pane clears tmux's
+    // marked register, so the send that follows fails and the whole folded
+    // invocation reports one status for three operations.
+    let pane = plan.add(SplitWindow::new(session.window()).focus());
+    plan.add(KillPane::new(pane));
+    plan.add(SendKeys::new(pane).text("unreachable").enter());
+
+    let result = plan
+        .run(server, Planner::Marked)
+        .await
+        .expect("the run reports rather than refusing");
+
+    let created = result
+        .operations()
+        .iter()
+        .find(|report| report.kind() == OperationKind::SplitWindow)
+        .expect("the split is reported");
+
+    // `Outcome::Unknown` means the absence of evidence. tmux prints a pane id
+    // only once it has made the pane, so naming it is evidence.
+    assert!(
+        created.value().is_some(),
+        "the run named the pane it created",
+    );
+    assert_eq!(
+        created.outcome(),
+        Outcome::Complete,
+        "a creation the run can name is not unproven",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
