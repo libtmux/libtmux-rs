@@ -10,20 +10,85 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use libtmux::test::{DaemonState, TestServer, retry_until};
-use libtmux::{Command, Server};
-use rmcp::model::CallToolRequestParams;
+use libtmux::{Command, NewSessionOptions, Server};
+use rmcp::model::{
+    CallToolRequestParams, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction,
+    ElicitationCapability,
+};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
 use serde_json::{Value, json};
-use tmux_mcp::{Safety, TmuxTools};
+use tmux_mcp::{CallerIdentity, Safety, TmuxTools};
 
 /// A client and server talking over an in-memory duplex.
 struct Wire {
     client: RunningService<RoleClient, ()>,
     server: tokio::task::JoinHandle<()>,
+}
+
+/// A tmux move to make immediately before answering a confirmation.
+#[derive(Clone)]
+struct PaneMove {
+    server: Server,
+    source: String,
+    target: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ConfirmedDestruction {
+    Window,
+    Session,
+    Plan,
+}
+
+/// A client that can decide confirmations after an optional pane move.
+#[derive(Clone)]
+struct Decider {
+    approve: Arc<AtomicBool>,
+    asked: Arc<AtomicBool>,
+    before_answer: Option<PaneMove>,
+}
+
+impl rmcp::ClientHandler for Decider {
+    fn get_info(&self) -> ClientInfo {
+        let mut info = ClientInfo::default();
+        info.capabilities.elicitation = Some(ElicitationCapability::default());
+        info
+    }
+
+    async fn create_elicitation(
+        &self,
+        _: ElicitRequestParams,
+        _: rmcp::service::RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, rmcp::ErrorData> {
+        if let Some(movement) = &self.before_answer {
+            let moved = movement
+                .server
+                .cmd(
+                    Command::new("join-pane")
+                        .arg("-d")
+                        .arg("-s")
+                        .arg(&movement.source)
+                        .arg("-t")
+                        .arg(&movement.target),
+                )
+                .await
+                .expect("tmux answers the move");
+            assert!(moved.success(), "the caller pane moves: {moved:?}");
+        }
+        self.asked.store(true, Ordering::SeqCst);
+
+        let mut answer = ElicitResult::new(ElicitationAction::Accept);
+        answer.content = Some(json!({"confirmed": self.approve.load(Ordering::SeqCst)}));
+        Ok(answer)
+    }
 }
 
 /// Which layer turned a call down.
@@ -1644,41 +1709,6 @@ async fn a_long_wait_reports_progress_to_a_client_that_asked() {
     reason = "a client that answers both ways, and the state left behind by each"
 )]
 async fn a_client_that_can_be_asked_decides_whether_work_is_destroyed() {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-
-    use rmcp::model::{
-        ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
-    };
-
-    /// A client that answers the confirmation however it was told to.
-    #[derive(Clone)]
-    struct Decider {
-        approve: Arc<AtomicBool>,
-        asked: Arc<AtomicBool>,
-    }
-
-    impl rmcp::ClientHandler for Decider {
-        fn get_info(&self) -> ClientInfo {
-            let mut info = ClientInfo::default();
-            info.capabilities.elicitation = Some(ElicitationCapability::default());
-            info
-        }
-
-        async fn create_elicitation(
-            &self,
-            _: ElicitRequestParams,
-            _: rmcp::service::RequestContext<RoleClient>,
-        ) -> Result<ElicitResult, rmcp::ErrorData> {
-            self.asked.store(true, Ordering::SeqCst);
-            let mut answer = ElicitResult::new(ElicitationAction::Accept);
-            answer.content = Some(json!({"confirmed": self.approve.load(Ordering::SeqCst)}));
-            Ok(answer)
-        }
-    }
-
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = TmuxTools::builder(guard.server().clone())
         .safety(Safety::Destructive)
@@ -1696,6 +1726,7 @@ async fn a_client_that_can_be_asked_decides_whether_work_is_destroyed() {
     let decider = Decider {
         approve: Arc::new(AtomicBool::new(false)),
         asked: Arc::new(AtomicBool::new(false)),
+        before_answer: None,
     };
     let client = decider
         .clone()
@@ -1772,4 +1803,111 @@ async fn a_client_that_can_be_asked_decides_whether_work_is_destroyed() {
     let _ = client.cancel().await;
     server.abort();
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+async fn assert_moved_caller_is_protected(route: ConfirmedDestruction) {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let caller = guard
+        .server()
+        .new_session(NewSessionOptions::new("caller").command("sleep 300"))
+        .await
+        .expect("caller session is created");
+    let own = caller.panes().await.expect("caller panes are listed")[0]
+        .id()
+        .to_string();
+    let target = guard
+        .server()
+        .new_session(NewSessionOptions::new("target").command("sleep 300"))
+        .await
+        .expect("target session is created");
+    let target_window = target.windows().await.expect("target windows are listed")[0].clone();
+    let target_pane = target_window
+        .panes()
+        .await
+        .expect("target panes are listed")[0]
+        .id()
+        .to_string();
+    let caller = CallerIdentity::from_values(
+        Some(format!("{},1,$0", guard.socket_path().display()).into()),
+        Some(own.clone().into()),
+    )
+    .expect("caller identity is complete");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .safety(Safety::Destructive)
+        .caller(Some(caller))
+        .confirm(true)
+        .build();
+
+    let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
+    let server = tokio::spawn(async move {
+        let service = serve_server(tools, server_transport)
+            .await
+            .expect("server starts");
+        let _ = service.waiting().await;
+    });
+    let client = Decider {
+        approve: Arc::new(AtomicBool::new(true)),
+        asked: Arc::new(AtomicBool::new(false)),
+        before_answer: Some(PaneMove {
+            server: guard.server().clone(),
+            source: own.clone(),
+            target: target_pane,
+        }),
+    }
+    .serve(client_transport)
+    .await
+    .expect("client connects");
+    let arguments = match route {
+        ConfirmedDestruction::Window => {
+            json!({"window": target_window.id().to_string()})
+        }
+        ConfirmedDestruction::Session => json!({"session": "target"}),
+        ConfirmedDestruction::Plan => {
+            let mut plan = libtmux::plan::Plan::new();
+            plan.add(libtmux::plan::KillWindow::new(target_window.id().clone()));
+            json!({"plan": plan, "grouping": "sequential"})
+        }
+    };
+    let mut call = CallToolRequestParams::default();
+    call.name = match route {
+        ConfirmedDestruction::Window => "kill_window",
+        ConfirmedDestruction::Session => "kill_session",
+        ConfirmedDestruction::Plan => "run_plan",
+    }
+    .into();
+    call.arguments = arguments.as_object().cloned();
+
+    let refused = client.call_tool(call).await;
+    assert!(
+        refused.is_err() || refused.is_ok_and(|answer| answer.is_error == Some(true)),
+        "the newly protected target is refused for {route:?}",
+    );
+    assert!(
+        target_window
+            .panes()
+            .await
+            .expect("the target window survives")
+            .iter()
+            .any(|pane| pane.id().to_string() == own),
+        "the caller pane survives in its new window",
+    );
+
+    let _ = client.cancel().await;
+    server.abort();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_caller_moved_during_window_confirmation_is_still_protected() {
+    assert_moved_caller_is_protected(ConfirmedDestruction::Window).await;
+}
+
+#[tokio::test]
+async fn a_caller_moved_during_session_confirmation_is_still_protected() {
+    assert_moved_caller_is_protected(ConfirmedDestruction::Session).await;
+}
+
+#[tokio::test]
+async fn a_caller_moved_during_plan_confirmation_is_still_protected() {
+    assert_moved_caller_is_protected(ConfirmedDestruction::Plan).await;
 }

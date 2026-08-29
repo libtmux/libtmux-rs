@@ -61,10 +61,7 @@ impl TmuxTools {
                         continue;
                     };
                     let window = self.find_window(id.as_ref()).await?;
-                    let panes = window.panes().await.map_err(|error| tmux_error(&error))?;
-                    if panes.iter().any(|pane| pane.id().to_string() == own) {
-                        return Err(Self::self_harm("window", &own));
-                    }
+                    self.protect_window_caller(&window).await?;
                 }
                 _ => {}
             }
@@ -132,6 +129,9 @@ impl TmuxTools {
                 &format!("a plan containing {destructive} destructive {noun}"),
             )
             .await?;
+            if self.confirm {
+                self.protect_plan_caller(&plan).await?;
+            }
         }
 
         let result = plan

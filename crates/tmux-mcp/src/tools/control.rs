@@ -21,6 +21,35 @@ use super::{OptionScope, lossy};
 /// Numbers temporary paste buffers so concurrent calls cannot share one.
 static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+impl TmuxTools {
+    /// Refuse to destroy a window that currently contains the caller pane.
+    pub(super) async fn protect_window_caller(
+        &self,
+        window: &libtmux::Window,
+    ) -> Result<(), ErrorData> {
+        let Some(own) = self.protected_pane().await else {
+            return Ok(());
+        };
+        let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
+        if panes.iter().any(|pane| pane.id().to_string() == own) {
+            return Err(Self::self_harm("window", own));
+        }
+        Ok(())
+    }
+
+    /// Refuse to destroy a session that currently contains the caller pane.
+    async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ErrorData> {
+        let Some(own) = self.protected_pane().await else {
+            return Ok(());
+        };
+        let panes = session.panes().await.map_err(|e| tmux_error(&e))?;
+        if panes.iter().any(|pane| pane.id().to_string() == own) {
+            return Err(Self::self_harm("session", own));
+        }
+        Ok(())
+    }
+}
+
 #[tool_router(router = control_router, vis = "pub(super)")]
 impl TmuxTools {
     /// Create a window in one session.
@@ -69,12 +98,10 @@ impl TmuxTools {
     ) -> Result<Json<Killed>, ErrorData> {
         let window = self.find_window(&window).await?;
         let id = window.id().to_string();
+        self.protect_window_caller(&window).await?;
         self.permitted(&asking, &format!("window {id}")).await?;
-        if let Some(own) = self.protected_pane().await {
-            let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
-            if panes.iter().any(|pane| pane.id().to_string() == own) {
-                return Err(Self::self_harm("window", own));
-            }
+        if self.confirm {
+            self.protect_window_caller(&window).await?;
         }
         window.kill().await.map_err(|e| tmux_error(&e))?;
 
@@ -99,10 +126,10 @@ impl TmuxTools {
     ) -> Result<Json<Killed>, ErrorData> {
         let pane = self.find_pane(&pane).await?;
         let id = pane.id().to_string();
-        self.permitted(&asking, &format!("pane {id}")).await?;
         if self.protected_pane().await == Some(id.as_str()) {
             return Err(Self::self_harm("pane", &id));
         }
+        self.permitted(&asking, &format!("pane {id}")).await?;
         pane.kill().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Killed { id }))
@@ -211,12 +238,10 @@ impl TmuxTools {
     ) -> Result<Json<Killed>, ErrorData> {
         let target = self.find_session(&session).await?;
         let id = target.id().to_string();
+        self.protect_session_caller(&target).await?;
         self.permitted(&asking, &format!("session {id}")).await?;
-        if let Some(own) = self.protected_pane().await {
-            let panes = target.panes().await.map_err(|e| tmux_error(&e))?;
-            if panes.iter().any(|pane| pane.id().to_string() == own) {
-                return Err(Self::self_harm("session", own));
-            }
+        if self.confirm {
+            self.protect_session_caller(&target).await?;
         }
         target.kill().await.map_err(|e| tmux_error(&e))?;
 

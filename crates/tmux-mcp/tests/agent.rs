@@ -307,8 +307,14 @@ async fn killing_the_pane_the_server_runs_in_is_refused() {
         .await
         .expect("the pane splits"));
 
+    let caller = identity_for(guard.server(), &own).await;
     let tools = TmuxTools::builder(guard.server().clone())
-        .caller(Some(identity_for(guard.server(), &own).await))
+        .caller(Some(caller.clone()))
+        .confirm(true)
+        .build();
+    let permissive = TmuxTools::builder(guard.server().clone())
+        .caller(Some(caller))
+        .confirm(false)
         .build();
 
     let refused = tools
@@ -338,14 +344,14 @@ async fn killing_the_pane_the_server_runs_in_is_refused() {
     assert_eq!(detail["stale"], false, "{detail}");
 
     // The guard protects one pane, not the whole server.
-    tools
+    permissive
         .kill_pane(
             args(serde_json::json!({"pane": other})),
             tmux_mcp::Asking::nobody(),
         )
         .await
         .expect("another pane is fair game");
-    assert_eq!(panes(&tools).await.len(), 1);
+    assert_eq!(panes(&permissive).await.len(), 1);
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -361,8 +367,14 @@ async fn killing_the_window_or_session_holding_that_pane_is_refused() {
     let own = pane["id"].as_str().expect("a pane id is a string");
     let window = pane["window_id"].as_str().expect("a window id is a string");
 
+    let caller = identity_for(guard.server(), own).await;
     let tools = TmuxTools::builder(guard.server().clone())
-        .caller(Some(identity_for(guard.server(), own).await))
+        .caller(Some(caller.clone()))
+        .confirm(true)
+        .build();
+    let permissive = TmuxTools::builder(guard.server().clone())
+        .caller(Some(caller))
+        .confirm(false)
         .build();
 
     let refused = tools
@@ -386,11 +398,11 @@ async fn killing_the_window_or_session_holding_that_pane_is_refused() {
     assert!(refused.message.contains(own), "{}", refused.message);
 
     // A session that does not hold the caller is untouched by the guard.
-    tools
+    permissive
         .create_session(args(serde_json::json!({"name": "scratch"})))
         .await
         .expect("session is created");
-    tools
+    permissive
         .kill_session(
             args(serde_json::json!({"session": "scratch"})),
             tmux_mcp::Asking::nobody(),
