@@ -501,6 +501,11 @@ fixed-width integer is a canonical base-10 string. This avoids TypeScript
 number precision loss. `isize` and `usize` are excluded because their range is
 target-dependent.
 
+Wire decoding stops at 64 expression levels, 4,096 expression nodes, or 4,096
+membership values. The limits bound recursive validation and retained input
+independently of the deserializer. The schema states the array limits; its
+recursive grammar cannot express one budget shared across the whole tree.
+
 `lt`, `lte`, `gt`, and `gte` take one bound rather than a set, and appear in
 the schema beside the text operators because an integer rides as text. Which
 fields accept them is the crate's business rather than the schema's: a bound

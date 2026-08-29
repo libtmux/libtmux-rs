@@ -1496,6 +1496,7 @@ variant libtmux::plan::WindowTarget::Id
 variant libtmux::plan::WindowTarget::Slot
 variant libtmux::query::ExactlyOneError::MultipleItems
 variant libtmux::query::ExactlyOneError::NoItems
+variant libtmux::query::FilterExpressionErrorKind::ComplexityLimit
 variant libtmux::query::FilterExpressionErrorKind::InvalidLiteral
 variant libtmux::query::FilterExpressionErrorKind::InvalidRegex
 variant libtmux::query::FilterExpressionErrorKind::InvalidStructure

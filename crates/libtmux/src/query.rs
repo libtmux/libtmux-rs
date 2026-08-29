@@ -60,10 +60,12 @@
 //!
 //! The optional `derive` and `serde` features are independent. Serde uses the
 //! closed version 1 grammar, whose membership values are arrays even though
-//! Rust authoring accepts any `IntoIterator`. Regex operators use Rust syntax
-//! and reject Python-only look-around and backreferences with source-less,
-//! value-free errors. Dynamic `field__operator` parsing and remote pushdown
-//! belong to later ingress and execution layers.
+//! Rust authoring accepts any `IntoIterator`. Decoding accepts at most 64
+//! expression levels, 4,096 expression nodes, and 4,096 membership values.
+//! Regex operators use Rust syntax and reject Python-only look-around and
+//! backreferences with source-less, value-free errors. Dynamic
+//! `field__operator` parsing and remote pushdown belong to later ingress and
+//! execution layers.
 //!
 //! Scalar field handles expose only operators valid for their field type. A
 //! boolean field rejects string equality and membership:
@@ -587,6 +589,8 @@ pub enum FilterExpressionErrorKind {
     UnknownQuantifier,
     /// A literal cannot be represented by the field type.
     InvalidLiteral,
+    /// The serialized expression exceeds a fixed decoder budget.
+    ComplexityLimit,
     /// The expression tree has an invalid shape.
     InvalidStructure,
 }
@@ -644,6 +648,7 @@ impl fmt::Display for FilterExpressionError {
             FilterExpressionErrorKind::UnknownOperator => "unknown expression operator",
             FilterExpressionErrorKind::UnknownQuantifier => "unknown relation quantifier",
             FilterExpressionErrorKind::InvalidLiteral => "invalid expression literal",
+            FilterExpressionErrorKind::ComplexityLimit => "expression exceeds complexity limits",
             FilterExpressionErrorKind::InvalidStructure => "invalid expression structure",
         })
     }

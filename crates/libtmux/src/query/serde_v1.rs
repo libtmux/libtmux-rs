@@ -2,7 +2,7 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use serde::de::{
-    self, Deserialize, Deserializer, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor,
+    self, Deserialize, DeserializeSeed, Deserializer, Error as _, MapAccess, SeqAccess, Visitor,
 };
 use serde::ser::{Error as _, Serialize, SerializeSeq, SerializeStruct, Serializer};
 
@@ -14,6 +14,9 @@ use super::{
 };
 
 const VERSION: u8 = 1;
+const MAX_EXPRESSION_DEPTH: usize = 64;
+const MAX_EXPRESSION_NODES: usize = 4_096;
+const MAX_SET_VALUES: usize = 4_096;
 
 fn expression_error(kind: FilterExpressionErrorKind) -> FilterExpressionError {
     FilterExpressionError::new(kind)
@@ -25,14 +28,26 @@ fn invalid_structure<E: de::Error>() -> E {
     ))
 }
 
-fn consume_seq<'de, A: SeqAccess<'de>>(mut sequence: A) -> Result<(), A::Error> {
-    while sequence.next_element::<IgnoredAny>()?.is_some() {}
-    Ok(())
+fn complexity_limit<E: de::Error>() -> E {
+    E::custom(expression_error(FilterExpressionErrorKind::ComplexityLimit))
 }
 
-fn consume_map<'de, A: MapAccess<'de>>(mut map: A) -> Result<(), A::Error> {
-    while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
-    Ok(())
+struct DecodeBudget {
+    nodes: usize,
+}
+
+impl DecodeBudget {
+    const fn new() -> Self {
+        Self { nodes: 0 }
+    }
+
+    fn enter_expression<E: de::Error>(&mut self, depth: usize) -> Result<(), E> {
+        if depth > MAX_EXPRESSION_DEPTH || self.nodes >= MAX_EXPRESSION_NODES {
+            return Err(complexity_limit());
+        }
+        self.nodes += 1;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -166,18 +181,16 @@ impl<'de> Visitor<'de> for VersionVisitor {
         Ok(WireVersion::Invalid)
     }
 
-    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        deserializer.deserialize_any(self)
+    fn visit_some<D: Deserializer<'de>>(self, _: D) -> Result<Self::Value, D::Error> {
+        Err(invalid_structure())
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, sequence: A) -> Result<Self::Value, A::Error> {
-        consume_seq(sequence)?;
-        Ok(WireVersion::Invalid)
+    fn visit_seq<A: SeqAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(invalid_structure())
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        consume_map(map)?;
-        Ok(WireVersion::Invalid)
+    fn visit_map<A: MapAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(invalid_structure())
     }
 }
 
@@ -251,18 +264,16 @@ impl<'de> Visitor<'de> for WireElementVisitor {
         Ok(WireElement::Other)
     }
 
-    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        deserializer.deserialize_any(self)
+    fn visit_some<D: Deserializer<'de>>(self, _: D) -> Result<Self::Value, D::Error> {
+        Err(invalid_structure())
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, sequence: A) -> Result<Self::Value, A::Error> {
-        consume_seq(sequence)?;
-        Ok(WireElement::Other)
+    fn visit_seq<A: SeqAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(invalid_structure())
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        consume_map(map)?;
-        Ok(WireElement::Other)
+    fn visit_map<A: MapAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(invalid_structure())
     }
 }
 
@@ -321,8 +332,8 @@ impl<'de> Visitor<'de> for WireValueVisitor {
         Ok(WireValue::Other)
     }
 
-    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
-        deserializer.deserialize_any(self)
+    fn visit_some<D: Deserializer<'de>>(self, _: D) -> Result<Self::Value, D::Error> {
+        Err(invalid_structure())
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
@@ -330,7 +341,12 @@ impl<'de> Visitor<'de> for WireValueVisitor {
         let mut booleans = Vec::new();
         let mut family = None;
         let mut invalid = false;
+        let mut items = 0;
         while let Some(element) = sequence.next_element::<WireElement>()? {
+            if items >= MAX_SET_VALUES {
+                return Err(complexity_limit());
+            }
+            items += 1;
             match element {
                 WireElement::String(value) => {
                     if family == Some(false) {
@@ -360,9 +376,8 @@ impl<'de> Visitor<'de> for WireValueVisitor {
         })
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        consume_map(map)?;
-        Ok(WireValue::Other)
+    fn visit_map<A: MapAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(invalid_structure())
     }
 }
 
@@ -373,31 +388,41 @@ impl<'de> Deserialize<'de> for WireValue {
 }
 
 struct RawNode {
-    invalid_member: bool,
     op: Option<WireValue>,
-    args: Option<RawArgs>,
-    expression: Option<RawExpression>,
+    args: Option<Vec<RawNode>>,
+    expression: Option<Box<RawNode>>,
     field: Option<WireValue>,
     value: Option<WireValue>,
     quantifier: Option<WireValue>,
 }
 
-enum RawArgs {
-    Nodes(Vec<RawNode>),
-    Other,
+struct RawExpressionSeed<'a> {
+    budget: &'a mut DecodeBudget,
+    depth: usize,
 }
 
-enum RawExpression {
-    Node(Box<RawNode>),
-    Other,
+struct RawExpressionVisitor<'a> {
+    budget: &'a mut DecodeBudget,
+    depth: usize,
 }
 
-struct RawNodeVisitor;
+struct RawArgsSeed<'a> {
+    budget: &'a mut DecodeBudget,
+    depth: usize,
+}
+
+struct RawArgsVisitor<'a> {
+    budget: &'a mut DecodeBudget,
+    depth: usize,
+}
 
 impl RawNode {
-    fn from_map<'de, A: MapAccess<'de>>(mut map: A) -> Result<Self, A::Error> {
+    fn from_map<'de, A: MapAccess<'de>>(
+        mut map: A,
+        budget: &mut DecodeBudget,
+        depth: usize,
+    ) -> Result<Self, A::Error> {
         let mut node = Self {
-            invalid_member: false,
             op: None,
             args: None,
             expression: None,
@@ -408,9 +433,17 @@ impl RawNode {
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
                 "op" if node.op.is_none() => node.op = Some(map.next_value()?),
-                "args" if node.args.is_none() => node.args = Some(map.next_value()?),
+                "args" if node.args.is_none() => {
+                    node.args = Some(map.next_value_seed(RawArgsSeed {
+                        budget,
+                        depth: depth + 1,
+                    })?);
+                }
                 "expr" if node.expression.is_none() => {
-                    node.expression = Some(map.next_value()?);
+                    node.expression = Some(Box::new(map.next_value_seed(RawExpressionSeed {
+                        budget,
+                        depth: depth + 1,
+                    })?));
                 }
                 "field" if node.field.is_none() => node.field = Some(map.next_value()?),
                 "value" if node.value.is_none() => node.value = Some(map.next_value()?),
@@ -418,8 +451,7 @@ impl RawNode {
                     node.quantifier = Some(map.next_value()?);
                 }
                 _ => {
-                    node.invalid_member = true;
-                    map.next_value::<IgnoredAny>()?;
+                    return Err(invalid_structure());
                 }
             }
         }
@@ -459,19 +491,19 @@ impl RawNode {
         matches!(value, Some(WireValue::String(_)))
     }
 
-    fn validate_nested(expression: Option<&RawExpression>) -> bool {
+    fn validate_nested(expression: Option<&RawNode>) -> bool {
         match expression {
-            Some(RawExpression::Node(expression)) => expression.validate_structure().is_ok(),
-            Some(RawExpression::Other) | None => false,
+            Some(expression) => expression.validate_structure().is_ok(),
+            None => false,
         }
     }
 
-    fn validate_args(args: Option<&RawArgs>) -> bool {
+    fn validate_args(args: Option<&[RawNode]>) -> bool {
         match args {
-            Some(RawArgs::Nodes(expressions)) if expressions.len() >= 2 => expressions
+            Some(expressions) if expressions.len() >= 2 => expressions
                 .iter()
                 .all(|expression| expression.validate_structure().is_ok()),
-            Some(RawArgs::Nodes(_) | RawArgs::Other) | None => false,
+            Some(_) | None => false,
         }
     }
 
@@ -514,40 +546,37 @@ impl RawNode {
         {
             true
         } else if self.has_only_args_members() {
-            Self::validate_args(self.args.as_ref())
+            Self::validate_args(self.args.as_deref())
         } else if self.has_only_expression_members()
             || (self.has_only_relation_members()
                 && Self::validate_string(self.field.as_ref())
                 && Self::validate_string(self.quantifier.as_ref()))
         {
-            Self::validate_nested(self.expression.as_ref())
+            Self::validate_nested(self.expression.as_deref())
         } else {
             false
         }
     }
 
     fn validate_structure(&self) -> Result<(), FilterExpressionError> {
-        if self.invalid_member {
-            return Err(expression_error(
-                FilterExpressionErrorKind::InvalidStructure,
-            ));
-        }
         let Some(operator) = self.operator() else {
             return Err(expression_error(
                 FilterExpressionErrorKind::InvalidStructure,
             ));
         };
         let valid = match operator {
-            "and" | "or" => self.has_only_args_members() && Self::validate_args(self.args.as_ref()),
+            "and" | "or" => {
+                self.has_only_args_members() && Self::validate_args(self.args.as_deref())
+            }
             "not" => {
                 self.has_only_expression_members()
-                    && Self::validate_nested(self.expression.as_ref())
+                    && Self::validate_nested(self.expression.as_deref())
             }
             "relation" => {
                 self.has_only_relation_members()
                     && Self::validate_string(self.field.as_ref())
                     && Self::validate_string(self.quantifier.as_ref())
-                    && Self::validate_nested(self.expression.as_ref())
+                    && Self::validate_nested(self.expression.as_deref())
             }
             "eq"
             | "eq_ignore_case"
@@ -585,24 +614,19 @@ impl RawNode {
         }
     }
 
-    fn take_nested(value: Option<RawExpression>) -> Result<RawNode, FilterExpressionError> {
+    fn take_nested(value: Option<Box<RawNode>>) -> Result<RawNode, FilterExpressionError> {
         match value {
-            Some(RawExpression::Node(value)) => Ok(*value),
-            Some(RawExpression::Other) | None => Err(expression_error(
+            Some(value) => Ok(*value),
+            None => Err(expression_error(
                 FilterExpressionErrorKind::InvalidStructure,
             )),
         }
     }
 
     fn into_junction(self, operator: &str) -> Result<ExprData, FilterExpressionError> {
-        let RawArgs::Nodes(nodes) = self
+        let nodes = self
             .args
-            .ok_or_else(|| expression_error(FilterExpressionErrorKind::InvalidStructure))?
-        else {
-            return Err(expression_error(
-                FilterExpressionErrorKind::InvalidStructure,
-            ));
-        };
+            .ok_or_else(|| expression_error(FilterExpressionErrorKind::InvalidStructure))?;
         let mut expressions = Vec::new();
         for node in nodes {
             let expression = match node.into_expression() {
@@ -722,33 +746,19 @@ impl RawNode {
     }
 }
 
-impl<'de> Visitor<'de> for RawNodeVisitor {
-    type Value = RawNode;
+impl<'de> DeserializeSeed<'de> for RawArgsSeed<'_> {
+    type Value = Vec<RawNode>;
 
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a portable filter expression object")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        RawNode::from_map(map)
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, sequence: A) -> Result<Self::Value, A::Error> {
-        consume_seq(sequence)?;
-        Err(invalid_structure())
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(RawArgsVisitor {
+            budget: self.budget,
+            depth: self.depth,
+        })
     }
 }
 
-impl<'de> Deserialize<'de> for RawNode {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_map(RawNodeVisitor)
-    }
-}
-
-struct RawArgsVisitor;
-
-impl<'de> Visitor<'de> for RawArgsVisitor {
-    type Value = RawArgs;
+impl<'de> Visitor<'de> for RawArgsVisitor<'_> {
+    type Value = Vec<RawNode>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("an expression array")
@@ -756,129 +766,122 @@ impl<'de> Visitor<'de> for RawArgsVisitor {
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
         let mut nodes = Vec::new();
-        let mut invalid = false;
-        while let Some(expression) = sequence.next_element::<RawExpression>()? {
-            match expression {
-                RawExpression::Node(node) => nodes.push(*node),
-                RawExpression::Other => invalid = true,
-            }
+        while let Some(node) = sequence.next_element_seed(RawExpressionSeed {
+            budget: self.budget,
+            depth: self.depth,
+        })? {
+            nodes.push(node);
         }
-        Ok(if invalid {
-            RawArgs::Other
-        } else {
-            RawArgs::Nodes(nodes)
-        })
+        Ok(nodes)
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        consume_map(map)?;
-        Ok(RawArgs::Other)
+    fn visit_map<A: MapAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(invalid_structure())
     }
 
     fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 
     fn visit_string<E: de::Error>(self, _: String) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 
     fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 
     fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 
     fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 
     fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 
     fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 
     fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(RawArgs::Other)
+        Err(invalid_structure())
     }
 }
 
-impl<'de> Deserialize<'de> for RawArgs {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(RawArgsVisitor)
+impl<'de> DeserializeSeed<'de> for RawExpressionSeed<'_> {
+    type Value = RawNode;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        self.budget.enter_expression(self.depth)?;
+        deserializer.deserialize_any(RawExpressionVisitor {
+            budget: self.budget,
+            depth: self.depth,
+        })
     }
 }
 
-struct RawExpressionVisitor;
-
-impl<'de> Visitor<'de> for RawExpressionVisitor {
-    type Value = RawExpression;
+impl<'de> Visitor<'de> for RawExpressionVisitor<'_> {
+    type Value = RawNode;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("an expression object")
     }
 
     fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        RawNode::from_map(map).map(|node| RawExpression::Node(Box::new(node)))
+        RawNode::from_map(map, self.budget, self.depth)
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, sequence: A) -> Result<Self::Value, A::Error> {
-        consume_seq(sequence)?;
-        Ok(RawExpression::Other)
+    fn visit_seq<A: SeqAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+        Err(invalid_structure())
     }
 
     fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
+        Err(invalid_structure())
     }
 
     fn visit_string<E: de::Error>(self, _: String) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
+        Err(invalid_structure())
     }
 
     fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
+        Err(invalid_structure())
     }
 
     fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
+        Err(invalid_structure())
     }
 
     fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
+        Err(invalid_structure())
     }
 
     fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
+        Err(invalid_structure())
     }
 
     fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
+        Err(invalid_structure())
     }
 
     fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(RawExpression::Other)
-    }
-}
-
-impl<'de> Deserialize<'de> for RawExpression {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(RawExpressionVisitor)
+        Err(invalid_structure())
     }
 }
 
 struct RawEnvelope {
-    invalid_member: bool,
     version: Option<WireVersion>,
     target: Option<WireValue>,
-    expression: Option<RawExpression>,
+    expression: Option<RawNode>,
 }
 
-struct EnvelopeVisitor<T>(PhantomData<fn() -> T>);
+struct EnvelopeVisitor<T> {
+    marker: PhantomData<fn() -> T>,
+    budget: DecodeBudget,
+}
 
 impl<'de, T: Filterable> Visitor<'de> for EnvelopeVisitor<T> {
     type Value = FilterExpr<T>;
@@ -887,9 +890,8 @@ impl<'de, T: Filterable> Visitor<'de> for EnvelopeVisitor<T> {
         formatter.write_str("a version 1 portable filter envelope")
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(mut self, mut map: A) -> Result<Self::Value, A::Error> {
         let mut raw = RawEnvelope {
-            invalid_member: false,
             version: None,
             target: None,
             expression: None,
@@ -899,23 +901,22 @@ impl<'de, T: Filterable> Visitor<'de> for EnvelopeVisitor<T> {
                 "version" if raw.version.is_none() => raw.version = Some(map.next_value()?),
                 "target" if raw.target.is_none() => raw.target = Some(map.next_value()?),
                 "expr" if raw.expression.is_none() => {
-                    raw.expression = Some(map.next_value()?);
+                    raw.expression = Some(map.next_value_seed(RawExpressionSeed {
+                        budget: &mut self.budget,
+                        depth: 1,
+                    })?);
                 }
-                _ => {
-                    raw.invalid_member = true;
-                    map.next_value::<IgnoredAny>()?;
-                }
+                _ => return Err(invalid_structure()),
             }
         }
 
-        if raw.invalid_member
-            || raw.version.is_none()
+        if raw.version.is_none()
             || !matches!(raw.target, Some(WireValue::String(_)))
-            || !matches!(raw.expression, Some(RawExpression::Node(_)))
+            || raw.expression.is_none()
         {
             return Err(invalid_structure());
         }
-        let Some(RawExpression::Node(expression)) = raw.expression.as_ref() else {
+        let Some(expression) = raw.expression.as_ref() else {
             return Err(invalid_structure());
         };
         expression.validate_structure().map_err(A::Error::custom)?;
@@ -938,9 +939,8 @@ impl<'de, T: Filterable> Visitor<'de> for EnvelopeVisitor<T> {
                 FilterExpressionErrorKind::InvalidTarget,
             )));
         }
-        let expression = match raw.expression {
-            Some(RawExpression::Node(expression)) => *expression,
-            Some(RawExpression::Other) | None => return Err(invalid_structure()),
+        let Some(expression) = raw.expression else {
+            return Err(invalid_structure());
         };
         let data = expression.into_expression().map_err(A::Error::custom)?;
         validate_expression::<T>(&data).map_err(A::Error::custom)?;
@@ -953,8 +953,7 @@ impl<'de, T: Filterable> Visitor<'de> for EnvelopeVisitor<T> {
         })
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, sequence: A) -> Result<Self::Value, A::Error> {
-        consume_seq(sequence)?;
+    fn visit_seq<A: SeqAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
         Err(invalid_structure())
     }
 
@@ -993,7 +992,10 @@ impl<'de, T: Filterable> Visitor<'de> for EnvelopeVisitor<T> {
 
 impl<'de, T: Filterable> Deserialize<'de> for FilterExpr<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(EnvelopeVisitor(PhantomData))
+        deserializer.deserialize_any(EnvelopeVisitor {
+            marker: PhantomData,
+            budget: DecodeBudget::new(),
+        })
     }
 }
 
