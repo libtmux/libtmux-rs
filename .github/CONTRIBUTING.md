@@ -348,6 +348,12 @@ verifies what the tarballs contain. A packaged crate ships its README, so a
 README telling a reader to depend on a version that is no longer current is
 shipped install instructions, and this is what catches it.
 
+The gate verifies the workspace tarballs as one prospective release set. Cargo
+resolves workspace dependencies from the packaged crates in a temporary
+registry, not from their path entries. It does not assert that those versions
+are already on crates.io; the release workflow packages one tagged crate at a
+time, after its dependencies have been published.
+
 ## The language floor
 
 MSRV is **1.85** for the libraries, Edition 2024's first compiler, and

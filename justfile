@@ -350,9 +350,16 @@ bench *args:
 #
 # --allow-dirty so this stays runnable mid-change; `cargo publish` does its
 # own clean-tree check when it matters.
+#
+# Cargo treats staged registry versions as immutable. A fresh target keeps
+# same-version edits from reusing source extracted by an earlier run.
 [group: 'release']
 package:
-    cargo package --locked --allow-dirty \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    package_target="$(mktemp -d "${TMPDIR:-/tmp}/libtmux-package.XXXXXX")"
+    trap 'rm -rf -- "$package_target"' EXIT
+    CARGO_TARGET_DIR="$package_target" cargo package --locked --allow-dirty \
         --package libtmux --package libtmux-macros \
         --package tmux-mcp --package tmux-workspace --all-features
     bash scripts/check-package-contents.sh
