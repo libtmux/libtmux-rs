@@ -9,11 +9,10 @@ use rmcp::{tool, tool_router};
 
 use crate::{
     Asking, ChannelArgs, ChannelSignal, CreateSessionArgs, EnvironmentSet, Killed, Layout,
-    NewWindowArgs, OptionArgs, OptionSet, PaneArgs, PaneChanged, PaneDirection, PaneView,
-    PasteTextArgs, Pasted, PipePaneArgs, Piped, RenameArgs, Renamed, ResizeDirectionArg,
-    ResizePaneArgs, RespawnPaneArgs, SelectLayoutArgs, SelectPaneArgs, SelectWindowArgs,
-    SendKeysArgs, Sent, ServerKilled, SessionArgs, SessionView, SetEnvironmentArgs, Size,
-    SplitDirectionArg, SplitPaneArgs, TmuxTools, WindowArgs, WindowDirection, WindowView, Windows,
+    NewWindowArgs, OptionArgs, OptionSet, PaneArgs, PaneChanged, PaneView, PasteTextArgs, Pasted,
+    PipePaneArgs, Piped, RenameArgs, Renamed, ResizePaneArgs, RespawnPaneArgs, SelectLayoutArgs,
+    SelectPaneArgs, SelectWindowArgs, SendKeysArgs, Sent, ServerKilled, SessionArgs, SessionView,
+    SetEnvironmentArgs, Size, SplitPaneArgs, TmuxTools, WindowArgs, WindowView, Windows,
 };
 
 use super::error::{EffectBoundary, bad_input, object_gone, tmux_error, vanished};
@@ -269,12 +268,12 @@ impl TmuxTools {
             command,
         }): Parameters<SplitPaneArgs>,
     ) -> Result<Json<PaneView>, ErrorData> {
-        let direction = match direction.as_ref() {
-            None | Some(SplitDirectionArg::Below) => SplitDirection::Below,
-            Some(SplitDirectionArg::Above) => SplitDirection::Above,
-            Some(SplitDirectionArg::Left) => SplitDirection::Left,
-            Some(SplitDirectionArg::Right) => SplitDirection::Right,
-            Some(SplitDirectionArg::Other(other)) => {
+        let direction = match direction.as_deref() {
+            None | Some("below") => SplitDirection::Below,
+            Some("above") => SplitDirection::Above,
+            Some("left") => SplitDirection::Left,
+            Some("right") => SplitDirection::Right,
+            Some(other) => {
                 return Err(bad_input(format!(
                     "direction must be above, below, left, or right, not {other}"
                 )));
@@ -329,12 +328,12 @@ impl TmuxTools {
             cells,
         }): Parameters<ResizePaneArgs>,
     ) -> Result<Json<Size>, ErrorData> {
-        let direction = match direction {
-            ResizeDirectionArg::Up => ResizeDirection::Up,
-            ResizeDirectionArg::Down => ResizeDirection::Down,
-            ResizeDirectionArg::Left => ResizeDirection::Left,
-            ResizeDirectionArg::Right => ResizeDirection::Right,
-            ResizeDirectionArg::Other(other) => {
+        let direction = match direction.as_str() {
+            "up" => ResizeDirection::Up,
+            "down" => ResizeDirection::Down,
+            "left" => ResizeDirection::Left,
+            "right" => ResizeDirection::Right,
+            other => {
                 return Err(bad_input(format!(
                     "direction must be up, down, left, or right, not {other}"
                 )));
@@ -425,8 +424,8 @@ impl TmuxTools {
         // `next` and `previous` are resolved here rather than with a tmux
         // target, because tmux's `{next}` is relative to the active pane and
         // this tool is relative to the pane the caller named.
-        let selected = match direction.as_ref() {
-            Some(PaneDirection::Next | PaneDirection::Previous) => {
+        let selected = match direction.as_deref() {
+            Some("next" | "previous") => {
                 let panes = self
                     .find_window(target.window_id().as_ref())
                     .await?
@@ -437,7 +436,7 @@ impl TmuxTools {
                     .iter()
                     .position(|candidate| candidate.id() == target.id())
                     .ok_or_else(|| vanished("the pane vanished from its own window"))?;
-                let step = if matches!(direction.as_ref(), Some(PaneDirection::Next)) {
+                let step = if matches!(direction.as_deref(), Some("next")) {
                     at + 1
                 } else {
                     at + panes.len() - 1
@@ -452,13 +451,13 @@ impl TmuxTools {
             other => {
                 let mut boundary = EffectBoundary::new("select_pane");
                 let flag = match other {
-                    None | Some(PaneDirection::Next | PaneDirection::Previous) => None,
-                    Some(PaneDirection::Up) => Some("-U"),
-                    Some(PaneDirection::Down) => Some("-D"),
-                    Some(PaneDirection::Left) => Some("-L"),
-                    Some(PaneDirection::Right) => Some("-R"),
-                    Some(PaneDirection::Last) => Some("-l"),
-                    Some(PaneDirection::Other(unknown)) => {
+                    None | Some("next" | "previous") => None,
+                    Some("up") => Some("-U"),
+                    Some("down") => Some("-D"),
+                    Some("left") => Some("-L"),
+                    Some("right") => Some("-R"),
+                    Some("last") => Some("-l"),
+                    Some(unknown) => {
                         return Err(bad_input(format!(
                             "direction must be up, down, left, right, last, next, or \
                                  previous, not {unknown}"
@@ -512,17 +511,17 @@ impl TmuxTools {
         let mut target = self.find_window(&window).await?;
         let mut boundary = EffectBoundary::new("select_window");
 
-        match direction.as_ref() {
+        match direction.as_deref() {
             None => {
                 boundary.tmux(target.select().await)?;
                 boundary.mark();
             }
             Some(step) => {
                 let flag = match step {
-                    WindowDirection::Next => "-n",
-                    WindowDirection::Previous => "-p",
-                    WindowDirection::Last => "-l",
-                    WindowDirection::Other(unknown) => {
+                    "next" => "-n",
+                    "previous" => "-p",
+                    "last" => "-l",
+                    unknown => {
                         return Err(bad_input(format!(
                             "direction must be next, previous, or last, not {unknown}"
                         )));
@@ -537,7 +536,7 @@ impl TmuxTools {
                 // `last` is excluded from that. It means the session's
                 // previously active window, so selecting the named one first
                 // would rewrite the very pointer being asked about.
-                if !matches!(step, WindowDirection::Last) {
+                if step != "last" {
                     boundary.tmux(target.select().await)?;
                     boundary.mark();
                 }
@@ -596,7 +595,10 @@ impl TmuxTools {
         })?;
         let value = value.to_string();
 
-        match self.option_scope(scope.as_ref(), target.as_deref()).await? {
+        match self
+            .option_scope(scope.as_deref(), target.as_deref())
+            .await?
+        {
             OptionScope::Server => self.server.set_option(&name, &value).await,
             OptionScope::GlobalSession => self.server.set_global_option(&name, &value).await,
             OptionScope::GlobalWindow => self.server.set_global_window_option(&name, &value).await,
@@ -608,10 +610,7 @@ impl TmuxTools {
 
         Ok(Json(OptionSet {
             name,
-            scope: scope
-                .as_ref()
-                .map_or("global-session", crate::OptionScopeName::as_str)
-                .to_owned(),
+            scope: scope.unwrap_or_else(|| "global-session".to_owned()),
         }))
     }
 

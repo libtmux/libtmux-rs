@@ -8,189 +8,87 @@ use libtmux::TmuxText;
 /// The shared text budget for all evidence in one plan response.
 const PLAN_EVIDENCE_BYTES: usize = 64 * 1024;
 
-macro_rules! string_vocabulary {
-    ($name:ident { $($wire:literal => $variant:ident),+ $(,)? }) => {
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                let value = String::deserialize(deserializer)?;
-                Ok(match value.as_str() {
-                    $($wire => Self::$variant,)+
-                    _ => Self::Other(value),
-                })
-            }
-        }
-    };
-}
-
-/// How a plan's operations share tmux invocations.
+/// Closed vocabularies used only to describe string fields in JSON Schema.
+#[allow(
+    dead_code,
+    reason = "schemars reads these types through field attributes"
+)]
 #[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
 #[schemars(rename_all = "snake_case")]
-pub enum PlanGrouping {
-    /// Run each operation separately and attribute every failure exactly.
+enum PlanGroupingSchema {
     Sequential,
-    /// Fold compatible operations into fewer tmux invocations.
     Folding,
-    /// Fold operations while retaining tmux command marks.
     Marked,
-    /// An unpublished value retained so the tool can classify bad input.
-    #[schemars(skip)]
-    Other(String),
 }
 
-string_vocabulary!(PlanGrouping {
-    "sequential" => Sequential,
-    "folding" => Folding,
-    "marked" => Marked,
-});
-
-/// Where a newly split pane is placed.
+#[allow(
+    dead_code,
+    reason = "schemars reads these types through field attributes"
+)]
 #[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
 #[schemars(rename_all = "snake_case")]
-pub enum SplitDirectionArg {
-    /// Put the new pane above the named pane.
+enum SplitDirectionSchema {
     Above,
-    /// Put the new pane below the named pane.
     Below,
-    /// Put the new pane left of the named pane.
     Left,
-    /// Put the new pane right of the named pane.
     Right,
-    /// An unpublished value retained so the tool can classify bad input.
-    #[schemars(skip)]
-    Other(String),
 }
 
-string_vocabulary!(SplitDirectionArg {
-    "above" => Above,
-    "below" => Below,
-    "left" => Left,
-    "right" => Right,
-});
-
-/// Which edge of a pane to move while resizing it.
+#[allow(
+    dead_code,
+    reason = "schemars reads these types through field attributes"
+)]
 #[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
 #[schemars(rename_all = "snake_case")]
-pub enum ResizeDirectionArg {
-    /// Move the pane's upper edge.
+enum ResizeDirectionSchema {
     Up,
-    /// Move the pane's lower edge.
     Down,
-    /// Move the pane's left edge.
     Left,
-    /// Move the pane's right edge.
     Right,
-    /// An unpublished value retained so the tool can classify bad input.
-    #[schemars(skip)]
-    Other(String),
 }
 
-string_vocabulary!(ResizeDirectionArg {
-    "up" => Up,
-    "down" => Down,
-    "left" => Left,
-    "right" => Right,
-});
-
-/// How pane selection moves relative to the named pane.
+#[allow(
+    dead_code,
+    reason = "schemars reads these types through field attributes"
+)]
 #[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
 #[schemars(rename_all = "snake_case")]
-pub enum PaneDirection {
-    /// Select the pane drawn above.
+enum SelectPaneDirectionSchema {
     Up,
-    /// Select the pane drawn below.
     Down,
-    /// Select the pane drawn to the left.
     Left,
-    /// Select the pane drawn to the right.
     Right,
-    /// Return to the previously active pane.
     Last,
-    /// Select the next pane in order.
     Next,
-    /// Select the previous pane in order.
     Previous,
-    /// An unpublished value retained so the tool can classify bad input.
-    #[schemars(skip)]
-    Other(String),
 }
 
-string_vocabulary!(PaneDirection {
-    "up" => Up,
-    "down" => Down,
-    "left" => Left,
-    "right" => Right,
-    "last" => Last,
-    "next" => Next,
-    "previous" => Previous,
-});
-
-/// How window selection moves relative to the named window.
+#[allow(
+    dead_code,
+    reason = "schemars reads these types through field attributes"
+)]
 #[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
 #[schemars(rename_all = "snake_case")]
-pub enum WindowDirection {
-    /// Select the next window in index order.
+enum SelectWindowDirectionSchema {
     Next,
-    /// Select the previous window in index order.
     Previous,
-    /// Return to the previously active window.
     Last,
-    /// An unpublished value retained so the tool can classify bad input.
-    #[schemars(skip)]
-    Other(String),
 }
 
-string_vocabulary!(WindowDirection {
-    "next" => Next,
-    "previous" => Previous,
-    "last" => Last,
-});
-
-/// Which tmux object owns an option.
+#[allow(
+    dead_code,
+    reason = "schemars reads these types through field attributes"
+)]
 #[derive(Clone, Debug, Eq, PartialEq, schemars::JsonSchema)]
 #[schemars(rename_all = "kebab-case")]
-pub enum OptionScopeName {
-    /// Server-wide options.
+enum OptionScopeSchema {
     Server,
-    /// Defaults inherited by sessions.
     GlobalSession,
-    /// Defaults inherited by windows.
     GlobalWindow,
-    /// One session's options.
     Session,
-    /// One window's options.
     Window,
-    /// One pane's options.
     Pane,
-    /// An unpublished value retained so the tool can classify bad input.
-    #[schemars(skip)]
-    Other(String),
 }
-
-impl OptionScopeName {
-    pub(crate) fn as_str(&self) -> &str {
-        match self {
-            Self::Server => "server",
-            Self::GlobalSession => "global-session",
-            Self::GlobalWindow => "global-window",
-            Self::Session => "session",
-            Self::Window => "window",
-            Self::Pane => "pane",
-            Self::Other(value) => value,
-        }
-    }
-}
-
-string_vocabulary!(OptionScopeName {
-    "server" => Server,
-    "global-session" => GlobalSession,
-    "global-window" => GlobalWindow,
-    "session" => Session,
-    "window" => Window,
-    "pane" => Pane,
-});
 
 /// Arguments naming one session.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -240,7 +138,8 @@ pub struct RunPlanArgs {
     ///
     /// Defaults to `sequential`, which is the only grouping that can say
     /// which operation failed.
-    pub grouping: Option<PlanGrouping>,
+    #[schemars(with = "Option<PlanGroupingSchema>")]
+    pub grouping: Option<String>,
 }
 
 /// What running a plan produced.
@@ -539,7 +438,8 @@ pub struct SelectPaneArgs {
     /// whatever pane is drawn above. `last` returns to the previously active
     /// pane, and `next` and `previous` step through the window's panes in
     /// order. Omit to select the named pane itself.
-    pub direction: Option<PaneDirection>,
+    #[schemars(with = "Option<SelectPaneDirectionSchema>")]
+    pub direction: Option<String>,
 }
 
 /// Arguments for running a command and waiting for it.
@@ -747,7 +647,8 @@ pub struct SelectWindowArgs {
     /// `next` and `previous` step through the session in index order, and
     /// `last` returns to the previously active window. Omit to select the
     /// named window itself.
-    pub direction: Option<WindowDirection>,
+    #[schemars(with = "Option<SelectWindowDirectionSchema>")]
+    pub direction: Option<String>,
 }
 
 /// Arguments for searching what panes are showing.
@@ -780,7 +681,8 @@ pub struct OptionArgs {
     /// One of `server`, `global-session`, `global-window`, `session`,
     /// `window`, or `pane`. Defaults to `global-session`, which is what
     /// setting an option without a target means in tmux.
-    pub scope: Option<OptionScopeName>,
+    #[schemars(with = "Option<OptionScopeSchema>")]
+    pub scope: Option<String>,
     /// The `$`, `@` or `%`-prefixed id, for the scopes that need one.
     pub target: Option<String>,
     /// The value to set. Omit to read the option instead.
@@ -859,7 +761,8 @@ pub struct SplitPaneArgs {
     /// Where the new pane goes: `above`, `below`, `left`, or `right`.
     ///
     /// Defaults to `below`.
-    pub direction: Option<SplitDirectionArg>,
+    #[schemars(with = "Option<SplitDirectionSchema>")]
+    pub direction: Option<String>,
     /// How much of the divided space the new pane takes, as a percentage.
     pub percent: Option<u32>,
     /// A command to run instead of the default shell.
@@ -872,7 +775,8 @@ pub struct ResizePaneArgs {
     /// The `%`-prefixed pane id.
     pub pane: String,
     /// Which edge to move: `up`, `down`, `left`, or `right`.
-    pub direction: ResizeDirectionArg,
+    #[schemars(with = "ResizeDirectionSchema")]
+    pub direction: String,
     /// How many rows or columns to move it by.
     pub cells: u32,
 }

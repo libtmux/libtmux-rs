@@ -7,8 +7,8 @@ use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::{
-    Asking, PlanFailure, PlanFailureKind, PlanGrouping, PlanOperationReport, PlanRun, RunPlanArgs,
-    TmuxTools, plan_evidence, plan_evidence_limit, project_plan_value,
+    Asking, PlanFailure, PlanFailureKind, PlanOperationReport, PlanRun, RunPlanArgs, TmuxTools,
+    plan_evidence, plan_evidence_limit, project_plan_value,
 };
 
 use super::error::tmux_error;
@@ -95,11 +95,11 @@ impl TmuxTools {
         Parameters(RunPlanArgs { plan, grouping }): Parameters<RunPlanArgs>,
         asking: Asking,
     ) -> Result<Json<PlanRun>, ErrorData> {
-        let planner = match grouping.as_ref() {
-            None | Some(PlanGrouping::Sequential) => Planner::Sequential,
-            Some(PlanGrouping::Folding) => Planner::Folding,
-            Some(PlanGrouping::Marked) => Planner::Marked,
-            Some(PlanGrouping::Other(other)) => {
+        let planner = match grouping.as_deref() {
+            None | Some("sequential") => Planner::Sequential,
+            Some("folding") => Planner::Folding,
+            Some("marked") => Planner::Marked,
+            Some(other) => {
                 return Err(ErrorData::invalid_params(
                     format!("unknown grouping {other:?}; use sequential, folding, or marked"),
                     None,

@@ -241,7 +241,7 @@ async fn the_server_advertises_its_tools_over_the_protocol() {
 
 #[tokio::test]
 async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
-    use tmux_mcp::{ResizeDirectionArg, ResizePaneArgs, SplitDirectionArg, SplitPaneArgs};
+    use tmux_mcp::{ResizePaneArgs, SplitPaneArgs};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
@@ -259,7 +259,7 @@ async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
     let second = id(tools
         .split_pane(Parameters(SplitPaneArgs {
             pane: first.clone(),
-            direction: Some(SplitDirectionArg::Right),
+            direction: Some("right".into()),
             percent: Some(50),
             command: Some("sleep 300".into()),
         }))
@@ -271,7 +271,7 @@ async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
     let third = id(tools
         .split_pane(Parameters(SplitPaneArgs {
             pane: second.clone(),
-            direction: Some(SplitDirectionArg::Below),
+            direction: Some("below".into()),
             percent: Some(50),
             command: Some("sleep 300".into()),
         }))
@@ -305,7 +305,7 @@ async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
         tools
             .split_pane(Parameters(SplitPaneArgs {
                 pane: first.clone(),
-                direction: Some(SplitDirectionArg::Other("sideways".into())),
+                direction: Some("sideways".into()),
                 percent: None,
                 command: None,
             }))
@@ -316,7 +316,7 @@ async fn a_pane_is_split_where_the_caller_says_and_from_the_pane_it_names() {
     let sized = tools
         .resize_pane(Parameters(ResizePaneArgs {
             pane: third.clone(),
-            direction: ResizeDirectionArg::Up,
+            direction: "up".into(),
             cells: 2,
         }))
         .await

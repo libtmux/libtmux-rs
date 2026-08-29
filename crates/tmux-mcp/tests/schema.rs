@@ -12,7 +12,10 @@ use libtmux::plan::{
     SelectPane, SelectWindow, SendKeys, SetEnvironment, SetOption, SplitWindow,
 };
 use serde_json::json;
-use tmux_mcp::{FilterArgs, RunPlanArgs, Safety, TmuxTools, TreeFilterArgs};
+use tmux_mcp::{
+    FilterArgs, OptionArgs, ResizePaneArgs, RunPlanArgs, Safety, SelectPaneArgs, SelectWindowArgs,
+    SplitPaneArgs, TmuxTools, TreeFilterArgs,
+};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -243,6 +246,39 @@ fn tool_schemas_close_every_documented_choice_vocabulary() -> TestResult {
     }
 
     Ok(())
+}
+
+#[test]
+fn public_argument_struct_literals_keep_string_vocabulary_fields() {
+    let _ = RunPlanArgs {
+        plan: Plan::new(),
+        grouping: Some("sequential".into()),
+    };
+    let _ = SplitPaneArgs {
+        pane: "%1".into(),
+        direction: Some("right".into()),
+        percent: None,
+        command: None,
+    };
+    let _ = ResizePaneArgs {
+        pane: "%1".into(),
+        direction: "up".into(),
+        cells: 1,
+    };
+    let _ = SelectPaneArgs {
+        pane: "%1".into(),
+        direction: Some("next".into()),
+    };
+    let _ = SelectWindowArgs {
+        window: "@1".into(),
+        direction: Some("last".into()),
+    };
+    let _ = OptionArgs {
+        name: "status".into(),
+        scope: Some("global-session".into()),
+        target: None,
+        value: None,
+    };
 }
 
 #[test]

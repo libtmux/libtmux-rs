@@ -531,7 +531,7 @@ impl TmuxTools {
             ..
         }): Parameters<OptionArgs>,
     ) -> Result<Json<OptionValue>, ErrorData> {
-        let value = match self.option_scope(scope.as_ref(), target.as_deref()).await? {
+        let value = match self.option_scope(scope.as_deref(), target.as_deref()).await? {
             OptionScope::Server => self.server.get_option(&name).await,
             OptionScope::GlobalSession => self.server.get_global_option(&name).await,
             OptionScope::GlobalWindow => self.server.get_global_window_option(&name).await,
