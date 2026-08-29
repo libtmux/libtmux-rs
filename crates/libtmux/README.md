@@ -175,6 +175,47 @@ Three things that are not obvious:
   subscribe to a format instead and be told when it changes -- see
   `ControlSender::subscribe`. tmux coalesces those reports to at most once a
   second, so a subscription says what a value became, not every step it took.
+
+The subscription form, which costs one connection rather than a process per
+tick. It watches a format rather than the pane's text, so it suits "how many
+windows are there now" better than "did this line appear":
+
+```rust
+use libtmux::control::{ControlMode, Event, Subscription};
+use libtmux::test::TestServer;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let session = guard.server().new_session("watching").await?;
+    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
+        .await?
+        .split();
+
+    commands
+        .subscribe("windows", &Subscription::Session, "#{session_windows}")
+        .await?;
+
+    // The first report arrives without anything having changed, so a
+    // subscription reads the value as well as watching it.
+    let mut reports = 0;
+    while let Some(event) = events.next_event().await {
+        if let Event::SubscriptionChanged { name, value, .. } = event {
+            println!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
+            reports += 1;
+            if reports == 1 {
+                break;
+            }
+        }
+    }
+
+    commands.unsubscribe("windows").await?;
+    events.shutdown().await?;
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
 - **`command_prompt` and `display_menu` wait for a person**, not for a
   condition, and the dispatch timeout is what ends that wait. They are not
   building blocks for this.
