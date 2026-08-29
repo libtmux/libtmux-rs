@@ -202,6 +202,28 @@ A command you needed here is worth reporting: `tmux-mcp` and `tmux-workspace`
 use this crate from outside it, and when either reaches for `cmd` that counts as
 a gap in the API rather than a use of the escape hatch.
 
+## What tmux is made of
+
+```text
+Server ──┬── Session ──── Window ──── Pane
+         └── Client ─────┘
+```
+
+| Type | Held by | Identified by | Notes |
+| --- | --- | --- | --- |
+| `Server` | a socket | its socket path | one daemon; `Server::new()` finds the default |
+| `Session` | the server | `$0` | what a client attaches to |
+| `Window` | *linked into* sessions | `@0` | one window can be linked into several sessions at once |
+| `Pane` | exactly one window | `%0` | holds the process and the scrollback |
+| `Client` | the server | its tty | attached to one session at a time |
+
+The third row is the one that surprises people, and it decides API shape. A
+window has one identity and several *links*, so a command that removes one link
+has to name `session:index` rather than `@id` -- `@id` could not say which link
+to remove. [`Window::unlink`] does exactly that, and reports
+[`Error::LinkGone`] rather than [`Error::ObjectGone`] when the link is already
+gone, because the window itself may still be running under another session.
+
 ## Walking the hierarchy
 
 `Server::hierarchy` gathers the whole tree in three tmux commands, rather than
