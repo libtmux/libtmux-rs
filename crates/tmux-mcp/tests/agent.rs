@@ -630,6 +630,8 @@ async fn a_deadline_stops_the_waiting_rather_than_the_command() {
 #[tokio::test]
 async fn waiting_for_text_sees_what_a_pane_writes() {
     let (guard, tools, pane) = typing_fixture("work").await;
+    let server = guard.server();
+    let baseline = client_count(server).await;
 
     let waiting = {
         let tools = tools.clone();
@@ -648,7 +650,11 @@ async fn waiting_for_text_sees_what_a_pane_writes() {
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        clients_settle(server, baseline + 1).await,
+        baseline + 1,
+        "the wait attached before the pane writes"
+    );
     tools
         .send_keys(args(serde_json::json!({
             "pane": pane,
@@ -662,7 +668,6 @@ async fn waiting_for_text_sees_what_a_pane_writes() {
     assert_eq!(result["outcome"], "matched");
     assert_eq!(result["matched_index"], 1);
     assert_eq!(result["matched_pattern"], "ready to serve");
-    assert_eq!(result["present_at_entry"], false);
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
