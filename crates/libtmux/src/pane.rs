@@ -15,6 +15,7 @@ use crate::snapshot::PaneProjection;
 #[cfg(feature = "query")]
 use crate::snapshot::{PaneFields, PaneInfo};
 use crate::target::{PaneId, ServerIdentity, SessionId, WindowId};
+use crate::version::TmuxVersion;
 use crate::window::Window;
 use crate::{Command, CommandResult, Error, ObjectKind};
 
@@ -1419,9 +1420,27 @@ impl CaptureOptions {
         self
     }
 
-    /// Report whether these options ask tmux for `-T`.
-    pub(crate) const fn trims_blank_cells(self) -> bool {
-        self.trim_blank_cells
+    /// Lower these options into a `capture-pane` command for one pane.
+    ///
+    /// Takes the release so a flag cannot reach tmux without the check that
+    /// guards it: the two transports render this command from one place, and
+    /// a version is the price of rendering it at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedCapability`] when a requested flag needs a
+    /// newer tmux than `version`.
+    pub(crate) fn lower(self, pane: &str, version: &TmuxVersion) -> Result<Command, Error> {
+        // `-T` arrived in 3.4; every other flag lowered here is present at the
+        // supported floor.
+        if self.trim_blank_cells {
+            version.require(
+                "capture-pane -T",
+                crate::version::since::CAPTURE_TRIM_BLANK_CELLS,
+            )?;
+        }
+
+        Ok(self.into_command(pane))
     }
 
     /// Lower these options into a `capture-pane` command for one pane.
@@ -1567,7 +1586,26 @@ fn parse_env_id(value: Option<&OsStr>) -> Result<PaneId, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::send_line_command;
+    use super::{CaptureOptions, send_line_command};
+    use crate::TmuxVersion;
+
+    #[test]
+    fn a_flag_a_release_lacks_is_refused_before_it_reaches_tmux() {
+        let options = CaptureOptions::visible().trim_blank_cells();
+        let refused = TmuxVersion::parse_output(b"tmux 3.2a\n").expect("a release");
+        let accepted = TmuxVersion::parse_output(b"tmux 3.4\n").expect("a release");
+
+        assert!(options.lower("%1", &refused).is_err());
+        assert!(options.lower("%1", &accepted).is_ok());
+        // Every other flag is present at the floor.
+        assert!(
+            CaptureOptions::history()
+                .join_wrapped()
+                .trailing_spaces()
+                .lower("%1", &refused)
+                .is_ok()
+        );
+    }
 
     #[test]
     fn a_line_keeps_one_length_independent_sensitive_argument() {

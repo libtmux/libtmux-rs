@@ -119,19 +119,14 @@ impl Pane {
     /// # }
     /// ```
     pub async fn capture_with(&self, options: CaptureOptions) -> Result<Vec<TmuxText>, Error> {
-        // `-T` arrived in 3.4; every other flag this lowers is present at the
-        // supported floor. Refusing here beats dispatching a flag tmux will
-        // reject with a usage error that names the whole command.
-        if options.trims_blank_cells() {
-            crate::Server::from_core(Arc::clone(&self.core))
-                .require(
-                    "capture-pane -T",
-                    crate::version::since::CAPTURE_TRIM_BLANK_CELLS,
-                )
-                .await?;
-        }
-
-        let command = options.into_command(self.id().as_ref());
+        // Refusing beats dispatching a flag tmux will reject with a usage
+        // error that names the whole command.
+        let version = crate::Server::from_core(Arc::clone(&self.core))
+            .capabilities()
+            .await?
+            .tmux_version()
+            .clone();
+        let command = options.lower(self.id().as_ref(), &version)?;
         let target = command.target().map(OsStr::to_os_string);
         let result = self.core.execute(command).await?;
         if !result.success() {

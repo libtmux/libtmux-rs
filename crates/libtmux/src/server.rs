@@ -956,31 +956,16 @@ impl Server {
         Ok(TmuxText::from(value.to_vec()))
     }
 
-    /// Refuse a capability the running tmux is too old for.
-    ///
-    /// Checked rather than left to tmux, which usually accepts an unknown
-    /// flag and ignores it: without this, "your tmux is too old" arrives as
-    /// "the command did nothing".
+    /// Read this server's release and refuse a capability it is too old for.
     pub(crate) async fn require(
         &self,
         capability: &'static str,
         needs: ReleaseVersion,
     ) -> Result<(), Error> {
-        let found = self.capabilities().await?.tmux_version();
-        // A development build carries no numbered release to compare, so it
-        // is taken at its word rather than refused.
-        if found
-            .behavior_release()
-            .is_some_and(|release| release < needs)
-        {
-            return Err(Error::UnsupportedCapability {
-                capability,
-                needs,
-                found: found.clone(),
-            });
-        }
-
-        Ok(())
+        self.capabilities()
+            .await?
+            .tmux_version()
+            .require(capability, needs)
     }
 
     /// Refuse when the running release is inside a range that gets it wrong.

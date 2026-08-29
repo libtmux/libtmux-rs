@@ -450,6 +450,36 @@ impl TmuxVersion {
         }
     }
 
+    /// Refuse a capability this release is too old for.
+    ///
+    /// tmux usually accepts an unknown flag and ignores it, so without this
+    /// "your tmux is too old" arrives as "the command did nothing". A
+    /// development build carries no numbered release to compare and is taken
+    /// at its word rather than refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedCapability`] when this release is below
+    /// `needs`.
+    pub(crate) fn require(
+        &self,
+        capability: &'static str,
+        needs: ReleaseVersion,
+    ) -> Result<(), Error> {
+        if self
+            .behavior_release()
+            .is_some_and(|release| release < needs)
+        {
+            return Err(Error::UnsupportedCapability {
+                capability,
+                needs,
+                found: self.clone(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Require this version to meet the crate's minimum supported release.
     ///
     /// # Errors
