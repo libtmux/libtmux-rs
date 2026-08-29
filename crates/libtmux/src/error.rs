@@ -690,6 +690,28 @@ pub enum Error {
         id: String,
     },
 
+    /// A session's link to an object was not there to remove.
+    ///
+    /// Distinct from [`Self::ObjectGone`], and the distinction matters to a
+    /// caller holding a handle: the object may be perfectly alive, linked into
+    /// another session or sitting at another index. What was missing is this
+    /// session's link to it, which is what a link-scoped command targets.
+    ///
+    /// tmux names such a target `session:index`, and answers a missing one by
+    /// echoing the index. An index is not an identity -- `@4` and index 4 are
+    /// different things, and both can exist at once -- so reporting it as one
+    /// would name some other window, or name a live one as gone.
+    #[non_exhaustive]
+    #[error("{session} has no {kind} at index {index}")]
+    LinkGone {
+        /// The kind of object the link pointed at.
+        kind: ObjectKind,
+        /// The session whose link was targeted.
+        session: String,
+        /// The index within that session.
+        index: i32,
+    },
+
     /// A control-mode connection failed.
     #[cfg(feature = "control-mode")]
     #[non_exhaustive]
@@ -1022,6 +1044,9 @@ impl Error {
             // there. That is the same decision as a missing object, and the
             // same branch a caller already writes for one.
             Self::ObjectGone { .. } | Self::ServerGenerationChanged { .. } => ErrorKind::ObjectGone,
+            // Not `ObjectGone`: the object may still exist, so a caller must
+            // not read this as a reason to drop the handle.
+            Self::LinkGone { .. } => ErrorKind::Refused,
             Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
             | Self::OutputLimitExceeded { .. }
@@ -1501,6 +1526,16 @@ impl fmt::Debug for Error {
                 .debug_struct("SupervisorLost")
                 .field("request_id", request_id)
                 .field("command", command)
+                .finish(),
+            Self::LinkGone {
+                kind,
+                session,
+                index,
+            } => formatter
+                .debug_struct("LinkGone")
+                .field("kind", kind)
+                .field("session", session)
+                .field("index", index)
                 .finish(),
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, source } => formatter

@@ -1171,6 +1171,7 @@ variant libtmux::Error::ExecutorShutdown
 variant libtmux::Error::InvalidCommandInput
 variant libtmux::Error::InvalidServerConfiguration
 variant libtmux::Error::InvalidVersionOutput
+variant libtmux::Error::LinkGone
 variant libtmux::Error::ObjectGone
 variant libtmux::Error::OptionRejected
 variant libtmux::Error::OutputLimitExceeded

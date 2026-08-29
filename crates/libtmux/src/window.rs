@@ -705,6 +705,7 @@ impl Window {
     ///
     /// Returns an error when tmux refuses the command.
     pub async fn select(&mut self) -> Result<&mut Self, Error> {
+        let (session, index) = (self.session_id().to_string(), self.index());
         listing::mutate(
             &self.core,
             "select-window",
@@ -714,7 +715,8 @@ impl Window {
                 self.index()
             )),
         )
-        .await?;
+        .await
+        .map_err(|error| link_gone(error, &session, index))?;
 
         self.refresh().await?;
         Ok(self)
@@ -926,6 +928,7 @@ impl Window {
     /// Returns an error when tmux refuses the command, which includes
     /// unlinking a window that only one session holds.
     pub async fn unlink(self) -> Result<(), Error> {
+        let (session, index) = (self.session_id().to_string(), self.index());
         listing::mutate(
             &self.core,
             "unlink-window",
@@ -936,6 +939,7 @@ impl Window {
             )),
         )
         .await
+        .map_err(|error| link_gone(error, &session, index))
     }
 
     /// Read one option's exact stored value.
@@ -2268,5 +2272,31 @@ pub(crate) fn assignment(name: &OsStr, value: &OsStr) -> OsString {
 impl fmt::Display for Window {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}:{}", self.session_id(), self.index())
+    }
+}
+
+/// Say that a link was missing rather than that an object is gone.
+///
+/// A link-scoped command targets `session:index`, because a window linked into
+/// three sessions has one id and three links and `-t @5` could not say which
+/// to act on. When tmux cannot resolve such a target it answers by echoing the
+/// index, and the generic classifier reads that echo as an identity -- so
+/// `index 4` is reported as window `@4`, which is a different object that may
+/// well be alive, or the same one still living under another link.
+///
+/// Here the index is known to be an index, so the error can say so, and
+/// [`Error::is_object_gone`] answers `false`: a caller must not drop a handle
+/// whose window is still there.
+fn link_gone(error: Error, session: &str, index: i32) -> Error {
+    match &error {
+        Error::ObjectGone {
+            kind: ObjectKind::Window,
+            id,
+        } if id.parse::<i32>() == Ok(index) => Error::LinkGone {
+            kind: ObjectKind::Window,
+            session: session.to_owned(),
+            index,
+        },
+        _ => error,
     }
 }

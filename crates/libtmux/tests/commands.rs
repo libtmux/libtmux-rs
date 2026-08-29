@@ -831,6 +831,87 @@ async fn dispatch_only_commands_are_accepted() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Unlinking a link that is already gone must not say the window is gone.
+///
+/// A link-scoped command targets `session:index`, because a window linked into
+/// several sessions has one id and several links. tmux answers a missing
+/// target by echoing the index, and reading that echo as an identity produces
+/// three wrong claims at once: an index reported as an id, a name that may
+/// belong to a different live window, and "closed or killed" about a window
+/// that is still running under another link.
+///
+/// The last is the one that costs a caller something: `is_object_gone` is what
+/// they branch on to drop a handle.
+#[tokio::test]
+async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let home = server.new_session("home").await.expect("session");
+    let elsewhere = server.new_session("elsewhere").await.expect("session");
+
+    let shared = home
+        .new_window(NewWindowOptions::new("shared"))
+        .await
+        .expect("a window to share");
+    let shared_id = shared.id().to_string();
+    let index = shared.index();
+
+    shared
+        .link_to(&elsewhere, None)
+        .await
+        .expect("the window is linked into a second session");
+
+    // Two handles to the same link, taken before either is used: `unlink`
+    // consumes the handle, and after the first call this session holds no
+    // window at that index to take a second from.
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        handles.push(
+            home.windows()
+                .await
+                .expect("windows")
+                .into_iter()
+                .find(|window| window.index() == index)
+                .expect("the shared window is linked here"),
+        );
+    }
+    let second = handles.pop().expect("two handles");
+    let first = handles.pop().expect("two handles");
+
+    // The first removal succeeds: two links, one goes.
+    first.unlink().await.expect("the link is removed");
+
+    // The window itself is still running, held by the other session.
+    let alive = server
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .any(|window| window.id().to_string() == shared_id);
+    assert!(alive, "the window survives losing one of its links");
+
+    // Removing the same link again fails, and what it says matters.
+    let again = home
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .find(|window| window.index() == index);
+    assert!(
+        again.is_none(),
+        "the session no longer holds a window at that index"
+    );
+
+    let refused = second.unlink().await.expect_err("the link is already gone");
+
+    assert!(
+        !refused.is_object_gone(),
+        "a missing link is not a missing object; the window is still alive. got {refused:?}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
