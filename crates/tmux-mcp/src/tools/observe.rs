@@ -8,6 +8,7 @@ use rmcp::{tool, tool_router};
 use crate::exec::{self, Patterns};
 use crate::jobs;
 use crate::policy::reporting;
+use crate::tail::TailError;
 use crate::{
     CancelJobArgs, CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, IdleView, JobCancelled,
     JobList, JobStatusArgs, Reporter, RunCommandArgs, RunView, Since, StartCommandArgs, TmuxTools,
@@ -70,6 +71,20 @@ fn start_error(error: jobs::StartError) -> ErrorData {
             Some(serde_json::json!({
                 "kind": "startup_stopped",
                 "retryable": false,
+                "stale": false,
+            })),
+        ),
+    }
+}
+
+fn tail_error(error: TailError) -> ErrorData {
+    match error {
+        TailError::Tmux(error) => tmux_error(&error),
+        TailError::OwnerUnavailable => ErrorData::internal_error(
+            "capture cursor identity is unavailable".to_owned(),
+            Some(serde_json::json!({
+                "kind": "unreachable",
+                "retryable": true,
                 "stale": false,
             })),
         ),
@@ -428,8 +443,8 @@ impl TmuxTools {
                        cursor, starts watching and returns a cursor; later calls pass it back \
                        and receive only what is new. Use this to follow a pane over several \
                        turns without re-reading the whole screen. The answer says missed=true \
-                       if output was dropped because the pane outran the buffer or its live \
-                       tail was evicted.",
+                       if the cursor no longer names retained output, including when the pane \
+                       outran the buffer, its live tail was evicted, or the server restarted.",
         title = "Read New Pane Output",
         annotations(
             read_only_hint = true,
@@ -462,7 +477,7 @@ impl TmuxTools {
             .tails
             .read(&target, cursor.as_ref())
             .await
-            .map_err(|e| tmux_error(&e))?;
+            .map_err(tail_error)?;
 
         // A tail can only report what it saw, and on the first call it has
         // seen nothing. Answering with the visible screen makes the tool
@@ -586,5 +601,18 @@ mod tests {
         assert_eq!(data["kind"], "startup_stopped");
         assert_eq!(data["retryable"], false);
         assert!(error.message.contains("pane input may have been sent"));
+    }
+
+    #[test]
+    fn unavailable_cursor_identity_is_an_internal_failure() {
+        let error = tail_error(TailError::OwnerUnavailable);
+        let data = error.data.expect("the failure is classified");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(error.message, "capture cursor identity is unavailable");
+        assert_eq!(data["kind"], "unreachable");
+        assert_eq!(data["retryable"], true);
+        assert_eq!(data["stale"], false);
+        assert_eq!(data.as_object().map(serde_json::Map::len), Some(3));
     }
 }

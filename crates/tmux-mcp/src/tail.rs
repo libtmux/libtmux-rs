@@ -8,9 +8,8 @@
 //! freed. The loss is silent, which is the worst part.
 //!
 //! So the bytes are kept here instead. A tail attaches once and holds a ring
-//! of what the pane wrote; a cursor names an offset in that ring. Output is
-//! missed when the ring overflows or its tail was evicted. Both losses are
-//! visible and reported.
+//! of what the pane wrote; a cursor names an offset in that ring. A cursor
+//! that no longer names retained output reports the gap.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,6 +38,30 @@ const RING_BYTES: usize = 256 * 1024;
 /// least recently read is dropped to make room.
 const MAX_TAILS: usize = 8;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct Owner(u128);
+
+impl Owner {
+    fn generate() -> Result<Self, getrandom::Error> {
+        let mut bytes = [0; 16];
+        getrandom::fill(&mut bytes)?;
+        Ok(Self(u128::from_le_bytes(bytes)))
+    }
+
+    fn decode(text: &str) -> Option<Self> {
+        if text.len() != 32 {
+            return None;
+        }
+        u128::from_str_radix(text, 16).ok().map(Self)
+    }
+}
+
+impl std::fmt::Debug for Owner {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Owner(..)")
+    }
+}
+
 /// A place in one pane's output.
 ///
 /// Opaque by contract: it is rendered as text for the protocol to carry, and
@@ -46,6 +69,7 @@ const MAX_TAILS: usize = 8;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cursor {
     pane: String,
+    owner: Owner,
     epoch: u64,
     offset: u64,
 }
@@ -54,7 +78,10 @@ impl Cursor {
     /// Render the cursor for a caller to hold.
     #[must_use]
     pub fn encode(&self) -> String {
-        format!("{}:{}:{}", self.pane, self.epoch, self.offset)
+        format!(
+            "{}:{:032x}:{}:{}",
+            self.pane, self.owner.0, self.epoch, self.offset
+        )
     }
 
     /// Read back a cursor this crate rendered.
@@ -63,16 +90,20 @@ impl Cursor {
     ///
     /// Returns the given text when it is not one of ours.
     pub fn decode(text: &str) -> Result<Self, &str> {
-        let mut fields = text.rsplitn(3, ':');
+        let mut fields = text.rsplitn(4, ':');
         let offset = fields.next().and_then(|field| field.parse().ok());
         let epoch = fields.next().and_then(|field| field.parse().ok());
+        let owner = fields.next().and_then(Owner::decode);
         let pane = fields.next();
-        match (pane, epoch, offset) {
-            (Some(pane), Some(epoch), Some(offset)) if pane.starts_with('%') => Ok(Self {
-                pane: pane.to_owned(),
-                epoch,
-                offset,
-            }),
+        match (pane, owner, epoch, offset) {
+            (Some(pane), Some(owner), Some(epoch), Some(offset)) if pane.starts_with('%') => {
+                Ok(Self {
+                    pane: pane.to_owned(),
+                    owner,
+                    epoch,
+                    offset,
+                })
+            }
             _ => Err(text),
         }
     }
@@ -93,9 +124,7 @@ pub(crate) struct Since {
     pub cursor: Cursor,
     /// Whether output between the cursor and this text was dropped.
     ///
-    /// True when the ring overflowed, and when the cursor predates the tail
-    /// that is answering — a tail evicted and reopened cannot vouch for what
-    /// happened while it was gone.
+    /// True when the cursor no longer names retained output in this tail.
     pub missed: bool,
     /// Whether the pane has stopped writing for good.
     pub closed: bool,
@@ -146,6 +175,9 @@ impl Ring {
         if offset < self.start {
             return (&self.bytes, true);
         }
+        if offset > self.end() {
+            return (&[], true);
+        }
         let from = usize::try_from(offset - self.start).unwrap_or(self.bytes.len());
         (self.bytes.get(from..).unwrap_or_default(), false)
     }
@@ -172,13 +204,10 @@ impl Ring {
 /// Where a read should resume, and whether the gap before it is unaccounted
 /// for.
 ///
-/// A cursor issued by a previous tail is the interesting case. Tails are
-/// evicted to bound how many control-mode connections this server holds, and
-/// whatever a pane wrote while none was attached is exactly what no one can
-/// recover. Resuming at the end and saying so is the only honest answer.
-fn resume_at(ring: &Ring, cursor: Option<&Cursor>, epoch: u64) -> (u64, bool) {
+/// A cursor from another owner or tail cannot name a point in this ring.
+fn resume_at(ring: &Ring, cursor: Option<&Cursor>, owner: Owner, epoch: u64) -> (u64, bool) {
     match cursor {
-        Some(cursor) if cursor.epoch == epoch => (cursor.offset, false),
+        Some(cursor) if cursor.owner == owner && cursor.epoch == epoch => (cursor.offset, false),
         Some(_) => (ring.end(), true),
         None => (ring.end(), false),
     }
@@ -202,17 +231,52 @@ impl Drop for Tail {
 }
 
 /// The tails this server is holding.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Tails {
+    owner: Mutex<Option<Owner>>,
     inner: Mutex<HashMap<String, Tail>>,
     next_epoch: AtomicU64,
+}
+
+#[derive(Debug)]
+pub(crate) enum TailError {
+    Tmux(Error),
+    OwnerUnavailable,
+}
+
+impl From<Error> for TailError {
+    fn from(error: Error) -> Self {
+        Self::Tmux(error)
+    }
 }
 
 impl Tails {
     /// Hold no tails yet.
     #[must_use]
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            owner: Mutex::new(None),
+            inner: Mutex::new(HashMap::new()),
+            next_epoch: AtomicU64::new(0),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_owner(owner: Owner) -> Self {
+        Self {
+            owner: Mutex::new(Some(owner)),
+            ..Self::new()
+        }
+    }
+
+    fn owner(&self) -> Result<Owner, TailError> {
+        let mut current = hold(&self.owner);
+        if let Some(owner) = *current {
+            return Ok(owner);
+        }
+        let owner = Owner::generate().map_err(|_| TailError::OwnerUnavailable)?;
+        *current = Some(owner);
+        Ok(owner)
     }
 
     /// Read what a pane wrote since `cursor`, opening a tail if needed.
@@ -223,8 +287,14 @@ impl Tails {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pane cannot be watched.
-    pub(crate) async fn read(&self, pane: &Pane, cursor: Option<&Cursor>) -> Result<Since, Error> {
+    /// Returns an error when a cursor identity cannot be generated or the pane
+    /// cannot be watched.
+    pub(crate) async fn read(
+        &self,
+        pane: &Pane,
+        cursor: Option<&Cursor>,
+    ) -> Result<Since, TailError> {
+        let owner = self.owner()?;
         let id = pane.id().to_string();
 
         let opened = self.ensure(pane, &id).await?;
@@ -232,7 +302,7 @@ impl Tails {
 
         let (read, missed, closed, end) = {
             let ring = hold(&ring);
-            let (from, stale) = resume_at(&ring, cursor, epoch);
+            let (from, stale) = resume_at(&ring, cursor, owner, epoch);
             let read = ring.snapshot_from(from);
             let missed = read.missed || stale;
             (read, missed, ring.closed, ring.end())
@@ -242,6 +312,7 @@ impl Tails {
             text: read.text(),
             cursor: Cursor {
                 pane: id,
+                owner,
                 epoch,
                 offset: end,
             },
@@ -315,7 +386,7 @@ impl Tails {
         Some((Arc::clone(&tail.ring), tail.epoch))
     }
 
-    /// The next process-local tail epoch.
+    /// The next tail epoch for this owner.
     fn next_epoch(&self) -> u64 {
         self.next_epoch
             .fetch_add(1, Ordering::Relaxed)
@@ -336,23 +407,53 @@ mod tests {
         }
     }
 
+    fn tails_with_owner(owner: u128) -> Tails {
+        Tails::with_owner(Owner(owner))
+    }
+
+    fn cursor_for(tails: &Tails, pane: &str, epoch: u64, offset: u64) -> Cursor {
+        Cursor {
+            pane: pane.to_owned(),
+            owner: tails.owner().expect("the test owner is available"),
+            epoch,
+            offset,
+        }
+    }
+
+    fn resume_for(tails: &Tails, ring: &Ring, cursor: Option<&Cursor>, epoch: u64) -> (u64, bool) {
+        resume_at(
+            ring,
+            cursor,
+            tails.owner().expect("the test owner is available"),
+            epoch,
+        )
+    }
+
     #[test]
     fn a_cursor_survives_a_round_trip() {
-        let cursor = Cursor {
-            pane: "%12".to_owned(),
-            epoch: 3,
-            offset: 4096,
-        };
+        let tails = tails_with_owner(1);
+        let cursor = cursor_for(&tails, "%12", 3, 4096);
 
+        assert_eq!(
+            cursor.encode(),
+            "%12:00000000000000000000000000000001:3:4096"
+        );
         assert_eq!(Cursor::decode(&cursor.encode()), Ok(cursor));
     }
 
     #[test]
     fn foreign_text_is_not_a_cursor() {
         assert!(Cursor::decode("nonsense").is_err());
-        assert!(Cursor::decode("%1:notanumber:0").is_err());
         assert!(
-            Cursor::decode("1:2:3").is_err(),
+            Cursor::decode("%1:1:0").is_err(),
+            "old cursors lack an owner"
+        );
+        assert!(
+            Cursor::decode("%1:notanowner:1:0").is_err(),
+            "an owner is fixed-width hexadecimal"
+        );
+        assert!(
+            Cursor::decode("1:00000000000000000000000000000001:2:3").is_err(),
             "a pane id always starts with %"
         );
     }
@@ -375,11 +476,11 @@ mod tests {
     }
 
     #[test]
-    fn an_offset_past_the_end_yields_nothing_rather_than_panicking() {
+    fn an_offset_past_the_end_admits_the_cursor_is_invalid() {
         let mut ring = ring();
         ring.push(b"hello");
 
-        assert_eq!(ring.read_from(99), (&b""[..], false));
+        assert_eq!(ring.read_from(99), (&b""[..], true));
     }
 
     #[test]
@@ -402,44 +503,55 @@ mod tests {
 
     #[test]
     fn a_first_read_resumes_at_the_end_and_has_missed_nothing() {
+        let tails = tails_with_owner(1);
         let mut ring = ring();
         ring.push(b"written before anyone looked");
 
-        assert_eq!(resume_at(&ring, None, 1), (ring.end(), false));
+        assert_eq!(resume_for(&tails, &ring, None, 1), (ring.end(), false));
     }
 
     #[test]
     fn a_cursor_from_this_tail_resumes_where_it_says() {
+        let tails = tails_with_owner(1);
         let mut ring = ring();
         ring.push(b"hello");
-        let cursor = Cursor {
-            pane: "%1".to_owned(),
-            epoch: 1,
-            offset: 2,
-        };
+        let cursor = cursor_for(&tails, "%1", 1, 2);
 
-        assert_eq!(resume_at(&ring, Some(&cursor), 1), (2, false));
+        assert_eq!(resume_for(&tails, &ring, Some(&cursor), 1), (2, false));
     }
 
     #[test]
     fn a_cursor_from_an_evicted_tail_admits_the_gap() {
+        let tails = tails_with_owner(1);
         let mut ring = ring();
         ring.push(b"written after the tail came back");
-        let cursor = Cursor {
-            pane: "%1".to_owned(),
-            epoch: 1,
-            offset: 0,
-        };
+        let cursor = cursor_for(&tails, "%1", 1, 0);
 
         assert_eq!(
-            resume_at(&ring, Some(&cursor), 2),
+            resume_for(&tails, &ring, Some(&cursor), 2),
             (ring.end(), true),
             "an offset from a previous tail names a place in a buffer that is gone"
         );
     }
 
     #[test]
-    fn tail_epochs_are_process_wide() {
+    fn a_cursor_from_a_fresh_owner_admits_the_gap() {
+        let first = tails_with_owner(1);
+        let second = tails_with_owner(2);
+        let mut ring = ring();
+        ring.push(b"written after the server restarted");
+        let cursor = cursor_for(&first, "%1", first.next_epoch(), 0);
+        let epoch = second.next_epoch();
+
+        assert_eq!(
+            resume_for(&second, &ring, Some(&cursor), epoch),
+            (ring.end(), true),
+            "an offset from another cursor owner names a different buffer"
+        );
+    }
+
+    #[test]
+    fn tail_epochs_increase_within_one_owner() {
         let tails = Tails::new();
 
         assert_eq!(tails.next_epoch(), 1);

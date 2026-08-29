@@ -28,6 +28,7 @@ include = [
 ]
 
 [dependencies]
+getrandom = "0.3"
 libtmux = { workspace = true, features = ["plan", "control-mode", "query", "schema", "serde"] }
 regex = "1.13"
 rmcp = { version = "3.0", features = ["server", "macros", "transport-io", "elicitation"] }
