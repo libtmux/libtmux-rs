@@ -1088,3 +1088,64 @@ async fn a_plan_is_refused_per_operation_when_the_tier_does_not_offer_it() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_rename_reports_the_name_tmux_stored_not_the_one_asked_for() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = bare_tools(guard.server());
+
+    tools
+        .create_session(Parameters(
+            serde_json::from_value(serde_json::json!({"name": "work"}))
+                .expect("arguments deserialize"),
+        ))
+        .await
+        .expect("session is created");
+
+    let window = rows(
+        tools
+            .list_session_windows(Parameters(
+                serde_json::from_value(serde_json::json!({"session": "work"}))
+                    .expect("arguments deserialize"),
+            ))
+            .await
+            .expect("windows"),
+    )
+    .first()
+    .and_then(|row| row["id"].as_str().map(str::to_owned))
+    .expect("the session has a window");
+
+    // tmux expands a name as a format before storing it, so the caller's text
+    // and the window's name are not the same string. Answering with the
+    // request would name something that cannot be found again.
+    let renamed = json(
+        tools
+            .rename(Parameters(
+                serde_json::from_value(
+                    serde_json::json!({"target": &window, "name": "w#{pane_index}x"}),
+                )
+                .expect("arguments deserialize"),
+            ))
+            .await
+            .expect("the window is renamed"),
+    );
+
+    assert_eq!(renamed["name"], "w0x", "the answer is what tmux stored");
+
+    let listed = rows(
+        tools
+            .list_session_windows(Parameters(
+                serde_json::from_value(serde_json::json!({"session": "work"}))
+                    .expect("arguments deserialize"),
+            ))
+            .await
+            .expect("windows are listable"),
+    );
+    assert_eq!(
+        listed.iter().filter(|row| row["name"] == "w0x").count(),
+        1,
+        "the reported name is the one the server lists: {listed:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

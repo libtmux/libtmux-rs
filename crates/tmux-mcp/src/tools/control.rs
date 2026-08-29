@@ -153,14 +153,15 @@ impl TmuxTools {
     ) -> Result<Json<Renamed>, ErrorData> {
         if target.starts_with('@') {
             let mut window = self.find_window(&target).await?;
-            window
-                .rename(name.clone())
-                .await
-                .map_err(|e| tmux_error(&e))?;
+            window.rename(name).await.map_err(|e| tmux_error(&e))?;
 
+            // tmux expands a name as a format before storing it, so what it
+            // holds may not be what was asked for: `w#{pane_index}x` lands as
+            // `w0x`. Reporting the request would hand back a name that targets
+            // nothing. `rename` refreshes the handle, so this is what tmux has.
             return Ok(Json(Renamed {
                 id: window.id().to_string(),
-                name,
+                name: window.name().to_string_lossy().into_owned(),
             }));
         }
 
@@ -172,14 +173,11 @@ impl TmuxTools {
             .into_iter()
             .find(|session| session.id().to_string() == target)
             .ok_or_else(|| object_gone("session", &target))?;
-        session
-            .rename(name.clone())
-            .await
-            .map_err(|e| tmux_error(&e))?;
+        session.rename(name).await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Renamed {
             id: session.id().to_string(),
-            name,
+            name: session.name().to_string_lossy().into_owned(),
         }))
     }
 
