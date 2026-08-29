@@ -339,19 +339,23 @@ pub(crate) enum InfoPlacement {
     ClientInfo,
 }
 
-/// Canonical list-profile admission set.
+/// Which list commands can resolve a field.
+///
+/// A set of [`ListProfile`], and deliberately not named for it: the two sat
+/// one letter apart in this file and a reader took the busy one for the
+/// catalogue-only one.
 #[allow(
     dead_code,
     reason = "catalog-only metadata is verified by the checked parity fixture"
 )]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ListProfiles(u8);
+pub(crate) struct ProfileSet(u8);
 
 #[allow(
     dead_code,
     reason = "catalog-only metadata is verified by the checked parity fixture"
 )]
-impl ListProfiles {
+impl ProfileSet {
     const SESSIONS: u8 = 1;
     const WINDOWS: u8 = 1 << 1;
     const PANES: u8 = 1 << 2;
@@ -409,7 +413,7 @@ pub(crate) struct FormatDescriptor {
     /// Context tmux needs to resolve the field.
     required_context: RequiredContext,
     /// List commands that can resolve the field.
-    profiles: ListProfiles,
+    profiles: ProfileSet,
     /// First numbered tmux release that provides the field.
     minimum_release: ReleaseVersion,
     /// Primitive byte decoder for the field.
@@ -441,7 +445,7 @@ impl FormatDescriptor {
     }
 
     /// Return the admitted list profiles.
-    pub(crate) const fn profiles(&self) -> ListProfiles {
+    pub(crate) const fn profiles(&self) -> ProfileSet {
         self.profiles
     }
 
@@ -472,7 +476,7 @@ impl FormatDescriptor {
             name,
             owner: SemanticOwner::Session,
             required_context: RequiredContext::Session,
-            profiles: ListProfiles::all(),
+            profiles: ProfileSet::all(),
             minimum_release: TmuxVersion::MIN_SUPPORTED,
             decoder,
             empty_policy: EmptyPolicy::Available,
@@ -695,13 +699,13 @@ pub(crate) use format_catalog;
 
 macro_rules! catalog_profiles {
     (All) => {
-        ListProfiles::all()
+        ProfileSet::all()
     };
     (Clients) => {
-        ListProfiles::clients()
+        ProfileSet::clients()
     };
     (None) => {
-        ListProfiles::none()
+        ProfileSet::none()
     };
 }
 
@@ -2050,11 +2054,11 @@ mod tests {
     use super::{
         CATALOG, CLIENT_INFO_DESCRIPTORS, CLIENT_INFO_SUPPLEMENTS, CLIENT_NAME, DecoderKind,
         EmptyPolicy, FormatCodecError, FormatCodecErrorKind, FormatCodecPhase, FormatDescriptor,
-        FormatPlan, GROUPED_CATALOG, InfoPlacement, ListProfile, ListProfiles, PANE_ID,
-        PANE_INFO_DESCRIPTORS, PANE_INFO_SUPPLEMENTS, ParsedRow, ParsedSlot, PlanFieldState,
-        PlanPurpose, PlanVersion, QUOTE_SHELL_SPECIALS, RequiredContext, SESSION_ID,
-        SESSION_INFO_DESCRIPTORS, SESSION_INFO_SUPPLEMENTS, SemanticOwner, TransportDialect,
-        WINDOW_ID, WINDOW_INFO_DESCRIPTORS, WINDOW_INFO_SUPPLEMENTS, for_profile_selection_test,
+        FormatPlan, GROUPED_CATALOG, InfoPlacement, ListProfile, PANE_ID, PANE_INFO_DESCRIPTORS,
+        PANE_INFO_SUPPLEMENTS, ParsedRow, ParsedSlot, PlanFieldState, PlanPurpose, PlanVersion,
+        ProfileSet, QUOTE_SHELL_SPECIALS, RequiredContext, SESSION_ID, SESSION_INFO_DESCRIPTORS,
+        SESSION_INFO_SUPPLEMENTS, SemanticOwner, TransportDialect, WINDOW_ID,
+        WINDOW_INFO_DESCRIPTORS, WINDOW_INFO_SUPPLEMENTS, for_profile_selection_test,
     };
     #[cfg(feature = "test-support")]
     use crate::Command;
@@ -2070,7 +2074,7 @@ mod tests {
         name: "post_baseline",
         owner: SemanticOwner::Session,
         required_context: RequiredContext::Session,
-        profiles: ListProfiles::all(),
+        profiles: ProfileSet::all(),
         minimum_release: ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL),
         decoder: DecoderKind::Text,
         empty_policy: EmptyPolicy::Absent,
@@ -2364,7 +2368,7 @@ mod tests {
         assert_impl_all!(EmptyPolicy: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
         assert_impl_all!(InfoPlacement: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
         assert_impl_all!(ListProfile: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
-        assert_impl_all!(ListProfiles: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
+        assert_impl_all!(ProfileSet: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
         assert_impl_all!(FormatDescriptor: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
         assert_impl_all!(PlanPurpose: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
         assert_impl_all!(PlanFieldState: Clone, Copy, std::fmt::Debug, Eq, PartialEq);
@@ -3174,7 +3178,7 @@ mod tests {
         }
     }
 
-    fn profiles_token(profiles: ListProfiles) -> &'static str {
+    fn profiles_token(profiles: ProfileSet) -> &'static str {
         let admission = [
             profiles.contains(ListProfile::Sessions),
             profiles.contains(ListProfile::Windows),
