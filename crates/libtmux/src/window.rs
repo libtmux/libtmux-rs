@@ -701,22 +701,27 @@ impl Window {
 
     /// Make this window active in the session it was reached through.
     ///
+    /// Targeted by id rather than by index. An index is a slot, not an
+    /// identity: anything that renumbers windows -- breaking a lone pane out
+    /// of one moves it to a free index -- leaves a handle's cached index
+    /// pointing at whatever occupies that slot now, which is a different live
+    /// window rather than nothing. tmux answers such a target without
+    /// complaint, so an index-scoped select would switch to the wrong window
+    /// and report success.
+    ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command.
+    /// Returns an error when tmux refuses the command, and
+    /// [`Error::ObjectGone`] when the window is no longer on the server.
     pub async fn select(&mut self) -> Result<&mut Self, Error> {
-        let (session, index) = (self.session_id().to_string(), self.index());
         listing::mutate(
             &self.core,
             "select-window",
-            Command::new("select-window").arg("-t").arg(format!(
-                "{}:{}",
-                self.session_id(),
-                self.index()
-            )),
+            Command::new("select-window")
+                .arg("-t")
+                .arg(self.id().to_string()),
         )
-        .await
-        .map_err(|error| link_gone(error, &session, index))?;
+        .await?;
 
         self.refresh().await?;
         Ok(self)
@@ -929,17 +934,47 @@ impl Window {
     /// unlinking a window that only one session holds.
     pub async fn unlink(self) -> Result<(), Error> {
         let (session, index) = (self.session_id().to_string(), self.index());
-        listing::mutate(
+        // `session:id` rather than `session:index`. A link is what this
+        // removes, so the session half is needed; the window half is an
+        // identity, and a cached index stops being one the moment anything
+        // renumbers the session.
+        let Err(error) = listing::mutate(
             &self.core,
             "unlink-window",
             Command::new("unlink-window").arg("-t").arg(format!(
                 "{}:{}",
                 self.session_id(),
-                self.index()
+                self.id()
             )),
         )
         .await
-        .map_err(|error| link_gone(error, &session, index))
+        else {
+            return Ok(());
+        };
+
+        // Targeting by id costs the distinction the message used to carry: a
+        // link that is gone and a window that is gone read the same. So it is
+        // settled by asking, on the failure path only.
+        //
+        // Asked of the server rather than of this handle. A window refreshes
+        // within its own session, and a window whose link to that session is
+        // gone is exactly the case being told apart -- so refreshing would
+        // report it missing and answer the question with its own premise.
+        let alive = crate::Server::from_core(Arc::clone(&self.core))
+            .window_by_id(self.id())
+            .await
+            .is_ok_and(|window| window.is_some());
+        if error.is_object_gone() && alive {
+            return Err(link_gone(
+                Error::ObjectGone {
+                    kind: ObjectKind::Window,
+                    id: index.to_string(),
+                },
+                &session,
+                index,
+            ));
+        }
+        Err(error)
     }
 
     /// Read one option's exact stored value.

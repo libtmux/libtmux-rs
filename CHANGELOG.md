@@ -16,6 +16,16 @@ full.
 
 ## Unreleased
 
+### Fixed
+
+- `Window::select` and `Window::unlink` target the window by id rather than by
+  its cached index. An index is a slot: breaking a lone pane out of a window
+  relinks it at a free index, and anything that then occupies the vacated slot
+  inherits the index a handle still holds. tmux answers such a target without
+  complaint, so both commands could act on a different live window and report
+  success. `unlink` still reports `Error::LinkGone` rather than
+  `Error::ObjectGone` when the link is gone and the window is not.
+
 ### Added
 
 - `Pane::wait_for_text` and `Pane::wait_for_quiet`, with `PaneWait` naming the
