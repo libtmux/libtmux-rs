@@ -3944,6 +3944,7 @@ mod tests {
     #[test]
     fn each_listing_records_the_fields_it_requests() {
         use super::{FormatPlan, ListProfile};
+        use crate::snapshot::{pane_projection_plan, window_projection_plan};
         use crate::version::TmuxVersion;
         use std::fmt::Write as _;
 
@@ -3954,15 +3955,40 @@ mod tests {
              # are macro-generated; without this file the only way to learn a\n\
              # listing's fields is to intercept its `-F` string.\n\
              #\n\
+             # Recorded from the plan each listing builds, which is not the\n\
+             # same for all four: sessions and clients plan from the profile,\n\
+             # windows and panes from a requested set that chains a projection\n\
+             # suffix onto it. What this cannot see is a listing that changes\n\
+             # which plan it builds -- the check would then hold this file\n\
+             # consistent with itself rather than with the `-F` string. The\n\
+             # cross-check is to intercept the argv and count.\n\
+             #\n\
              # Regenerate with `just list-profiles`.\n\n",
         );
-        for (label, profile) in [
-            ("sessions", ListProfile::Sessions),
-            ("windows", ListProfile::Windows),
-            ("panes", ListProfile::Panes),
-            ("clients", ListProfile::Clients),
-        ] {
-            let plan = FormatPlan::for_profile(profile, &version);
+        // Built the way each listing builds it, not the way they look alike.
+        // `sessions` and `clients` plan from the profile; `windows` and
+        // `panes` plan from a requested set that chains a projection suffix
+        // onto the supplements, and recording the profile plan for those two
+        // documented a template nothing sends.
+        let plans = [
+            (
+                "sessions",
+                FormatPlan::for_profile(ListProfile::Sessions, &version),
+            ),
+            (
+                "windows",
+                window_projection_plan(&version).expect("a supported release plans windows"),
+            ),
+            (
+                "panes",
+                pane_projection_plan(&version).expect("a supported release plans panes"),
+            ),
+            (
+                "clients",
+                FormatPlan::for_profile(ListProfile::Clients, &version),
+            ),
+        ];
+        for (label, plan) in plans {
             let mut names: Vec<&str> = plan
                 .descriptors_for_test()
                 .iter()

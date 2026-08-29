@@ -3,6 +3,14 @@
 # are macro-generated; without this file the only way to learn a
 # listing's fields is to intercept its `-F` string.
 #
+# Recorded from the plan each listing builds, which is not the
+# same for all four: sessions and clients plan from the profile,
+# windows and panes from a requested set that chains a projection
+# suffix onto it. What this cannot see is a listing that changes
+# which plan it builds -- the check would then hold this file
+# consistent with itself rather than with the `-F` string. The
+# cross-check is to intercept the argv and count.
+#
 # Regenerate with `just list-profiles`.
 
 sessions (9 fields)
@@ -16,20 +24,40 @@ sessions (9 fields)
   session_path
   session_windows
 
-windows (11 fields)
+windows (31 fields)
+  session_id
+  window_active
+  window_active_clients
+  window_active_clients_list
+  window_active_sessions
+  window_active_sessions_list
   window_activity
+  window_activity_flag
+  window_bell_flag
   window_cell_height
   window_cell_width
+  window_end_flag
+  window_flags
   window_height
   window_id
+  window_index
+  window_last_flag
   window_layout
+  window_linked
+  window_linked_sessions
+  window_linked_sessions_list
+  window_marked_flag
   window_name
   window_panes
+  window_raw_flags
+  window_silence_flag
+  window_stack_index
+  window_start_flag
   window_visible_layout
   window_width
   window_zoomed_flag
 
-panes (69 fields)
+panes (72 fields)
   alternate_saved_x
   alternate_saved_y
   bracket_paste_flag
@@ -97,7 +125,10 @@ panes (69 fields)
   pane_zoomed_flag
   scroll_region_lower
   scroll_region_upper
+  session_id
   synchronized_output_flag
+  window_id
+  window_index
   wrap_flag
 
 clients (22 fields)
