@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt as _;
 
 use crate::formats::TmuxText;
 use crate::hooks::IndexedHooks;
@@ -434,10 +435,13 @@ pub(crate) async fn set_hooks(
         commands.push(
             scope
                 .apply(Command::new("set-hook"))
+                .arg("--")
                 .arg(OsString::from(format!("{name}[{index}]")))
-                .sensitive_arg(OsString::from(
-                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                )),
+                // A hook command is bytes, as everything tmux stores is. The
+                // single-hook path forwards them; going through a `String`
+                // here would replace whatever is not UTF-8 before tmux ever
+                // sees it.
+                .sensitive_arg(OsString::from_vec(value.as_bytes().to_vec())),
         );
     }
 

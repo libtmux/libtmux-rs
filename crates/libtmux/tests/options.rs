@@ -1023,3 +1023,42 @@ async fn a_name_shaped_like_a_flag_is_refused_not_obeyed() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_whole_hook_write_refuses_bytes_rather_than_substituting_them() {
+    use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
+    use std::collections::BTreeMap;
+
+    // A hook value is a tmux command, and tmux refuses one carrying a byte it
+    // cannot read. Passing the bytes through a `String` first replaced that
+    // byte with U+FFFD, which tmux then accepted: the caller was told the
+    // write succeeded and tmux held a command they had not written.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut command = b"set-environment -g MARK \"a".to_vec();
+    command.push(0xff);
+    command.extend_from_slice(b"b\"");
+
+    let mut entries = BTreeMap::new();
+    entries.insert(0, TmuxText::from(command));
+    server
+        .set_hooks(
+            "alert-bell",
+            &IndexedHooks::from(entries),
+            ReplaceMode::Replace,
+        )
+        .await
+        .expect_err("tmux refuses a command it cannot read");
+
+    assert!(
+        server
+            .hook("alert-bell")
+            .await
+            .expect("the hook reads")
+            .is_none_or(|hook| hook.get(0).is_none()),
+        "nothing was stored under a substituted value",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
