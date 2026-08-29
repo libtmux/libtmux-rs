@@ -467,6 +467,62 @@ async fn dropping_the_dispatch_future_cancels_and_reaps() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_dispatch_keeps_capacity_until_its_child_is_reaped() {
+    const ACQUIRE_TIMEOUT: Duration = Duration::from_millis(50);
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let first_path = directory.path().join("cancelled-holder.pid");
+    let second_path = directory.path().join("cancelled-waiter.pid");
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let executor = executor("block", TEST_TIMEOUT)
+        .with_dispatch_limits(
+            DispatchLimits::default()
+                .max_in_flight(1)
+                .acquire_timeout(Some(ACQUIRE_TIMEOUT)),
+        )
+        .with_test_hooks(TestHooks {
+            supervisor_failure_reached: Some(Arc::clone(&reached)),
+            supervisor_failure_release: Some(Arc::clone(&release)),
+            ..TestHooks::default()
+        });
+
+    let holder =
+        tokio::spawn(executor.execute(request(41, [first_path.as_os_str().to_os_string()])));
+    let first_pid = read_pids(&first_path, 1).await[0];
+    reached.notified().await;
+    holder.abort();
+    assert!(
+        holder
+            .await
+            .expect_err("holder was cancelled")
+            .is_cancelled()
+    );
+
+    let mut waiter =
+        tokio::spawn(executor.execute(request(42, [second_path.as_os_str().to_os_string()])));
+    let outcome = tokio::time::timeout(ACQUIRE_TIMEOUT * 4, &mut waiter).await;
+    if outcome.is_err() {
+        waiter.abort();
+        let _ = (&mut waiter).await;
+    }
+
+    release.notify_waiters();
+    executor
+        .shutdown()
+        .await
+        .expect("shutdown waits for cleanup");
+    assert_process_reaped(first_pid);
+
+    let error = outcome
+        .expect("capacity remains occupied while the cancelled child is live")
+        .expect("waiter task remains healthy")
+        .expect_err("a second dispatch is refused while cleanup owns the capacity");
+    assert!(matches!(error, Error::Overloaded { .. }), "{error:?}");
+    assert!(!second_path.exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn aborting_the_awaiting_task_cancels_and_reaps() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let pid_path = directory.path().join("abort.pid");

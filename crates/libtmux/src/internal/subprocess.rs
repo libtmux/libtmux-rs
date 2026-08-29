@@ -95,6 +95,7 @@ pub(crate) struct TestHooks {
     reader_failure: Option<ReaderFailure>,
     reader_failure_release: Option<Arc<Notify>>,
     wait_failure_release: Option<Arc<Notify>>,
+    supervisor_failure_reached: Option<Arc<Notify>>,
     supervisor_failure_release: Option<Arc<Notify>>,
 }
 
@@ -238,12 +239,7 @@ impl SubprocessExecutor {
         };
         trace_requested(&context);
 
-        // Held for the whole dispatch and released on drop, so a cancelled
-        // caller returns its permit even though the child it started is still
-        // being cleaned up.
-        // Bound to `_permit` rather than dropped: the guard is the admission,
-        // and releasing it here would let the next dispatch in immediately.
-        let _permit = match self.acquire_permit(&context).await {
+        let permit = match self.acquire_permit(&context).await {
             Ok(permit) => permit,
             Err(error) => return Err(error),
         };
@@ -353,6 +349,7 @@ impl SubprocessExecutor {
             readers,
             #[cfg(feature = "test-support")]
             synchronous_reap_on_drop: self.configuration.synchronous_reap_on_supervisor_drop,
+            _permit: permit,
             registry,
         };
         let supervisor = supervise_outer(
@@ -423,6 +420,8 @@ struct ChildOwnership {
     readers: ReaderTasks,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_drop: bool,
+    // Admission follows the process and readers into supervisor cleanup.
+    _permit: OwnedSemaphorePermit,
     // This must remain last so registry removal follows child and reader cleanup.
     #[allow(
         dead_code,
@@ -1024,6 +1023,9 @@ fn wait_at_barriers(
 #[allow(clippy::panic)]
 async fn inject_supervisor_failure(hooks: &TestHooks) {
     if let Some(release) = &hooks.supervisor_failure_release {
+        if let Some(reached) = &hooks.supervisor_failure_reached {
+            reached.notify_one();
+        }
         release.notified().await;
         panic!("sentinel-supervisor-panic");
     }
