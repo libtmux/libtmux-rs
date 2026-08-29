@@ -1199,10 +1199,8 @@ impl PaneOutput {
                         Some(Delivery::Boundary(_)) => {}
                         None => {
                             self.closed = true;
-                            if answer.is_none()
-                                && let Err(error) = reply.as_mut().await
-                            {
-                                return Err(error);
+                            if answer.is_none() {
+                                reply.as_mut().await?;
                             }
                             return Err(Error::control_mode_closed());
                         }
