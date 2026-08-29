@@ -2,6 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
@@ -15,21 +16,7 @@ use tmux_mcp::{RunPlanArgs, Safety, TmuxTools};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-#[test]
-fn run_plan_schema_matches_every_operation_and_rejects_malformed_plans() -> TestResult {
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
-        .safety(Safety::Destructive)
-        .build();
-    let tool = tools
-        .offered()
-        .into_iter()
-        .find(|tool| tool.name == "run_plan")
-        .expect("run_plan is offered");
-    let schema = serde_json::to_value(tool.input_schema)?;
-    jsonschema::draft202012::meta::validate(&schema)
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let validator = jsonschema::draft202012::new(&schema)?;
-
+fn every_operation_plan() -> Plan {
     let mut plan = Plan::new();
     let session = plan.add(
         NewSession::new(OsString::from_vec(vec![0xff]))
@@ -68,6 +55,110 @@ fn run_plan_schema_matches_every_operation_and_rejects_malformed_plans() -> Test
     plan.add(CapturePane::new(pane).escape_sequences());
     plan.add(KillPane::new(pane));
     plan.add(KillWindow::new(window));
+    plan
+}
+
+fn advertised_operations(schema: &serde_json::Value) -> BTreeSet<&str> {
+    schema["$defs"]["Op"]["oneOf"]
+        .as_array()
+        .expect("Op is a tagged union")
+        .iter()
+        .map(|variant| {
+            let required = variant["required"]
+                .as_array()
+                .expect("an operation requires its tag");
+            assert_eq!(required.len(), 1, "an operation has one tag: {variant}");
+            required[0].as_str().expect("the operation tag is text")
+        })
+        .collect()
+}
+
+#[test]
+fn each_safety_tier_advertises_exactly_the_operations_it_accepts() -> TestResult {
+    const READ_ONLY: &[&str] = &["CapturePane"];
+    const MUTATING: &[&str] = &[
+        "CapturePane",
+        "NewSession",
+        "NewWindow",
+        "RenameWindow",
+        "SelectLayout",
+        "SelectPane",
+        "SelectWindow",
+        "SendKeys",
+        "SetEnvironment",
+        "SetOption",
+        "SplitWindow",
+    ];
+    const DESTRUCTIVE: &[&str] = &[
+        "CapturePane",
+        "KillPane",
+        "KillWindow",
+        "NewSession",
+        "NewWindow",
+        "RenameWindow",
+        "SelectLayout",
+        "SelectPane",
+        "SelectWindow",
+        "SendKeys",
+        "SetEnvironment",
+        "SetOption",
+        "SplitWindow",
+    ];
+
+    for (tier, expected) in [
+        (Safety::ReadOnly, READ_ONLY),
+        (Safety::Mutating, MUTATING),
+        (Safety::Destructive, DESTRUCTIVE),
+    ] {
+        let tools = TmuxTools::builder(libtmux::Server::new()?)
+            .safety(tier)
+            .build();
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == "run_plan")
+            .expect("run_plan is offered");
+        let schema = serde_json::to_value(tool.input_schema)?;
+        jsonschema::draft202012::meta::validate(&schema)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let advertised = advertised_operations(&schema);
+
+        assert_eq!(advertised, expected.iter().copied().collect(), "{tier:?}");
+        let validator = jsonschema::draft202012::new(&schema)?;
+        let operations = serde_json::to_value(every_operation_plan())?;
+        for operation in operations.as_array().expect("a plan is an array") {
+            let name = operation
+                .as_object()
+                .and_then(|object| object.keys().next())
+                .expect("an operation has one tag");
+            let arguments = json!({"plan": [operation]});
+            assert_eq!(
+                validator.is_valid(&arguments),
+                expected.contains(&name.as_str()),
+                "{tier:?} admission for {name}",
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn run_plan_schema_matches_every_operation_and_rejects_malformed_plans() -> TestResult {
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .safety(Safety::Destructive)
+        .build();
+    let tool = tools
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "run_plan")
+        .expect("run_plan is offered");
+    let schema = serde_json::to_value(tool.input_schema)?;
+    jsonschema::draft202012::meta::validate(&schema)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let validator = jsonschema::draft202012::new(&schema)?;
+
+    let plan = every_operation_plan();
 
     let valid = json!({
         "plan": serde_json::to_value(&plan)?,

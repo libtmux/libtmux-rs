@@ -793,7 +793,9 @@ function libtmux::plan::Op::is_chainable
 function libtmux::plan::Op::kind
 function libtmux::plan::Op::name
 function libtmux::plan::Op::safety
+function libtmux::plan::OperationKind::from_wire_name
 function libtmux::plan::OperationKind::name
+function libtmux::plan::OperationKind::safety
 function libtmux::plan::OperationReport::attribution
 function libtmux::plan::OperationReport::index
 function libtmux::plan::OperationReport::kind

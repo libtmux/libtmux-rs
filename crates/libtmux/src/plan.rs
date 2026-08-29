@@ -571,160 +571,144 @@ impl<T> FromStep for Slot<T> {
     }
 }
 
-/// One recorded operation.
-///
-/// A plan holds these rather than boxed trait objects: the set of commands is
-/// closed, so an enum keeps a plan allocation-free per step, `Clone`, and
-/// inspectable without downcasting.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub enum Op {
-    /// Create a session.
-    NewSession(NewSession),
-    /// Create a window.
-    NewWindow(NewWindow),
-    /// Split a window into a new pane.
-    SplitWindow(SplitWindow),
-    /// Send text or keys to a pane.
-    SendKeys(SendKeys),
-    /// Make a pane active.
-    SelectPane(SelectPane),
-    /// Make a window active.
-    SelectWindow(SelectWindow),
-    /// Rename a window.
-    RenameWindow(RenameWindow),
-    /// Set a tmux option.
-    SetOption(SetOption),
-    /// Set a variable in a session's environment.
-    SetEnvironment(SetEnvironment),
-    /// Rearrange a window's panes.
-    SelectLayout(SelectLayout),
-    /// Capture a pane's contents.
-    CapturePane(CapturePane),
-    /// Destroy a pane.
-    KillPane(KillPane),
-    /// Destroy a window.
-    KillWindow(KillWindow),
-}
-
-/// Which operation a result describes, without retaining its arguments.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum OperationKind {
-    /// Create a session.
-    NewSession,
-    /// Create a window.
-    NewWindow,
-    /// Split a window into a new pane.
-    SplitWindow,
-    /// Send text or keys to a pane.
-    SendKeys,
-    /// Make a pane active.
-    SelectPane,
-    /// Make a window active.
-    SelectWindow,
-    /// Rename a window.
-    RenameWindow,
-    /// Set a tmux option.
-    SetOption,
-    /// Set a variable in a session's environment.
-    SetEnvironment,
-    /// Rearrange a window's panes.
-    SelectLayout,
-    /// Capture a pane's contents.
-    CapturePane,
-    /// Destroy a pane.
-    KillPane,
-    /// Destroy a window.
-    KillWindow,
-}
-
-impl OperationKind {
-    /// The tmux subcommand this operation runs.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::NewSession => "new-session",
-            Self::NewWindow => "new-window",
-            Self::SplitWindow => "split-window",
-            Self::SendKeys => "send-keys",
-            Self::SelectPane => "select-pane",
-            Self::SelectWindow => "select-window",
-            Self::RenameWindow => "rename-window",
-            Self::SetOption => "set-option",
-            Self::SetEnvironment => "set-environment",
-            Self::SelectLayout => "select-layout",
-            Self::CapturePane => "capture-pane",
-            Self::KillPane => "kill-pane",
-            Self::KillWindow => "kill-window",
+macro_rules! operation_set {
+    ($( $(#[$meta:meta])* $variant:ident($operation:ty) => $name:literal ),+ $(,)?) => {
+        /// One recorded operation.
+        ///
+        /// A plan holds these rather than boxed trait objects: the set of commands is
+        /// closed, so an enum keeps a plan allocation-free per step, `Clone`, and
+        /// inspectable without downcasting.
+        #[derive(Clone, Debug)]
+        #[non_exhaustive]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+        pub enum Op {
+            $(
+                $(#[$meta])*
+                $variant($operation),
+            )+
         }
-    }
+
+        /// Which operation a result describes, without retaining its arguments.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[non_exhaustive]
+        pub enum OperationKind {
+            $(
+                $(#[$meta])*
+                $variant,
+            )+
+        }
+
+        impl OperationKind {
+            /// The tmux subcommand this operation runs.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            /// How this operation directly affects tmux objects.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// use libtmux::plan::{OperationKind, Safety};
+            ///
+            /// assert_eq!(OperationKind::CapturePane.safety(), Safety::ReadOnly);
+            /// assert_eq!(OperationKind::KillPane.safety(), Safety::Destructive);
+            /// ```
+            #[must_use]
+            pub const fn safety(self) -> Safety {
+                match self {
+                    $(Self::$variant => <$operation as Operation>::SAFETY,)+
+                }
+            }
+
+            /// Find an operation kind by its externally tagged serde name.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// use libtmux::plan::OperationKind;
+            ///
+            /// assert_eq!(
+            ///     OperationKind::from_wire_name("CapturePane"),
+            ///     Some(OperationKind::CapturePane),
+            /// );
+            /// assert_eq!(OperationKind::from_wire_name("Unknown"), None);
+            /// ```
+            #[cfg(feature = "serde")]
+            #[must_use]
+            pub fn from_wire_name(name: &str) -> Option<Self> {
+                match name {
+                    $(stringify!($variant) => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            const fn effects(self) -> Effects {
+                match self {
+                    $(Self::$variant => <$operation as Operation>::EFFECTS,)+
+                }
+            }
+        }
+
+        impl Op {
+            /// Which operation this is, without exposing its arguments.
+            #[must_use]
+            pub const fn kind(&self) -> OperationKind {
+                match self {
+                    $(Self::$variant(_) => OperationKind::$variant,)+
+                }
+            }
+
+            /// What this operation does to tmux state.
+            #[must_use]
+            pub const fn effects(&self) -> Effects {
+                self.kind().effects()
+            }
+
+            /// How this operation directly affects tmux objects.
+            #[must_use]
+            pub const fn safety(&self) -> Safety {
+                self.kind().safety()
+            }
+        }
+    };
+}
+
+operation_set! {
+    /// Create a session.
+    NewSession(NewSession) => "new-session",
+    /// Create a window.
+    NewWindow(NewWindow) => "new-window",
+    /// Split a window into a new pane.
+    SplitWindow(SplitWindow) => "split-window",
+    /// Send text or keys to a pane.
+    SendKeys(SendKeys) => "send-keys",
+    /// Make a pane active.
+    SelectPane(SelectPane) => "select-pane",
+    /// Make a window active.
+    SelectWindow(SelectWindow) => "select-window",
+    /// Rename a window.
+    RenameWindow(RenameWindow) => "rename-window",
+    /// Set a tmux option.
+    SetOption(SetOption) => "set-option",
+    /// Set a variable in a session's environment.
+    SetEnvironment(SetEnvironment) => "set-environment",
+    /// Rearrange a window's panes.
+    SelectLayout(SelectLayout) => "select-layout",
+    /// Capture a pane's contents.
+    CapturePane(CapturePane) => "capture-pane",
+    /// Destroy a pane.
+    KillPane(KillPane) => "kill-pane",
+    /// Destroy a window.
+    KillWindow(KillWindow) => "kill-window",
 }
 
 impl Op {
-    /// Which operation this is, without exposing its arguments.
-    #[must_use]
-    pub const fn kind(&self) -> OperationKind {
-        match self {
-            Self::NewSession(_) => OperationKind::NewSession,
-            Self::NewWindow(_) => OperationKind::NewWindow,
-            Self::SplitWindow(_) => OperationKind::SplitWindow,
-            Self::SendKeys(_) => OperationKind::SendKeys,
-            Self::SelectPane(_) => OperationKind::SelectPane,
-            Self::SelectWindow(_) => OperationKind::SelectWindow,
-            Self::RenameWindow(_) => OperationKind::RenameWindow,
-            Self::SetOption(_) => OperationKind::SetOption,
-            Self::SetEnvironment(_) => OperationKind::SetEnvironment,
-            Self::SelectLayout(_) => OperationKind::SelectLayout,
-            Self::CapturePane(_) => OperationKind::CapturePane,
-            Self::KillPane(_) => OperationKind::KillPane,
-            Self::KillWindow(_) => OperationKind::KillWindow,
-        }
-    }
-
-    /// What this operation does to tmux state.
-    #[must_use]
-    pub const fn effects(&self) -> Effects {
-        match self {
-            Self::NewSession(_) => NewSession::EFFECTS,
-            Self::NewWindow(_) => NewWindow::EFFECTS,
-            Self::SplitWindow(_) => SplitWindow::EFFECTS,
-            Self::SendKeys(_) => SendKeys::EFFECTS,
-            Self::SelectPane(_) => SelectPane::EFFECTS,
-            Self::SelectWindow(_) => SelectWindow::EFFECTS,
-            Self::RenameWindow(_) => RenameWindow::EFFECTS,
-            Self::SetOption(_) => SetOption::EFFECTS,
-            Self::SetEnvironment(_) => SetEnvironment::EFFECTS,
-            Self::SelectLayout(_) => SelectLayout::EFFECTS,
-            Self::CapturePane(_) => CapturePane::EFFECTS,
-            Self::KillPane(_) => KillPane::EFFECTS,
-            Self::KillWindow(_) => KillWindow::EFFECTS,
-        }
-    }
-
-    /// How this operation directly affects tmux objects.
-    #[must_use]
-    pub const fn safety(&self) -> Safety {
-        match self {
-            Self::NewSession(_) => NewSession::SAFETY,
-            Self::NewWindow(_) => NewWindow::SAFETY,
-            Self::SplitWindow(_) => SplitWindow::SAFETY,
-            Self::SendKeys(_) => SendKeys::SAFETY,
-            Self::SelectPane(_) => SelectPane::SAFETY,
-            Self::SelectWindow(_) => SelectWindow::SAFETY,
-            Self::RenameWindow(_) => RenameWindow::SAFETY,
-            Self::SetOption(_) => SetOption::SAFETY,
-            Self::SetEnvironment(_) => SetEnvironment::SAFETY,
-            Self::SelectLayout(_) => SelectLayout::SAFETY,
-            Self::CapturePane(_) => CapturePane::SAFETY,
-            Self::KillPane(_) => KillPane::SAFETY,
-            Self::KillWindow(_) => KillWindow::SAFETY,
-        }
-    }
-
     /// The tmux subcommand this operation runs.
     #[must_use]
     pub const fn name(&self) -> &'static str {

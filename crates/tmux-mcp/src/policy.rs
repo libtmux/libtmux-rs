@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use libtmux::Server;
-use libtmux::plan::Safety as PlanSafety;
+use libtmux::plan::{OperationKind, Safety as PlanSafety};
 use rmcp::model::ErrorData;
 use rmcp::schemars;
 use serde::Deserialize;
@@ -103,6 +103,17 @@ impl Safety {
         hints.idempotent_hint = Some(matches!(self, Self::ReadOnly));
         hints.open_world_hint = Some(!matches!(self, Self::ReadOnly));
     }
+
+    fn filter_plan_schema(self, tool: &mut rmcp::model::Tool) -> bool {
+        schema::retain_tagged_union_variants(
+            Arc::make_mut(&mut tool.input_schema),
+            "Op",
+            |wire_name| {
+                OperationKind::from_wire_name(wire_name)
+                    .is_some_and(|kind| self.admits_operation(kind.safety()))
+            },
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -200,8 +211,14 @@ impl Builder {
     pub fn build(self) -> TmuxTools {
         let identity = Arc::new(crate::identity::InstanceIdentity::new());
         let mut router = tools::router();
-        if let Some(route) = router.map.get_mut("run_plan") {
+        let plan_schema_valid = if let Some(route) = router.map.get_mut("run_plan") {
             self.safety.annotate_plan(&mut route.attr);
+            self.safety.filter_plan_schema(&mut route.attr)
+        } else {
+            true
+        };
+        if !plan_schema_valid {
+            router.remove_route("run_plan");
         }
         let withheld: Vec<String> = router
             .list_all()
