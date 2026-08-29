@@ -253,15 +253,21 @@ impl ProducerIdentity {
     }
 }
 
-/// How much damage an operation can do, for callers that gate on it.
+/// How an operation directly affects tmux objects.
+///
+/// This is not confinement: operations can launch commands or send terminal
+/// input whose indirect effects are unrestricted.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Safety {
-    /// Reads state and changes nothing.
+    /// Its direct tmux action reads state and changes nothing.
     ReadOnly,
-    /// Changes state reversibly.
+    /// Its direct tmux action changes state without removing a tmux object.
+    ///
+    /// It need not be reversible and may launch a command or send terminal
+    /// input.
     Mutating,
-    /// Removes an object.
+    /// Its direct tmux action removes a tmux object.
     Destructive,
 }
 
@@ -522,7 +528,7 @@ pub trait Operation: Into<Op> {
     /// What the operation does to tmux state.
     const EFFECTS: Effects;
 
-    /// How much damage it can do.
+    /// How the operation directly affects tmux objects.
     const SAFETY: Safety;
 
     /// The lowest tmux release that accepts it, when it is not universal.
@@ -699,7 +705,7 @@ impl Op {
         }
     }
 
-    /// How much damage this operation can do.
+    /// How this operation directly affects tmux objects.
     #[must_use]
     pub const fn safety(&self) -> Safety {
         match self {
