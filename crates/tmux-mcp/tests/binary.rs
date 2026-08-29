@@ -133,6 +133,20 @@ impl Process {
     }
 }
 
+async fn wait_for_prompt(pane: &libtmux::Pane) {
+    for _ in 0..600 {
+        let lines = pane.capture().await.expect("pane captures");
+        if lines
+            .iter()
+            .any(|line| matches!(line.as_bytes().last(), Some(b'$' | b'#')))
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the pane never drew a prompt");
+}
+
 #[test]
 fn the_binary_serves_the_socket_it_was_pointed_at() {
     let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
@@ -165,6 +179,55 @@ fn the_binary_serves_the_socket_it_was_pointed_at() {
         "the process names itself on stderr: {logged:?}",
     );
 
+    runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
+}
+
+#[test]
+fn a_job_handle_from_a_previous_process_is_stale() {
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let pane = runtime.block_on(async {
+        let session = guard
+            .server()
+            .new_session("job-identity")
+            .await
+            .expect("a session is created");
+        let pane = session.panes().await.expect("panes list").remove(0);
+        wait_for_prompt(&pane).await;
+        pane.id().to_string()
+    });
+    let socket = guard
+        .socket_path()
+        .to_str()
+        .expect("a utf-8 socket path")
+        .to_owned();
+
+    let mut first = Process::start(&["--socket", &socket]);
+    let answer = first.call(
+        "start_command",
+        &json!({"pane": pane, "command": "printf first"}),
+    );
+    let old_job = answer["result"]["structuredContent"]["job"]
+        .as_str()
+        .unwrap_or_else(|| panic!("start_command answered with {answer}"))
+        .to_owned();
+    first.finish();
+
+    let mut second = Process::start(&["--socket", &socket]);
+    let answer = second.call(
+        "start_command",
+        &json!({"pane": pane, "command": "printf second"}),
+    );
+    let new_job = answer["result"]["structuredContent"]["job"]
+        .as_str()
+        .unwrap_or_else(|| panic!("start_command answered with {answer}"));
+    let stale = second.call("job_status", &json!({"job": old_job}));
+
+    assert_ne!(old_job, new_job, "separate processes reused a job handle");
+    assert_eq!(stale["error"]["data"]["kind"], "object_gone", "{stale}");
+
+    second.finish();
     runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
 }
 

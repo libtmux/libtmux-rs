@@ -157,6 +157,21 @@ fn a_terminal_result_wins_a_simultaneous_foreground_stop() {
     assert!(!retain, "terminal work needs no recovery job");
 }
 
+#[test]
+fn job_ids_are_not_reused_after_counter_exhaustion() {
+    let mut table = JobTable::new(1);
+    table.next_id = Some(u64::MAX);
+    let owner = InstanceIdentity::fixed(1)
+        .get()
+        .expect("the fixed identity is available");
+
+    table.reserve(owner).expect("the last id is available");
+    assert!(
+        matches!(table.reserve(owner), Err(StartError::IdSpaceExhausted)),
+        "an exhausted counter wrapped to a previously issued id",
+    );
+}
+
 #[tokio::test]
 async fn a_full_running_table_refuses_before_sending() {
     let guard = libtmux::test::TestServer::builder()

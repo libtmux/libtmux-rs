@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use libtmux::{Error, Pane};
 
+use crate::identity::{InstanceId, InstanceIdentity};
 use crate::text::{TextFilter, readable_from};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
@@ -38,30 +39,6 @@ const RING_BYTES: usize = 256 * 1024;
 /// least recently read is dropped to make room.
 const MAX_TAILS: usize = 8;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct Owner(u128);
-
-impl Owner {
-    fn generate() -> Result<Self, getrandom::Error> {
-        let mut bytes = [0; 16];
-        getrandom::fill(&mut bytes)?;
-        Ok(Self(u128::from_le_bytes(bytes)))
-    }
-
-    fn decode(text: &str) -> Option<Self> {
-        if text.len() != 32 {
-            return None;
-        }
-        u128::from_str_radix(text, 16).ok().map(Self)
-    }
-}
-
-impl std::fmt::Debug for Owner {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("Owner(..)")
-    }
-}
-
 /// A place in one pane's output.
 ///
 /// Opaque by contract: it is rendered as text for the protocol to carry, and
@@ -69,7 +46,7 @@ impl std::fmt::Debug for Owner {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cursor {
     pane: String,
-    owner: Owner,
+    owner: InstanceId,
     epoch: u64,
     offset: u64,
 }
@@ -79,8 +56,8 @@ impl Cursor {
     #[must_use]
     pub fn encode(&self) -> String {
         format!(
-            "{}:{:032x}:{}:{}",
-            self.pane, self.owner.0, self.epoch, self.offset
+            "{}:{}:{}:{}",
+            self.pane, self.owner, self.epoch, self.offset
         )
     }
 
@@ -93,7 +70,7 @@ impl Cursor {
         let mut fields = text.rsplitn(4, ':');
         let offset = fields.next().and_then(|field| field.parse().ok());
         let epoch = fields.next().and_then(|field| field.parse().ok());
-        let owner = fields.next().and_then(Owner::decode);
+        let owner = fields.next().and_then(InstanceId::decode);
         let pane = fields.next();
         match (pane, owner, epoch, offset) {
             (Some(pane), Some(owner), Some(epoch), Some(offset)) if pane.starts_with('%') => {
@@ -205,7 +182,7 @@ impl Ring {
 /// for.
 ///
 /// A cursor from another owner or tail cannot name a point in this ring.
-fn resume_at(ring: &Ring, cursor: Option<&Cursor>, owner: Owner, epoch: u64) -> (u64, bool) {
+fn resume_at(ring: &Ring, cursor: Option<&Cursor>, owner: InstanceId, epoch: u64) -> (u64, bool) {
     match cursor {
         Some(cursor) if cursor.owner == owner && cursor.epoch == epoch => (cursor.offset, false),
         Some(_) => (ring.end(), true),
@@ -233,7 +210,7 @@ impl Drop for Tail {
 /// The tails this server is holding.
 #[derive(Debug)]
 pub(crate) struct Tails {
-    owner: Mutex<Option<Owner>>,
+    identity: Arc<InstanceIdentity>,
     inner: Mutex<HashMap<String, Tail>>,
     next_epoch: AtomicU64,
 }
@@ -253,30 +230,21 @@ impl From<Error> for TailError {
 impl Tails {
     /// Hold no tails yet.
     #[must_use]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(identity: Arc<InstanceIdentity>) -> Self {
         Self {
-            owner: Mutex::new(None),
+            identity,
             inner: Mutex::new(HashMap::new()),
             next_epoch: AtomicU64::new(0),
         }
     }
 
     #[cfg(test)]
-    fn with_owner(owner: Owner) -> Self {
-        Self {
-            owner: Mutex::new(Some(owner)),
-            ..Self::new()
-        }
+    fn with_owner(owner: u128) -> Self {
+        Self::new(Arc::new(InstanceIdentity::fixed(owner)))
     }
 
-    fn owner(&self) -> Result<Owner, TailError> {
-        let mut current = hold(&self.owner);
-        if let Some(owner) = *current {
-            return Ok(owner);
-        }
-        let owner = Owner::generate().map_err(|_| TailError::OwnerUnavailable)?;
-        *current = Some(owner);
-        Ok(owner)
+    fn owner(&self) -> Result<InstanceId, TailError> {
+        self.identity.get().map_err(|_| TailError::OwnerUnavailable)
     }
 
     /// Read what a pane wrote since `cursor`, opening a tail if needed.
@@ -408,7 +376,7 @@ mod tests {
     }
 
     fn tails_with_owner(owner: u128) -> Tails {
-        Tails::with_owner(Owner(owner))
+        Tails::with_owner(owner)
     }
 
     fn cursor_for(tails: &Tails, pane: &str, epoch: u64, offset: u64) -> Cursor {
@@ -552,7 +520,7 @@ mod tests {
 
     #[test]
     fn tail_epochs_increase_within_one_owner() {
-        let tails = Tails::new();
+        let tails = Tails::new(Arc::new(InstanceIdentity::new()));
 
         assert_eq!(tails.next_epoch(), 1);
         assert_eq!(tails.next_epoch(), 2);

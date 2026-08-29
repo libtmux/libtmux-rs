@@ -152,6 +152,7 @@ impl Builder {
     /// Build the server, offering only the tools the tier admits.
     #[must_use]
     pub fn build(self) -> TmuxTools {
+        let identity = Arc::new(crate::identity::InstanceIdentity::new());
         let mut router = tools::router();
         if let Some(route) = router.map.get_mut("run_plan") {
             self.safety.annotate_plan(&mut route.attr);
@@ -180,8 +181,8 @@ impl Builder {
             safety: self.safety,
             confirm: self.confirm,
             socket: Arc::new(OnceLock::new()),
-            tails: Arc::new(Tails::new()),
-            jobs: Arc::new(Jobs::new()),
+            tails: Arc::new(Tails::new(Arc::clone(&identity))),
+            jobs: Arc::new(Jobs::new(identity)),
             tool_router: router,
             prompt_router: prompts::router(),
         }

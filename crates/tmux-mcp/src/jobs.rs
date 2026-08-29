@@ -13,7 +13,6 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
@@ -22,6 +21,7 @@ use serde::Serialize;
 use tokio::sync::{Notify, oneshot};
 
 use crate::exec::{self, RunOutcome, RunView};
+use crate::identity::{InstanceId, InstanceIdentity};
 use crate::text::{TextFilter, readable_from};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
@@ -41,6 +41,10 @@ const MAX_JOBS: usize = 32;
 pub(crate) enum StartError {
     /// Every remembered slot belongs to a command still starting or running.
     AtCapacity { limit: usize },
+    /// A server-instance identity could not be generated.
+    IdentityUnavailable,
+    /// This server instance issued every possible counter value.
+    IdSpaceExhausted,
     /// The pane could not be watched, or the line dispatch never began.
     Tmux(Error),
     /// A send may have reached tmux, and the named job retains ownership.
@@ -70,9 +74,6 @@ impl From<Error> for StartError {
         Self::Tmux(error)
     }
 }
-
-/// Numbers job ids, so one is never reused within a process.
-static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Where a job has got to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
@@ -294,6 +295,7 @@ enum JobSlot {
 struct JobTable {
     slots: HashMap<String, JobSlot>,
     limit: usize,
+    next_id: Option<u64>,
 }
 
 impl JobTable {
@@ -301,11 +303,13 @@ impl JobTable {
         Self {
             slots: HashMap::new(),
             limit,
+            next_id: Some(0),
         }
     }
 
     /// Reserve a slot, evicting only a finished job when the table is full.
-    fn reserve(&mut self) -> Result<String, StartError> {
+    fn reserve(&mut self, owner: InstanceId) -> Result<String, StartError> {
+        let next_id = self.next_id.ok_or(StartError::IdSpaceExhausted)?;
         if self.slots.len() >= self.limit
             && let Some(stale) = self
                 .slots
@@ -326,7 +330,8 @@ impl JobTable {
             return Err(StartError::AtCapacity { limit: self.limit });
         }
 
-        let id = format!("job-{}", JOB_COUNTER.fetch_add(1, Ordering::Relaxed));
+        let id = format!("job-{owner}-{next_id}");
+        self.next_id = next_id.checked_add(1);
         self.slots.insert(id.clone(), JobSlot::Pending);
         Ok(id)
     }
@@ -364,24 +369,34 @@ impl Drop for Reservation<'_> {
 /// The jobs this server is holding.
 #[derive(Debug)]
 pub(crate) struct Jobs {
+    identity: Arc<InstanceIdentity>,
     inner: Mutex<JobTable>,
 }
 
 impl Jobs {
     /// Hold no jobs yet.
     #[must_use]
-    pub(crate) fn new() -> Self {
-        Self::with_limit(MAX_JOBS)
+    pub(crate) fn new(identity: Arc<InstanceIdentity>) -> Self {
+        Self {
+            identity,
+            inner: Mutex::new(JobTable::new(MAX_JOBS)),
+        }
     }
 
+    #[cfg(test)]
     fn with_limit(limit: usize) -> Self {
         Self {
+            identity: Arc::new(InstanceIdentity::new()),
             inner: Mutex::new(JobTable::new(limit)),
         }
     }
 
     fn reserve(&self) -> Result<Reservation<'_>, StartError> {
-        let id = hold(&self.inner).reserve()?;
+        let owner = self
+            .identity
+            .get()
+            .map_err(|_| StartError::IdentityUnavailable)?;
+        let id = hold(&self.inner).reserve(owner)?;
         Ok(Reservation {
             table: &self.inner,
             id,
@@ -393,8 +408,9 @@ impl Jobs {
     ///
     /// # Errors
     ///
-    /// Returns an error when every job slot is active or the pane cannot be
-    /// watched. A send that tmux does not confirm returns the retained job id.
+    /// Returns an error when the server identity cannot be generated, every
+    /// job slot is active, or the pane cannot be watched. A send that tmux
+    /// does not confirm returns the retained job id.
     pub(crate) async fn start(
         &self,
         pane: &Pane,

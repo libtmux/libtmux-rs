@@ -44,6 +44,22 @@ fn unknown_job(job: &str) -> ErrorData {
 fn start_error(error: jobs::StartError) -> ErrorData {
     match error {
         jobs::StartError::AtCapacity { limit } => at_capacity(limit),
+        jobs::StartError::IdentityUnavailable => ErrorData::internal_error(
+            "job identity is unavailable".to_owned(),
+            Some(serde_json::json!({
+                "kind": "unreachable",
+                "retryable": true,
+                "stale": false,
+            })),
+        ),
+        jobs::StartError::IdSpaceExhausted => ErrorData::internal_error(
+            "job id space is exhausted; restart tmux-mcp before starting another job".to_owned(),
+            Some(serde_json::json!({
+                "kind": "job_id_exhausted",
+                "retryable": false,
+                "stale": false,
+            })),
+        ),
         jobs::StartError::Tmux(error) => tmux_error(&error),
         jobs::StartError::DispatchUnknown { job, cause } => {
             let cause = match cause {

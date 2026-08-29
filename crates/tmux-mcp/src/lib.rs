@@ -82,6 +82,7 @@ pub mod resources;
 
 mod caller;
 mod exec;
+mod identity;
 mod jobs;
 mod model;
 mod policy;
