@@ -635,6 +635,13 @@ pub enum Error {
     },
 
     /// Handles passed to one operation belong to different tmux endpoints.
+    ///
+    /// An endpoint here is a socket path, which is what separates two servers
+    /// running at once. It does not separate a server from the one that
+    /// replaced it on the same socket: that daemon reissues ids from the
+    /// start, so a handle held across the restart names something live and is
+    /// not refused. [`crate::Server::require_generation`] is what tells those two
+    /// apart, and it costs the round trip this check does not spend.
     #[non_exhaustive]
     #[error("{operation} requires handles from the same tmux server endpoint")]
     ServerMismatch {
