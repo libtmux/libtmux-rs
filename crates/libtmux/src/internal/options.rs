@@ -278,9 +278,9 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
         return Ok(());
     }
 
-    // An indexed name addresses the option the index belongs to.
-    let bare = name.split('[').next().unwrap_or(name);
-    let Some(schema) = crate::option_schema(bare) else {
+    // `option_schema` resolves the name the way tmux does: it drops an index,
+    // maps the legacy spellings, and takes an unambiguous prefix.
+    let Some(schema) = crate::option_schema(name) else {
         // tmux will answer "unknown option" itself, and its message names what
         // it could not resolve better than a guess here would.
         return Ok(());
@@ -289,7 +289,7 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
     let requested = scope.option_scope();
     if !schema.accepts(requested) {
         return Err(Error::OptionScopeMismatch {
-            option: bare.to_owned(),
+            option: schema.name().to_owned(),
             requested,
             declared: schema.scopes(),
         });
@@ -298,7 +298,7 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
     // The schema is built from one tmux. Where a scope arrived later than the
     // floor, the running server decides.
     for (option, late, needs) in LATE_SCOPES {
-        if *option == bare && *late == requested {
+        if *option == schema.name() && *late == requested {
             let found = core.capabilities().await?.tmux_version();
             if !found.meets(needs) {
                 return Err(Error::UnsupportedCapability {

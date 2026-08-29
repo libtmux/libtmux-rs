@@ -168,10 +168,34 @@ impl OptionSchema {
 pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
     let name = name.split_once('[').map_or(name, |(base, _)| base);
 
-    generated::OPTION_SCHEMA
-        .binary_search_by(|entry| entry.name.cmp(name))
-        .ok()
-        .map(|index| &generated::OPTION_SCHEMA[index])
+    // tmux maps a few legacy spellings before it looks a name up, so both
+    // spellings have to reach the same entry.
+    let name = generated::OPTION_ALIASES
+        .iter()
+        .find_map(|(from, to)| (*from == name).then_some(*to))
+        .unwrap_or(name);
+
+    if let Ok(index) = generated::OPTION_SCHEMA.binary_search_by(|entry| entry.name.cmp(name)) {
+        return Some(&generated::OPTION_SCHEMA[index]);
+    }
+
+    // tmux takes an unambiguous prefix of an option's name for the option, so
+    // `mous` reaches `mouse`. Answering `None` for one would report a real
+    // option as unknown, and anything deciding where a write lands would then
+    // be deciding about a name tmux does not use.
+    //
+    // Reached only when the exact search missed, which is the rarer half.
+    let mut matched = None;
+    for entry in &generated::OPTION_SCHEMA {
+        if entry.name.starts_with(name) {
+            if matched.is_some() {
+                // Ambiguous. tmux refuses these by name, and says so better.
+                return None;
+            }
+            matched = Some(entry);
+        }
+    }
+    matched
 }
 
 /// One option's value, decoded according to what tmux declares about it.

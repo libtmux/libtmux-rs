@@ -1202,3 +1202,44 @@ async fn a_write_tmux_would_place_elsewhere_is_refused() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_name_tmux_would_resolve_is_guarded_like_the_one_it_resolves_to() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("scoped").await.expect("a session");
+    let pane = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session has a window")
+        .active_pane()
+        .await
+        .expect("active pane")
+        .expect("a window has a pane");
+
+    // tmux takes an unambiguous prefix for the option itself, so this is a
+    // write to the session's `mouse` however little of the name was typed.
+    // Matching on the text alone let it through and the write landed.
+    pane.set_option("mous", "on")
+        .await
+        .expect_err("a prefix reaches the option it names");
+
+    // The same for a spelling tmux maps before it looks anything up.
+    pane.set_option("display-panes-color", "red")
+        .await
+        .expect_err("an alias reaches the option it maps to");
+
+    // An ambiguous prefix belongs to tmux: it names the input in its own
+    // answer, which is more use than a guess made here.
+    let ambiguous = pane
+        .set_option("pane-b", "on")
+        .await
+        .expect_err("tmux refuses an ambiguous name");
+    assert!(
+        !matches!(ambiguous, libtmux::Error::OptionScopeMismatch { .. }),
+        "and it is tmux's refusal, not this crate's: {ambiguous:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

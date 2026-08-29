@@ -850,6 +850,16 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
     OptionSchema::new("xterm-keys", OptionKind::Flag, &[OptionScope::Window]),
 ];
 
+/// The spellings tmux maps to another option before looking it up.
+pub(crate) static OPTION_ALIASES: [(&str, &str); 6] = [
+    ("clock-mode-color", "clock-mode-colour"),
+    ("cursor-color", "cursor-colour"),
+    ("display-panes-active-color", "display-panes-active-colour"),
+    ("display-panes-color", "display-panes-colour"),
+    ("pane-colors", "pane-colours"),
+    ("prompt-cursor-color", "prompt-cursor-colour"),
+];
+
 /// Option names, so a typo is a compile error rather than a runtime one.
 ///
 /// Every constant here is a name tmux declares. A user option, whose name
