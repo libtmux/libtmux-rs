@@ -321,6 +321,10 @@ a name recorded `catalogued` but absent from the catalog, and a name recorded
 `missing` that has since been added. Adding a format is therefore two steps —
 the catalog entry, then the ledger — and the gate fails in between.
 
+The pinned tmux 3.7b compatibility lane also compares every recorded status
+with that tag's source before it builds tmux. Added, removed, or reclassified
+upstream formats therefore fail the source-backed gate.
+
 Rerecording does need a tmux checkout, because it reads `format.c` for both
 `format_table[]` and the names attached by `format_add` and `cmdq_add_format`:
 
@@ -329,11 +333,10 @@ $ just format-coverage ../tmux
 ```
 
 The scope on a `missing` row is inferred from which member of the format tree
-the callback reads, so it is a guess. An `excluded:` reason written by hand
-survives rerecording, which is how a reviewed judgement outlives the crude test
-that would otherwise demote it back to `missing`. A `missing` row is a field a
-listing could carry and does not; adding one is ordinary work, leaving it
-unrecorded is not.
+the callback reads, so it is a guess. Reviewed exceptions live in the script,
+not in its generated output, and survive rerecording. A `missing` row is a
+field a listing could carry and does not; adding one is ordinary work, leaving
+it unrecorded is not.
 
 **Parsers that read from outside are fuzzed.** The control-mode line parser,
 the filter-expression wire format, and the workspace YAML loader each have a
