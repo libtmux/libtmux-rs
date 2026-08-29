@@ -147,6 +147,17 @@ example-coverage-check:
         -- -Zunstable-options --output-format json > /dev/null
     python3 scripts/example-coverage.py --require-all target/doc/libtmux.json
 
+# Which format names each listing asks tmux for.
+#
+# The supplement arrays behind it are macro-generated, so the answer is in the
+# source and cannot be read out of it. `each_listing_records_the_fields_it_requests`
+# is both the recorder and the gate: it fails under `just test` when the set
+# drifts, so nothing extra runs in `just check`.
+[group: 'release']
+list-profiles:
+    LIBTMUX_RERECORD=1 cargo test --locked --package libtmux --all-features \
+        --lib each_listing_records_the_fields_it_requests
+
 # Regenerate the recorded public API surface
 #
 # Needs nightly for rustdoc's JSON output, so it is not part of `just check`.

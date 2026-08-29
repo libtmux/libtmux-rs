@@ -1,0 +1,126 @@
+# Which format names each listing asks tmux for, at the newest
+# release the lanes build. The supplement arrays this comes from
+# are macro-generated; without this file the only way to learn a
+# listing's fields is to intercept its `-F` string.
+#
+# Regenerate with `just list-profiles`.
+
+sessions (9 fields)
+  session_activity
+  session_attached
+  session_created
+  session_id
+  session_last_attached
+  session_many_attached
+  session_name
+  session_path
+  session_windows
+
+windows (11 fields)
+  window_activity
+  window_cell_height
+  window_cell_width
+  window_height
+  window_id
+  window_layout
+  window_name
+  window_panes
+  window_visible_layout
+  window_width
+  window_zoomed_flag
+
+panes (69 fields)
+  alternate_saved_x
+  alternate_saved_y
+  bracket_paste_flag
+  cursor_character
+  cursor_flag
+  cursor_x
+  cursor_y
+  history_bytes
+  history_limit
+  history_size
+  insert_flag
+  keypad_cursor_flag
+  keypad_flag
+  mouse_all_flag
+  mouse_any_flag
+  mouse_button_flag
+  mouse_sgr_flag
+  mouse_standard_flag
+  origin_flag
+  pane_active
+  pane_at_bottom
+  pane_at_left
+  pane_at_right
+  pane_at_top
+  pane_bg
+  pane_bottom
+  pane_current_command
+  pane_current_path
+  pane_dead
+  pane_dead_signal
+  pane_dead_status
+  pane_dead_time
+  pane_fg
+  pane_flags
+  pane_floating_flag
+  pane_height
+  pane_id
+  pane_in_mode
+  pane_index
+  pane_input_off
+  pane_last
+  pane_left
+  pane_marked
+  pane_mode
+  pane_path
+  pane_pb_progress
+  pane_pb_state
+  pane_pid
+  pane_pipe
+  pane_pipe_pid
+  pane_right
+  pane_search_string
+  pane_start_command
+  pane_start_path
+  pane_synchronized
+  pane_tabs
+  pane_title
+  pane_top
+  pane_tty
+  pane_unseen_changes
+  pane_width
+  pane_x
+  pane_y
+  pane_z
+  pane_zoomed_flag
+  scroll_region_lower
+  scroll_region_upper
+  synchronized_output_flag
+  wrap_flag
+
+clients (22 fields)
+  client_activity
+  client_cell_height
+  client_cell_width
+  client_control_mode
+  client_created
+  client_discarded
+  client_flags
+  client_height
+  client_key_table
+  client_name
+  client_pid
+  client_prefix
+  client_readonly
+  client_termfeatures
+  client_termname
+  client_termtype
+  client_tty
+  client_uid
+  client_user
+  client_utf8
+  client_width
+  client_written
+
