@@ -41,12 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder().socket_path(&socket).build()?;
     println!("server on {}", socket.display());
 
-    // A handle to wait through. `with_session` borrows the server for the
-    // whole scope, and `Session` does not carry one, so the waiter is cloned
-    // out first -- a `Server` is a handle, and cloning shares the connection
-    // rather than starting a second one.
-    let waiter = server.clone();
-
     // The scope kills the session whether the body succeeds or fails, so a
     // job that misbehaves does not leave a session behind.
     let finished = server
@@ -77,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // ones that finished already have their signals waiting.
             let mut finished = 0;
             for (name, channel) in channels {
-                match waiter
+                match server
                     .wait_for_channel(&channel, Duration::from_secs(10))
                     .await?
                 {
