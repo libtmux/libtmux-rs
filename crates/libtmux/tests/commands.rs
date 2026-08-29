@@ -389,6 +389,49 @@ async fn pane_modes_enter_and_leave() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A mode that is not copy mode must be leavable too.
+///
+/// `exit_mode` sent the cancel key, which reaches a pane through the copy-mode
+/// key table. Clock mode and tree mode have none, so the key was answered "not
+/// in a mode" while the pane stayed in one, and `is_in_mode` and `exit_mode`
+/// disagreed about the same pane. `clock_mode` is a public way in, so the
+/// crate could put a pane into a state only a raw command could clear.
+///
+/// The old test entered copy mode, which is the one mode the cancel key does
+/// leave, so it passed throughout.
+#[tokio::test]
+async fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("clocked").await.expect("session");
+    let mut pane = session
+        .panes()
+        .await
+        .expect("panes")
+        .into_iter()
+        .next()
+        .expect("one pane");
+
+    pane.clock_mode().await.expect("clock mode is entered");
+    pane.refresh().await.expect("the pane still exists");
+    assert!(pane.is_in_mode(), "clock mode is a pane mode");
+
+    pane.exit_mode().await.expect("clock mode is left");
+    pane.refresh().await.expect("the pane still exists");
+    assert!(
+        !pane.is_in_mode(),
+        "a mode that is not copy mode is left as well"
+    );
+
+    // A pane in no mode is left alone rather than refused, so a caller can
+    // reach a known state without asking first.
+    pane.exit_mode()
+        .await
+        .expect("leaving no mode at all is not a failure");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
