@@ -461,6 +461,10 @@ Generated field handles make invalid operations fail to compile on downstream
 data through the current public API:
 
 ```rust
+# // The derive is behind `derive`, which is not a default feature.
+# #[cfg(not(feature = "derive"))]
+# fn main() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
+# #[cfg(feature = "derive")]
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 
