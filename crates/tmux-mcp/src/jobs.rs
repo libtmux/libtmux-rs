@@ -167,9 +167,11 @@ struct Job {
 
 impl Drop for Job {
     fn drop(&mut self) {
-        // Dropping the reader drops its `PaneOutput`, which is how libtmux is
-        // told the control-mode connection is no longer wanted.
-        self.reader.abort();
+        // A terminal state is published before its notification. Let that
+        // reader finish the handoff rather than stranding a waiter.
+        if matches!(hold(&self.progress).state, JobState::Running) {
+            self.reader.abort();
+        }
     }
 }
 
@@ -642,6 +644,40 @@ mod tests {
             "the newer finished job remains",
         );
         drop(next);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_finished_job_does_not_abort_its_reader() {
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let (complete, completed) = tokio::sync::oneshot::channel::<()>();
+        let reader = tokio::spawn(async move {
+            if released.await.is_ok() {
+                let _ = complete.send(());
+            }
+        });
+        let now = Instant::now();
+        let finished = Job {
+            pane: "%0".to_owned(),
+            command: "true".to_owned(),
+            started: now,
+            progress: Arc::new(Mutex::new(Progress {
+                state: JobState::Finished,
+                exit_status: Some(0),
+                output: Vec::new(),
+                dropped: 0,
+            })),
+            finished: Arc::new(Notify::new()),
+            reader,
+            last_read: now,
+        };
+
+        drop(finished);
+        let _ = release.send(());
+
+        assert!(
+            completed.await.is_ok(),
+            "a terminal reader was aborted before it could notify waiters",
+        );
     }
 
     #[tokio::test]
