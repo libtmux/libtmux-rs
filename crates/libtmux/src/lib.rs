@@ -308,8 +308,8 @@ pub use options::{
 };
 pub use pane::{CaptureOptions, CapturedLine, Pane};
 pub use server::{
-    AccessMode, AccessRule, Chooser, NewSessionOptions, PromptKind, Server, ServerBuilder,
-    SessionTree, WindowTree,
+    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, PromptKind, Server,
+    ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};

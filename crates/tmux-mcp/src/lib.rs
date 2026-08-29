@@ -3777,28 +3777,27 @@ impl TmuxTools {
         &self,
         Parameters(ChannelArgs { channel, seconds }): Parameters<ChannelArgs>,
     ) -> Result<Json<ChannelWait>, ErrorData> {
-        // This wait is a tmux client rather than a control-mode command, so
-        // libtmux's own command timeout bounds it too. Asking for longer than
-        // that would report a transport failure where the caller expects a
-        // deadline, so the shorter of the two is the honest budget.
-        let budget = Self::budget(seconds).min(self.server.default_timeout());
-
-        // tmux blocks the client until the channel fires. Losing the race
-        // drops the future, and libtmux kills the process it was waiting on,
-        // so a deadline leaves nothing behind.
-        let waited = tokio::time::timeout(
-            budget,
-            self.server
-                .cmd(Command::new("wait-for").arg(channel.as_str())),
-        )
-        .await;
-
-        let outcome = match waited {
-            Ok(Ok(_)) => "signalled",
-            // libtmux reaching its own limit first is the same event.
-            Ok(Err(error)) if error.kind() == libtmux::ErrorKind::Timeout => "deadline",
-            Ok(Err(error)) => return Err(tmux_error(&error)),
-            Err(_) => "deadline",
+        // libtmux caps this at its own command timeout and reports running
+        // out of time as an outcome rather than an error, which is the shape
+        // this tool wants: the budget stays a request, and a deadline stays
+        // distinct from a failure to reach tmux.
+        let outcome = match self
+            .server
+            .wait_for_channel(channel.as_str(), Self::budget(seconds))
+            .await
+        {
+            Ok(libtmux::ChannelWait::Signalled) => "signalled",
+            Ok(libtmux::ChannelWait::TimedOut) => "deadline",
+            // The schema promises one of those two words. `ChannelWait` may
+            // grow a third, and answering with the nearest existing label
+            // would report something that did not happen.
+            Ok(_) => {
+                return Err(ErrorData::internal_error(
+                    "tmux reported a wait outcome this server does not know".to_owned(),
+                    None,
+                ));
+            }
+            Err(error) => return Err(tmux_error(&error)),
         };
 
         Ok(Json(ChannelWait {

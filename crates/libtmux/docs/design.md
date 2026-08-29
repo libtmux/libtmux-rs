@@ -1677,6 +1677,21 @@ than inferring a type from the value, and the example now says so.
 
 ### Waiting is missing from the production surface
 
+One kind of waiting is now offered, and it is worth naming so the gap below is
+not read as wider than it is. `Server::wait_for_channel` is the blocking half
+of `wait-for`, which `signal_channel` had for a long time without it: the
+missing side was deferred in that method's own documentation until a wait
+running out of time could be told from tmux failing to reply, and that is what
+`ChannelWait` now carries. tmux latches a signal nobody is waiting on -- one
+signal releases every waiter present, and the latch then releases one later
+wait -- so signalling before the wait starts is safe, measured on 3.7c. That
+removed the `Server::cmd(wait-for)` workaround from `tmux-mcp`.
+
+It closes none of what follows. `wait-for` is a rendezvous between commands:
+something has to signal it, so it answers "tell me when this is done" only for
+work that was written to announce itself. Watching a pane that was not is the
+missing category, and it stays missing.
+
 `libtmux::test::retry_until` is the only waiting primitive this crate exposes,
 and `test` sits behind `test-support`, which the manifest calls out as
 belonging "to a dev-dependency, not to a build of the library". A caller who
