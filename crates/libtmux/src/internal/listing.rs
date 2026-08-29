@@ -191,6 +191,38 @@ pub(crate) async fn windows(
         .map_err(decode_error(LIST_COMMAND))
 }
 
+/// Resolve one pane and hydrate its containing window from the same tmux row.
+pub(crate) async fn window_for_pane(
+    core: &Core,
+    pane: &crate::PaneId,
+) -> Result<Option<WindowProjection>, Error> {
+    const LIST_COMMAND: &str = "list-panes";
+
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = window_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
+    let target = pane.to_string();
+    let filter = pane.predicate("pane_id");
+    let stdout = match list(
+        core,
+        LIST_COMMAND,
+        Scope::Target(&target),
+        Some(&filter),
+        plan.template(),
+    )
+    .await
+    {
+        Err(error) if error.is_object_gone() => return Ok(None),
+        result => result?,
+    };
+
+    Ok(
+        hydrate_window_projections_from_stdout(core.configuration().identity(), &plan, &stdout)
+            .map_err(decode_error(LIST_COMMAND))?
+            .into_iter()
+            .next(),
+    )
+}
+
 /// List panes, either server-wide or under one target.
 pub(crate) async fn panes(
     core: &Core,

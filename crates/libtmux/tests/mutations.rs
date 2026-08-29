@@ -671,6 +671,59 @@ async fn handle_mutations_reject_another_server() {
 }
 
 #[tokio::test]
+async fn pane_window_follows_an_external_move() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("pane-moved").await.expect("session");
+    let source = session
+        .active_window()
+        .await
+        .expect("source lookup")
+        .expect("source window");
+    let moving = source
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("moving pane");
+    let destination_session = server
+        .new_session(NewSessionOptions::new("pane-destination").command("sleep 300"))
+        .await
+        .expect("destination session");
+    let destination = destination_session
+        .active_window()
+        .await
+        .expect("destination lookup")
+        .expect("destination window");
+    let beside = destination
+        .panes()
+        .await
+        .expect("destination panes")
+        .remove(0);
+
+    let moved = server
+        .cmd(
+            libtmux::Command::new("join-pane")
+                .arg("-d")
+                .arg("-s")
+                .arg(moving.id().to_string())
+                .arg("-t")
+                .arg(beside.id().to_string()),
+        )
+        .await
+        .expect("join-pane runs");
+    assert!(moved.success(), "join-pane succeeds: {moved:?}");
+
+    let current = moving
+        .window()
+        .await
+        .expect("window lookup")
+        .expect("the pane still has a window");
+    assert_eq!(current.id(), destination.id());
+    assert_eq!(current.session_id(), destination_session.id());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn a_session_environment_is_set_read_and_removed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();

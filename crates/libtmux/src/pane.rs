@@ -369,21 +369,18 @@ impl Pane {
     /// Return the window that contains this pane.
     ///
     /// This re-reads tmux, so a window renamed or moved since discovery is
-    /// reported as it is now. `Ok(None)` means the window no longer exists.
+    /// reported as it is now. `Ok(None)` means the pane no longer has a
+    /// resolvable containing window.
+    /// For a linked window, tmux chooses the session context for the pane-ID
+    /// target rather than preserving this handle's cached session link.
     ///
     /// # Errors
     ///
-    /// Returns an error when the window listing fails.
+    /// Returns an error when the parent lookup fails.
     pub async fn window(&self) -> Result<Option<Window>, Error> {
-        let session = self.session_id().to_string();
-
-        Ok(
-            listing::windows(&self.core, listing::Scope::Target(&session), None)
-                .await?
-                .into_iter()
-                .find(|projection| projection.window().window_id() == self.window_id())
-                .map(|projection| Window::new(Arc::clone(&self.core), projection)),
-        )
+        Ok(listing::window_for_pane(&self.core, self.id())
+            .await?
+            .map(|projection| Window::new(Arc::clone(&self.core), projection)))
     }
 
     /// Watch what this pane writes, as it writes it.
@@ -1420,7 +1417,7 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerMismatch`] when the other pane belongs to another
+    /// Returns [`Error::ServerMismatch`] when `other` belongs to another
     /// server, or an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
         self.core
@@ -1514,9 +1511,9 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerMismatch`] when the other pane belongs to another
-    /// server, or an error when tmux refuses the move, which includes joining
-    /// a pane to its own window.
+    /// Returns [`Error::ServerMismatch`] when `beside` belongs to another
+    /// server, or an error when tmux refuses the move, including a pane joined
+    /// to its own window.
     ///
     /// # Examples
     ///
