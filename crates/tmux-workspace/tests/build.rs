@@ -134,6 +134,11 @@ windows:
     start_directory: {nested}
     panes:
       - sleep 300
+  - window_name: pane-overridden
+    start_directory: {root}
+    panes:
+      - start_directory: {nested}
+        shell_command: sleep 300
 ",
         root = root.path().display(),
         nested = nested.display(),
@@ -149,7 +154,11 @@ windows:
     let canonical_root = root.path().canonicalize().expect("canonical root");
     let canonical_nested = nested.canonicalize().expect("canonical nested");
 
-    for (window, expected) in windows.iter().zip([canonical_root, canonical_nested]) {
+    for (window, expected) in
+        windows
+            .iter()
+            .zip([canonical_root, canonical_nested.clone(), canonical_nested])
+    {
         let panes = window.panes().await.expect("panes list");
         assert_eq!(
             text_optional(panes[0].current_path()),
@@ -242,7 +251,7 @@ windows:
 }
 
 #[tokio::test]
-async fn a_pane_starts_with_the_environment_the_file_gives_it() {
+async fn panes_start_with_the_environment_the_file_gives_them() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
@@ -252,10 +261,16 @@ session_name: environed
 windows:
   - window_name: main
     panes:
-      - shell_command: sleep 300
+      - environment:
+          PANE_MARKER: first-pane
+        shell_command: echo first:$PANE_MARKER:$WINDOW_MARKER; sleep 300
       - environment:
           PANE_MARKER: second-pane
-        shell_command: printenv PANE_MARKER; sleep 300
+        shell_command: echo second:$PANE_MARKER:$WINDOW_MARKER; sleep 300
+      - shell_command: echo third:$PANE_MARKER:$WINDOW_MARKER; sleep 300
+    environment:
+      PANE_MARKER: window
+      WINDOW_MARKER: inherited
 ",
     )
     .expect("the workspace parses");
@@ -267,21 +282,32 @@ windows:
 
     let window = session.windows().await.expect("windows").remove(0);
     let panes = window.panes().await.expect("panes");
-    assert_eq!(panes.len(), 2);
+    assert_eq!(panes.len(), 3);
 
     // The pane prints the variable it was started with, so this reads what
     // tmux actually put in the process rather than what was asked for. The
     // search is for the value rather than a whole line, because the pane also
     // echoes a prompt and the command that was typed.
-    let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
-        panes[1].capture().await.is_ok_and(|lines| {
-            lines
-                .iter()
-                .any(|line| line.to_string_lossy().contains("second-pane"))
+    for marker in [
+        "first:first-pane:inherited",
+        "second:second-pane:inherited",
+        "third:window:inherited",
+    ] {
+        let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+            for pane in &panes {
+                if pane.capture().await.is_ok_and(|lines| {
+                    lines
+                        .iter()
+                        .any(|line| line.to_string_lossy().contains(marker))
+                }) {
+                    return true;
+                }
+            }
+            false
         })
-    })
-    .await;
-    assert!(printed.is_ok(), "the pane's own environment reached it");
+        .await;
+        assert!(printed.is_ok(), "{marker} reached its pane");
+    }
 
     assert!(
         session
@@ -447,6 +473,13 @@ windows:
     let builder = WorkspaceBuilder::new(guard.server());
     let plan = builder.plan(&workspace);
 
+    let mut without_configured_panes = workspace.clone();
+    without_configured_panes.windows[0].panes.clear();
+    assert!(
+        builder.plan(&without_configured_panes).len() < plan.len(),
+        "a public window with no pane configuration still lowers",
+    );
+
     // Every object a later step addresses is a forward reference, so the whole
     // file lowers without asking tmux for a single id first.
     assert!(
@@ -498,6 +531,7 @@ fn a_present_but_invalid_value_is_refused_rather_than_defaulted() {
             "session_name: s\nwindows:\n  - layout: [not, a, string]\n",
             "windows[0].layout",
         ),
+        ("session_name: s\nwindows:\n  - scalar\n", "windows[0]"),
     ] {
         let error = Workspace::from_yaml(source).expect_err("the value is refused");
         let message = error.to_string();

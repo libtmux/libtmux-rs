@@ -157,7 +157,16 @@ impl<'server> WorkspaceBuilder<'server> {
                 .start_directory
                 .as_deref()
                 .or(workspace.start_directory.as_deref());
-            let window = plan.add(Self::window_op(session, config, directory));
+            let first_pane = config.panes.first();
+            let first_directory = first_pane
+                .and_then(|pane| pane.start_directory.as_deref())
+                .or(directory);
+            let window = plan.add(Self::window_op(
+                session,
+                config,
+                first_pane,
+                first_directory,
+            ));
             for (name, value) in &config.options {
                 plan.add(SetOption::window(window, name.as_str(), value.as_str()));
             }
@@ -172,7 +181,7 @@ impl<'server> WorkspaceBuilder<'server> {
                 if let Some(directory) = directory {
                     split = split.start_directory(directory);
                 }
-                for (name, value) in &pane.environment {
+                for (name, value) in config.environment.iter().chain(&pane.environment) {
                     split = split.environment(name.as_str(), value.as_str());
                 }
                 panes.push(plan.add(split));
@@ -291,6 +300,7 @@ impl<'server> WorkspaceBuilder<'server> {
     fn window_op(
         session: Slot<SessionSlot>,
         config: &WindowConfig,
+        first_pane: Option<&PaneConfig>,
         directory: Option<&Path>,
     ) -> NewWindow {
         let mut window = NewWindow::new(session);
@@ -308,7 +318,10 @@ impl<'server> WorkspaceBuilder<'server> {
         if let Some(shell) = config.window_shell.as_deref() {
             window = window.command(shell);
         }
-        for (name, value) in &config.environment {
+        let pane_environment = first_pane
+            .map(|pane| pane.environment.as_slice())
+            .unwrap_or_default();
+        for (name, value) in config.environment.iter().chain(pane_environment) {
             window = window.environment(name.as_str(), value.as_str());
         }
         window

@@ -190,6 +190,9 @@ impl Workspace {
 impl WindowConfig {
     fn from_yaml(value: &Yaml, index: usize) -> Result<Self, ConfigError> {
         let at = format!("windows[{index}]");
+        if !matches!(value, Yaml::Hash(_)) {
+            return Err(ConfigError::invalid(format!("{at} must be a mapping")));
+        }
         let panes = match &value["panes"] {
             // A window with no panes still has the one tmux creates with it.
             Yaml::BadValue | Yaml::Null => vec![PaneConfig::default()],
