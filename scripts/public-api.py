@@ -89,14 +89,15 @@ def public_paths(index: dict, root, crate: str) -> dict:
     return best
 
 
-def parents(index: dict, paths: dict, reachable: dict) -> dict:
-    """Map each child item to the type that owns it.
+def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
+    """Map each child item to its owner and find trait-impl duplicates.
 
     Methods, fields, and variants have no standalone path in rustdoc's output,
     so an unqualified `sessions` says nothing about which handle it belongs to
     and a move between types would not show in a diff.
     """
     owner: dict = {}
+    implemented: set = set()
 
     def name_of(identifier) -> str | None:
         reached = reachable.get(str(identifier))
@@ -116,10 +117,14 @@ def parents(index: dict, paths: dict, reachable: dict) -> dict:
             kind = inner["struct"].get("kind")
             # A unit struct reports its kind as a bare string rather than a
             # map, so it has no fields to attribute.
-            plain = kind.get("plain") if isinstance(kind, dict) else None
-            fields = (plain or {}).get("fields") or []
+            if isinstance(kind, dict):
+                plain = kind.get("plain") or {}
+                fields = (plain.get("fields") or []) + (kind.get("tuple") or [])
+            else:
+                fields = []
             for child in fields:
-                owner[str(child)] = here
+                if child is not None:
+                    owner[str(child)] = here
 
         if "enum" in inner:
             here = name_of(item.get("id"))
@@ -133,10 +138,15 @@ def parents(index: dict, paths: dict, reachable: dict) -> dict:
                 variant = index.get(str(child)) or index.get(child) or {}
                 shape = (variant.get("inner") or {}).get("variant") or {}
                 kind = shape.get("kind")
-                plain = kind.get("struct") if isinstance(kind, dict) else None
+                if isinstance(kind, dict):
+                    plain = kind.get("struct") or {}
+                    fields = (plain.get("fields") or []) + (kind.get("tuple") or [])
+                else:
+                    fields = []
                 held = variant.get("name")
-                for field in (plain or {}).get("fields") or []:
-                    owner[str(field)] = f"{here}::{held}" if here and held else held
+                for field in fields:
+                    if field is not None:
+                        owner[str(field)] = f"{here}::{held}" if here and held else held
 
         if "trait" in inner:
             here = name_of(item.get("id"))
@@ -151,11 +161,12 @@ def parents(index: dict, paths: dict, reachable: dict) -> dict:
             # A trait implementation adds no new surface: the trait already
             # declared it. Only inherent items are listed.
             if trait:
+                implemented.update(str(child) for child in inner["impl"].get("items") or [])
                 continue
             for child in inner["impl"].get("items") or []:
                 owner[str(child)] = here
 
-    return owner
+    return owner, implemented
 
 
 def main(path: str) -> int:
@@ -168,7 +179,7 @@ def main(path: str) -> int:
     summary = paths.get(str(root)) or paths.get(root) or {}
     crate = (summary.get("path") or ["crate"])[0]
     reachable = public_paths(index, root, crate)
-    owner = parents(index, paths, reachable)
+    owner, implemented = parents(index, paths, reachable)
     lines = set()
 
     for item in index.values():
@@ -180,6 +191,8 @@ def main(path: str) -> int:
             continue
 
         identifier = item.get("id")
+        if str(identifier) in implemented:
+            continue
         reached = reachable.get(str(identifier))
         held_by = owner.get(str(identifier))
         summary = paths.get(str(identifier)) or paths.get(identifier)
