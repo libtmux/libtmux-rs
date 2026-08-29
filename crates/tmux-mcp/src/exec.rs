@@ -24,6 +24,9 @@ use crate::text::{TextFilter, readable_from};
 /// end of a command's output is what says how it went.
 const OUTPUT_LIMIT: usize = 256 * 1024;
 
+/// How much dead prefix a command buffer holds before moving its live bytes.
+const COMPACT_AFTER: usize = 64 * 1024;
+
 /// Distinguishes one run's sentinels from another's.
 ///
 /// Only has to be unique among the runs this process makes; a sentinel is
@@ -224,14 +227,83 @@ pub(crate) struct Run {
     pane: String,
 }
 
-/// One immutable snapshot from a run's collector.
+/// One immutable delta from a run's collector.
 pub(crate) struct RunProgress<'a> {
-    pub(crate) stream: &'a [u8],
+    pub(crate) appended: &'a [u8],
+    pub(crate) discarded: usize,
     pub(crate) body: Option<Range<usize>>,
     pub(crate) body_dropped: u64,
     pub(crate) body_checkpoint: &'a TextFilter,
     pub(crate) bytes: usize,
     pub(crate) truncated: bool,
+}
+
+#[cfg(test)]
+impl RunProgress<'_> {
+    fn publication_bytes(&self) -> usize {
+        self.appended.len()
+    }
+}
+
+/// A contiguous retained window with a logical front.
+#[derive(Debug, Default)]
+pub(crate) struct RetainedBytes {
+    bytes: Vec<u8>,
+    head: usize,
+}
+
+impl RetainedBytes {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_slice(bytes: &[u8]) -> Self {
+        Self {
+            bytes: bytes.to_vec(),
+            head: 0,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        &self.bytes[self.head..]
+    }
+
+    fn len(&self) -> usize {
+        self.bytes.len() - self.head
+    }
+
+    pub(crate) fn append(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    pub(crate) fn discard(&mut self, bytes: usize) {
+        debug_assert!(bytes <= self.len());
+        self.head += bytes.min(self.len());
+        self.settle();
+    }
+
+    pub(crate) fn settle(&mut self) {
+        if self.head >= COMPACT_AFTER {
+            let retained = self.len();
+            self.bytes.copy_within(self.head.., 0);
+            self.bytes.truncate(retained);
+            self.head = 0;
+        }
+        if self.bytes.capacity() > OUTPUT_LIMIT + COMPACT_AFTER {
+            let retained = self.as_slice();
+            debug_assert!(retained.len() <= OUTPUT_LIMIT);
+            let mut bounded = Vec::with_capacity(retained.len() + COMPACT_AFTER);
+            bounded.extend_from_slice(retained);
+            self.bytes = bounded;
+            self.head = 0;
+        }
+    }
+
+    #[cfg(test)]
+    fn physical_len(&self) -> usize {
+        self.bytes.len()
+    }
 }
 
 /// A watched run whose pane has not been changed yet.
@@ -326,9 +398,9 @@ pub(crate) async fn prepare_run(
 impl Run {
     /// Read until the command ends or the pane closes, publishing as it goes.
     ///
-    /// `publish` receives the command's output so far and how many bytes were
-    /// dropped from the front of it, so a poller sees progress rather than
-    /// only the answer.
+    /// `publish` receives only bytes added to the retained window and how much
+    /// of its preceding front to discard. A poller therefore sees progress
+    /// without copying the whole window for every pane-stream chunk.
     pub(crate) async fn collect(mut self, mut publish: impl FnMut(RunProgress<'_>)) -> RunView {
         while let Some(chunk) = self.output.next_chunk().await {
             let finished = self.scanner.push(&chunk);
@@ -434,7 +506,9 @@ pub(crate) async fn wait_for_idle(
 struct Scanner {
     opened: Vec<u8>,
     closed: Vec<u8>,
-    collected: Vec<u8>,
+    collected: RetainedBytes,
+    /// How far the search for the opening sentinel has looked.
+    open_scanned: usize,
     /// How far the search for the closing sentinel has looked.
     scanned: usize,
     /// Where the closing sentinel was found, once it has been.
@@ -450,6 +524,10 @@ struct Scanner {
     body_dropped: u64,
     /// Filter state at the first retained byte of the command's output.
     body_checkpoint: TextFilter,
+    /// Bytes the last update discards from the preceding publication.
+    publish_drop: usize,
+    /// Bytes from the last chunk that remain in the retained window.
+    publish_append: usize,
     bytes: usize,
     truncated: bool,
 }
@@ -459,12 +537,15 @@ impl Scanner {
         Self {
             opened,
             closed,
-            collected: Vec::new(),
+            collected: RetainedBytes::new(),
+            open_scanned: 0,
             scanned: 0,
             close_at: None,
             body_at: None,
             body_dropped: 0,
             body_checkpoint: TextFilter::new(),
+            publish_drop: 0,
+            publish_append: 0,
             bytes: 0,
             truncated: false,
         }
@@ -473,10 +554,19 @@ impl Scanner {
     /// Take one chunk, and report the run if it completed it.
     fn push(&mut self, chunk: &[u8]) -> Option<RunView> {
         self.bytes = self.bytes.saturating_add(chunk.len());
-        self.collected.extend_from_slice(chunk);
+        let previously_retained = self.collected.len();
+        self.collected.append(chunk);
+        self.publish_drop = 0;
+        self.publish_append = chunk.len();
 
         if self.body_at.is_none() {
-            self.body_at = find(&self.collected, &self.opened).map(|at| at + self.opened.len());
+            let collected = self.collected.as_slice();
+            let from = self
+                .open_scanned
+                .saturating_sub(self.opened.len().saturating_sub(1));
+            self.body_at =
+                find(&collected[from..], &self.opened).map(|at| from + at + self.opened.len());
+            self.open_scanned = collected.len();
         }
 
         if self.close_at.is_none() {
@@ -485,43 +575,74 @@ impl Scanner {
             let from = self
                 .scanned
                 .saturating_sub(self.closed.len().saturating_sub(1));
-            self.close_at = find(&self.collected[from..], &self.closed).map(|at| from + at);
-            self.scanned = self.collected.len();
-
-            // Trimming only while the end is still out of sight. Once the
-            // closing sentinel has been found the run is bytes from done, and
-            // not moving the buffer keeps the recorded position true.
-            if self.close_at.is_none() && self.collected.len() > OUTPUT_LIMIT {
-                let excess = self.collected.len() - OUTPUT_LIMIT;
-                if let Some(body_at) = self.body_at {
-                    // Trimming eats the command's output only once it has
-                    // eaten everything before it.
-                    let body_excess = excess.saturating_sub(body_at);
-                    self.body_checkpoint
-                        .advance(&self.collected[body_at..body_at + body_excess]);
-                    self.body_dropped = self.body_dropped.saturating_add(body_excess as u64);
-                    self.body_at = Some(body_at.saturating_sub(excess));
-                }
-                self.collected.drain(..excess);
-                self.scanned = self.scanned.saturating_sub(excess);
-                self.truncated = true;
-            }
+            let collected = self.collected.as_slice();
+            self.close_at = find(&collected[from..], &self.closed).map(|at| from + at);
+            self.scanned = collected.len();
         }
 
+        if self.collected.len() > OUTPUT_LIMIT {
+            let excess = self.collected.len() - OUTPUT_LIMIT;
+            self.publish_drop = excess.min(previously_retained);
+            self.publish_append = chunk
+                .len()
+                .saturating_sub(excess.saturating_sub(previously_retained));
+            if let Some(body_at) = self.body_at {
+                // Trimming eats the command's output only once it has eaten
+                // everything before it.
+                let body_excess = excess.saturating_sub(body_at);
+                self.body_checkpoint
+                    .advance(&self.collected.as_slice()[body_at..body_at + body_excess]);
+                self.body_dropped = self.body_dropped.saturating_add(body_excess as u64);
+                self.body_at = Some(body_at.saturating_sub(excess));
+            }
+            self.open_scanned = self.open_scanned.saturating_sub(excess);
+            if let Some(close_at) = self.close_at {
+                if excess <= close_at {
+                    self.close_at = Some(close_at - excess);
+                    self.scanned = self.scanned.saturating_sub(excess);
+                } else {
+                    // A closing marker whose terminator falls more than one
+                    // retained window later cannot be completed from bounded
+                    // state. Resume looking for the wrapper's final marker.
+                    self.close_at = None;
+                    self.scanned = 0;
+                }
+            } else {
+                self.scanned = self.scanned.saturating_sub(excess);
+            }
+            self.collected.discard(excess);
+            self.truncated = true;
+        }
+        self.collected.settle();
+
         let at = self.close_at?;
-        let mut view = finished(&self.collected, at, &self.opened, &self.closed)?;
-        view.bytes = self.bytes;
-        view.truncated = self.truncated;
-        Some(view)
+        let collected = self.collected.as_slice();
+        let completion = completion(collected, at, &self.closed)?;
+        let output = self.body_at.filter(|&from| from <= at).map_or_else(
+            || readable(&collected[..at]),
+            |from| readable_from(&self.body_checkpoint, &collected[from..at], 0),
+        );
+        Some(RunView {
+            pane: String::new(),
+            outcome: RunOutcome::Completed,
+            exit_status: completion.exit_status,
+            output,
+            bytes: self.bytes,
+            truncated: self.truncated,
+            job: None,
+        })
     }
 
     /// Borrow the state an owner needs to publish this run's progress.
     fn progress(&self) -> RunProgress<'_> {
+        let retained = self.collected.as_slice();
+        let appended_at = retained.len().saturating_sub(self.publish_append);
         RunProgress {
-            stream: &self.collected,
+            appended: &retained[appended_at..],
+            discarded: self.publish_drop,
             body: self
                 .body_at
-                .map(|from| from..self.close_at.unwrap_or(self.collected.len())),
+                .map(|from| from..self.close_at.unwrap_or(retained.len())),
             body_dropped: self.body_dropped,
             body_checkpoint: &self.body_checkpoint,
             bytes: self.bytes,
@@ -529,22 +650,41 @@ impl Scanner {
         }
     }
 
+    #[cfg(test)]
+    fn physical_bytes(&self) -> usize {
+        self.collected.physical_len()
+    }
+
+    #[cfg(test)]
+    fn physical_capacity(&self) -> usize {
+        self.collected.bytes.capacity()
+    }
+
+    #[cfg(test)]
+    fn retained(&self) -> &[u8] {
+        self.collected.as_slice()
+    }
+
     /// Report a run that stopped without completing.
     fn unfinished(&self, outcome: RunOutcome, pane: String) -> RunView {
         // Nothing came back at all: the keys went somewhere that is not a
         // shell prompt. Worth its own answer, because retrying will not help.
-        let outcome =
-            if outcome == RunOutcome::Deadline && find(&self.collected, &self.opened).is_none() {
-                RunOutcome::NoShell
-            } else {
-                outcome
-            };
+        let collected = self.collected.as_slice();
+        let outcome = if outcome == RunOutcome::Deadline && self.body_at.is_none() {
+            RunOutcome::NoShell
+        } else {
+            outcome
+        };
+        let output = self.body_at.map_or_else(
+            || readable(collected),
+            |from| readable_from(&self.body_checkpoint, &collected[from..], 0),
+        );
 
         RunView {
             pane,
             outcome,
             exit_status: None,
-            output: readable(&self.collected),
+            output,
             bytes: self.bytes,
             truncated: self.truncated,
             job: None,
@@ -556,12 +696,9 @@ impl Scanner {
 ///
 /// Returns `None` while the status digits are still arriving, so the caller
 /// reads more rather than reporting a truncated number.
+#[cfg(test)]
 fn finished(collected: &[u8], at: usize, opened: &[u8], closed: &[u8]) -> Option<RunView> {
-    let digits_from = at + closed.len();
-    let terminator = find(&collected[digits_from..], b"\x1b\\")?;
-    let status = std::str::from_utf8(&collected[digits_from..digits_from + terminator])
-        .ok()
-        .and_then(|text| text.trim().parse::<i32>().ok());
+    let completion = completion(collected, at, closed)?;
 
     // Everything between the sentinels is the command's own output. The echo
     // of the typed line sits before the opening sentinel: a shell echoes the
@@ -580,11 +717,26 @@ fn finished(collected: &[u8], at: usize, opened: &[u8], closed: &[u8]) -> Option
         // Filled in by the caller, which is what holds the connection.
         pane: String::new(),
         outcome: RunOutcome::Completed,
-        exit_status: status,
+        exit_status: completion.exit_status,
         output: readable(body),
         bytes: 0,
         truncated: false,
         job: None,
+    })
+}
+
+struct Completion {
+    exit_status: Option<i32>,
+}
+
+fn completion(collected: &[u8], at: usize, closed: &[u8]) -> Option<Completion> {
+    let digits_from = at + closed.len();
+    let terminator = find(&collected[digits_from..], b"\x1b\\")?;
+    let status = std::str::from_utf8(&collected[digits_from..digits_from + terminator])
+        .ok()
+        .and_then(|text| text.trim().parse::<i32>().ok());
+    Some(Completion {
+        exit_status: status,
     })
 }
 

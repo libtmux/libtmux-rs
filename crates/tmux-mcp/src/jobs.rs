@@ -20,7 +20,7 @@ use libtmux::{Error, Pane};
 use serde::Serialize;
 use tokio::sync::{Notify, oneshot};
 
-use crate::exec::{self, RunOutcome, RunView};
+use crate::exec::{self, RetainedBytes, RunOutcome, RunView};
 use crate::identity::{InstanceId, InstanceIdentity};
 use crate::text::{TextFilter, readable_from};
 
@@ -163,7 +163,7 @@ struct Progress {
     state: JobState,
     exit_status: Option<i32>,
     /// The retained pane stream, including the command's echoed input.
-    stream: Vec<u8>,
+    stream: RetainedBytes,
     /// The command's own bytes within `stream`, once its shell answered.
     body: Option<Range<usize>>,
     /// How many bytes were dropped off the front of the command's output.
@@ -179,14 +179,11 @@ struct Progress {
 }
 
 impl Progress {
-    /// Take the command's output as the reader now knows it.
-    ///
-    /// The scanner owns the bytes and may trim its own front, so this copies
-    /// rather than sharing. `dropped` is how many of the command's bytes went
-    /// with that trimming, which is what keeps a cursor meaningful.
-    fn replace(&mut self, progress: exec::RunProgress<'_>) {
-        self.stream.clear();
-        self.stream.extend_from_slice(progress.stream);
+    /// Apply one scanner delta to the retained command output.
+    fn apply(&mut self, progress: exec::RunProgress<'_>) {
+        self.stream.discard(progress.discarded);
+        self.stream.append(progress.appended);
+        self.stream.settle();
         self.body = progress.body;
         self.dropped = progress.body_dropped;
         self.checkpoint = progress.body_checkpoint.clone();
@@ -197,7 +194,7 @@ impl Progress {
     fn body(&self) -> &[u8] {
         self.body
             .as_ref()
-            .and_then(|range| self.stream.get(range.clone()))
+            .and_then(|range| self.stream.as_slice().get(range.clone()))
             .unwrap_or_default()
     }
 
@@ -233,11 +230,16 @@ impl Progress {
         } else {
             outcome
         };
+        let output = if self.body.is_some() {
+            readable_from(&self.checkpoint, self.body(), 0)
+        } else {
+            exec::readable(self.stream.as_slice())
+        };
         RunView {
             pane,
             outcome,
             exit_status: None,
-            output: exec::readable(&self.stream),
+            output,
             bytes: self.bytes,
             truncated: self.truncated,
             job: None,
@@ -424,7 +426,7 @@ impl Jobs {
         let progress = Arc::new(Mutex::new(Progress {
             state: JobState::Starting,
             exit_status: None,
-            stream: Vec::new(),
+            stream: RetainedBytes::new(),
             body: None,
             dropped: 0,
             checkpoint: TextFilter::new(),
@@ -688,7 +690,7 @@ async fn drive(
         }
     };
 
-    let view = run.collect(|update| hold(&progress).replace(update)).await;
+    let view = run.collect(|update| hold(&progress).apply(update)).await;
 
     {
         let mut held = hold(&progress);

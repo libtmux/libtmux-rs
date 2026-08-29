@@ -4,7 +4,7 @@ fn job(index: usize, state: JobState, last_read: Instant) -> Job {
     let progress = Arc::new(Mutex::new(Progress {
         state,
         exit_status: None,
-        stream: Vec::new(),
+        stream: RetainedBytes::new(),
         body: None,
         dropped: 0,
         checkpoint: TextFilter::new(),
@@ -67,7 +67,7 @@ fn progress(output: &[u8], dropped: u64) -> Progress {
     Progress {
         state: JobState::Running,
         exit_status: None,
-        stream: output.to_vec(),
+        stream: RetainedBytes::from_slice(output),
         body: Some(0..output.len()),
         dropped,
         checkpoint: TextFilter::new(),
@@ -113,8 +113,9 @@ fn reusing_a_job_cursor_resumes_its_filter_state() {
     let mut checkpoint = TextFilter::new();
     checkpoint.advance(b"\x1b[31");
     let mut held = progress(b"", 0);
-    held.replace(exec::RunProgress {
-        stream: b"mred",
+    held.apply(exec::RunProgress {
+        appended: b"mred",
+        discarded: 0,
         body: Some(0..4),
         body_dropped: 4,
         body_checkpoint: &checkpoint,
@@ -127,7 +128,10 @@ fn reusing_a_job_cursor_resumes_its_filter_state() {
     assert_eq!(text, "red");
     assert!(truncated);
 
-    held.stream.extend_from_slice(b"!");
+    let interrupted = held.unfinished("%0".to_owned(), RunOutcome::Deadline);
+    assert_eq!(interrupted.output, "red");
+
+    held.stream.append(b"!");
     held.body.as_mut().expect("the body is known").end += 1;
 
     assert_eq!(held.text_from(cursor).0, "red!");
@@ -554,7 +558,7 @@ async fn forgetting_a_ready_job_returns_its_pane_and_aborts_its_reader() {
             progress: Arc::new(Mutex::new(Progress {
                 state: JobState::Running,
                 exit_status: None,
-                stream: Vec::new(),
+                stream: RetainedBytes::new(),
                 body: None,
                 dropped: 0,
                 checkpoint: TextFilter::new(),
@@ -612,7 +616,7 @@ async fn dropping_a_finished_job_does_not_abort_its_reader() {
         progress: Arc::new(Mutex::new(Progress {
             state: JobState::Finished,
             exit_status: Some(0),
-            stream: Vec::new(),
+            stream: RetainedBytes::new(),
             body: Some(0..0),
             dropped: 0,
             checkpoint: TextFilter::new(),

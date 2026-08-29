@@ -108,13 +108,110 @@ fn scanner_publishes_state_at_a_trimmed_body_start() {
     assert_eq!(progress.body_dropped, 4);
     let retained = progress
         .body
-        .and_then(|range| progress.stream.get(range))
+        .and_then(|range| scanner.retained().get(range))
         .unwrap_or_default();
 
     let text = readable_from(progress.body_checkpoint, retained, 0);
 
     assert!(text.starts_with("red"));
     assert_eq!(text.len(), OUTPUT_LIMIT - 1);
+
+    let closed = scanner.unfinished(RunOutcome::PaneClosed, "%0".to_owned());
+    assert!(closed.output.starts_with("red"));
+}
+
+#[test]
+fn scanner_publishes_each_retained_byte_once() {
+    const CHUNK: usize = 1024;
+    let mut scanner = Scanner::new(b"open".to_vec(), b"close".to_vec());
+    let chunk = [b'x'; CHUNK];
+    let chunks = OUTPUT_LIMIT / CHUNK + 64;
+    let mut published = 0;
+    let mut mirror = RetainedBytes::new();
+
+    for _ in 0..chunks {
+        assert!(scanner.push(&chunk).is_none());
+        let progress = scanner.progress();
+        published += progress.publication_bytes();
+        mirror.discard(progress.discarded);
+        mirror.append(progress.appended);
+        assert_eq!(mirror.as_slice(), scanner.retained());
+    }
+
+    assert_eq!(published, chunks * CHUNK);
+}
+
+#[test]
+fn scanner_compacts_dropped_storage_in_batches() {
+    const CHUNK: usize = 1024;
+    let mut scanner = Scanner::new(b"open".to_vec(), b"close".to_vec());
+    let chunk = [b'x'; CHUNK];
+
+    for _ in 0..OUTPUT_LIMIT / CHUNK + 32 {
+        assert!(scanner.push(&chunk).is_none());
+    }
+    assert_eq!(scanner.retained().len(), OUTPUT_LIMIT);
+    assert!(scanner.physical_bytes() > OUTPUT_LIMIT);
+
+    let mut previous = scanner.physical_bytes();
+    let mut compacted = false;
+    for _ in 0..COMPACT_AFTER / CHUNK {
+        assert!(scanner.push(&chunk).is_none());
+        let current = scanner.physical_bytes();
+        compacted |= current < previous;
+        previous = current;
+    }
+    assert_eq!(scanner.retained().len(), OUTPUT_LIMIT);
+    assert!(compacted);
+    assert!(scanner.physical_bytes() <= OUTPUT_LIMIT + COMPACT_AFTER);
+}
+
+#[test]
+fn scanner_releases_an_oversized_chunk_allocation() {
+    let mut scanner = Scanner::new(b"open".to_vec(), b"close".to_vec());
+    let chunk = vec![b'x'; OUTPUT_LIMIT * 4];
+
+    assert!(scanner.push(&chunk).is_none());
+
+    assert_eq!(scanner.retained().len(), OUTPUT_LIMIT);
+    assert!(scanner.physical_capacity() <= OUTPUT_LIMIT + COMPACT_AFTER);
+}
+
+#[test]
+fn a_close_waiting_for_status_does_not_suspend_trimming() {
+    let opened = b"\x1b_Ns\x1b\\".to_vec();
+    let closed = b"\x1b_Ne;".to_vec();
+    let mut scanner = Scanner::new(opened.clone(), closed.clone());
+    let mut chunk = opened;
+    chunk.resize(OUTPUT_LIMIT + 32, b'x');
+    chunk.extend_from_slice(&closed);
+
+    assert!(scanner.push(&chunk).is_none());
+
+    assert_eq!(scanner.retained().len(), OUTPUT_LIMIT);
+}
+
+#[test]
+fn completed_output_resumes_at_the_trim_checkpoint() {
+    let opened = b"\x1b_Ns\x1b\\".to_vec();
+    let closed = b"\x1b_Ne;".to_vec();
+    let ending = [closed.as_slice(), b"0\x1b\\"].concat();
+    let mut body = b"\x1b[31mred".to_vec();
+    body.resize(OUTPUT_LIMIT + 4 - ending.len(), b'x');
+    let mut stream = opened.clone();
+    stream.extend_from_slice(&body);
+    stream.extend_from_slice(&ending);
+    let mut scanner = Scanner::new(opened, closed);
+
+    let view = scanner
+        .push(&stream)
+        .unwrap_or_else(|| unreachable!("the completed run is whole"));
+
+    assert!(
+        view.output.starts_with("red"),
+        "output prefix was {:?}",
+        view.output.get(..4),
+    );
 }
 
 #[test]
