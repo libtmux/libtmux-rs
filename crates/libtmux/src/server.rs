@@ -2076,9 +2076,21 @@ impl Server {
 
     /// Open one of tmux's interactive choosers on a client.
     ///
+    /// A chooser draws in a terminal, so it needs a client. Unlike the other
+    /// three commands that need one, tmux does not say so: with no client
+    /// attached and no `client` given, this succeeds and opens nothing.
+    /// `display_popup`, `display_menu` and `command_prompt` all answer "no
+    /// current client" in the same state, and the difference is tmux's rather
+    /// than this crate's -- `choose-tree` alone exits zero.
+    ///
+    /// So `Ok(())` here means the command was accepted, not that a chooser is
+    /// on screen. Pass a client, or check [`Self::clients`] first, when the
+    /// difference matters.
+    ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists or tmux refuses.
+    /// Returns an error when tmux refuses the command -- which it does not do
+    /// for a missing client, however the other three behave.
     pub async fn choose(&self, chooser: Chooser, client: Option<&Client>) -> Result<(), Error> {
         let name = chooser.command();
         let mut request = Command::new(name);
