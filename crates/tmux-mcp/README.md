@@ -297,8 +297,9 @@ $ tmux-mcp --safety destructive --confirm
 Those calls proceed only on a yes. They fail closed when the client cannot
 ask. Confirmation does not inspect command text or keys passed to open-ended
 tools, so indirect destructive effects do not ask. `TMUX_MCP_CONFIRM=1` does
-the same. Invalid safety values narrow the surface to `readonly`; invalid
-confirmation values enable the gate.
+the same. `--confirm` and `--no-confirm` override that environment setting.
+Invalid safety values narrow the surface to `readonly`; invalid confirmation
+values enable the gate.
 
 When launched from tmux, the process inherits a pane ID and socket. Pane
 listings mark that pane `caller: "self"` only when the socket matches the

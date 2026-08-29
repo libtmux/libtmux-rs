@@ -332,6 +332,34 @@ fn invalid_environment_policy_fails_closed() {
 }
 
 #[test]
+fn command_line_can_disable_environment_confirmation() {
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let socket = guard
+        .socket_path()
+        .to_str()
+        .expect("a utf-8 path")
+        .to_owned();
+
+    let mut process = Process::start_with_environment(
+        &["--socket", &socket, "--no-confirm"],
+        &[("TMUX_MCP_CONFIRM", "1")],
+    );
+    let initialized = process.handshake();
+    let instructions = initialized["result"]["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("initialize answered with {initialized}"));
+    assert!(
+        !instructions.contains("CONFIRMATION"),
+        "the explicit CLI setting wins over the environment: {instructions}",
+    );
+    process.finish();
+
+    runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
+}
+
+#[test]
 fn a_failure_from_a_real_process_carries_its_classification() {
     let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
     let guard =

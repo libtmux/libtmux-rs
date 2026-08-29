@@ -93,7 +93,7 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let server = builder.build()?;
 
     let safety = options.safety.unwrap_or_else(Safety::from_env);
-    let confirm = options.confirm || tmux_mcp::confirm_from_env();
+    let confirm = options.confirm.unwrap_or_else(tmux_mcp::confirm_from_env);
     let tools = TmuxTools::builder(server)
         .safety(safety)
         .confirm(confirm)
