@@ -579,7 +579,7 @@ impl Server {
     /// ```
     pub async fn sessions_or_empty(&self) -> Vec<Session> {
         self.sessions().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-sessions", &error);
+            listing::trace_discarded("list-sessions", &error);
             Vec::new()
         })
     }
@@ -593,7 +593,7 @@ impl Server {
     /// for an empty result matters.
     pub async fn windows_or_empty(&self) -> Vec<Window> {
         self.windows().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-windows", &error);
+            listing::trace_discarded("list-windows", &error);
             Vec::new()
         })
     }
@@ -622,7 +622,7 @@ impl Server {
     /// an empty result matters.
     pub async fn panes_or_empty(&self) -> Vec<Pane> {
         self.panes().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-panes", &error);
+            listing::trace_discarded("list-panes", &error);
             Vec::new()
         })
     }
@@ -648,7 +648,7 @@ impl Server {
     /// an empty result matters.
     pub async fn clients_or_empty(&self) -> Vec<Client> {
         self.clients().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-clients", &error);
+            listing::trace_discarded("list-clients", &error);
             Vec::new()
         })
     }
@@ -751,7 +751,7 @@ impl Server {
     /// reason for an empty result matters.
     pub async fn attached_sessions_or_empty(&self) -> Vec<Session> {
         self.attached_sessions().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-sessions", &error);
+            listing::trace_discarded("list-sessions", &error);
             Vec::new()
         })
     }
@@ -2433,23 +2433,6 @@ impl Server {
     /// The lenient contract hides the cause from the return type, so this is
     /// the only place it survives. Without the `tracing` feature the failure
     /// is dropped, which is why every lenient accessor has a loud
-    /// counterpart under the short name.
-    #[cfg_attr(
-        not(feature = "tracing"),
-        expect(
-            unused_variables,
-            reason = "the cause has no sink when tracing is disabled"
-        )
-    )]
-    fn trace_lenient_listing(list_command: &'static str, error: &Error) {
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            list_command,
-            error = %error,
-            "a lenient listing discarded a failure and returned empty",
-        );
-    }
-
     /// List every session on the server, preserving any failure.
     ///
     /// # Errors

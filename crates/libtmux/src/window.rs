@@ -306,7 +306,10 @@ impl Window {
     /// This is the lenient form; use [`Window::panes`] when the reason for
     /// an empty result matters.
     pub async fn panes_or_empty(&self) -> Vec<Pane> {
-        self.panes().await.unwrap_or_default()
+        self.panes().await.unwrap_or_else(|error| {
+            listing::trace_discarded("list-panes", &error);
+            Vec::new()
+        })
     }
 
     /// List this window's panes, preserving any failure.
@@ -342,7 +345,10 @@ impl Window {
         &self,
         matcher: M,
     ) -> Vec<Pane> {
-        self.search_panes(matcher).await.unwrap_or_default()
+        self.search_panes(matcher).await.unwrap_or_else(|error| {
+            listing::trace_discarded("list-panes", &error);
+            Vec::new()
+        })
     }
 
     /// The panes under this window that a matcher accepts, reporting why
@@ -553,7 +559,10 @@ impl Window {
     /// # }
     /// ```
     pub async fn linked_sessions_or_empty(&self) -> Vec<Session> {
-        self.linked_sessions().await.unwrap_or_default()
+        self.linked_sessions().await.unwrap_or_else(|error| {
+            listing::trace_discarded("list-sessions", &error);
+            Vec::new()
+        })
     }
 
     /// The sessions this window is linked into, reporting why if it cannot.
