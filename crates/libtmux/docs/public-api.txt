@@ -1080,7 +1080,6 @@ struct_field libtmux::Error::ServerGenerationChanged::expected
 struct_field libtmux::Error::ServerGenerationChanged::found
 struct_field libtmux::Error::ServerGone::command
 struct_field libtmux::Error::ServerGone::kind
-struct_field libtmux::Error::ServerGone::stderr
 struct_field libtmux::Error::SessionExists::name
 struct_field libtmux::Error::Spawn::command
 struct_field libtmux::Error::Spawn::request_id

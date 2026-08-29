@@ -20,9 +20,9 @@ use crate::session::Session;
 use crate::snapshot::{SessionFields, WindowFields};
 use crate::window::Window;
 use crate::{
-    Command, CommandChain, CommandResult, EngineCapabilities, Error, ObjectKind, PaneId,
-    ReleaseSuffix, ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
-    SessionId, WindowId,
+    Command, CommandChain, CommandResult, EngineCapabilities, Error, PaneId, ReleaseSuffix,
+    ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, SessionId,
+    WindowId,
 };
 
 mod builder;
@@ -2008,19 +2008,15 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be run at all. A daemon that is
-    /// simply not running is reported through `Ok(false)`-shaped emptiness by
-    /// the listings, so this distinguishes "nothing started" from "cannot ask".
+    /// Returns [`Error::ServerGone`] when no daemon is answering, or another
+    /// dispatch error when tmux cannot be asked.
     pub async fn check_alive(&self) -> Result<(), Error> {
         let result = self.cmd(Command::new("list-sessions")).await?;
         if result.success() {
             return Ok(());
         }
 
-        Err(Error::ObjectGone {
-            kind: ObjectKind::Session,
-            id: self.identity().socket_path().display().to_string(),
-        })
+        Err(Error::from_refused_result("list-sessions", &result, None))
     }
 
     /// Report whether a session with this exact name exists.

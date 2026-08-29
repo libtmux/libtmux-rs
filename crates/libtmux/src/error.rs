@@ -224,7 +224,6 @@ pub enum OptionErrorKind {
 /// let absent = Error::ServerGone {
 ///     command: "list-sessions",
 ///     kind: ServerGoneKind::NotRunning,
-///     stderr: "no server running on /tmp/libtmux-rs-dev/absent".to_owned(),
 /// };
 /// assert_eq!(advise(&absent), "start one");
 /// ```
@@ -240,6 +239,17 @@ pub enum ServerGoneKind {
     Lost,
     /// The server shut down with the command in flight.
     Stopped,
+}
+
+impl fmt::Display for ServerGoneKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotRunning => "nothing is listening",
+            Self::Unreachable => "the endpoint is unreachable",
+            Self::Lost => "the connection was lost",
+            Self::Stopped => "the server stopped",
+        })
+    }
 }
 
 /// What tmux says when it has no client to act on.
@@ -791,15 +801,14 @@ pub enum Error {
     ///
     /// tmux exits 1 for this and for a command it refused, and separates them
     /// only in stderr, so this is read from the message rather than the
-    /// status. [`ServerGoneKind`] says which way it was missing.
-    #[error("tmux found no server for {command}: {stderr}")]
+    /// status. [`ServerGoneKind`] says which way it was missing; the raw
+    /// stderr remains available only through [`crate::Server::cmd`].
+    #[error("tmux found no server for {command}: {kind}")]
     ServerGone {
         /// The tmux command that found no server.
         command: &'static str,
         /// Which way the server was not there.
         kind: ServerGoneKind,
-        /// What tmux wrote to stderr.
-        stderr: String,
     },
 
     /// tmux rejected a command that the crate requires to succeed.
@@ -1020,11 +1029,7 @@ impl Error {
 
         for (prefix, kind) in GONE {
             if stderr.trim_end().starts_with(prefix) {
-                return Self::ServerGone {
-                    command,
-                    kind,
-                    stderr,
-                };
+                return Self::ServerGone { command, kind };
             }
         }
 
@@ -1698,15 +1703,10 @@ impl fmt::Debug for Error {
                 .field("kind", kind)
                 .field("id", id)
                 .finish(),
-            Self::ServerGone {
-                command,
-                kind,
-                stderr,
-            } => formatter
+            Self::ServerGone { command, kind } => formatter
                 .debug_struct("ServerGone")
                 .field("command", command)
                 .field("kind", kind)
-                .field("stderr", stderr)
                 .finish(),
             Self::DecodeListing {
                 list_command,

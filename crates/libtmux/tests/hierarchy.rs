@@ -6,7 +6,8 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{Client, Command, NewSessionOptions, NewWindowOptions, Pane, Server, Session};
+use libtmux::{Client, Command, ErrorKind, NewSessionOptions, NewWindowOptions, Pane, Server};
+use libtmux::{ServerGoneKind, Session};
 use libtmux::{SplitDirection, SplitOptions, Window};
 use static_assertions::assert_impl_all;
 
@@ -559,7 +560,39 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
 
     // Which question was being asked is what these primitives are for.
     assert!(!server.is_alive().await);
-    assert!(server.check_alive().await.is_err());
+    let error = server
+        .check_alive()
+        .await
+        .expect_err("the daemon is absent");
+    assert_eq!(error.kind(), ErrorKind::ServerGone, "{error}");
+    assert!(
+        matches!(
+            &error,
+            libtmux::Error::ServerGone {
+                kind: ServerGoneKind::Unreachable,
+                ..
+            }
+        ),
+        "the daemon, not one session, is absent: {error:?}",
+    );
+    assert!(!error.is_object_gone());
+
+    server.shutdown().await.expect("executor shuts down");
+}
+
+#[tokio::test]
+async fn typed_server_absence_errors_withhold_endpoint_paths() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let server = Server::builder()
+        .socket_path(directory.path().join("sentinel-absent.sock"))
+        .build()
+        .expect("an inert server handle is built");
+    let socket = server.socket_path().display().to_string();
+
+    let error = server.sessions().await.expect_err("the daemon is absent");
+    assert_eq!(error.kind(), ErrorKind::ServerGone, "{error}");
+    assert!(!error.to_string().contains(&socket));
+    assert!(!format!("{error:?}").contains(&socket));
 
     server.shutdown().await.expect("executor shuts down");
 }
