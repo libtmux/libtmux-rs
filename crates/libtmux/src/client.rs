@@ -228,6 +228,24 @@ impl Client {
     /// session's current window, and that window's active pane, so one
     /// `display-message` answers any of the three. `None` means the client is
     /// attached to nothing.
+    ///
+    /// Targeted with `-t` rather than `-c`, and that is not a preference.
+    /// `display-message`'s option string is `acd:INpt:F:v` on 3.2a, where `c`
+    /// carries no colon and so takes no argument: a client name after it
+    /// becomes a positional argument, the command exceeds its one-argument
+    /// maximum, and tmux answers with a usage error while every format
+    /// expands empty. `-c` gained its argument in 3.5a. The usage line on
+    /// 3.2a advertises `[-c target-client]` anyway, on the line after the
+    /// option string that refuses it, so the error quotes the flag it just
+    /// rejected and reads as a typo rather than as a disagreement between
+    /// tmux's help and its parser.
+    ///
+    /// `-t` resolves a client on every supported release. Verified to report
+    /// the target rather than the caller, which the obvious probe cannot
+    /// show: the asking process and the client usually share a `TERM`, so a
+    /// wrong answer is byte-identical to a right one. With the client
+    /// attached as `screen-256color` and the caller at `vt100`, 3.2a and
+    /// 3.7c both answer `screen-256color`.
     async fn attached_id(&self, format: &str) -> Result<Option<TmuxText>, Error> {
         let result = self
             .core
