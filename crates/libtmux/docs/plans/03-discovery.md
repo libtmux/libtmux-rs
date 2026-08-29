@@ -120,9 +120,9 @@ observable, a parity-ledger row, and the full crate gate.
 8. **Connections and environment.** Liveness and `has_session` are done.
    Still owed: `Server::from_env`, and loud server and session environment
    reads with explicit set and unset values.
-9. **Scoped operations.** `with_server`, `Server::with_session`,
-   `Session::with_window`, `Window::with_pane`, each awaiting cleanup after
-   success, error, and cancellation.
+9. **Scoped operations.** `Server::with_session`, `Session::with_window`, and
+   `Window::with_pane`, each awaiting cleanup after success or error; an owned
+   supervisor completes cleanup after cancellation.
 10. ~~**Filtering over handles.**~~ Done. `Session`, `Window`, `Pane`, and
     `Client` implement `Filterable`; mismatched field operations are proved to
     fail at compile time by `compile_fail` doctests. Still owed: handles for

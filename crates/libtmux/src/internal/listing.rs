@@ -325,26 +325,6 @@ fn mutation_failure(
     Error::from_refused_result(command_name, result, target)
 }
 
-/// Record a cleanup failure that a scoped operation is about to discard.
-///
-/// It is discarded because the operation failed first, and that error is the
-/// one the caller was pursuing. Without `tracing` the failure is lost, which
-/// is the price of returning one error rather than two.
-#[cfg_attr(
-    not(feature = "tracing"),
-    expect(
-        unused_variables,
-        reason = "the cause has no sink when tracing is disabled"
-    )
-)]
-pub(crate) fn trace_discarded_cleanup(error: &Error) {
-    #[cfg(feature = "tracing")]
-    tracing::debug!(
-        error = %error,
-        "a scoped operation discarded a cleanup failure after its body failed",
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::ExitStatusExt as _;

@@ -673,12 +673,15 @@ Options and hooks are exposed as inherent methods on each applicable handle,
 not extension traits users must import. Private macros may remove repetitive
 wrapper code while keeping generated public methods documented and tested.
 
-Python context-manager cleanup maps to explicit async scoped operations:
-`with_server`, `Server::with_session`, `Session::with_window`, and
-`Window::with_pane`. Each accepts an async closure, waits for cleanup after
-either success or error, and delegates cancellation cleanup to the same
-independently owned supervisor used by command execution. Ordinary cloneable
-handles do not perform async side effects in `Drop`.
+Python context-manager cleanup maps to `Server::with_session`,
+`Session::with_window`, and `Window::with_pane`. Each accepts an async closure
+and waits for cleanup after success or error. An owned task completes creation,
+arms cleanup before handing the object to the caller, and keeps cleanup running
+after cancellation. Cleanup needs the Tokio runtime to remain active; ordinary
+cloneable handles remain non-destructive.
+
+If tmux creates an object but the command fails before yielding a decodable
+handle, the scope has no identity to target and cannot compensate for it.
 
 ### Errors and collapsed collections
 

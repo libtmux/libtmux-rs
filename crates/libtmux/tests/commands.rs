@@ -2,6 +2,7 @@
 
 #![cfg(feature = "test-support")]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use libtmux::test::{TestServer, retry_until};
@@ -213,6 +214,82 @@ async fn scoped_windows_and_panes_nest() {
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn scoped_operations_clean_up_after_cancellation() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server().clone();
+    let anchor = server.new_session("anchor").await.expect("session");
+    let window = anchor
+        .active_window()
+        .await
+        .expect("window lookup")
+        .expect("window");
+    let ready = Arc::new(tokio::sync::Barrier::new(4));
+
+    let session_scope = tokio::spawn({
+        let server = server.clone();
+        let ready = Arc::clone(&ready);
+        async move {
+            server
+                .with_session("cancelled-session", async move |_session| {
+                    ready.wait().await;
+                    std::future::pending::<Result<(), libtmux::Error>>().await
+                })
+                .await
+        }
+    });
+    let window_scope = tokio::spawn({
+        let anchor = anchor.clone();
+        let ready = Arc::clone(&ready);
+        async move {
+            anchor
+                .with_window("cancelled-window", async move |_window| {
+                    ready.wait().await;
+                    std::future::pending::<Result<(), libtmux::Error>>().await
+                })
+                .await
+        }
+    });
+    let pane_scope = tokio::spawn({
+        let window = window.clone();
+        let ready = Arc::clone(&ready);
+        async move {
+            window
+                .with_pane(SplitDirection::Below, async move |_pane| {
+                    ready.wait().await;
+                    std::future::pending::<Result<(), libtmux::Error>>().await
+                })
+                .await
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), ready.wait())
+        .await
+        .expect("all scoped objects are created");
+    session_scope.abort();
+    window_scope.abort();
+    pane_scope.abort();
+    for scope in [session_scope, window_scope, pane_scope] {
+        assert!(scope.await.expect_err("scope is aborted").is_cancelled());
+    }
+
+    let cleanup = retry_until(Duration::from_secs(5), async || {
+        matches!(server.sessions().await, Ok(objects) if objects.len() == 1)
+            && matches!(anchor.windows().await, Ok(objects) if objects.len() == 1)
+            && matches!(window.panes().await, Ok(objects) if objects.len() == 1)
+    })
+    .await;
+    let sessions = server.sessions().await.expect("sessions").len();
+    let windows = anchor.windows().await.expect("windows").len();
+    let panes = window.panes().await.expect("panes").len();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+
+    assert!(
+        cleanup.is_ok(),
+        "aborted scopes left sessions={sessions}, windows={windows}, panes={panes}",
+    );
 }
 
 #[tokio::test]

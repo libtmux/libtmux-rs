@@ -55,9 +55,10 @@
 //!
 //! ## Building something and cleaning up
 //!
-//! Scoped operations kill what they create, whether the body succeeded or
-//! failed. `Drop` is deliberately not destructive, so nothing disappears
-//! because a handle went out of scope.
+//! Once polled, a scoped operation owns creation and cleanup. Cancellation can
+//! let an in-flight creation finish, but an object whose creation yields a
+//! handle is killed while the Tokio runtime remains active. Ordinary handle
+//! `Drop` is deliberately non-destructive.
 //!
 //! ```no_run
 //! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::Error> {

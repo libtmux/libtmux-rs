@@ -11,6 +11,7 @@ use crate::formats::TmuxText;
 use crate::internal::core::Core;
 use crate::internal::listing::{self, Pushdown as _};
 use crate::internal::options;
+use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
 use crate::query::Filterable;
@@ -1321,15 +1322,18 @@ impl Window {
 
     /// Create a pane, run an operation with it, then kill it.
     ///
-    /// The pane is killed whether the operation succeeded or failed, so a
-    /// short-lived task does not leave one behind. A panic still skips
-    /// cleanup: `Drop` on these handles is deliberately not destructive.
+    /// Once this future is polled, the scope owns creation and cleanup.
+    /// Cancellation or unwinding can let an in-flight creation finish, but a
+    /// pane whose creation yields a handle is killed while the Tokio runtime
+    /// remains active. Ordinary handle `Drop` remains non-destructive.
     ///
     /// Setup and teardown failures convert into the operation's own error
     /// type, so a caller writes one `?` rather than unwrapping twice. When
     /// both the operation and the cleanup fail, the operation's error is
     /// returned, because that is the work the caller was doing; the discarded
     /// cleanup failure is recorded through `tracing` when that feature is on.
+    /// A canceled caller cannot receive a cleanup error, so tracing is its
+    /// only report.
     ///
     /// # Errors
     ///
@@ -1344,17 +1348,14 @@ impl Window {
     where
         E: From<Error>,
     {
-        let created = self.split(options).await?;
-        let outcome = operation(&created).await;
-
-        match (outcome, created.kill().await) {
-            (outcome, Ok(())) => outcome,
-            (Ok(_), Err(error)) => Err(error.into()),
-            (Err(outcome), Err(cleanup)) => {
-                listing::trace_discarded_cleanup(&cleanup);
-                Err(outcome)
-            }
-        }
+        let window = self.clone();
+        let options = options.into();
+        scoped::run(
+            async move { window.split(options).await },
+            Pane::kill,
+            operation,
+        )
+        .await
     }
 
     /// Swap this window's position with another.
