@@ -138,6 +138,34 @@ fn decode_error(list_command: &'static str) -> impl Fn(FormatCodecError) -> Erro
 }
 
 /// List sessions.
+/// Record that a lenient listing threw a failure away.
+///
+/// The lenient forms return an empty vector for "nothing there" and for "the
+/// listing failed", which is the trade they exist for. A caller who chose them
+/// has said the reason does not change what they do -- but somebody reading a
+/// log later still needs to be able to tell the two apart, and an empty vector
+/// cannot.
+///
+/// This lives here rather than beside any one caller because all eleven of
+/// them need it. As a private associated function on `Server` it was reachable
+/// only from that file, so five listings recorded their discard and six did
+/// not, split by nothing but where the helper happened to sit.
+#[cfg_attr(
+    not(feature = "tracing"),
+    expect(
+        unused_variables,
+        reason = "the cause has no sink when tracing is disabled"
+    )
+)]
+pub(crate) fn trace_discarded(list_command: &'static str, error: &Error) {
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        list_command,
+        error = %error,
+        "a lenient listing discarded a failure and returned empty",
+    );
+}
+
 pub(crate) async fn sessions(core: &Core, filter: Option<&str>) -> Result<Vec<SessionInfo>, Error> {
     const LIST_COMMAND: &str = "list-sessions";
 
