@@ -125,6 +125,18 @@ def parents(index: dict, paths: dict, reachable: dict) -> dict:
             here = name_of(item.get("id"))
             for child in inner["enum"].get("variants") or []:
                 owner[str(child)] = here
+                # A struct-like variant's fields are items in their own right
+                # and nothing else attributes them, so without this they record
+                # as a bare `kind` or `target`: names that collide with every
+                # other field spelled the same and leave a variant's shape free
+                # to change under a diff that reports nothing.
+                variant = index.get(str(child)) or index.get(child) or {}
+                shape = (variant.get("inner") or {}).get("variant") or {}
+                kind = shape.get("kind")
+                plain = kind.get("struct") if isinstance(kind, dict) else None
+                held = variant.get("name")
+                for field in (plain or {}).get("fields") or []:
+                    owner[str(field)] = f"{here}::{held}" if here and held else held
 
         if "trait" in inner:
             here = name_of(item.get("id"))
