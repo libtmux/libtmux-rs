@@ -1109,3 +1109,40 @@ async fn setting_one_hook_leaves_the_other_slots_alone() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn the_schema_agrees_with_where_tmux_accepts_a_write() {
+    use libtmux::{OptionScope, option_schema};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("scoped").await.expect("a session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    // A pane hook is a window option too, and tmux has said so since 3.2a. The
+    // schema called it pane-only, so anything consulting it to choose a scope
+    // was told this write would not land.
+    let schema = option_schema("pane-died").expect("a documented hook");
+    assert!(schema.accepts(OptionScope::Window), "{:?}", schema.scopes());
+
+    window
+        .set_hook("pane-died", "display-message gone")
+        .await
+        .expect("tmux accepts a pane hook at window scope");
+    assert!(
+        window
+            .hook("pane-died")
+            .await
+            .expect("the hook reads")
+            .is_some(),
+        "and reads it back there",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
