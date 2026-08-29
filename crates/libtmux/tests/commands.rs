@@ -2,7 +2,9 @@
 
 #![cfg(feature = "test-support")]
 
-use libtmux::test::TestServer;
+use std::time::Duration;
+
+use libtmux::test::{TestServer, retry_until};
 use libtmux::{Command, NewWindowOptions, SplitDirection, SplitOptions};
 
 #[tokio::test]
@@ -318,7 +320,7 @@ async fn a_client_reports_itself_while_it_is_attached() {
 
     // tmux registers the client as part of attaching, but the listing is a
     // separate command, so wait for it rather than assuming the order.
-    libtmux::test::retry_until(Duration::from_secs(10), async || {
+    retry_until(Duration::from_secs(10), async || {
         server
             .clients()
             .await
@@ -337,7 +339,7 @@ async fn a_client_reports_itself_while_it_is_attached() {
         .switch_to(&second)
         .await
         .expect("the client switches session");
-    libtmux::test::retry_until(Duration::from_secs(10), async || {
+    retry_until(Duration::from_secs(10), async || {
         second
             .refreshed()
             .await
@@ -350,7 +352,7 @@ async fn a_client_reports_itself_while_it_is_attached() {
 
     // Detaching consumes the handle, and the listing empties out.
     client.detach().await.expect("the client detaches");
-    libtmux::test::retry_until(Duration::from_secs(10), async || {
+    retry_until(Duration::from_secs(10), async || {
         server
             .clients()
             .await
@@ -429,6 +431,130 @@ async fn a_pane_leaves_a_mode_that_is_not_copy_mode() {
         .await
         .expect("leaving no mode at all is not a failure");
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane's edge flags must follow the split that made it.
+///
+/// These read from the snapshot rather than dispatching, so nothing catches
+/// them being wired to the wrong format field: `pane_at_left` and
+/// `pane_at_right` differ only in a word.
+#[tokio::test]
+async fn edge_flags_follow_the_split_that_made_them() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("edges").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a session has a window");
+
+    let only = window.panes().await.expect("panes").remove(0);
+    assert!(only.is_at_left(), "an undivided pane touches both edges");
+    assert!(only.is_at_right(), "an undivided pane touches both edges");
+
+    only.split(SplitOptions::new(SplitDirection::Right))
+        .await
+        .expect("the pane splits sideways");
+
+    let panes = window.panes().await.expect("panes");
+    assert_eq!(panes.len(), 2, "the split produced a second pane");
+    let (left, right) = (&panes[0], &panes[1]);
+
+    assert!(left.is_at_left(), "the original keeps the left edge");
+    assert!(!left.is_at_right(), "and gives up the right one");
+    assert!(right.is_at_right(), "the new pane takes the right edge");
+    assert!(!right.is_at_left(), "and does not hold the left one");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A global window option must be read from the global table, not the window
+/// the server happens to be pointing at.
+///
+/// A plain round trip cannot say that: writing and reading through the same
+/// wrong scope agrees with itself. So this gives the window a different value
+/// and checks the global read is unmoved by it.
+///
+/// What this cannot pin is the `-w` half of tmux's `-w -g`. tmux resolves an
+/// option's table from its name, so `show-options -g main-pane-width` and
+/// `-wg` return the same value and no assertion here can tell them apart.
+/// Dropping `-w` in the scope leaves this test passing, which was checked
+/// rather than assumed.
+#[tokio::test]
+async fn a_global_window_option_is_read_globally() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("options").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a session has a window");
+
+    server
+        .set_global_window_option("main-pane-width", "123")
+        .await
+        .expect("the global window option is set");
+    window
+        .set_option("main-pane-width", "456")
+        .await
+        .expect("the window takes a value of its own");
+
+    let read = server
+        .get_global_window_option("main-pane-width")
+        .await
+        .expect("the option is readable")
+        .expect("the option is set");
+    assert_eq!(
+        read.as_str().expect("the width is text"),
+        "123",
+        "the global read is not answered by the window's own value"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Piping a pane must start and stop with the same call.
+///
+/// `pipe-pane` toggles when given no command, so a caller who cannot stop it
+/// leaves tmux writing into a process for the life of the pane.
+#[tokio::test]
+async fn a_pane_pipes_until_it_is_told_to_stop() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("piped").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    let sink = guard.socket_path().with_extension("piped");
+    pane.pipe(Some(format!("cat >{}", sink.display())))
+        .await
+        .expect("the pane pipes");
+
+    pane.send_keys("printf 'piped\n'").await.expect("keys");
+    pane.send_key_names(["Enter"]).await.expect("enter");
+
+    retry_until(Duration::from_secs(10), async || {
+        std::fs::read(&sink).is_ok_and(|seen| seen.windows(5).any(|word| word == b"piped"))
+    })
+    .await
+    .expect("what the pane printed reaches the pipe");
+
+    pane.pipe(None::<String>).await.expect("the pipe stops");
+    let after = std::fs::metadata(&sink).map_or(0, |meta| meta.len());
+
+    pane.send_keys("printf 'later\n'").await.expect("keys");
+    pane.send_key_names(["Enter"]).await.expect("enter");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert_eq!(
+        std::fs::metadata(&sink).map_or(0, |meta| meta.len()),
+        after,
+        "nothing more arrives once the pipe is stopped"
+    );
+
+    let _ = std::fs::remove_file(&sink);
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -554,7 +680,7 @@ async fn a_scoped_raw_command_targets_its_own_object() {
     .await
     .expect("keys are sent");
 
-    let seen = libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
+    let seen = retry_until(Duration::from_secs(5), async || {
         pane.capture().await.is_ok_and(|lines| {
             lines
                 .iter()
@@ -773,7 +899,7 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
     .await
     .expect("keys are sent");
     pane.send_key_names(["Enter"]).await.expect("Enter is sent");
-    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
 
     let lines = pane
         .capture_lines(CaptureOptions::history())
