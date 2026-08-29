@@ -6,6 +6,8 @@ use std::fmt;
 use super::Resolver;
 use super::{Chainable, Effects, Op, Operation, Safety, SessionTarget, WindowTarget};
 use crate::Command;
+#[cfg(feature = "serde")]
+use crate::plan::ProducerIdentity;
 use crate::plan::SlotUse;
 
 /// Set a tmux option.
@@ -90,6 +92,15 @@ impl SetOption {
             OptionScope::Global => None,
             OptionScope::Session(target) => target.slot(),
             OptionScope::Window(target) => target.slot(),
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    pub(in crate::plan) fn rebind_slots(&mut self, producers: &[Option<ProducerIdentity>]) {
+        match &mut self.scope {
+            OptionScope::Global => {}
+            OptionScope::Session(target) => target.rebind(producers),
+            OptionScope::Window(target) => target.rebind(producers),
         }
     }
 

@@ -50,6 +50,7 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{Command, PaneId, SessionId, WindowId};
 
@@ -125,6 +126,8 @@ pub enum PlanValidationErrorKind {
     SourceOutputMissing,
     /// The source output is a different tmux object kind.
     SourceScopeMismatch,
+    /// The slot came from a different recorded producer.
+    SourceProvenanceMismatch,
 }
 
 /// An invalid dependency between two plan steps.
@@ -209,6 +212,9 @@ impl fmt::Display for PlanValidationError {
                 "the source output is {:?}, not {:?}",
                 self.source_scope, self.expected_scope
             ),
+            PlanValidationErrorKind::SourceProvenanceMismatch => {
+                formatter.write_str("the referenced output belongs to another plan")
+            }
         }
     }
 }
@@ -220,6 +226,31 @@ pub(in crate::plan) struct SlotUse {
     pub(in crate::plan) source_step: usize,
     pub(in crate::plan) part: Part,
     expected_scope: Scope,
+    producer: ProducerIdentity,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::plan) struct ProducerIdentity(u64);
+
+static NEXT_PRODUCER_ID: AtomicU64 = AtomicU64::new(1);
+
+impl ProducerIdentity {
+    const fn unbound() -> Self {
+        Self(0)
+    }
+
+    fn fresh() -> Self {
+        let Ok(id) = NEXT_PRODUCER_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        else {
+            std::process::abort();
+        };
+        Self(id)
+    }
+
+    const fn matches(self, other: Self) -> bool {
+        self.0 == other.0
+    }
 }
 
 /// How much damage an operation can do, for callers that gate on it.
@@ -260,6 +291,8 @@ pub enum Safety {
 pub struct Slot<T> {
     index: usize,
     part: Part,
+    #[cfg_attr(feature = "serde", serde(skip, default = "ProducerIdentity::unbound"))]
+    producer: ProducerIdentity,
     #[cfg_attr(feature = "serde", serde(skip))]
     scope: PhantomData<fn() -> T>,
 }
@@ -282,10 +315,11 @@ pub(crate) enum Part {
 }
 
 impl<T> Slot<T> {
-    pub(crate) const fn new(index: usize, part: Part) -> Self {
+    const fn new(index: usize, part: Part, producer: ProducerIdentity) -> Self {
         Self {
             index,
             part,
+            producer,
             scope: PhantomData,
         }
     }
@@ -298,7 +332,7 @@ impl<T> Slot<T> {
 }
 
 // Derived impls would demand `T: Clone` and friends, which is wrong: a slot is
-// an index and a tag, and the tag is never held.
+// an index and tags, and the type tag is never held.
 impl<T> Clone for Slot<T> {
     fn clone(&self) -> Self {
         *self
@@ -313,13 +347,15 @@ impl<T> fmt::Debug for Slot<T> {
             .debug_struct("Slot")
             .field("step", &self.index)
             .field("part", &self.part)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl<T> PartialEq for Slot<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.part == other.part
+        self.index == other.index
+            && self.part == other.part
+            && self.producer.matches(other.producer)
     }
 }
 
@@ -344,13 +380,13 @@ impl Slot<SessionSlot> {
     /// The first window tmux made with this session.
     #[must_use]
     pub const fn window(self) -> Slot<WindowSlot> {
-        Slot::new(self.index, Part::FirstWindow)
+        Slot::new(self.index, Part::FirstWindow, self.producer)
     }
 
     /// The first pane of this session's first window.
     #[must_use]
     pub const fn pane(self) -> Slot<PaneSlot> {
-        Slot::new(self.index, Part::FirstPane)
+        Slot::new(self.index, Part::FirstPane, self.producer)
     }
 }
 
@@ -358,7 +394,7 @@ impl Slot<WindowSlot> {
     /// The first pane tmux made with this window.
     #[must_use]
     pub const fn pane(self) -> Slot<PaneSlot> {
-        Slot::new(self.index, Part::FirstPane)
+        Slot::new(self.index, Part::FirstPane, self.producer)
     }
 }
 
@@ -434,14 +470,24 @@ macro_rules! target_conversions {
         }
 
         impl $target {
-            pub(in crate::plan) const fn slot(&self) -> Option<SlotUse> {
+            pub(in crate::plan) fn slot(&self) -> Option<SlotUse> {
                 match self {
                     Self::Id(_) => None,
                     Self::Slot(slot) => Some(SlotUse {
                         source_step: slot.index,
                         part: slot.part,
                         expected_scope: $scope,
+                        producer: slot.producer,
                     }),
+                }
+            }
+
+            #[cfg(feature = "serde")]
+            pub(in crate::plan) fn rebind(&mut self, producers: &[Option<ProducerIdentity>]) {
+                if let Self::Slot(slot) = self {
+                    if let Some(Some(producer)) = producers.get(slot.index) {
+                        slot.producer = *producer;
+                    }
                 }
             }
 
@@ -505,16 +551,17 @@ pub trait Chainable: Operation {}
 /// Turns a recorded step index into whatever [`Plan::add`] returns for it.
 pub trait FromStep {
     /// Build the handle for the operation recorded at `index`.
-    fn from_step(index: usize) -> Self;
+    fn from_step(index: usize, plan: &Plan) -> Self;
 }
 
 impl FromStep for () {
-    fn from_step(_: usize) {}
+    fn from_step(_: usize, _: &Plan) {}
 }
 
 impl<T> FromStep for Slot<T> {
-    fn from_step(index: usize) -> Self {
-        Self::new(index, Part::Created)
+    fn from_step(index: usize, plan: &Plan) -> Self {
+        let producer = plan.producers[index].unwrap_or_else(ProducerIdentity::unbound);
+        Self::new(index, Part::Created, producer)
     }
 }
 
@@ -724,6 +771,25 @@ impl Op {
         }
     }
 
+    #[cfg(feature = "serde")]
+    fn rebind_slots(&mut self, producers: &[Option<ProducerIdentity>]) {
+        match self {
+            Self::NewSession(_) => {}
+            Self::NewWindow(op) => op.target.rebind(producers),
+            Self::SplitWindow(op) => op.target.rebind(producers),
+            Self::SendKeys(op) => op.target.rebind(producers),
+            Self::SelectPane(op) => op.target.rebind(producers),
+            Self::SelectWindow(op) => op.target.rebind(producers),
+            Self::RenameWindow(op) => op.target.rebind(producers),
+            Self::SetOption(op) => op.rebind_slots(producers),
+            Self::SetEnvironment(op) => op.target.rebind(producers),
+            Self::SelectLayout(op) => op.target.rebind(producers),
+            Self::CapturePane(op) => op.target.rebind(producers),
+            Self::KillPane(op) => op.target.rebind(producers),
+            Self::KillWindow(op) => op.target.rebind(producers),
+        }
+    }
+
     fn output_scope(&self, part: Part) -> Option<Scope> {
         let created = self.effects().creates?;
         match (part, created) {
@@ -779,21 +845,33 @@ impl Op {
 /// assert!(rendered[0].as_ref().is_some_and(|c| c.summary().to_string().contains("send-keys")));
 /// # Ok::<(), libtmux::IdParseError>(())
 /// ```
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Clone, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(with = "Vec<Op>"))]
 // A plan is its steps, so it reads as a list rather than an object wrapping
 // one. That is the shape a plan written by hand wants.
-#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Plan {
     steps: Vec<Op>,
+    producers: Vec<Option<ProducerIdentity>>,
+}
+
+impl fmt::Debug for Plan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Plan")
+            .field("steps", &self.steps)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Plan {
     /// Start an empty plan.
     #[must_use]
     pub const fn new() -> Self {
-        Self { steps: Vec::new() }
+        Self {
+            steps: Vec::new(),
+            producers: Vec::new(),
+        }
     }
 
     /// Record one operation and return a handle to what it creates.
@@ -812,7 +890,9 @@ impl Plan {
     pub fn add<O: Operation>(&mut self, operation: O) -> O::Creates {
         let index = self.steps.len();
         self.steps.push(operation.into());
-        O::Creates::from_step(index)
+        self.producers
+            .push(O::EFFECTS.creates.map(|_| ProducerIdentity::fresh()));
+        O::Creates::from_step(index, self)
     }
 
     /// Record an operation that is allowed to share a tmux invocation.
@@ -900,6 +980,20 @@ impl Plan {
                         Some(source_scope),
                     ));
                 }
+                let provenance_matches = self
+                    .producers
+                    .get(slot_use.source_step)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|producer| producer.matches(slot_use.producer));
+                if !provenance_matches {
+                    return Err(PlanValidationError::new(
+                        step,
+                        slot_use.source_step,
+                        PlanValidationErrorKind::SourceProvenanceMismatch,
+                        slot_use.expected_scope,
+                        Some(source_scope),
+                    ));
+                }
             }
         }
         Ok(())
@@ -919,13 +1013,38 @@ impl Plan {
 }
 
 #[cfg(feature = "serde")]
+impl serde::Serialize for Plan {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error as _;
+
+        self.validate().map_err(S::Error::custom)?;
+        serde::Serialize::serialize(&self.steps, serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Plan {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
 
         let plan = Self {
             steps: Vec::<Op>::deserialize(deserializer)?,
+            producers: Vec::new(),
         };
+        let mut plan = plan;
+        plan.producers = plan
+            .steps
+            .iter()
+            .map(|operation| {
+                operation
+                    .effects()
+                    .creates
+                    .map(|_| ProducerIdentity::fresh())
+            })
+            .collect();
+        for operation in &mut plan.steps {
+            operation.rebind_slots(&plan.producers);
+        }
         plan.validate().map_err(D::Error::custom)?;
         Ok(plan)
     }

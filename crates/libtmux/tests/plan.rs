@@ -16,8 +16,8 @@ use std::time::Duration;
 use libtmux::plan::{
     Attribution, CapturePane, KillPane, KillWindow, NewSession, NewWindow, OperationKind,
     OperationReport, OperationValue, Outcome, PaneTarget, Plan, PlanResult,
-    PlanValidationErrorKind, Planner, SelectPane, SendKeys, SetEnvironment, SetOption, SplitWindow,
-    StepReason, WindowTarget,
+    PlanValidationErrorKind, Planner, SelectPane, SelectWindow, SendKeys, SetEnvironment,
+    SetOption, SplitWindow, StepReason, WindowTarget,
 };
 use libtmux::test::TestServer;
 use libtmux::{Command, NewSessionOptions, PaneId, PaneWait, Server, WindowId};
@@ -193,6 +193,51 @@ fn plan_validation_rejects_a_dependency_that_is_not_earlier() {
     assert_eq!(failure.step(), 1);
     assert_eq!(failure.source_step(), 1);
     assert_eq!(failure.kind(), PlanValidationErrorKind::SourceNotEarlier);
+}
+
+#[test]
+fn plan_validation_rejects_a_slot_owned_by_another_plan() {
+    let mut other = Plan::new();
+    let foreign_session = other.add(NewSession::new("same"));
+
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("same"));
+    plan.add(NewWindow::new(foreign_session));
+
+    let failure = plan
+        .validate()
+        .expect_err("a foreign slot must not alias a compatible local producer");
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SourceProvenanceMismatch,
+    );
+    assert!(!failure.to_string().contains("same"));
+    #[cfg(feature = "serde")]
+    assert!(
+        serde_json::to_value(plan).is_err(),
+        "an invalid plan must not become valid on the wire",
+    );
+}
+
+#[test]
+fn cloned_plans_share_existing_but_not_divergent_producers() {
+    let mut base = Plan::new();
+    let session = base.add(NewSession::new("cloned"));
+    let mut left = base.clone();
+    let mut right = base.clone();
+
+    let left_window = left.add(NewWindow::new(session).name("same"));
+    right.add(NewWindow::new(session).name("same"));
+    right.add(SelectWindow::new(left_window));
+
+    left.validate().expect("the original producer was cloned");
+    let failure = right
+        .validate()
+        .expect_err("divergent producers must not share identity");
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SourceProvenanceMismatch,
+    );
 }
 
 #[test]
