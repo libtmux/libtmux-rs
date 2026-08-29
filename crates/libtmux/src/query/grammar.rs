@@ -121,6 +121,20 @@ impl TextOperator {
             SetOperator::Lt | SetOperator::Lte | SetOperator::Gt | SetOperator::Gte => None,
         }
     }
+
+    #[cfg(feature = "schema")]
+    pub(super) const SCALAR_SCHEMA: [Self; 10] = [
+        Self::Eq,
+        Self::EqIgnoreCase,
+        Self::Contains,
+        Self::ContainsIgnoreCase,
+        Self::StartsWith,
+        Self::StartsWithIgnoreCase,
+        Self::EndsWith,
+        Self::EndsWithIgnoreCase,
+        Self::Regex,
+        Self::RegexIgnoreCase,
+    ];
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -155,6 +169,14 @@ impl SetOperator {
     pub(super) const fn takes_a_set(self) -> bool {
         matches!(self, Self::In | Self::NotIn)
     }
+
+    #[cfg(feature = "schema")]
+    pub(super) const EQ_SCHEMA: [Self; 1] = [Self::Eq];
+    #[cfg(feature = "schema")]
+    pub(super) const COMPARISON_SCHEMA: [Self; 5] =
+        [Self::Eq, Self::Lt, Self::Lte, Self::Gt, Self::Gte];
+    #[cfg(feature = "schema")]
+    pub(super) const MEMBERSHIP_SCHEMA: [Self; 2] = [Self::In, Self::NotIn];
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -181,4 +203,9 @@ impl RelationQuantifier {
             .into_iter()
             .find(|quantifier| quantifier.label() == label)
     }
+
+    #[cfg(feature = "schema")]
+    pub(super) const MANY_SCHEMA: [Self; 3] = [Self::Any, Self::All, Self::None];
+    #[cfg(feature = "schema")]
+    pub(super) const ONE_SCHEMA: [Self; 1] = [Self::Is];
 }

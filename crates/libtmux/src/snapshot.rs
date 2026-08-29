@@ -13,7 +13,8 @@ use crate::formats::{
 };
 #[cfg(feature = "query")]
 use crate::query::{
-    BoolField, EnumField, FilterEnum, FilterExpressionError, Filterable, IntegerField, TextField,
+    BoolField, EnumField, FilterEnum, FilterExpressionError, FilterSchema, Filterable,
+    IntegerField, TextField,
 };
 use crate::target::WindowLinkIdentity;
 use crate::{PaneId, ServerIdentity, SessionId, TmuxVersion, WindowId};
@@ -741,6 +742,46 @@ macro_rules! validate_scalar {
     };
 }
 
+#[cfg(feature = "query")]
+macro_rules! filter_schema_value {
+    (Text) => {
+        crate::query::__private::FilterValueSchema::Text
+    };
+    (SessionId) => {
+        crate::query::__private::FilterValueSchema::Text
+    };
+    (WindowId) => {
+        crate::query::__private::FilterValueSchema::Text
+    };
+    (PaneId) => {
+        crate::query::__private::FilterValueSchema::Text
+    };
+    (Bool) => {
+        crate::query::__private::FilterValueSchema::Bool
+    };
+    (U8) => {
+        crate::query::__private::FilterValueSchema::Unsigned
+    };
+    (U32) => {
+        crate::query::__private::FilterValueSchema::Unsigned
+    };
+    (U64) => {
+        crate::query::__private::FilterValueSchema::Unsigned
+    };
+    (I32) => {
+        crate::query::__private::FilterValueSchema::Signed
+    };
+    (Timestamp) => {
+        crate::query::__private::FilterValueSchema::Signed
+    };
+    (PaneProgress) => {
+        crate::query::__private::FilterValueSchema::Unsigned
+    };
+    (PaneProgressState) => {
+        crate::query::__private::FilterValueSchema::Enum(PaneProgressState::FILTER_VARIANTS)
+    };
+}
+
 /// The stored type for a field, given its version floor and empty policy.
 ///
 /// A field at or below the supported floor with a `Required` or `Available`
@@ -953,6 +994,25 @@ macro_rules! define_snapshot_info {
                     $($name => validate_scalar!(predicate, $decoder),)*
                     _ => Err(crate::query::__private::unknown_field_error()),
                 }
+            }
+        }
+
+        #[cfg(feature = "query")]
+        impl FilterSchema for $info {
+            fn __filter_schema() -> crate::query::__private::FilterSchemaDescriptor {
+                crate::query::__private::FilterSchemaDescriptor::new(
+                    $target,
+                    vec![
+                        crate::query::__private::FilterFieldSchema::new(
+                            $baseline_name,
+                            filter_schema_value!($baseline_decoder),
+                        ),
+                        $(crate::query::__private::FilterFieldSchema::new(
+                            $name,
+                            filter_schema_value!($decoder),
+                        )),*
+                    ],
+                )
             }
         }
 

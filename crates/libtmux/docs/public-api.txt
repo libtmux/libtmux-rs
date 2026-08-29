@@ -1276,6 +1276,7 @@ trait libtmux::plan::Chainable
 trait libtmux::plan::FromStep
 trait libtmux::plan::Operation
 trait libtmux::query::FilterEnum
+trait libtmux::query::FilterSchema
 trait libtmux::query::Filterable
 trait libtmux::query::Matcher
 trait libtmux::query::QueryIteratorExt

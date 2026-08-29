@@ -14,7 +14,7 @@ use crate::internal::options;
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
-use crate::query::Filterable;
+use crate::query::{FilterSchema, Filterable};
 use crate::session::Session;
 use crate::snapshot::WindowProjection;
 #[cfg(feature = "query")]
@@ -1730,6 +1730,13 @@ impl Filterable for Window {
         predicate: &crate::query::__private::Predicate,
     ) -> Result<(), crate::query::FilterExpressionError> {
         <WindowInfo as Filterable>::__filter_validate(predicate)
+    }
+}
+
+#[cfg(feature = "query")]
+impl FilterSchema for Window {
+    fn __filter_schema() -> crate::query::__private::FilterSchemaDescriptor {
+        <WindowInfo as FilterSchema>::__filter_schema()
     }
 }
 

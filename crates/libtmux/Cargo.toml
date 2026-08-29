@@ -104,7 +104,7 @@ plan = []
 query = ["dep:caseless", "dep:regex"]
 # Describe serde's plan wire grammar without making schema generation part of
 # the ordinary serialization feature.
-schema = ["dep:schemars", "serde"]
+schema = ["dep:schemars", "dep:serde_json", "serde"]
 serde = ["dep:serde"]
 test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
 tracing = ["dep:tracing"]
@@ -117,6 +117,7 @@ regex = { version = "1.13", optional = true }
 rustix = { version = "1.1.4", features = ["process"] }
 schemars = { version = "1", optional = true }
 serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }

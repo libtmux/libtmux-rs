@@ -136,10 +136,18 @@ fn generate(
     });
     let match_arms = fields.iter().map(|field| match_arm(field, core_path));
     let validation_arms = fields.iter().map(|field| validation_arm(field, core_path));
+    let schema_fields = fields.iter().map(|field| {
+        let wire_name = &field.wire_name;
+        let kind = schema_kind(&field.kind, core_path);
+        quote!(#core_path::query::__private::FilterFieldSchema::new(#wire_name, #kind))
+    });
 
     let mut filter_impl_generics = generics.clone();
     add_filter_bounds(&mut filter_impl_generics, fields, core_path);
     let (filter_impl_generics, _, filter_where_clause) = filter_impl_generics.split_for_impl();
+    let mut schema_impl_generics = generics.clone();
+    add_schema_bounds(&mut schema_impl_generics, fields, core_path);
+    let (schema_impl_generics, _, schema_where_clause) = schema_impl_generics.split_for_impl();
     let companion_doc = format!("Typed filter handles generated for [`{candidate}`].");
     let companion = quote_spanned! {candidate.span()=>
         #[doc = #companion_doc]
@@ -225,6 +233,19 @@ fn generate(
                         #core_path::query::__private::unknown_field_error(),
                     ),
                 }
+            }
+        }
+
+        #[automatically_derived]
+        impl #schema_impl_generics #core_path::query::FilterSchema
+            for #candidate #type_generics #schema_where_clause
+        {
+            fn __filter_schema(
+            ) -> #core_path::query::__private::FilterSchemaDescriptor {
+                #core_path::query::__private::FilterSchemaDescriptor::new(
+                    #target,
+                    ::std::vec![#(#schema_fields),*],
+                )
             }
         }
     }
@@ -338,6 +359,34 @@ fn validation_arm(field: &FieldSpec, core: &TokenStream2) -> TokenStream2 {
     quote!(#wire => #body)
 }
 
+fn schema_kind(kind: &FieldKind, core: &TokenStream2) -> TokenStream2 {
+    match kind {
+        FieldKind::Text { .. } => quote!(#core::query::__private::FilterValueSchema::Text),
+        FieldKind::Bool { .. } => quote!(#core::query::__private::FilterValueSchema::Bool),
+        FieldKind::SignedInteger { .. } => {
+            quote!(#core::query::__private::FilterValueSchema::Signed)
+        }
+        FieldKind::UnsignedInteger { .. } => {
+            quote!(#core::query::__private::FilterValueSchema::Unsigned)
+        }
+        FieldKind::Enum { ty, .. } => quote!(
+            #core::query::__private::FilterValueSchema::Enum(
+                <#ty as #core::query::FilterEnum>::FILTER_VARIANTS,
+            )
+        ),
+        FieldKind::Many { related } => quote!(
+            #core::query::__private::FilterValueSchema::Many(
+                #core::query::__private::filter_schema::<#related>,
+            )
+        ),
+        FieldKind::One { related } => quote!(
+            #core::query::__private::FilterValueSchema::One(
+                #core::query::__private::filter_schema::<#related>,
+            )
+        ),
+    }
+}
+
 fn add_filter_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &TokenStream2) {
     let mut seen = HashSet::new();
     for field in fields {
@@ -345,6 +394,29 @@ fn add_filter_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &
             FieldKind::Enum { ty, .. } => (ty, quote!(#core::query::FilterEnum)),
             FieldKind::Many { related } | FieldKind::One { related } => {
                 (related, quote!(#core::query::Filterable))
+            }
+            FieldKind::Text { .. }
+            | FieldKind::Bool { .. }
+            | FieldKind::SignedInteger { .. }
+            | FieldKind::UnsignedInteger { .. } => continue,
+        };
+        let key = quote!(#ty: #bound).to_string();
+        if seen.insert(key) {
+            generics
+                .make_where_clause()
+                .predicates
+                .push(parse_quote!(#ty: #bound));
+        }
+    }
+}
+
+fn add_schema_bounds(generics: &mut syn::Generics, fields: &[FieldSpec], core: &TokenStream2) {
+    let mut seen = HashSet::new();
+    for field in fields {
+        let (ty, bound) = match &field.kind {
+            FieldKind::Enum { ty, .. } => (ty, quote!(#core::query::FilterEnum)),
+            FieldKind::Many { related } | FieldKind::One { related } => {
+                (related, quote!(#core::query::FilterSchema))
             }
             FieldKind::Text { .. }
             | FieldKind::Bool { .. }

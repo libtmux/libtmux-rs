@@ -12,7 +12,7 @@ use crate::internal::core::Core;
 use crate::internal::listing;
 use crate::internal::options;
 #[cfg(feature = "query")]
-use crate::query::Filterable;
+use crate::query::{FilterSchema, Filterable};
 use crate::snapshot::PaneProjection;
 #[cfg(feature = "query")]
 use crate::snapshot::{PaneFields, PaneInfo};
@@ -1715,6 +1715,13 @@ impl Filterable for Pane {
         predicate: &crate::query::__private::Predicate,
     ) -> Result<(), crate::query::FilterExpressionError> {
         <PaneInfo as Filterable>::__filter_validate(predicate)
+    }
+}
+
+#[cfg(feature = "query")]
+impl FilterSchema for Pane {
+    fn __filter_schema() -> crate::query::__private::FilterSchemaDescriptor {
+        <PaneInfo as FilterSchema>::__filter_schema()
     }
 }
 

@@ -372,6 +372,8 @@ use regex::{Regex, RegexBuilder};
 
 mod grammar;
 use grammar::{RelationQuantifier, SetOperator, TextOperator};
+mod schema;
+pub use schema::FilterSchema;
 
 /// A predicate that evaluates a borrowed candidate.
 ///
@@ -2691,6 +2693,11 @@ pub mod __private {
         FilterExpressionErrorKind, Filterable, IntegerField, ManyRelation, OneRelation,
         PhantomData, PredicateData, PredicateIdentity, RelationPredicate, RelationQuantifier,
         SetOperator, TextField, TextOperator, default_case_fold_str, evaluate, validate_expression,
+    };
+
+    #[doc(hidden)]
+    pub use super::schema::{
+        FilterFieldSchema, FilterSchemaDescriptor, FilterValueSchema, filter_schema,
     };
 
     #[cfg(feature = "serde")]

@@ -10,7 +10,7 @@ use crate::formats::TmuxText;
 use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "query")]
-use crate::query::Filterable;
+use crate::query::{FilterSchema, Filterable};
 #[cfg(feature = "query")]
 use crate::snapshot::ClientFields;
 use crate::snapshot::ClientInfo;
@@ -556,6 +556,13 @@ impl Filterable for Client {
         predicate: &crate::query::__private::Predicate,
     ) -> Result<(), crate::query::FilterExpressionError> {
         <ClientInfo as Filterable>::__filter_validate(predicate)
+    }
+}
+
+#[cfg(feature = "query")]
+impl FilterSchema for Client {
+    fn __filter_schema() -> crate::query::__private::FilterSchemaDescriptor {
+        <ClientInfo as FilterSchema>::__filter_schema()
     }
 }
 

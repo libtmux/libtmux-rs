@@ -57,6 +57,27 @@ struct Task {
     owner: Option<Child>,
 }
 
+#[derive(Filterable)]
+#[filterable(target = "duplicate", crate = "libtmux")]
+struct FirstDuplicate {
+    first: bool,
+}
+
+#[derive(Filterable)]
+#[filterable(target = "duplicate", crate = "libtmux")]
+struct SecondDuplicate {
+    second: bool,
+}
+
+#[derive(Filterable)]
+#[filterable(target = "duplicate_root", crate = "libtmux")]
+struct DuplicateRoot {
+    #[filterable(many)]
+    first: Vec<FirstDuplicate>,
+    #[filterable(many)]
+    second: Vec<SecondDuplicate>,
+}
+
 fn assert_value_traits<T: Clone + Copy + core::fmt::Debug + Eq + Send + Sync>() {}
 
 fn fixture() -> Vec<Task> {
@@ -232,4 +253,51 @@ fn an_empty_relation_is_vacuously_true_for_all_and_false_for_any() {
         fields.children.none(impossible).matches(&childless),
         "and none holds too",
     );
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn generated_schema_uses_the_same_fields_types_and_relations() {
+    use libtmux::query::FilterExpr;
+    use serde_json::json;
+
+    let schema =
+        serde_json::to_value(schemars::schema_for!(FilterExpr<Task>)).expect("schema serializes");
+    jsonschema::draft202012::meta::validate(&schema).expect("schema is valid Draft 2020-12");
+    let validator = jsonschema::draft202012::new(&schema).expect("schema compiles");
+
+    assert!(validator.is_valid(&json!({
+        "version": 1,
+        "target": "work_item",
+        "expr": {
+            "op": "relation",
+            "field": "children",
+            "quantifier": "any",
+            "expr": {"op": "eq", "field": "active", "value": true},
+        },
+    })));
+    for malformed in [
+        json!({"version": 1, "target": "work_item", "expr":
+            {"op": "contains", "field": "done", "value": "yes"}}),
+        json!({"version": 1, "target": "work_item", "expr":
+            {"op": "eq", "field": "private_note", "value": "secret"}}),
+        json!({"version": 1, "target": "work_item", "expr": {
+            "op": "relation", "field": "owner", "quantifier": "any",
+            "expr": {"op": "eq", "field": "active", "value": true},
+        }}),
+    ] {
+        assert!(
+            !validator.is_valid(&malformed),
+            "schema accepted {malformed}"
+        );
+    }
+}
+
+#[cfg(feature = "schema")]
+#[test]
+#[should_panic(expected = "filter target `duplicate` has conflicting schemas")]
+fn generated_schema_rejects_one_target_name_with_two_grammars() {
+    use libtmux::query::FilterExpr;
+
+    let _ = schemars::schema_for!(FilterExpr<DuplicateRoot>);
 }

@@ -17,7 +17,7 @@ use crate::internal::process::PersistentChild;
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
-use crate::query::{Filterable, ManyRelation};
+use crate::query::{FilterSchema, Filterable, ManyRelation};
 use crate::session::Session;
 #[cfg(feature = "query")]
 use crate::snapshot::{SessionFields, WindowFields};
@@ -2819,6 +2819,20 @@ impl Filterable for SessionTree {
     }
 }
 
+#[cfg(feature = "query")]
+impl FilterSchema for SessionTree {
+    fn __filter_schema() -> crate::query::__private::FilterSchemaDescriptor {
+        <Session as FilterSchema>::__filter_schema()
+            .retarget(Self::FILTER_TARGET)
+            .with_field(crate::query::__private::FilterFieldSchema::new(
+                WINDOWS_RELATION,
+                crate::query::__private::FilterValueSchema::Many(
+                    crate::query::__private::filter_schema::<WindowTree>,
+                ),
+            ))
+    }
+}
+
 /// Filtering a window branch reaches the window's fields and its panes.
 #[cfg(feature = "query")]
 impl Filterable for WindowTree {
@@ -2849,5 +2863,19 @@ impl Filterable for WindowTree {
         }
 
         <Window as Filterable>::__filter_validate(predicate)
+    }
+}
+
+#[cfg(feature = "query")]
+impl FilterSchema for WindowTree {
+    fn __filter_schema() -> crate::query::__private::FilterSchemaDescriptor {
+        <Window as FilterSchema>::__filter_schema()
+            .retarget(Self::FILTER_TARGET)
+            .with_field(crate::query::__private::FilterFieldSchema::new(
+                PANES_RELATION,
+                crate::query::__private::FilterValueSchema::Many(
+                    crate::query::__private::filter_schema::<Pane>,
+                ),
+            ))
     }
 }
