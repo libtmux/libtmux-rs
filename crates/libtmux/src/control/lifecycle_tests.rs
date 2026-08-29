@@ -18,9 +18,9 @@ use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
 use super::actor::EVENT_QUEUE;
-use super::{ControlMode, Event};
+use super::{ControlMode, Event, PaneOutput};
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
-use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId};
+use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId, TmuxText};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -657,6 +657,35 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
         events.shutdown().await.expect("connection shuts down");
         server.shutdown().await.expect("server shuts down");
     }
+}
+
+#[tokio::test]
+async fn pane_snapshot_separates_output_at_the_capture_block() {
+    let fixture = directory();
+    let executable = write_script(
+        fixture.path(),
+        &format!(
+            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 2 0\\nvisible\\n%%end 0 2 0\\n'\nprintf '%%output %%1 after\\n'",
+            opening_success(),
+        ),
+    );
+    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let (commands, events) = attach(&server)
+        .await
+        .expect("control mode attaches")
+        .split();
+    let mut output = PaneOutput::new("%1".parse().expect("a pane id"), events, commands);
+
+    let snapshot = output.snapshot().await.expect("the pane is captured");
+
+    assert_eq!(snapshot.visible(), &[TmuxText::from("visible")]);
+    assert_eq!(snapshot.preceding_output(), b"before");
+    assert_eq!(
+        output.next_chunk().await.as_deref(),
+        Some(b"after".as_slice())
+    );
+    output.shutdown().await.expect("connection shuts down");
+    server.shutdown().await.expect("server shuts down");
 }
 
 #[tokio::test]

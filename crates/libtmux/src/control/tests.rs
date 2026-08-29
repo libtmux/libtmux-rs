@@ -3,8 +3,9 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::{
-    BlockResult, ControlEvents, ControlSender, Event, HELD_WHILE_AWAITING, Line, PaneOutput,
-    ReplySlot, ReplySlots, Request, admit_request, decode_watched_pane_id, unescape_output,
+    BlockResult, ControlEvents, ControlSender, Delivery, Event, HELD_WHILE_AWAITING, Line,
+    PaneOutput, ReplySlot, ReplySlots, Request, admit_request, decode_watched_pane_id,
+    unescape_output,
 };
 use crate::{
     Command, ControlModeErrorKind, Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId,
@@ -28,6 +29,7 @@ fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
             deadline: None,
             commit,
             result,
+            boundary: None,
         },
         answer,
     )
@@ -196,6 +198,99 @@ async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
         .result
         .send(Ok(reply(2)))
         .expect("the second pass is still waiting");
+}
+
+#[tokio::test]
+async fn cancelling_a_snapshot_preserves_output_it_already_consumed() {
+    let (commands, mut requests) = mpsc::channel(1);
+    let sender = sender(commands, Duration::from_secs(5));
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, _stopped) = watch::channel(());
+    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+    let mut output = PaneOutput::new(
+        "%1".parse().expect("a pane id"),
+        ControlEvents {
+            events: received,
+            stop,
+            connection,
+        },
+        sender,
+    );
+    let (staged, staged_answer) = oneshot::channel();
+    let driver = tokio::spawn(async move {
+        let request = requests.recv().await.expect("the capture request");
+        assert!(
+            request.boundary.is_some(),
+            "the capture requests a boundary"
+        );
+        deliveries
+            .send(Delivery::Event(Event::Output {
+                pane: "%1".parse().expect("a pane id"),
+                bytes: b"before".to_vec(),
+            }))
+            .await
+            .expect("the output receiver remains open");
+        // With a one-item channel, completing this send proves the snapshot
+        // consumed and staged the output above.
+        deliveries
+            .send(Delivery::Event(Event::SessionsChanged))
+            .await
+            .expect("the output receiver remains open");
+        staged.send(()).expect("the test still waits for staging");
+        std::future::pending::<()>().await;
+    });
+
+    {
+        let snapshot = output.snapshot();
+        tokio::pin!(snapshot);
+        tokio::select! {
+            outcome = snapshot.as_mut() => panic!("the unreplied capture finished: {outcome:?}"),
+            result = staged_answer => result.expect("the driver reports staged output"),
+        }
+    }
+
+    assert_eq!(
+        output.next_chunk().await.as_deref(),
+        Some(b"before".as_slice())
+    );
+    driver.abort();
+    let _ = driver.await;
+    output.shutdown().await.expect("connection shuts down");
+}
+
+#[tokio::test]
+async fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
+    let (commands, mut requests) = mpsc::channel(1);
+    let sender = sender(commands, Duration::from_secs(5));
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, _stopped) = watch::channel(());
+    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+    let mut output = PaneOutput::new(
+        "%1".parse().expect("a pane id"),
+        ControlEvents {
+            events: received,
+            stop,
+            connection,
+        },
+        sender,
+    );
+    let driver = tokio::spawn(async move {
+        let request = requests.recv().await.expect("the capture request");
+        request
+            .result
+            .send(Err(Error::control_mode_closed()))
+            .expect("the snapshot still waits for its result");
+    });
+
+    let error = tokio::time::timeout(Duration::from_secs(1), output.snapshot())
+        .await
+        .expect("a rejected request needs no stream boundary")
+        .expect_err("the rejected capture fails");
+
+    assert_eq!(error.kind(), ErrorKind::Transport);
+    driver.await.expect("the driver task joins");
+    drop(deliveries);
+    output.shutdown().await.expect("connection shuts down");
 }
 
 #[tokio::test]

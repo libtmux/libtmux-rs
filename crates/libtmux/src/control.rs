@@ -46,6 +46,7 @@
 //! `examples/watch.rs` is this as a program that runs, against a server it
 //! starts and cleans up.
 
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -631,6 +632,15 @@ impl ControlSender {
     /// line, the connection has closed, or its deadline elapses while queued,
     /// being written, or awaiting a response.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
+        self.send_ordered(command, None).await
+    }
+
+    /// Send a command whose completed block marks one point in event order.
+    async fn send_ordered(
+        &self,
+        command: Command,
+        boundary: Option<Boundary>,
+    ) -> Result<BlockResult, Error> {
         let deadline = Instant::now().checked_add(self.timeout);
         let sensitive_input = command.summary().sensitive_argument_count() > 0;
         let line = command
@@ -661,6 +671,7 @@ impl ControlSender {
             deadline,
             result,
             commit,
+            boundary,
         });
 
         tokio::select! {
@@ -940,6 +951,17 @@ fn decode_watched_pane_id(line: &TmuxText) -> Result<PaneId, Error> {
     id.parse().map_err(invalid)
 }
 
+/// One private marker in the ordered control-mode delivery stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Boundary(u64);
+
+/// Public events and private ordering markers share one bounded FIFO.
+#[derive(Debug)]
+enum Delivery {
+    Event(Event),
+    Boundary(Boundary),
+}
+
 /// Receives what tmux reports without being asked.
 ///
 /// This is a [`Stream`], so it composes with `select!`, timeouts, and the rest
@@ -951,16 +973,25 @@ fn decode_watched_pane_id(line: &TmuxText) -> Result<PaneId, Error> {
 /// this handle to opt out of events entirely and the connection runs on.
 #[derive(Debug)]
 pub struct ControlEvents {
-    events: mpsc::Receiver<Event>,
+    events: mpsc::Receiver<Delivery>,
     /// Ends the connection when this handle asks, or when it is dropped.
     stop: watch::Sender<()>,
     connection: tokio::task::JoinHandle<Result<(), Error>>,
 }
 
 impl ControlEvents {
+    async fn next_delivery(&mut self) -> Option<Delivery> {
+        self.events.recv().await
+    }
+
     /// Return the next notification, or `None` once the connection closes.
     pub async fn next_event(&mut self) -> Option<Event> {
-        self.events.recv().await
+        loop {
+            match self.next_delivery().await? {
+                Delivery::Event(event) => return Some(event),
+                Delivery::Boundary(_) => {}
+            }
+        }
     }
 
     /// End the connection and report how it went.
@@ -992,13 +1023,53 @@ impl Stream for ControlEvents {
     type Item = Event;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Event>> {
-        self.events.poll_recv(context)
+        loop {
+            match std::task::ready!(self.events.poll_recv(context)) {
+                Some(Delivery::Event(event)) => return Poll::Ready(Some(event)),
+                Some(Delivery::Boundary(_)) => {}
+                None => return Poll::Ready(None),
+            }
+        }
     }
 }
 
 const NARROW_IDLE: u8 = 0;
 const NARROW_RUNNING: u8 = 1;
 const NARROW_DIRTY: u8 = 2;
+
+/// An ordered boundary between a pane's rendered screen and raw output stream.
+///
+/// The visible screen and preceding output answer different questions and may
+/// overlap: the screen is tmux's rendered grid, while the output is the raw
+/// terminal byte stream that reached that grid.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaneOutputSnapshot {
+    visible: Vec<TmuxText>,
+    preceding_output: Vec<u8>,
+}
+
+impl PaneOutputSnapshot {
+    /// Return the pane's visible screen at the boundary.
+    #[must_use]
+    pub fn visible(&self) -> &[TmuxText] {
+        &self.visible
+    }
+
+    /// Return every unread output byte ordered before the boundary.
+    ///
+    /// These bytes have been consumed from the stream. The next chunk from
+    /// the [`PaneOutput`] that made this snapshot is strictly after them.
+    #[must_use]
+    pub fn preceding_output(&self) -> &[u8] {
+        &self.preceding_output
+    }
+
+    /// Separate the visible screen from the preceding raw output.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<TmuxText>, Vec<u8>) {
+        (self.visible, self.preceding_output)
+    }
+}
 
 /// What one pane writes, as it writes it.
 ///
@@ -1016,6 +1087,13 @@ const NARROW_DIRTY: u8 = 2;
 pub struct PaneOutput {
     pane: PaneId,
     events: ControlEvents,
+    /// Output consumed while establishing a snapshot boundary.
+    ///
+    /// This belongs to the stream rather than the snapshot future so
+    /// cancelling that future cannot discard bytes.
+    buffered: VecDeque<Vec<u8>>,
+    boundary: u64,
+    closed: bool,
     /// Kept to re-narrow the subscription, not to send a caller's commands.
     ///
     /// tmux has no notification for a pane being created, so a pane that
@@ -1033,6 +1111,9 @@ impl PaneOutput {
         Self {
             pane,
             events,
+            buffered: VecDeque::new(),
+            boundary: 0,
+            closed: false,
             sender,
             narrowing: Arc::new(AtomicU8::new(NARROW_IDLE)),
         }
@@ -1084,21 +1165,111 @@ impl PaneOutput {
         &self.pane
     }
 
+    /// Capture the pane's visible screen at an ordered point in this stream.
+    ///
+    /// [`PaneOutputSnapshot::preceding_output`] contains every unread byte
+    /// tmux ordered before the capture block. Those bytes are consumed here;
+    /// the next chunk is strictly after that boundary. Previously returned
+    /// chunks are never repeated. Cancelling this future leaves any bytes it
+    /// has already received available to [`Self::next_chunk`] or a later
+    /// snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the connection closes, the command deadline
+    /// elapses, or tmux refuses the capture, including when the pane vanished.
+    pub async fn snapshot(&mut self) -> Result<PaneOutputSnapshot, Error> {
+        self.boundary = self.boundary.wrapping_add(1);
+        let boundary = Boundary(self.boundary);
+        let command = Command::new("capture-pane")
+            .arg("-p")
+            .arg("-t")
+            .arg(self.pane.to_string());
+        let sender = self.sender.clone();
+        let reply = sender.send_ordered(command, Some(boundary));
+        tokio::pin!(reply);
+        let mut answer = None;
+
+        loop {
+            let mut reached = false;
+            tokio::select! {
+                biased;
+                outcome = reply.as_mut(), if answer.is_none() => {
+                    match outcome {
+                        Ok(block) => answer = Some(block),
+                        Err(error) => return Err(error),
+                    }
+                }
+                delivery = self.events.next_delivery() => {
+                    match delivery {
+                        Some(Delivery::Event(
+                            Event::Output { pane, bytes }
+                            | Event::ExtendedOutput { pane, bytes, .. },
+                        )) if pane == self.pane => self.buffered.push_back(bytes),
+                        Some(Delivery::Event(Event::Exit { .. })) => self.closed = true,
+                        Some(Delivery::Event(event)) => {
+                            if event.may_have_added_a_pane() {
+                                self.narrow();
+                            }
+                        }
+                        Some(Delivery::Boundary(found)) if found == boundary => reached = true,
+                        Some(Delivery::Boundary(_)) => {}
+                        None => {
+                            self.closed = true;
+                            if answer.is_none()
+                                && let Err(error) = reply.as_mut().await
+                            {
+                                return Err(error);
+                            }
+                            return Err(Error::control_mode_closed());
+                        }
+                    }
+                }
+            }
+
+            if !reached {
+                continue;
+            }
+            let block = match answer.take() {
+                Some(block) => block,
+                None => reply.as_mut().await?,
+            }
+            .require_success("capture-pane")?;
+            let mut preceding_output = Vec::with_capacity(self.buffered.iter().map(Vec::len).sum());
+            while let Some(bytes) = self.buffered.pop_front() {
+                preceding_output.extend_from_slice(&bytes);
+            }
+            return Ok(PaneOutputSnapshot {
+                visible: block.output,
+                preceding_output,
+            });
+        }
+    }
+
     /// Return the next chunk this pane wrote, or `None` once it stops.
     ///
     /// A chunk is what tmux chose to report at once, which is not a line and
     /// not a fixed size. Callers wanting lines should buffer.
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
+        if let Some(bytes) = self.buffered.pop_front() {
+            return Some(bytes);
+        }
+        if self.closed {
+            return None;
+        }
         loop {
-            let event = self.events.next_event().await?;
-            match event {
-                Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. }
-                    if pane == self.pane =>
-                {
+            let delivery = self.events.next_delivery().await;
+            match delivery {
+                Some(Delivery::Event(
+                    Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. },
+                )) if pane == self.pane => {
                     return Some(bytes);
                 }
-                Event::Exit { .. } => return None,
-                event if event.may_have_added_a_pane() => self.narrow(),
+                Some(Delivery::Event(Event::Exit { .. })) | None => {
+                    self.closed = true;
+                    return None;
+                }
+                Some(Delivery::Event(event)) if event.may_have_added_a_pane() => self.narrow(),
                 _ => {}
             }
         }
@@ -1119,19 +1290,29 @@ impl Stream for PaneOutput {
     type Item = Vec<u8>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
+        if let Some(bytes) = self.buffered.pop_front() {
+            return Poll::Ready(Some(bytes));
+        }
+        if self.closed {
+            return Poll::Ready(None);
+        }
         loop {
             match std::task::ready!(self.events.events.poll_recv(context)) {
-                Some(Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. })
-                    if pane == self.pane =>
-                {
+                Some(Delivery::Event(
+                    Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. },
+                )) if pane == self.pane => {
                     return Poll::Ready(Some(bytes));
                 }
-                Some(Event::Exit { .. }) | None => return Poll::Ready(None),
-                Some(event) => {
+                Some(Delivery::Event(Event::Exit { .. })) | None => {
+                    self.closed = true;
+                    return Poll::Ready(None);
+                }
+                Some(Delivery::Event(event)) => {
                     if event.may_have_added_a_pane() {
                         self.narrow();
                     }
                 }
+                Some(Delivery::Boundary(_)) => {}
             }
         }
     }

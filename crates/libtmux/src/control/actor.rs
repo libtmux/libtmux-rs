@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
 use super::protocol::{Line, read_line, read_line_within, write_line};
-use super::{BlockResult, Event};
+use super::{BlockResult, Boundary, Delivery, Event};
 use crate::Error;
 use crate::internal::process::PersistentChild;
 use crate::limits::ControlLimits;
@@ -32,7 +32,7 @@ pub(super) const HELD_WHILE_AWAITING: usize = EVENT_QUEUE * 8;
 /// The public handles backed by one running connection actor.
 pub(super) struct OpenedConnection {
     pub(super) commands: mpsc::Sender<Request>,
-    pub(super) events: mpsc::Receiver<Event>,
+    pub(super) events: mpsc::Receiver<Delivery>,
     pub(super) stop: watch::Sender<()>,
     pub(super) connection: tokio::task::JoinHandle<Result<(), Error>>,
 }
@@ -106,6 +106,7 @@ pub(super) struct Request {
     pub(super) deadline: Option<Instant>,
     pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
     pub(super) commit: oneshot::Sender<()>,
+    pub(super) boundary: Option<Boundary>,
 }
 
 /// A request whose caller can no longer prevent the first write.
@@ -114,6 +115,7 @@ pub(super) struct CommittedRequest {
     pub(super) line: String,
     pub(super) deadline: Option<Instant>,
     pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
+    pub(super) boundary: Option<Boundary>,
 }
 
 impl Request {
@@ -123,12 +125,14 @@ impl Request {
             deadline,
             result,
             commit,
+            boundary,
         } = self;
         commit.send(()).ok()?;
         Some(CommittedRequest {
             line,
             deadline,
             result,
+            boundary,
         })
     }
 }
@@ -148,15 +152,25 @@ pub(super) enum ReplySlot {
     Live {
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
+        boundary: Option<Boundary>,
     },
     /// Consume this block without giving it to a later caller.
-    Tombstone { deadline: Option<Instant> },
+    Tombstone {
+        deadline: Option<Instant>,
+        boundary: Option<Boundary>,
+    },
 }
 
 impl ReplySlot {
     const fn deadline(&self) -> Option<Instant> {
         match self {
-            Self::Live { deadline, .. } | Self::Tombstone { deadline } => *deadline,
+            Self::Live { deadline, .. } | Self::Tombstone { deadline, .. } => *deadline,
+        }
+    }
+
+    const fn boundary(&self) -> Option<Boundary> {
+        match self {
+            Self::Live { boundary, .. } | Self::Tombstone { boundary, .. } => *boundary,
         }
     }
 }
@@ -170,18 +184,37 @@ pub(super) struct ReplySlots {
 }
 
 impl ReplySlots {
+    #[cfg(test)]
     pub(super) fn push(
         &mut self,
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
     ) {
+        self.push_ordered(result, deadline, None);
+    }
+
+    fn push_ordered(
+        &mut self,
+        result: oneshot::Sender<Result<BlockResult, Error>>,
+        deadline: Option<Instant>,
+        boundary: Option<Boundary>,
+    ) {
         self.earliest = earliest_deadline(self.earliest, deadline);
         if result.is_closed() {
-            self.slots.push_back(ReplySlot::Tombstone { deadline });
+            self.slots
+                .push_back(ReplySlot::Tombstone { deadline, boundary });
         } else {
-            self.slots.push_back(ReplySlot::Live { result, deadline });
+            self.slots.push_back(ReplySlot::Live {
+                result,
+                deadline,
+                boundary,
+            });
             self.live += 1;
         }
+    }
+
+    fn front_boundary(&self) -> Option<Boundary> {
+        self.slots.front().and_then(ReplySlot::boundary)
     }
 
     pub(super) const fn has_live(&self) -> bool {
@@ -207,8 +240,9 @@ impl ReplySlots {
     pub(super) fn refuse_live(&mut self) {
         for slot in &mut self.slots {
             let deadline = slot.deadline();
+            let boundary = slot.boundary();
             let ReplySlot::Live { result, .. } =
-                std::mem::replace(slot, ReplySlot::Tombstone { deadline })
+                std::mem::replace(slot, ReplySlot::Tombstone { deadline, boundary })
             else {
                 continue;
             };
@@ -294,7 +328,7 @@ struct Connection {
     /// here, and the next read continues from it.
     line: Vec<u8>,
     commands: mpsc::Receiver<Request>,
-    events: mpsc::Sender<Event>,
+    events: mpsc::Sender<Delivery>,
     /// Resolves when the watching half asks to stop, or is dropped.
     stopped: watch::Receiver<()>,
     core_stopped: watch::Receiver<bool>,
@@ -308,7 +342,7 @@ struct Connection {
     /// The reader puts an event here rather than waiting for the caller to
     /// have room, because waiting would stop it reading the connection, and
     /// the connection is where a caller's reply comes from.
-    pending: VecDeque<Event>,
+    pending: VecDeque<Delivery>,
 }
 
 impl Connection {
@@ -445,7 +479,8 @@ impl Connection {
                         }
                         break;
                     }
-                    self.awaiting.push(request.result, request.deadline);
+                    self.awaiting
+                        .push_ordered(request.result, request.deadline, request.boundary);
                 }
                 // The caller took one, so the next one can go.
                 Step::Deliver(true) => {
@@ -506,11 +541,11 @@ impl Connection {
                     };
                 }
                 Some(Line::Event(exit @ Event::Exit { .. })) => {
-                    let _ = self.events.try_send(exit);
+                    let _ = self.events.try_send(Delivery::Event(exit));
                     return Err(Error::control_mode_closed());
                 }
                 Some(Line::Event(event)) => {
-                    let _ = self.events.try_send(event);
+                    let _ = self.events.try_send(Delivery::Event(event));
                 }
                 Some(Line::Text(_) | Line::BlockEnd { .. }) => {}
                 None => return Err(Error::control_mode_closed()),
@@ -565,8 +600,8 @@ impl Connection {
     /// Close command admission and deliver every event parsed before tmux ended.
     async fn drain_terminal_events(&mut self) {
         self.commands.close();
-        while let Some(event) = self.pending.pop_front() {
-            if self.events.send(event).await.is_err() {
+        while let Some(delivery) = self.pending.pop_front() {
+            if self.events.send(delivery).await.is_err() {
                 break;
             }
         }
@@ -579,6 +614,13 @@ impl Connection {
                 let deadline = self.awaiting.block_deadline(self.timeout);
                 match self.read_block(number, deadline, watching).await? {
                     BlockRead::Complete(block) => {
+                        // tmux queues pane output and command replies in one
+                        // order. Put the private marker after `%end` and
+                        // before reading another line so the receiver sees
+                        // the same boundary without exposing protocol state.
+                        if let Some(boundary) = self.awaiting.front_boundary() {
+                            self.report(Delivery::Boundary(boundary));
+                        }
                         self.awaiting.complete(block);
                         Ok(true)
                     }
@@ -586,11 +628,11 @@ impl Connection {
                 }
             }
             Line::Event(exit @ Event::Exit { .. }) => {
-                self.report(exit);
+                self.report(Delivery::Event(exit));
                 Ok(false)
             }
             Line::Event(event) => {
-                self.report(event);
+                self.report(Delivery::Event(event));
                 Ok(true)
             }
             // A block terminator with no block open, or output outside one.
@@ -602,13 +644,13 @@ impl Connection {
     ///
     /// A receiver that has gone away is not a reason to stop: commands may
     /// still be in flight, and a caller who only sends is a valid caller.
-    fn report(&mut self, event: Event) {
+    fn report(&mut self, delivery: Delivery) {
         // Anything already held goes first. The channel can drain between one
         // event and the next, so handing this one straight over while older
         // ones wait would deliver them out of order, and a pane's output is a
         // byte stream where that reads exactly like loss.
         if !self.pending.is_empty() {
-            self.pending.push_back(event);
+            self.pending.push_back(delivery);
             return;
         }
 
@@ -618,11 +660,11 @@ impl Connection {
         // Anything but a full channel is finished with here. A receiver that
         // has gone away is not a reason to stop, because commands may still be
         // in flight and a caller who only sends is a valid caller.
-        let Err(mpsc::error::TrySendError::Full(event)) = self.events.try_send(event) else {
+        let Err(mpsc::error::TrySendError::Full(delivery)) = self.events.try_send(delivery) else {
             return;
         };
 
-        self.pending.push_back(event);
+        self.pending.push_back(delivery);
     }
 
     /// Read to the end of a block that has already begun.

@@ -770,6 +770,10 @@ function libtmux::control::Event::window
 function libtmux::control::PaneOutput::next_chunk
 function libtmux::control::PaneOutput::pane
 function libtmux::control::PaneOutput::shutdown
+function libtmux::control::PaneOutput::snapshot
+function libtmux::control::PaneOutputSnapshot::into_parts
+function libtmux::control::PaneOutputSnapshot::preceding_output
+function libtmux::control::PaneOutputSnapshot::visible
 function libtmux::option_schema
 function libtmux::plan::CapturePane::escape_sequences
 function libtmux::plan::CapturePane::new
@@ -981,6 +985,7 @@ struct libtmux::control::ControlEvents
 struct libtmux::control::ControlMode
 struct libtmux::control::ControlSender
 struct libtmux::control::PaneOutput
+struct libtmux::control::PaneOutputSnapshot
 struct libtmux::plan::CapturePane
 struct libtmux::plan::Effects
 struct libtmux::plan::KillPane
