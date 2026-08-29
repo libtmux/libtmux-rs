@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use libtmux::CaptureOptions;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
@@ -98,6 +97,50 @@ fn start_error(error: jobs::StartError) -> ErrorData {
 fn tail_error(error: TailError) -> ErrorData {
     match error {
         TailError::Tmux(error) => tmux_error(&error),
+        TailError::Snapshot { error, opened } => tail_snapshot_error(error, opened),
+        TailError::SnapshotBusy { opened, limit } => {
+            if opened {
+                let mut boundary = EffectBoundary::new("capture_since");
+                boundary.mark();
+                boundary.local(
+                    "the pane tail opened, but another baseline capture is already queued; inspect \
+                     the pane before retrying",
+                )
+            } else {
+                ErrorData::internal_error(
+                    "another baseline capture is already queued; retry capture_since after it \
+                     finishes"
+                        .to_owned(),
+                    Some(serde_json::json!({
+                        "kind": "capacity",
+                        "retryable": true,
+                        "stale": false,
+                        "resource": "tail_snapshot",
+                        "capacity": limit,
+                    })),
+                )
+            }
+        }
+        TailError::ReaderStopped { opened } => {
+            if opened {
+                let mut boundary = EffectBoundary::new("capture_since");
+                boundary.mark();
+                boundary.local(
+                    "the pane tail opened, but its reader stopped before the baseline completed; \
+                     inspect the pane before retrying",
+                )
+            } else {
+                ErrorData::internal_error(
+                    "the retained pane tail reader stopped; retry capture_since to replace it"
+                        .to_owned(),
+                    Some(serde_json::json!({
+                        "kind": "unreachable",
+                        "retryable": true,
+                        "stale": false,
+                    })),
+                )
+            }
+        }
         TailError::OwnerUnavailable => ErrorData::internal_error(
             "capture cursor identity is unavailable".to_owned(),
             Some(serde_json::json!({
@@ -119,7 +162,7 @@ fn tail_error(error: TailError) -> ErrorData {
     }
 }
 
-fn tail_visible_capture_error(error: libtmux::Error, opened: bool) -> ErrorData {
+fn tail_snapshot_error(error: libtmux::Error, opened: bool) -> ErrorData {
     let mut boundary = EffectBoundary::new("capture_since");
     if opened {
         boundary.mark();
@@ -511,26 +554,9 @@ impl TmuxTools {
             .await
             .map_err(tail_error)?;
 
-        // A tail can only report what it saw, and on the first call it has
-        // seen nothing. Answering with the visible screen makes the tool
-        // usable on its own rather than requiring a wasted first round trip.
-        let text = if first {
-            let lines = target
-                .capture_with(CaptureOptions::visible())
-                .await
-                .map_err(|error| tail_visible_capture_error(error, since.opened))?;
-            lines
-                .iter()
-                .map(|line| line.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            since.text
-        };
-
         Ok(Json(Since {
             pane: target.id().to_string(),
-            text,
+            text: since.text,
             cursor: since.cursor.encode(),
             missed: since.missed,
             closed: since.closed,
@@ -674,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_visible_capture_after_opening_reports_a_partial_effect() {
+    fn a_failed_baseline_after_opening_reports_a_partial_effect() {
         let configuration_error = || {
             libtmux::Server::builder()
                 .socket_name("conflicting")
@@ -682,11 +708,17 @@ mod tests {
                 .build()
                 .expect_err("two socket selectors are refused")
         };
-        let existing = tail_visible_capture_error(configuration_error(), false);
+        let existing = tail_error(TailError::Snapshot {
+            error: configuration_error(),
+            opened: false,
+        });
         let existing_data = existing.data.expect("the failure is classified");
         assert_eq!(existing_data["kind"], "unreachable");
 
-        let error = tail_visible_capture_error(configuration_error(), true);
+        let error = tail_error(TailError::Snapshot {
+            error: configuration_error(),
+            opened: true,
+        });
         let data = error.data.expect("the failure is classified");
 
         assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);

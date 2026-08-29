@@ -208,10 +208,12 @@ async fn publishing_a_tail_evicts_the_exact_lru_and_aborts_its_reader() {
     let make_tail = |epoch, last_read| {
         let reader = tokio::spawn(std::future::pending());
         let abort = reader.abort_handle();
+        let (snapshots, _requests) = tokio::sync::mpsc::channel(1);
         (
             Tail {
                 epoch,
                 ring: Arc::new(Mutex::new(ring())),
+                snapshots,
                 reader,
                 last_read,
             },
@@ -239,6 +241,43 @@ async fn publishing_a_tail_evicts_the_exact_lru_and_aborts_its_reader() {
     assert!(table.contains("%replacement"));
     tokio::task::yield_now().await;
     assert!(oldest_reader.is_finished(), "eviction aborts its reader");
+
+    table.remove_if_epoch("%replacement", 2);
+    assert!(
+        table.contains("%replacement"),
+        "an old failure cannot remove a newer reader",
+    );
+    table.remove_if_epoch("%replacement", 3);
+    assert!(!table.contains("%replacement"));
+}
+
+#[tokio::test]
+async fn baseline_admission_is_bounded_and_fail_fast() {
+    let (snapshots, _requests) = tokio::sync::mpsc::channel(1);
+    let tail = RetainedTail {
+        epoch: 1,
+        ring: Arc::new(Mutex::new(ring())),
+        snapshots,
+    };
+    let first = {
+        let tail = tail.clone();
+        tokio::spawn(async move { tail.snapshot().await })
+    };
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while tail.snapshots.capacity() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the first baseline occupies the one-slot mailbox");
+
+    assert!(
+        matches!(tail.snapshot().await, Err(SnapshotError::Busy { limit: 1 })),
+        "another baseline is refused rather than retained out of bounds",
+    );
+
+    first.abort();
+    let _ = first.await;
 }
 
 #[tokio::test]
@@ -299,11 +338,13 @@ async fn opening_is_fail_fast_and_a_failed_replacement_preserves_tails() {
 
     let full = tails_with_owner(2);
     for index in 0..MAX_TAILS {
+        let (snapshots, _requests) = tokio::sync::mpsc::channel(1);
         hold(&full.inner).insert(
             format!("%fake-{index}"),
             Tail {
                 epoch: u64::try_from(index).expect("eight indices fit"),
                 ring: Arc::new(Mutex::new(ring())),
+                snapshots,
                 reader: tokio::spawn(std::future::pending()),
                 last_read: Instant::now(),
             },

@@ -21,10 +21,10 @@ use crate::identity::{InstanceId, InstanceIdentity};
 mod registry;
 mod ring;
 
-use registry::{Tail, TailTable};
+use registry::{RetainedTail, SnapshotError, Tail, TailTable};
+use ring::resume_at;
 #[cfg(test)]
-use ring::RING_BYTES;
-use ring::{Ring, resume_at};
+use ring::{RING_BYTES, Ring};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
 ///
@@ -114,8 +114,6 @@ pub(crate) struct Since {
     pub missed: bool,
     /// Whether the pane has stopped writing for good.
     pub closed: bool,
-    /// Whether this call established the retained tail.
-    pub opened: bool,
 }
 
 /// The tails this server is holding.
@@ -130,6 +128,9 @@ pub(crate) struct Tails {
 #[derive(Debug)]
 pub(crate) enum TailError {
     Tmux(Error),
+    Snapshot { error: Error, opened: bool },
+    SnapshotBusy { opened: bool, limit: usize },
+    ReaderStopped { opened: bool },
     OwnerUnavailable,
     OpeningAtCapacity { limit: usize },
 }
@@ -163,9 +164,9 @@ impl Tails {
 
     /// Read what a pane wrote since `cursor`, opening a tail if needed.
     ///
-    /// A call with no cursor starts one and returns nothing but a place to
-    /// resume from: there is no history to report, because the tail did not
-    /// exist to record any.
+    /// A call with no cursor starts one and captures the visible screen at the
+    /// exact stream position returned in its cursor. Later calls read only the
+    /// retained output after that position.
     ///
     /// # Errors
     ///
@@ -179,11 +180,45 @@ impl Tails {
         let owner = self.owner()?;
         let id = pane.id().to_string();
 
-        let opened = self.ensure(pane, &id).await?;
-        let (ring, epoch, opened) = opened;
+        let (tail, opened) = self.ensure(pane, &id).await?;
+        let epoch = tail.epoch;
+
+        if cursor.is_none() {
+            let snapshot = match tail.snapshot().await {
+                Ok(snapshot) => snapshot,
+                Err(SnapshotError::Tmux(error)) => {
+                    return Err(TailError::Snapshot { error, opened });
+                }
+                Err(SnapshotError::Busy { limit }) => {
+                    return Err(TailError::SnapshotBusy { opened, limit });
+                }
+                Err(SnapshotError::Stopped) => {
+                    hold(&self.inner).remove_if_epoch(&id, epoch);
+                    return Err(TailError::ReaderStopped { opened });
+                }
+            };
+            let closed = hold(&tail.ring).closed;
+            let text = snapshot
+                .visible
+                .iter()
+                .map(|line| line.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Ok(Since {
+                text,
+                cursor: Cursor {
+                    pane: id,
+                    owner,
+                    epoch,
+                    offset: snapshot.offset,
+                },
+                missed: false,
+                closed,
+            });
+        }
 
         let (read, missed, closed, end) = {
-            let ring = hold(&ring);
+            let ring = hold(&tail.ring);
             let (from, stale) = resume_at(&ring, cursor, owner, epoch);
             let read = ring.snapshot_from(from);
             let missed = read.missed || stale;
@@ -198,21 +233,15 @@ impl Tails {
                 epoch,
                 offset: end,
             },
-            // A first call has nothing to have missed.
-            missed: cursor.is_some() && missed,
+            missed,
             closed,
-            opened,
         })
     }
 
     /// Return the ring for a pane, attaching a tail if there is not one.
-    async fn ensure(
-        &self,
-        pane: &Pane,
-        id: &str,
-    ) -> Result<(Arc<Mutex<Ring>>, u64, bool), TailError> {
+    async fn ensure(&self, pane: &Pane, id: &str) -> Result<(RetainedTail, bool), TailError> {
         if let Some(found) = self.touch(id) {
-            return Ok((found.0, found.1, false));
+            return Ok((found, false));
         }
 
         // Do not retain an unbounded queue of tool calls behind a slow attach.
@@ -224,19 +253,19 @@ impl Tails {
                 limit: MAX_TAIL_OPENERS,
             })?;
         if let Some(found) = self.touch(id) {
-            return Ok((found.0, found.1, false));
+            return Ok((found, false));
         }
 
         let epoch = self.next_epoch();
         let tail = Tail::attach(pane, epoch).await?;
-        let (ring, epoch) = tail.retained();
+        let retained = tail.retained();
         hold(&self.inner).insert(id.to_owned(), tail);
 
-        Ok((ring, epoch, true))
+        Ok((retained, true))
     }
 
     /// Mark a tail as recently read, and hand back its ring.
-    fn touch(&self, id: &str) -> Option<(Arc<Mutex<Ring>>, u64)> {
+    fn touch(&self, id: &str) -> Option<RetainedTail> {
         hold(&self.inner).touch(id)
     }
 

@@ -4,16 +4,65 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use libtmux::{Error, Pane};
+use libtmux::{Error, Pane, TmuxText};
+use tokio::sync::{mpsc, oneshot};
 
 use super::hold;
 use super::ring::Ring;
+
+/// How many baseline requests may wait behind the one being captured.
+const SNAPSHOT_QUEUE: usize = 1;
+
+#[derive(Debug)]
+pub(super) struct SnapshotRequest {
+    result: oneshot::Sender<Result<TailSnapshot, Error>>,
+}
+
+#[derive(Debug)]
+pub(super) struct TailSnapshot {
+    pub(super) visible: Vec<TmuxText>,
+    pub(super) offset: u64,
+}
+
+#[derive(Debug)]
+pub(super) enum SnapshotError {
+    Tmux(Error),
+    Busy { limit: usize },
+    Stopped,
+}
+
+/// The clonable state a caller may retain without owning the reader task.
+#[derive(Clone, Debug)]
+pub(super) struct RetainedTail {
+    pub(super) epoch: u64,
+    pub(super) ring: Arc<Mutex<Ring>>,
+    pub(super) snapshots: mpsc::Sender<SnapshotRequest>,
+}
+
+impl RetainedTail {
+    pub(super) async fn snapshot(&self) -> Result<TailSnapshot, SnapshotError> {
+        let (result, answer) = oneshot::channel();
+        self.snapshots
+            .try_send(SnapshotRequest { result })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => SnapshotError::Busy {
+                    limit: SNAPSHOT_QUEUE,
+                },
+                mpsc::error::TrySendError::Closed(_) => SnapshotError::Stopped,
+            })?;
+        answer
+            .await
+            .map_err(|_| SnapshotError::Stopped)?
+            .map_err(SnapshotError::Tmux)
+    }
+}
 
 /// One tailed pane.
 #[derive(Debug)]
 pub(super) struct Tail {
     pub(super) epoch: u64,
     pub(super) ring: Arc<Mutex<Ring>>,
+    pub(super) snapshots: mpsc::Sender<SnapshotRequest>,
     pub(super) reader: tokio::task::JoinHandle<()>,
     pub(super) last_read: Instant,
 }
@@ -23,11 +72,32 @@ impl Tail {
     pub(super) async fn attach(pane: &Pane, epoch: u64) -> Result<Self, Error> {
         let mut output = pane.stream_output().await?;
         let ring = Arc::new(Mutex::new(Ring::new()));
+        let (snapshots, mut requests) = mpsc::channel::<SnapshotRequest>(SNAPSHOT_QUEUE);
         let reader = {
             let ring = Arc::clone(&ring);
             tokio::spawn(async move {
-                while let Some(chunk) = output.next_chunk().await {
-                    hold(&ring).push(&chunk);
+                loop {
+                    tokio::select! {
+                        biased;
+                        Some(request) = requests.recv() => {
+                            let result = output.snapshot().await.map(|snapshot| {
+                                let (visible, preceding) = snapshot.into_parts();
+                                let offset = {
+                                    let mut ring = hold(&ring);
+                                    ring.push(&preceding);
+                                    ring.end()
+                                };
+                                TailSnapshot { visible, offset }
+                            });
+                            let _ = request.result.send(result);
+                        }
+                        chunk = output.next_chunk() => {
+                            let Some(chunk) = chunk else {
+                                break;
+                            };
+                            hold(&ring).push(&chunk);
+                        }
+                    }
                 }
                 hold(&ring).closed = true;
             })
@@ -36,13 +106,18 @@ impl Tail {
         Ok(Self {
             epoch,
             ring,
+            snapshots,
             reader,
             last_read: Instant::now(),
         })
     }
 
-    pub(super) fn retained(&self) -> (Arc<Mutex<Ring>>, u64) {
-        (Arc::clone(&self.ring), self.epoch)
+    pub(super) fn retained(&self) -> RetainedTail {
+        RetainedTail {
+            epoch: self.epoch,
+            ring: Arc::clone(&self.ring),
+            snapshots: self.snapshots.clone(),
+        }
     }
 }
 
@@ -71,7 +146,7 @@ impl TailTable {
     }
 
     /// Mark a tail as recently read, and hand back its retained ring.
-    pub(super) fn touch(&mut self, id: &str) -> Option<(Arc<Mutex<Ring>>, u64)> {
+    pub(super) fn touch(&mut self, id: &str) -> Option<RetainedTail> {
         let tail = self.tails.get_mut(id)?;
         tail.last_read = Instant::now();
         Some(tail.retained())
@@ -89,6 +164,13 @@ impl TailTable {
             self.tails.remove(&stale);
         }
         self.tails.insert(id, tail);
+    }
+
+    /// Remove a stopped reader without evicting a newer replacement.
+    pub(super) fn remove_if_epoch(&mut self, id: &str, epoch: u64) {
+        if self.tails.get(id).is_some_and(|tail| tail.epoch == epoch) {
+            self.tails.remove(id);
+        }
     }
 
     #[cfg(test)]

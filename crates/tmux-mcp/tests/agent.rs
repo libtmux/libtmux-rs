@@ -740,6 +740,19 @@ async fn capture_since_returns_only_what_is_new() {
         .as_str()
         .expect("a cursor is text")
         .to_owned();
+    let settled = json(
+        tools
+            .capture_since(args(serde_json::json!({
+                "pane": pane,
+                "cursor": cursor,
+            })))
+            .await
+            .expect("the baseline cursor excludes its own screen"),
+    );
+    assert_eq!(
+        settled["text"], "",
+        "the first screen is not replayed as stream output"
+    );
 
     tools
         .run_command(
