@@ -15,7 +15,7 @@ const SNAPSHOT_QUEUE: usize = 1;
 
 #[derive(Debug)]
 pub(super) struct SnapshotRequest {
-    result: oneshot::Sender<Result<TailSnapshot, Error>>,
+    pub(super) result: oneshot::Sender<Result<TailSnapshot, Error>>,
 }
 
 #[derive(Debug)]
@@ -29,6 +29,17 @@ pub(super) enum SnapshotError {
     Tmux(Error),
     Busy { limit: usize },
     Stopped,
+}
+
+pub(super) async fn next_live_snapshot(
+    requests: &mut mpsc::Receiver<SnapshotRequest>,
+) -> Option<SnapshotRequest> {
+    while let Some(request) = requests.recv().await {
+        if !request.result.is_closed() {
+            return Some(request);
+        }
+    }
+    None
 }
 
 /// The clonable state a caller may retain without owning the reader task.
@@ -79,7 +90,7 @@ impl Tail {
                 loop {
                     tokio::select! {
                         biased;
-                        Some(request) = requests.recv() => {
+                        Some(request) = next_live_snapshot(&mut requests) => {
                             let result = match output
                                 .snapshot(|preceding| hold(&ring).push(preceding))
                                 .await

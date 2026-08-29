@@ -1,6 +1,7 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+use super::registry::{SnapshotRequest, TailSnapshot, next_live_snapshot};
 use crate::text::TextFilter;
 
 fn ring() -> Ring {
@@ -293,6 +294,39 @@ async fn baseline_admission_is_bounded_and_fail_fast() {
 
     first.abort();
     let _ = first.await;
+}
+
+#[tokio::test]
+async fn a_cancelled_baseline_is_skipped_before_capture() {
+    let (snapshots, mut requests) = tokio::sync::mpsc::channel(2);
+    let (cancelled, answer) = tokio::sync::oneshot::channel();
+    snapshots
+        .send(SnapshotRequest { result: cancelled })
+        .await
+        .expect("the cancelled request enters the mailbox");
+    drop(answer);
+
+    let (live, answer) = tokio::sync::oneshot::channel();
+    snapshots
+        .send(SnapshotRequest { result: live })
+        .await
+        .expect("the live request follows it");
+
+    let request = next_live_snapshot(&mut requests)
+        .await
+        .expect("the live request remains");
+    assert!(
+        !request.result.is_closed(),
+        "a cancelled caller must not make the reader capture a baseline"
+    );
+    request
+        .result
+        .send(Ok(TailSnapshot {
+            visible: Vec::new(),
+            offset: 0,
+        }))
+        .expect("the live caller is still waiting");
+    assert!(answer.await.expect("the reader answers").is_ok());
 }
 
 #[tokio::test]
