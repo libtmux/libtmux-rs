@@ -570,9 +570,9 @@ async fn a_session_is_found_by_what_it_contains() {
     let find = |expression: Value| {
         let tools = tools.clone();
         async move {
-            tools
-                .find_sessions(Parameters(TreeFilterArgs { filter: expression }))
-                .await
+            let arguments = serde_json::from_value(serde_json::json!({"filter": expression}))
+                .expect("filter arguments deserialize");
+            tools.find_sessions(Parameters(arguments)).await
         }
     };
 
@@ -615,17 +615,18 @@ async fn a_session_is_found_by_what_it_contains() {
     // An expression naming a field the related type does not have is the
     // caller's mistake, reported rather than matching nothing.
     assert!(
-        find(serde_json::json!({
+        serde_json::from_value::<TreeFilterArgs>(serde_json::json!({
+            "filter": {
             "version": 1,
             "target": "session_tree",
             "expr": {
                 "op": "relation",
                 "quantifier": "any",
                 "field": "windows",
-                "expr": {"op": "eq", "field": "pane_index", "value": 0},
+                "expr": {"op": "eq", "field": "pane_index", "value": "0"},
             },
+            }
         }))
-        .await
         .is_err(),
     );
 

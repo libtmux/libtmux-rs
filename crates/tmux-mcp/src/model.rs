@@ -322,7 +322,7 @@ pub struct FilterArgs {
     /// `{"version": 1, "target": "pane", "expr": {...}}`. The same grammar the
     /// TypeScript port speaks, so an agent can build one expression and use it
     /// against either.
-    pub filter: serde_json::Value,
+    pub filter: libtmux::query::FilterExpr<libtmux::Pane>,
     /// Only consider panes in this session, by name.
     ///
     /// An expression names one object's own fields, so a pane cannot ask
@@ -341,7 +341,7 @@ pub struct TreeFilterArgs {
     /// `{"version": 1, "target": "session_tree", "expr": {...}}`. A session's
     /// own fields are named directly; `windows` is a relation taking `any`,
     /// `all`, or `none`, and a window's `panes` is another.
-    pub filter: serde_json::Value,
+    pub filter: libtmux::query::FilterExpr<libtmux::SessionTree>,
 }
 
 /// Arguments for moving focus between panes.

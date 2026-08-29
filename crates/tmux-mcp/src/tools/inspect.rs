@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use libtmux::query::{FilterExpr, QueryIteratorExt as _};
+use libtmux::query::QueryIteratorExt as _;
 use libtmux::{CaptureOptions, Command, Server};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
@@ -222,10 +222,9 @@ impl TmuxTools {
             window,
         }): Parameters<FilterArgs>,
     ) -> Result<Json<Panes>, ErrorData> {
-        // Decoding rejects unknown versions, fields, and operators, so an
-        // expression that survives this is one the crate can evaluate.
-        let expression: FilterExpr<libtmux::Pane> =
-            serde_json::from_value(filter).map_err(|error| bad_input(error.to_string()))?;
+        // The typed protocol boundary rejects unknown versions, fields, and
+        // operators before this route runs.
+        let expression = filter;
 
         // Narrow with tmux's own scoping before matching, so a large server
         // does not have every pane listed to answer a question about one
@@ -321,8 +320,7 @@ impl TmuxTools {
         &self,
         Parameters(TreeFilterArgs { filter }): Parameters<TreeFilterArgs>,
     ) -> Result<Json<Sessions>, ErrorData> {
-        let expression: FilterExpr<libtmux::SessionTree> =
-            serde_json::from_value(filter).map_err(|error| bad_input(error.to_string()))?;
+        let expression = filter;
 
         // One gathering of the hierarchy, three tmux commands, and the
         // expression decides among the branches locally.

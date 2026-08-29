@@ -12,7 +12,7 @@ use libtmux::plan::{
     SelectPane, SelectWindow, SendKeys, SetEnvironment, SetOption, SplitWindow,
 };
 use serde_json::json;
-use tmux_mcp::{RunPlanArgs, Safety, TmuxTools};
+use tmux_mcp::{FilterArgs, RunPlanArgs, Safety, TmuxTools, TreeFilterArgs};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -184,6 +184,108 @@ fn run_plan_schema_matches_every_operation_and_rejects_malformed_plans() -> Test
             serde_json::from_value::<RunPlanArgs>(malformed.clone()).is_err(),
             "serde accepted malformed arguments: {malformed}",
         );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn portable_filter_schemas_reject_target_field_and_operator_mismatches() -> TestResult {
+    let tools = TmuxTools::builder(libtmux::Server::new()?).build();
+
+    for (name, cases) in [
+        (
+            "find_panes",
+            vec![
+                (
+                    true,
+                    json!({"filter": {"version": 1, "target": "pane", "expr":
+                        {"op": "eq", "field": "pane_active", "value": true}}}),
+                ),
+                (
+                    true,
+                    json!({"filter": {"version": 1, "target": "pane", "expr":
+                    {"op": "and", "args": [
+                        {"op": "contains", "field": "pane_title", "value": "build"},
+                        {"op": "gte", "field": "pane_width", "value": "80"}
+                    ]}}}),
+                ),
+                (
+                    false,
+                    json!({"filter": {"version": 1, "target": "window", "expr":
+                        {"op": "eq", "field": "pane_active", "value": true}}}),
+                ),
+                (
+                    false,
+                    json!({"filter": {"version": 1, "target": "pane", "expr":
+                        {"op": "eq", "field": "not_a_pane_field", "value": true}}}),
+                ),
+                (
+                    false,
+                    json!({"filter": {"version": 1, "target": "pane", "expr":
+                        {"op": "contains", "field": "pane_active", "value": "yes"}}}),
+                ),
+            ],
+        ),
+        (
+            "find_sessions",
+            vec![
+                (
+                    true,
+                    json!({"filter": {"version": 1, "target": "session_tree", "expr": {
+                        "op": "relation", "field": "windows", "quantifier": "any",
+                        "expr": {"op": "relation", "field": "panes", "quantifier": "none",
+                            "expr": {"op": "eq", "field": "pane_dead", "value": true}}
+                    }}}),
+                ),
+                (
+                    false,
+                    json!({"filter": {"version": 1, "target": "session_tree", "expr": {
+                        "op": "relation", "field": "panes", "quantifier": "any",
+                        "expr": {"op": "eq", "field": "pane_dead", "value": true}
+                    }}}),
+                ),
+                (
+                    false,
+                    json!({"filter": {"version": 1, "target": "pane", "expr":
+                        {"op": "eq", "field": "session_name", "value": "build"}}}),
+                ),
+            ],
+        ),
+    ] {
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("filter tool is offered");
+        let schema = serde_json::to_value(tool.input_schema)?;
+        let bytes = serde_json::to_vec(&schema)?.len();
+        let ceiling = if name == "find_panes" {
+            8 * 1_024
+        } else {
+            16 * 1_024
+        };
+        assert!(
+            bytes <= ceiling,
+            "{name} schema grew to {bytes} bytes (ceiling {ceiling})",
+        );
+        jsonschema::draft202012::meta::validate(&schema)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let validator = jsonschema::draft202012::new(&schema)?;
+
+        for (expected, arguments) in cases {
+            let decoded = if name == "find_panes" {
+                serde_json::from_value::<FilterArgs>(arguments.clone()).is_ok()
+            } else {
+                serde_json::from_value::<TreeFilterArgs>(arguments.clone()).is_ok()
+            };
+            assert_eq!(decoded, expected, "typed decoder admission for {arguments}");
+            assert_eq!(
+                validator.is_valid(&arguments),
+                expected,
+                "advertised schema admission for {arguments}",
+            );
+        }
     }
 
     Ok(())

@@ -291,6 +291,38 @@ async fn every_tool_advertises_a_description_and_a_schema() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+#[tokio::test]
+async fn malformed_portable_filters_stop_at_the_protocol_boundary() {
+    let wire =
+        Wire::connect(TmuxTools::builder(Server::new().expect("server config")).build()).await;
+
+    for (name, arguments) in [
+        (
+            "find_panes",
+            json!({"filter": {"version": 1, "target": "pane", "expr":
+                {"op": "contains", "field": "pane_active", "value": "yes"}}}),
+        ),
+        (
+            "find_sessions",
+            json!({"filter": {"version": 1, "target": "session_tree", "expr": {
+                "op": "relation", "field": "panes", "quantifier": "any",
+                "expr": {"op": "eq", "field": "pane_dead", "value": true}
+            }}}),
+        ),
+    ] {
+        match wire
+            .call(name, arguments)
+            .await
+            .expect_err("malformed filter is refused")
+        {
+            Refusal::Arguments(detail) => assert!(!detail.is_empty()),
+            Refusal::Call(detail) => panic!("{name} reached the tool route: {detail}"),
+        }
+    }
+
+    wire.shutdown().await;
+}
+
 /// One call per tool, with arguments as a client would send them.
 ///
 /// Kept beside the test rather than inside it so the list stays readable as
