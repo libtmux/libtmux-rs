@@ -37,6 +37,16 @@ fn a_timeout_scale_only_ever_widens() {
     // it exists for.
     let base = Duration::from_secs(5);
     assert!(scaled(base) >= base);
+    // A span no scale can widen saturates rather than panicking.
+    assert_eq!(scaled(Duration::MAX), Duration::MAX);
+}
+
+/// A deadline past the end of the clock is a deadline, not a panic.
+#[tokio::test]
+async fn a_span_longer_than_the_clock_still_answers() {
+    super::retry_until(Duration::MAX, async || true)
+        .await
+        .expect("a condition that already holds");
 }
 
 use std::ffi::OsString;

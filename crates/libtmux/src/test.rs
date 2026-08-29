@@ -135,7 +135,10 @@ fn parse_timeout_scale(value: Option<&str>) -> f64 {
 /// ```
 #[must_use]
 pub fn scaled(base: Duration) -> Duration {
-    base.mul_f64(timeout_scale())
+    // Saturating, because this is public and `Duration::mul_f64` panics on
+    // overflow: a deadline no clock will reach is the answer a caller asking
+    // for one that long already wanted.
+    Duration::try_from_secs_f64(base.as_secs_f64() * timeout_scale()).unwrap_or(Duration::MAX)
 }
 
 /// The grace ceiling this platform uses, widened like every other deadline.
@@ -962,12 +965,14 @@ pub async fn retry_until(
     // reaches this deadline long before it reaches the ones around it, and the
     // failure names the condition rather than the load that beat it.
     let within = scaled(within);
-    let deadline = Instant::now() + within;
+    // `None` is a deadline past the end of the clock, which is how every other
+    // deadline in the crate reads an overflow.
+    let deadline = Instant::now().checked_add(within);
     loop {
         if condition().await {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Err(RetryTimeout { waited: within });
         }
         // Sleeping rather than yielding, because the condition almost always

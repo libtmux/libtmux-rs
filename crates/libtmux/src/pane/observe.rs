@@ -324,7 +324,7 @@ impl Pane {
         // output that scrolled away would read as absent, and a needle
         // spanning a wrap point would never match.
         let options = CaptureOptions::history().join_wrapped();
-        let deadline = tokio::time::Instant::now() + within;
+        let deadline = tokio::time::Instant::now().checked_add(within);
 
         loop {
             let text = self
@@ -351,7 +351,7 @@ impl Pane {
                 return Ok(PaneWait::Dead);
             }
 
-            if tokio::time::Instant::now() >= deadline {
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                 return Ok(PaneWait::TimedOut);
             }
             tokio::time::sleep(POLL_INTERVAL.min(within)).await;
