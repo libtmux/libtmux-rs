@@ -42,9 +42,9 @@ libtmux  | find     | query                                         | sh |      
 libtmux  | scratch  | test-support                                  |    |               | hello from tmux
 libtmux  | sweep    | test-support                                  |    |               | fixture
 libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket
-libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               |
-tmux-mcp | budget   |                                               |    |               |
-tmux-mcp | surface  |                                               |    |               |
+libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
+tmux-mcp | budget   |                                               |    |               | of it output schemas
+tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake |
 "
 
