@@ -958,6 +958,47 @@ async fn a_malformed_pane_variable_is_not_being_outside_tmux() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Two of the six client-drawing commands accept a server with no client.
+///
+/// `choose` and `find_window` return `Ok` where `display_popup`,
+/// `display_menu`, `command_prompt` and `display_panes` all report "no current
+/// client". The difference is tmux's, and both documented an error they do not
+/// return, so this pins the split rather than the wish.
+///
+/// Each call is the first thing that touches its own fresh server: an
+/// interactive command left open by one call changes what the next one
+/// answers, which is how this pair was mis-measured the first time.
+#[tokio::test]
+async fn two_choosers_accept_a_server_nobody_is_watching() {
+    for expect_ok in [true, false] {
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let server = guard.server();
+        server.new_session("nobody").await.expect("session");
+        assert!(
+            server.clients().await.expect("clients").is_empty(),
+            "nothing is attached"
+        );
+
+        let outcome = if expect_ok {
+            server.find_window(None, "nobody").await
+        } else {
+            server.display_popup(None, "true").await
+        };
+
+        if expect_ok {
+            assert!(
+                outcome.is_ok(),
+                "find_window is accepted with no client, and opens nothing"
+            );
+        } else {
+            let refused = outcome.expect_err("display_popup needs a client");
+            assert_eq!(refused.kind(), libtmux::ErrorKind::Refused);
+        }
+
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

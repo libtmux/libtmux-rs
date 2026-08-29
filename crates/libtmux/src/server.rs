@@ -2106,11 +2106,18 @@ impl Server {
     /// Open tmux's window finder for a search string.
     ///
     /// This is separate from [`Server::choose`] because it needs something to
-    /// search for, where the other choosers list what already exists.
+    /// search for, where the other choosers list what already exists. It shares
+    /// that method's surprise as well: with no client attached and no `client`
+    /// given, tmux accepts the command, exits zero, and opens nothing.
+    /// `display_popup`, `display_menu`, `command_prompt` and `display_panes`
+    /// all report "no current client" in the same state.
+    ///
+    /// So `Ok(())` means accepted, not that a finder is on screen.
     ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists or tmux refuses.
+    /// Returns an error when tmux refuses the command -- which it does not do
+    /// for a missing client, however the four above behave.
     pub async fn find_window(&self, client: Option<&Client>, search: &str) -> Result<(), Error> {
         let mut request = Command::new("find-window");
         if let Some(client) = client {
