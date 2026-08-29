@@ -143,6 +143,9 @@ pub enum ControlModeErrorKind {
 /// What tmux says when it holds no session to resolve a target against.
 pub(crate) const NO_CURRENT_TARGET: &str = "no current target";
 
+pub(crate) const SENSITIVE_OUTPUT_WITHHELD: &str =
+    "tmux output withheld because the request contained sensitive input";
+
 /// What tmux says when a move has nowhere to go.
 ///
 /// Reported as a command failure, but it is an ordinary state rather than a
@@ -1082,6 +1085,33 @@ impl Error {
         }
     }
 
+    /// Report a refusal without retaining tmux output.
+    pub(crate) fn refused_withheld(command: &'static str, exit_code: Option<i32>) -> Self {
+        Self::CommandFailed {
+            command,
+            exit_code,
+            stderr: SENSITIVE_OUTPUT_WITHHELD.to_owned(),
+        }
+    }
+
+    /// Classify a nonzero result, withholding output after sensitive input.
+    pub(crate) fn from_refused_result(
+        command: &'static str,
+        result: &crate::CommandResult,
+        target: Option<&std::ffi::OsStr>,
+    ) -> Self {
+        if result.command().sensitive_argument_count() > 0 {
+            Self::refused_withheld(command, result.exit_code())
+        } else {
+            Self::refused(
+                command,
+                result.exit_code(),
+                result.stderr_lossy().into_owned(),
+                target,
+            )
+        }
+    }
+
     /// Report a tmux target that could not be resolved.
     ///
     /// The kind comes from the sigil, which is how tmux names its objects.
@@ -1753,6 +1783,14 @@ mod tests {
             None,
         );
         assert_eq!(error.kind(), ErrorKind::Refused, "{error:?}");
+    }
+
+    #[test]
+    fn withheld_refusal_uses_the_payload_appropriate_variant() {
+        let error = Error::refused_withheld("set-option", Some(1));
+
+        assert!(matches!(&error, Error::CommandFailed { .. }), "{error:?}");
+        assert_eq!(error.kind(), ErrorKind::Refused);
     }
 
     /// What tmux echoes back decides whether an object died or a place is

@@ -118,10 +118,9 @@ async fn list(
         // Anything else is not an empty listing. The lenient accessors turn
         // this back into an empty Vec; the loud forms exist so a caller who
         // must not guess gets the reason instead.
-        return Err(Error::refused(
+        return Err(Error::from_refused_result(
             list_command,
-            result.exit_code(),
-            stderr,
+            &result,
             scope.target().map(OsStr::new),
         ));
     }
@@ -237,10 +236,9 @@ async fn create_one<T>(
     let target = command.target().map(OsStr::to_os_string);
     let result = core.execute(command).await?;
     if !result.success() {
-        return Err(Error::refused(
+        return Err(Error::from_refused_result(
             command_name,
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             target.as_deref(),
         ));
     }
@@ -316,12 +314,15 @@ pub(crate) async fn mutate(
         return Ok(());
     }
 
-    Err(Error::refused(
-        command_name,
-        result.exit_code(),
-        result.stderr_lossy().into_owned(),
-        target.as_deref(),
-    ))
+    Err(mutation_failure(command_name, &result, target.as_deref()))
+}
+
+fn mutation_failure(
+    command_name: &'static str,
+    result: &crate::CommandResult,
+    target: Option<&OsStr>,
+) -> Error {
+    Error::from_refused_result(command_name, result, target)
 }
 
 /// Record a cleanup failure that a scoped operation is about to discard.
@@ -342,4 +343,35 @@ pub(crate) fn trace_discarded_cleanup(error: &Error) {
         error = %error,
         "a scoped operation discarded a cleanup failure after its body failed",
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+
+    use super::mutation_failure;
+    use crate::command::{CommandResult, ProcessStatus, RequestId};
+    use crate::{Command, Error};
+
+    #[test]
+    fn sensitive_mutation_failure_withholds_tmux_output() {
+        let secret = "sentinel-mutation-secret";
+        let command = Command::new("set-option")
+            .arg("--")
+            .arg("mouse")
+            .sensitive_arg(secret);
+        let result = CommandResult::new(
+            RequestId::new(1),
+            command.summary(),
+            ProcessStatus::from_exit_status(ExitStatus::from_raw(1 << 8)),
+            Vec::new(),
+            format!("bad value: {secret}\n").into_bytes(),
+        );
+
+        let error = mutation_failure("set-option", &result, None);
+        assert!(matches!(&error, Error::CommandFailed { .. }));
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
 }

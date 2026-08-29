@@ -74,12 +74,7 @@ pub(crate) async fn get(
     let result = core.execute(command).await?;
 
     if !result.success() {
-        let failure = Error::refused(
-            "show-options",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        );
+        let failure = Error::from_refused_result("show-options", &result, None);
 
         // A user option that is not set is not merely empty, it is unknown to
         // tmux, so that one failure is the answer `None`.
@@ -122,12 +117,7 @@ pub(crate) async fn names(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, 
         .execute(scope.apply(Command::new("show-options")))
         .await?;
     if !result.success() {
-        return Err(Error::refused(
-            "show-options",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        ));
+        return Err(Error::from_refused_result("show-options", &result, None));
     }
 
     Ok(result
@@ -232,16 +222,16 @@ fn mutation_failure(
     result: &crate::CommandResult,
 ) -> Error {
     let exit_code = result.exit_code();
+    if result.command().sensitive_argument_count() == 0 {
+        return Error::from_refused_result(command_name, result, None);
+    }
+
     let failure = Error::refused(
         command_name,
         exit_code,
         result.stderr_lossy().into_owned(),
         None,
     );
-    if result.command().sensitive_argument_count() == 0 {
-        return failure;
-    }
-
     match (option_name, failure) {
         (Some(name), Error::OptionRejected { kind, .. }) => Error::OptionRejected {
             kind,
@@ -251,16 +241,7 @@ fn mutation_failure(
             kind: crate::OptionErrorKind::BadValue,
             detail: name.to_owned(),
         },
-        (None, Error::OptionRejected { .. } | Error::CommandFailed { .. }) => {
-            Error::CommandFailed {
-                command: command_name,
-                exit_code,
-                stderr: String::from(
-                    "tmux output withheld because the request contained sensitive input",
-                ),
-            }
-        }
-        (_, other) => other,
+        _ => Error::refused_withheld(command_name, exit_code),
     }
 }
 
@@ -275,12 +256,7 @@ pub(crate) async fn hook_slots(core: &Core, scope: Scope<'_>) -> Result<Vec<Stri
         .execute(scope.apply(Command::new("show-hooks")))
         .await?;
     if !result.success() {
-        return Err(Error::refused(
-            "show-hooks",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        ));
+        return Err(Error::from_refused_result("show-hooks", &result, None));
     }
 
     Ok(result
@@ -365,12 +341,7 @@ async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<Strin
         )
         .await?;
     if !result.success() {
-        return Err(Error::refused(
-            "show-options",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        ));
+        return Err(Error::from_refused_result("show-options", &result, None));
     }
 
     Ok(result

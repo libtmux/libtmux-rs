@@ -692,10 +692,9 @@ impl Pane {
         let target = command.target().map(OsStr::to_os_string);
         let result = self.core.execute(command).await?;
         if !result.success() {
-            return Err(Error::refused(
+            return Err(Error::from_refused_result(
                 "capture-pane",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
+                &result,
                 target.as_deref(),
             ));
         }
@@ -1200,10 +1199,9 @@ impl Pane {
             )
             .await?;
         if !result.success() {
-            return Err(Error::refused(
+            return Err(Error::from_refused_result(
                 "display-message",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
+                &result,
                 Some(OsStr::new(&self.id().to_string())),
             ));
         }
@@ -1233,10 +1231,9 @@ impl Pane {
             return Ok(());
         }
 
-        Err(Error::refused(
+        Err(Error::from_refused_result(
             "display-message",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             Some(OsStr::new(&self.id().to_string())),
         ))
     }

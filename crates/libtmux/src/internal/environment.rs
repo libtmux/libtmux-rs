@@ -112,10 +112,9 @@ pub(crate) async fn get(
             return Ok(None);
         }
 
-        return Err(Error::refused(
+        return Err(Error::from_refused_result(
             "show-environment",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             None,
         ));
     }
@@ -149,10 +148,9 @@ pub(crate) async fn all(
         .execute(scope.apply(Command::new("show-environment")))
         .await?;
     if !result.success() {
-        return Err(Error::refused(
+        return Err(Error::from_refused_result(
             "show-environment",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             None,
         ));
     }

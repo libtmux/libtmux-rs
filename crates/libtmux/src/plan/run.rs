@@ -197,10 +197,10 @@ impl StepOutcome {
     /// Why tmux refused this invocation, in the crate's error vocabulary.
     ///
     /// A refusal is data rather than an error here, because a plan may expect
-    /// one. This classifies it the same way a direct call would, so a caller
-    /// can match on [`Error::SessionExists`] rather than reading stderr, and
-    /// does not have to check for a name being taken *before* asking -- a
-    /// check that races with anything else creating sessions.
+    /// one. Without sensitive input, this classifies it the same way a direct
+    /// call would, so a caller can match on [`Error::SessionExists`] rather
+    /// than racing another session creation. A sensitive invocation reports
+    /// [`Error::CommandFailed`] and withholds tmux output.
     ///
     /// `None` when the invocation succeeded.
     #[must_use]
@@ -209,12 +209,16 @@ impl StepOutcome {
             return None;
         }
 
-        Some(Error::refused(
-            self.command,
-            None,
-            String::from_utf8_lossy(&self.stderr).into_owned(),
-            None,
-        ))
+        Some(if self.sensitive_input {
+            Error::refused_withheld(self.command, None)
+        } else {
+            Error::refused(
+                self.command,
+                None,
+                String::from_utf8_lossy(&self.stderr).into_owned(),
+                None,
+            )
+        })
     }
 }
 
@@ -850,5 +854,33 @@ mod tests {
         for diagnostic in [format!("{reported:?}"), format!("{result:?}")] {
             assert!(!diagnostic.contains(&exposed), "{diagnostic}");
         }
+    }
+
+    #[test]
+    fn sensitive_refusal_withholds_tmux_output() {
+        let secret = "sentinel-plan-secret";
+        let pane: PaneId = "%1".parse().expect("a pane id");
+        let mut plan = Plan::new();
+        plan.add(CapturePane::new(pane));
+        let step = Planner::Sequential
+            .steps(&plan)
+            .into_iter()
+            .next()
+            .expect("one plan step");
+        let reported = StepOutcome {
+            step,
+            outcomes: vec![Outcome::Failed],
+            attribution: Attribution::PerCommand,
+            command: "set-option",
+            sensitive_input: true,
+            stdout: Vec::new(),
+            stderr: format!("bad value: {secret}\n").into_bytes(),
+        };
+
+        assert!(String::from_utf8_lossy(reported.stderr()).contains(secret));
+        let refusal = reported.refusal().expect("the invocation failed");
+        assert!(matches!(&refusal, Error::CommandFailed { .. }));
+        let diagnostic = format!("{refusal:?} {refusal}");
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
     }
 }

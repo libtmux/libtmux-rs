@@ -509,10 +509,9 @@ impl Window {
             if crate::error::NO_SUCH_NEIGHBOUR.contains(&stderr.trim_end()) {
                 return Ok(None);
             }
-            return Err(Error::refused(
+            return Err(Error::from_refused_result(
                 "last-pane",
-                result.exit_code(),
-                stderr.into_owned(),
+                &result,
                 Some(OsStr::new(&target)),
             ));
         }
@@ -1242,10 +1241,9 @@ impl Window {
             )
             .await?;
         if !result.success() {
-            return Err(Error::refused(
+            return Err(Error::from_refused_result(
                 "display-message",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
+                &result,
                 Some(OsStr::new(&self.id().to_string())),
             ));
         }
@@ -1275,10 +1273,9 @@ impl Window {
             return Ok(());
         }
 
-        Err(Error::refused(
+        Err(Error::from_refused_result(
             "display-message",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             Some(OsStr::new(&self.id().to_string())),
         ))
     }

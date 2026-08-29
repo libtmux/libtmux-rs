@@ -262,12 +262,7 @@ impl Client {
             if stderr.trim_end() == crate::error::NO_CURRENT_CLIENT {
                 return Ok(None);
             }
-            return Err(Error::refused(
-                "display-message",
-                result.exit_code(),
-                stderr.into_owned(),
-                None,
-            ));
+            return Err(Error::from_refused_result("display-message", &result, None));
         }
 
         let stdout = result.stdout();

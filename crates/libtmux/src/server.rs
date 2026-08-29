@@ -1045,12 +1045,7 @@ impl Server {
 
         let result = self.cmd(command.arg(OsString::from(format))).await?;
         if !result.success() {
-            return Err(Error::refused(
-                "display-message",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
-                None,
-            ));
+            return Err(Error::from_refused_result("display-message", &result, None));
         }
 
         // `-p` terminates its output with a newline that is framing rather
@@ -1162,10 +1157,9 @@ impl Server {
             )
             .await?;
         if !result.success() {
-            return Err(Error::refused(
+            return Err(Error::from_refused_result(
                 "show-prompt-history",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
+                &result,
                 None,
             ));
         }
@@ -1238,12 +1232,7 @@ impl Server {
 
         let result = self.cmd(Command::new("server-access").arg("-l")).await?;
         if !result.success() {
-            return Err(Error::refused(
-                "server-access",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
-                None,
-            ));
+            return Err(Error::from_refused_result("server-access", &result, None));
         }
 
         // tmux writes `name (R)` or `name (W)`, one per line. Split from the
@@ -1390,11 +1379,7 @@ impl Server {
             .cmd(Command::new("run-shell").sensitive_arg(command.into()))
             .await?;
         if !result.success() {
-            return Err(Error::CommandFailed {
-                command: "run-shell",
-                exit_code: result.exit_code(),
-                stderr: result.stderr_lossy().into_owned(),
-            });
+            return Err(Error::from_refused_result("run-shell", &result, None));
         }
 
         let stdout = result.stdout();
@@ -2125,15 +2110,47 @@ impl fmt::Debug for Server {
 #[cfg(test)]
 mod tests {
 
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use tokio::sync::{Notify, watch};
 
     use super::{NewSessionOptions, Server};
     use crate::Error;
-    use crate::command::CommandRequest;
+    use crate::command::{CommandRequest, CommandResult, ProcessStatus};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+
+    struct RefusingExecutor {
+        calls: AtomicUsize,
+    }
+
+    impl Executor for RefusingExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            DispatchFuture::new(async move {
+                let (status, stdout, stderr) = if call == 0 {
+                    (0, b"tmux 3.7b\n".to_vec(), Vec::new())
+                } else {
+                    assert_eq!(call, 1, "one probe and one run-shell dispatch");
+                    assert_eq!(request.summary().sensitive_argument_count(), 1);
+                    (1 << 8, Vec::new(), b"sentinel-run-shell-output\n".to_vec())
+                };
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(status)),
+                    stdout,
+                    stderr,
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
 
     struct BlockingShutdownExecutor {
         closed: AtomicBool,
@@ -2205,6 +2222,22 @@ mod tests {
             .shutdown()
             .await
             .expect("later clone completes shutdown");
+    }
+
+    #[tokio::test]
+    async fn run_shell_failure_withholds_sensitive_output() {
+        let server = Server::from_executor_for_test(Arc::new(RefusingExecutor {
+            calls: AtomicUsize::new(0),
+        }));
+
+        let error = server
+            .run_shell("sentinel-run-shell-command")
+            .await
+            .expect_err("the command is refused");
+        let diagnostic = format!("{error:?} {error}");
+        for secret in ["sentinel-run-shell-command", "sentinel-run-shell-output"] {
+            assert!(!diagnostic.contains(secret), "{diagnostic}");
+        }
     }
 
     #[test]
