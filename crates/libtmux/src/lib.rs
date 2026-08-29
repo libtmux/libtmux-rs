@@ -333,6 +333,11 @@ pub use window::{
 /// had drifted out of the crate they describe: one named an `Error` variant
 /// nobody wrote. Compiling them is what keeps a rationale honest about the
 /// thing it is rationalising.
+///
+/// Every block in that file is one, an indented block included: rustdoc reads
+/// indentation as a fence and a fence with no language as Rust. A block
+/// quoting tmux source or terminal output needs a `text` tag, or the gate
+/// reports the crate as one that does not compile.
 #[cfg(doctest)]
 #[doc = include_str!("../docs/design.md")]
 pub struct DesignNotes;
