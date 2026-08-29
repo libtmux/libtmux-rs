@@ -73,8 +73,9 @@
 //! ```
 //!
 //! Setup and teardown failures convert into the operation's own error type,
-//! so there is one `?` rather than two. If both the operation and the cleanup
-//! fail, the operation's error is returned: that is the work you were doing.
+//! so there is one `?` rather than two. Once creation succeeds, a cleanup
+//! failure is returned as an after-effect; it owns the replay guidance even
+//! when the operation also failed.
 //!
 //! ## Options carry types
 //!

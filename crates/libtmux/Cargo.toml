@@ -102,8 +102,8 @@ derive = ["dep:libtmux-macros", "query"]
 # because it is API surface a caller who only dispatches commands never needs.
 plan = []
 query = ["dep:caseless", "dep:regex"]
-# Describe serde's plan wire grammar without making schema generation part of
-# the ordinary serialization feature.
+# Describe serde's plan and portable-filter wire grammars without making schema
+# generation part of the ordinary serialization feature.
 schema = ["dep:schemars", "dep:serde_json", "serde"]
 serde = ["dep:serde"]
 test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
