@@ -1919,3 +1919,41 @@ async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Breaking out the only pane relinks its window instead of doing nothing.
+///
+/// tmux takes the command, and `cmd-break-pane.c` links the window at a free
+/// index rather than refusing. The documentation said it did nothing, which
+/// left a caller holding a window whose index had silently moved.
+#[tokio::test]
+async fn breaking_out_the_only_pane_moves_its_window() {
+    use libtmux::NewWindowOptions;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("lonely").await.expect("session");
+    let window = session
+        .new_window(NewWindowOptions::new("lone"))
+        .await
+        .expect("window");
+    let pane = window.panes().await.expect("panes").remove(0);
+
+    assert_eq!(window.panes().await.expect("panes").len(), 1, "one pane");
+    let before = window.index();
+    let window_id = window.id().clone();
+
+    pane.break_out().await.expect("tmux accepts the command");
+
+    let after = window
+        .refreshed()
+        .await
+        .expect("the window is still there, by id");
+    assert_eq!(after.id(), &window_id, "the window keeps its identity");
+    assert_ne!(
+        after.index(),
+        before,
+        "the window moved to a free index rather than nothing happening",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
