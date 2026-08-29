@@ -904,15 +904,16 @@ async fn dispatch_only_commands_are_accepted() {
 
 /// Unlinking a link that is already gone must not say the window is gone.
 ///
-/// A link-scoped command targets `session:index`, because a window linked into
-/// several sessions has one id and several links. tmux answers a missing
-/// target by echoing the index, and reading that echo as an identity produces
-/// three wrong claims at once: an index reported as an id, a name that may
-/// belong to a different live window, and "closed or killed" about a window
-/// that is still running under another link.
+/// A link-scoped command names both halves, `session:@id`, because a window
+/// linked into several sessions has one id and several links and the id alone
+/// could not say which link to drop. tmux answers a target it cannot resolve
+/// by echoing it back, and it echoes an identity identically whether the
+/// window died or is merely linked somewhere else -- so the answer alone
+/// cannot separate them, and reading it as proof of death claims "closed or
+/// killed" about a window still running under another link.
 ///
-/// The last is the one that costs a caller something: `is_object_gone` is what
-/// they branch on to drop a handle.
+/// That is what costs a caller something: `is_object_gone` is what they branch
+/// on to drop a handle.
 #[tokio::test]
 async fn unlinking_a_gone_link_does_not_call_a_live_window_gone() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
