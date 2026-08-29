@@ -1469,6 +1469,46 @@ async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+#[tokio::test]
+async fn swapping_windows_across_sessions_refreshes_the_destination_link() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let left = server.new_session("left").await.expect("left session");
+    let right = server.new_session("right").await.expect("right session");
+    let mut left_window = left
+        .active_window()
+        .await
+        .expect("left window lookup")
+        .expect("left window");
+    let right_window = right
+        .active_window()
+        .await
+        .expect("right window lookup")
+        .expect("right window");
+    let left_id = left_window.id().clone();
+    let right_id = right_window.id().clone();
+    let destination_index = right_window.index();
+
+    left_window
+        .swap_with(&right_window)
+        .await
+        .expect("the windows are swapped");
+
+    assert_eq!(left_window.id(), &left_id);
+    assert_eq!(left_window.session_id(), right.id());
+    assert_eq!(left_window.index(), destination_index);
+    assert_eq!(
+        left.windows().await.expect("left windows")[0].id(),
+        &right_id,
+    );
+    assert_eq!(
+        right.windows().await.expect("right windows")[0].id(),
+        &left_id,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A rendered window target is offered for pasting, so it must not go stale.
 ///
 /// `Display` rendered `session:index`. An index is a place within a session,

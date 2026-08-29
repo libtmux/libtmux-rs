@@ -851,7 +851,7 @@ impl Window {
             .await);
         }
 
-        self.refresh()
+        self.refresh_in(other.session_id())
             .await
             .map_err(|error| error.after_effect("swap-window"))?;
         Ok(self)
