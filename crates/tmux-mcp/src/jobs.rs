@@ -11,8 +11,6 @@
 //! not anyone is waiting. Polling is cheap because a poll reports only what is
 //! new, on the same cursor contract `capture_since` uses.
 
-use std::collections::HashMap;
-use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
@@ -21,9 +19,13 @@ use serde::Serialize;
 use tokio::sync::{Notify, oneshot};
 
 use crate::exec::{self, RunOutcome, RunView};
-use crate::identity::{InstanceId, InstanceIdentity};
-use crate::retained::RetainedBytes;
-use crate::text::{TextFilter, readable_from};
+use crate::identity::InstanceIdentity;
+
+mod table;
+mod worker;
+
+use table::{Job, JobSlot, JobTable, Reservation};
+use worker::{Progress, drive};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
 fn hold<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -158,217 +160,6 @@ pub struct JobProgress {
     pub complete: bool,
 }
 
-/// What one job's reader has collected.
-#[derive(Debug)]
-struct Progress {
-    state: JobState,
-    exit_status: Option<i32>,
-    /// The retained pane stream, including the command's echoed input.
-    stream: RetainedBytes,
-    /// The command's own bytes within `stream`, once its shell answered.
-    body: Option<Range<usize>>,
-    /// How many bytes were dropped off the front of the command's output.
-    dropped: u64,
-    /// Filter state immediately before the retained command output.
-    checkpoint: TextFilter,
-    /// How many pane-stream bytes arrived before trimming.
-    bytes: usize,
-    /// Whether the pane stream was trimmed from the front.
-    truncated: bool,
-    /// The exact terminal view returned by the collector.
-    terminal: Option<RunView>,
-}
-
-impl Progress {
-    /// Apply one scanner delta to the retained command output.
-    fn apply(&mut self, progress: exec::RunProgress<'_>) {
-        self.stream.discard(progress.discarded);
-        self.stream.append(progress.appended);
-        self.stream.settle();
-        self.body = progress.body;
-        self.dropped = progress.body_dropped;
-        self.checkpoint = progress.body_checkpoint.clone();
-        self.bytes = progress.bytes;
-        self.truncated = progress.truncated;
-    }
-
-    fn body(&self) -> &[u8] {
-        self.body
-            .as_ref()
-            .and_then(|range| self.stream.as_slice().get(range.clone()))
-            .unwrap_or_default()
-    }
-
-    /// Read from `cursor`, saying whether anything before it was lost.
-    ///
-    /// The cursor counts bytes of the command's whole output, so it stays
-    /// meaningful after trimming: what moves is where those bytes live, not
-    /// what they are called.
-    fn read_from(&self, cursor: u64) -> (&[u8], u64, bool) {
-        let output = self.body();
-        let end = self.dropped + output.len() as u64;
-        if cursor < self.dropped {
-            return (output, end, true);
-        }
-        let from = usize::try_from(cursor - self.dropped).unwrap_or(output.len());
-        (output.get(from..).unwrap_or_default(), end, false)
-    }
-
-    fn text_from(&self, cursor: u64) -> (String, u64, bool) {
-        let (bytes, end, truncated) = self.read_from(cursor);
-        let output = self.body();
-        let from = output.len() - bytes.len();
-        (
-            readable_from(&self.checkpoint, output, from),
-            end,
-            truncated,
-        )
-    }
-
-    fn unfinished(&self, pane: String, outcome: RunOutcome) -> RunView {
-        let outcome = if outcome == RunOutcome::Deadline && self.body.is_none() {
-            RunOutcome::NoShell
-        } else {
-            outcome
-        };
-        let output = if self.body.is_some() {
-            readable_from(&self.checkpoint, self.body(), 0)
-        } else {
-            exec::readable(self.stream.as_slice())
-        };
-        RunView {
-            pane,
-            outcome,
-            exit_status: None,
-            output,
-            bytes: self.bytes,
-            truncated: self.truncated,
-            job: None,
-        }
-    }
-
-    /// Resolve a foreground observer after its wait ends.
-    fn foreground_view(
-        &self,
-        pane: String,
-        stopped: Option<RunOutcome>,
-    ) -> Option<(RunView, bool)> {
-        if let Some(terminal) = &self.terminal {
-            return Some((terminal.clone(), false));
-        }
-        stopped.map(|outcome| (self.unfinished(pane, outcome), true))
-    }
-}
-
-/// One background command.
-#[derive(Debug)]
-struct Job {
-    pane: String,
-    command: String,
-    started: Instant,
-    progress: Arc<Mutex<Progress>>,
-    /// Fires when the reader reaches a terminal state or loses its owner.
-    finished: Arc<Notify>,
-    reader: tokio::task::JoinHandle<()>,
-    last_read: Instant,
-}
-
-impl Drop for Job {
-    fn drop(&mut self) {
-        // A terminal state is published before its notification. Let that
-        // reader finish the handoff rather than stranding a waiter.
-        if hold(&self.progress).state.is_active() {
-            self.reader.abort();
-            self.finished.notify_waiters();
-        }
-    }
-}
-
-/// One slot in the bounded job table.
-#[derive(Debug)]
-enum JobSlot {
-    /// Reserved while the watcher attaches, before any pane input is sent.
-    Pending,
-    /// A command visible to callers and owned by the table.
-    Ready(Job),
-}
-
-/// Running jobs, completed jobs, and starts that are between those states.
-#[derive(Debug)]
-struct JobTable {
-    slots: HashMap<String, JobSlot>,
-    limit: usize,
-    next_id: Option<u64>,
-}
-
-impl JobTable {
-    fn new(limit: usize) -> Self {
-        Self {
-            slots: HashMap::new(),
-            limit,
-            next_id: Some(0),
-        }
-    }
-
-    /// Reserve a slot, evicting only a finished job when the table is full.
-    fn reserve(&mut self, owner: InstanceId) -> Result<String, StartError> {
-        let next_id = self.next_id.ok_or(StartError::IdSpaceExhausted)?;
-        if self.slots.len() >= self.limit
-            && let Some(stale) = self
-                .slots
-                .iter()
-                .filter_map(|(id, slot)| match slot {
-                    JobSlot::Ready(job) if !hold(&job.progress).state.is_active() => {
-                        Some((id, job.last_read))
-                    }
-                    JobSlot::Pending | JobSlot::Ready(_) => None,
-                })
-                .min_by_key(|(_, last_read)| *last_read)
-                .map(|(id, _)| id.clone())
-        {
-            self.slots.remove(&stale);
-        }
-
-        if self.slots.len() >= self.limit {
-            return Err(StartError::AtCapacity { limit: self.limit });
-        }
-
-        let id = format!("job-{owner}-{next_id}");
-        self.next_id = next_id.checked_add(1);
-        self.slots.insert(id.clone(), JobSlot::Pending);
-        Ok(id)
-    }
-}
-
-/// A slot that is released unless a started job takes ownership of it.
-struct Reservation<'a> {
-    table: &'a Mutex<JobTable>,
-    id: String,
-    committed: bool,
-}
-
-impl Reservation<'_> {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn commit(mut self, job: Job) {
-        let previous = hold(self.table)
-            .slots
-            .insert(self.id.clone(), JobSlot::Ready(job));
-        debug_assert!(matches!(previous, Some(JobSlot::Pending)));
-        self.committed = true;
-    }
-}
-
-impl Drop for Reservation<'_> {
-    fn drop(&mut self) {
-        if !self.committed {
-            hold(self.table).slots.remove(&self.id);
-        }
-    }
-}
-
 /// The jobs this server is holding.
 #[derive(Debug)]
 pub(crate) struct Jobs {
@@ -424,17 +215,7 @@ impl Jobs {
         let id = reservation.id().to_owned();
         let pane_id = pane.id().to_string();
         let command = command.to_owned();
-        let progress = Arc::new(Mutex::new(Progress {
-            state: JobState::Starting,
-            exit_status: None,
-            stream: RetainedBytes::new(),
-            body: None,
-            dropped: 0,
-            checkpoint: TextFilter::new(),
-            bytes: 0,
-            truncated: false,
-            terminal: None,
-        }));
+        let progress = Arc::new(Mutex::new(Progress::new()));
         let finished = Arc::new(Notify::new());
 
         // Setup is still request-owned because it has not touched the pane.
@@ -662,57 +443,6 @@ impl Jobs {
             job
         };
         Some(job.pane.clone())
-    }
-}
-
-/// Dispatch and read one job after its table entry is visible.
-async fn drive(
-    prepared: exec::PreparedRun,
-    progress: Arc<Mutex<Progress>>,
-    finished: Arc<Notify>,
-    report: oneshot::Sender<DispatchReport>,
-) {
-    let run = match prepared.dispatch().await {
-        exec::RunDispatch::Confirmed(run) => {
-            hold(&progress).state = JobState::Running;
-            let _ = report.send(DispatchReport::Confirmed);
-            run
-        }
-        exec::RunDispatch::NotDispatched(error) => {
-            hold(&progress).state = JobState::NotStarted;
-            finished.notify_waiters();
-            let _ = report.send(DispatchReport::NotDispatched(error));
-            return;
-        }
-        exec::RunDispatch::Unknown { run, error } => {
-            hold(&progress).state = JobState::DispatchUnknown;
-            let _ = report.send(DispatchReport::Unknown(error));
-            run
-        }
-    };
-
-    let view = run.collect(|update| hold(&progress).apply(update)).await;
-
-    {
-        let mut held = hold(&progress);
-        let (state, exit_status) = ended(&view);
-        held.state = state;
-        held.exit_status = exit_status;
-        held.terminal = Some(view);
-    }
-    finished.notify_waiters();
-}
-
-/// Translate a finished run into the two fields a job records.
-pub(crate) const fn ended(view: &RunView) -> (JobState, Option<i32>) {
-    match view.outcome {
-        RunOutcome::Completed => (JobState::Finished, view.exit_status),
-        RunOutcome::PaneClosed => (JobState::PaneClosed, None),
-        // A job reads until the command ends, so it has no deadline of its
-        // own to reach and is never cancelled by a withdrawn request.
-        RunOutcome::Deadline | RunOutcome::Cancelled | RunOutcome::NoShell => {
-            (JobState::NoShell, None)
-        }
     }
 }
 

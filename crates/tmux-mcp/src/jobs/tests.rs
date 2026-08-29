@@ -1,4 +1,6 @@
 use super::*;
+use crate::retained::RetainedBytes;
+use crate::text::TextFilter;
 
 fn job(index: usize, state: JobState, last_read: Instant) -> Job {
     let progress = Arc::new(Mutex::new(Progress {
