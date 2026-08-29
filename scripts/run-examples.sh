@@ -123,6 +123,15 @@ abandoned() {
         if [ -f "$owner" ] && kill -0 "$(cat "$owner")" 2>/dev/null; then
             continue
         fi
+        # A server still answering is someone's work, not a leak. `just
+        # fixture-root` has asked this second question about the test root
+        # since it was written; this root had only the first, so a hand spike
+        # holding a bare socket -- which is what `scratch` and `orchestrate`
+        # make, with no directory to put an owner file in -- was reported as
+        # abandoned while a server was plainly attached to it.
+        if [ -S "$entry" ] && tmux -S "$entry" list-sessions >/dev/null 2>&1; then
+            continue
+        fi
         printf '%s\n' "$entry"
     done
 }
