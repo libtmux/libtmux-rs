@@ -1156,14 +1156,17 @@ async fn next_report(events: &mut ControlEvents, name: &str, within: Duration) -
         let event = tokio::time::timeout_at(deadline, events.next_event())
             .await
             .ok()??;
+        // Two ifs rather than a let-chain: this crate's floor is 1.85, and
+        // let-chains landed in 1.88.
         if let Event::SubscriptionChanged {
             name: reported,
             value,
             ..
         } = event
-            && reported.as_str().is_ok_and(|reported| reported == name)
         {
-            return value.as_str().ok().map(str::to_owned);
+            if reported.as_str().is_ok_and(|reported| reported == name) {
+                return value.as_str().ok().map(str::to_owned);
+            }
         }
     }
 }
