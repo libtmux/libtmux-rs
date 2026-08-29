@@ -32,10 +32,19 @@ pub(super) async fn read_line_within(
     limit: usize,
     within: Option<u64>,
 ) -> Result<Option<Line>, Error> {
-    let read = stdout
-        .read_until(b'\n', pending)
-        .await
-        .map_err(Error::control_mode)?;
+    // One byte past the budget is enough to know the line broke it, and
+    // capping the read is what keeps the answer bounded: `read_until` on its
+    // own appends until it finds a newline, so checking the length afterwards
+    // measures memory already taken. `pending` carries bytes left by a
+    // cancelled read, so the cap is what is left of the budget, not all of it.
+    let allowance = limit.saturating_sub(pending.len()).saturating_add(1);
+    let read = {
+        let mut bounded = tokio::io::AsyncReadExt::take(&mut *stdout, allowance as u64);
+        bounded
+            .read_until(b'\n', pending)
+            .await
+            .map_err(Error::control_mode)?
+    };
     if read == 0 && pending.is_empty() {
         return Ok(None);
     }

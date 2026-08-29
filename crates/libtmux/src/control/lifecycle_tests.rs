@@ -883,3 +883,45 @@ async fn attach_after_server_shutdown_is_rejected() {
         .expect_err("shutdown closes persistent-client admission");
     assert!(matches!(error, Error::ExecutorShutdown { .. }));
 }
+
+#[tokio::test]
+async fn a_line_that_never_ends_stops_at_its_budget() {
+    use crate::ControlLimits;
+
+    let fixture = directory();
+    // Opens correctly, then writes forever without ever ending the line. A
+    // budget checked after the read would measure memory already taken, and
+    // against this fixture there is no point at which it would be checked.
+    let executable = write_script(
+        fixture.path(),
+        // `/dev/zero` is an endless stream carrying no newline, and it costs
+        // nothing: the reader stops at the budget and the pipe fills behind
+        // it. A shell loop here burns a core for the rest of the suite.
+        &format!("{}\ncat /dev/zero", opening_success()),
+    );
+    // Generous on purpose: the budget has to be what ends this, not the
+    // clock. A deadline tight enough to fire first would pass for the wrong
+    // reason on a loaded machine.
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT * 4);
+
+    let outcome = tokio::time::timeout(TEST_TIMEOUT * 6, async {
+        let control = ControlMode::attach_with_limits(
+            &server,
+            &session(),
+            ControlLimits::default().max_line_bytes(4096),
+        )
+        .await?;
+        control.send(Command::new("list-panes")).await
+    })
+    .await
+    .expect("the budget ends the read rather than growing with it");
+
+    let error = outcome.expect_err("an endless line is refused");
+    assert!(
+        matches!(&error, Error::ControlModeFrameTooLarge { frame, limit, .. }
+            if *frame == "line" && *limit == 4096),
+        "got {error:?}",
+    );
+
+    server.shutdown().await.expect("server shuts down");
+}
