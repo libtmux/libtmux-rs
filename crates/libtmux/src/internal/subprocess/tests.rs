@@ -108,6 +108,10 @@ fn nul_validation_distinguishes_global_subcommand_and_argument_positions() {
     clippy::zombie_processes,
     reason = "the process-group test deliberately kills parent and descendant together"
 )]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "this body runs as the spawned child, so the process it ends is its own"
+)]
 fn child_helper() {
     let Some(mode) = std::env::var_os(CHILD_ENV) else {
         return;

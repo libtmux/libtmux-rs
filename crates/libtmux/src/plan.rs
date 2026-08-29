@@ -243,6 +243,11 @@ impl ProducerIdentity {
         let Ok(id) = NEXT_PRODUCER_ID
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         else {
+            // Reuse would let a slot bind to another plan's step, which is the
+            // wrong tmux object rather than a failed one. Zero cannot stand in:
+            // it is the unbound identity a deserialized slot carries until it
+            // is rebound.
+            #[allow(clippy::disallowed_methods)]
             std::process::abort();
         };
         Self(id)
