@@ -25,8 +25,8 @@ const WATCH_BYTES: usize = 64 * 1024;
 
 /// Report a job id this server does not hold.
 ///
-/// Classified `stale` rather than as bad input: a job is forgotten when it
-/// ages out, so listing again is what helps, not a different argument.
+/// Classified `stale` rather than as bad input: a caller can explicitly
+/// forget a job, or one can age out, so listing again is what helps.
 fn unknown_job(job: &str) -> ErrorData {
     let mut data = serde_json::Map::new();
     data.insert("kind".into(), "object_gone".into());
@@ -35,7 +35,7 @@ fn unknown_job(job: &str) -> ErrorData {
 
     ErrorData::new(
         rmcp::model::ErrorCode::INVALID_PARAMS,
-        format!("no job {job}; it finished long enough ago to be forgotten, or never existed"),
+        format!("no job {job}; it was explicitly forgotten, aged out, or never existed"),
         Some(serde_json::Value::Object(data)),
     )
 }
@@ -52,9 +52,11 @@ fn start_error(error: jobs::StartError) -> ErrorData {
             };
             ErrorData::internal_error(
                 format!(
-                    "tmux did not confirm whether it started {job}: {cause}; the job remains \
-                     tracked, so inspect it with job_status or forget it with forget_job before \
-                     retrying"
+                    "tmux did not confirm whether it started {job}: {cause}; inspect it with \
+                     job_status and inspect the pane; retrying automatically is unsafe because \
+                     the command may be running. forget_job only discards retained output. To \
+                     interrupt, use pane-wide send_keys with keys=[\"C-c\"], which can discard \
+                     unrelated queued input"
                 ),
                 Some(serde_json::json!({
                     "kind": "dispatch_unknown",
@@ -222,7 +224,10 @@ impl TmuxTools {
                        run_command when the command is quick and you want its answer now. If \
                        every job slot is active, this refuses before sending anything to the \
                        pane. An unconfirmed send returns the retained job id in the error; \
-                       inspect or cancel that job instead of retrying.",
+                       inspect it with job_status and inspect the pane, because retrying \
+                       automatically is unsafe. forget_job only discards retained output. To \
+                       interrupt the whole pane, use send_keys with keys: [\"C-c\"]; that can \
+                       discard unrelated queued input.",
         title = "Start Command In Background",
         annotations(
             read_only_hint = false,
@@ -557,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn an_uncertain_start_names_the_retained_job() {
+    fn an_uncertain_start_names_the_retained_job_and_safe_recovery() {
         let source = libtmux::Server::builder()
             .socket_name("conflicting")
             .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
@@ -575,7 +580,18 @@ mod tests {
         assert_eq!(data["stale"], false);
         assert_eq!(data["job"], "job-7");
         assert!(error.message.contains("job_status"));
+        assert!(error.message.contains("inspect the pane"));
+        assert!(error.message.contains("retrying automatically is unsafe"));
         assert!(error.message.contains("forget_job"));
+        assert!(error.message.contains("only discards retained output"));
+        assert!(error.message.contains("send_keys"));
+    }
+
+    #[test]
+    fn an_explicitly_forgotten_job_is_stale() {
+        let error = unknown_job("job-7");
+
+        assert!(error.message.contains("explicitly forgotten"));
     }
 
     #[test]

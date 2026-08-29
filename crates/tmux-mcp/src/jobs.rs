@@ -2,7 +2,9 @@
 //!
 //! `run_command` waits on the same owned reader a background job uses. A
 //! deadline or withdrawn request stops that wait but leaves the job available
-//! to inspect or cancel.
+//! to inspect with `job_status`. `forget_job` only discards retained output;
+//! use `send_keys` with `keys: ["C-c"]` to interrupt the whole pane, which
+//! can discard unrelated queued input.
 //!
 //! A job is the same sentinel-bracketed run, reading in a task of its own. The
 //! call that starts it returns an id, and the answer is collected whether or
@@ -82,8 +84,10 @@ pub enum JobState {
     Running,
     /// tmux did not confirm a send, so the command may be running.
     ///
-    /// The watcher stays attached. Read its output and inspect the pane before
-    /// retrying, or cancel the job to stop whatever reached the pane.
+    /// The watcher stays attached. Inspect it with `job_status` and inspect
+    /// the pane; retrying automatically is unsafe. `forget_job` only discards
+    /// retained output. To interrupt the whole pane, use `send_keys` with
+    /// `keys: ["C-c"]`, which can discard unrelated queued input.
     DispatchUnknown,
     /// The line dispatch was rejected before tmux could receive pane input.
     ///

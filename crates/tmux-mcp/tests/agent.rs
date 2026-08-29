@@ -1612,7 +1612,7 @@ async fn abandoning_a_run_keeps_one_owned_connection() {
     assert_eq!(
         clients_settle(server, baseline).await,
         baseline,
-        "cancelling the owner closes its control-mode connection"
+        "forgetting the owner closes its control-mode connection"
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

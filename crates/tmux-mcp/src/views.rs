@@ -356,7 +356,7 @@ pub struct JobList {
 pub struct JobForgotten {
     /// The job that was forgotten.
     pub job: String,
-    /// The pane the job ran in.
+    /// The pane associated with the job.
     pub pane: String,
 }
 
