@@ -10,10 +10,15 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt;
+use std::str::FromStr as _;
 
 use super::planner::Planner;
-use super::{Op, OperationKind, Part, Plan, Step};
-use crate::{Command, CommandChain, Error, PaneId, Server, SessionId, TmuxText, WindowId};
+use super::{Op, OperationKind, Part, Plan, Scope, Step};
+use crate::error::ListingDecodeError;
+use crate::formats::FormatCodecError;
+use crate::{
+    Command, CommandChain, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId,
+};
 
 /// How an operation ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -281,11 +286,11 @@ impl Plan {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be reached or a process cannot be
-    /// captured, or when a slot dependency is invalid. Validation happens
-    /// before the first command. A command tmux *refuses* is reported through
-    /// the returned [`PlanResult`], not as an error, because a plan may expect
-    /// one.
+    /// Returns an error when tmux cannot be reached, a process cannot be
+    /// captured, a slot dependency is invalid, or a creating operation does
+    /// not return valid IDs. Validation happens before the first command. A
+    /// command tmux *refuses* is reported through the returned [`PlanResult`],
+    /// not as an error, because a plan may expect one.
     pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
@@ -304,8 +309,8 @@ impl Plan {
             for (position, index) in step.indices().iter().enumerate() {
                 outcomes[*index] = step_outcomes[position];
             }
-            if succeeded || marked_creation {
-                bind(&mut bound, self.steps(), &step, result.stdout());
+            if succeeded || (marked_creation && !result.stdout().is_empty()) {
+                bind(&mut bound, self.steps(), &step, result.stdout())?;
             }
 
             reported.push(StepOutcome {
@@ -441,38 +446,110 @@ fn attribute(members: usize, succeeded: bool) -> Vec<Outcome> {
     vec![Outcome::Unknown; members]
 }
 
+const SESSION_BINDINGS: &[(Part, Scope)] = &[
+    (Part::Created, Scope::Session),
+    (Part::FirstWindow, Scope::Window),
+    (Part::FirstPane, Scope::Pane),
+];
+const WINDOW_BINDINGS: &[(Part, Scope)] = &[
+    (Part::Created, Scope::Window),
+    (Part::FirstPane, Scope::Pane),
+];
+const PANE_BINDINGS: &[(Part, Scope)] = &[(Part::Created, Scope::Pane)];
+
 /// Record the ids a creating operation printed.
-fn bind(bound: &mut HashMap<(usize, Part), OsString>, ops: &[Op], step: &Step, stdout: &[u8]) {
+fn bind(
+    bound: &mut HashMap<(usize, Part), OsString>,
+    ops: &[Op],
+    step: &Step,
+    stdout: &[u8],
+) -> Result<(), Error> {
     let Some(index) = step.indices().first().copied() else {
-        return;
+        return Ok(());
     };
     let Some(op) = ops.get(index) else {
-        return;
+        return Ok(());
     };
-    if op.effects().creates.is_none() {
-        return;
-    }
+    let expected = match op.effects().creates {
+        Some(Scope::Session) => SESSION_BINDINGS,
+        Some(Scope::Window) => WINDOW_BINDINGS,
+        Some(Scope::Pane) => PANE_BINDINGS,
+        None => return Ok(()),
+    };
 
     // A creating operation prints its ids on the first line, most specific
     // last: `$1 @2 %3`. Reading them positionally is what makes a session's
     // first window and pane addressable without a second round trip.
-    let Some(line) = String::from_utf8_lossy(stdout)
-        .lines()
-        .next()
-        .map(str::to_owned)
-    else {
-        return;
+    let Some(line_end) = stdout.iter().position(|byte| *byte == b'\n') else {
+        let field = expected.len() - 1;
+        return Err(binding_shape_error(
+            op,
+            field,
+            expected.get(field).map(|(_, scope)| binding_format(*scope)),
+            Some(stdout.len()),
+        ));
     };
-    let ids: Vec<&str> = line.split_whitespace().collect();
-    let parts: &[Part] = match ids.len() {
-        3 => &[Part::Created, Part::FirstWindow, Part::FirstPane],
-        2 => &[Part::Created, Part::FirstPane],
-        1 => &[Part::Created],
-        _ => return,
-    };
-    for (id, part) in ids.iter().zip(parts) {
-        bound.insert((index, *part), OsString::from(*id));
+    let ids: Vec<&[u8]> = stdout[..line_end].split(|byte| *byte == b' ').collect();
+    if ids.len() != expected.len() {
+        let field = ids.len().min(expected.len());
+        return Err(binding_shape_error(
+            op,
+            field,
+            expected.get(field).map(|(_, scope)| binding_format(*scope)),
+            None,
+        ));
     }
+
+    let mut decoded = Vec::with_capacity(expected.len());
+    for (id, (part, scope)) in ids.into_iter().zip(expected) {
+        decoded.push(((index, *part), decode_binding(id, *scope)?));
+    }
+    bound.extend(decoded);
+    Ok(())
+}
+
+fn binding_shape_error(
+    op: &Op,
+    field: usize,
+    field_name: Option<&'static str>,
+    offset: Option<usize>,
+) -> Error {
+    Error::DecodeListing {
+        list_command: op.name(),
+        detail: ListingDecodeError::new(FormatCodecError::row_mismatch(
+            0,
+            Some(field),
+            field_name,
+            offset,
+        )),
+    }
+}
+
+fn binding_format(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Session => "session_id",
+        Scope::Window => "window_id",
+        Scope::Pane => "pane_id",
+    }
+}
+
+fn decode_binding(bytes: &[u8], scope: Scope) -> Result<OsString, Error> {
+    let (format, sigil) = match scope {
+        Scope::Session => ("#{session_id}", '$'),
+        Scope::Window => ("#{window_id}", '@'),
+        Scope::Pane => ("#{pane_id}", '%'),
+    };
+    let text = std::str::from_utf8(bytes).map_err(|_| Error::UnreadableFormatValue {
+        format,
+        detail: IdParseError::new(sigil),
+    })?;
+    let invalid = |detail| Error::UnreadableFormatValue { format, detail };
+    let rendered = match scope {
+        Scope::Session => SessionId::from_str(text).map_err(invalid)?.to_string(),
+        Scope::Window => WindowId::from_str(text).map_err(invalid)?.to_string(),
+        Scope::Pane => PaneId::from_str(text).map_err(invalid)?.to_string(),
+    };
+    Ok(OsString::from(rendered))
 }
 
 /// Correlate dispatch evidence back to the operations that produced it.
@@ -560,10 +637,10 @@ impl Plan {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection is closed or a command cannot be
-    /// written, or when a slot dependency is invalid. Validation happens before
-    /// the first command. A command tmux refuses is reported in the
-    /// [`PlanResult`].
+    /// Returns an error when the connection is closed, a command cannot be
+    /// written, a slot dependency is invalid, or a creating operation does not
+    /// return valid IDs. Validation happens before the first command. A command
+    /// tmux refuses is reported in the [`PlanResult`].
     pub async fn run_over_control_mode(
         &self,
         sender: &crate::control::ControlSender,
@@ -610,7 +687,7 @@ impl Plan {
                 .collect::<Vec<u8>>();
             if block.succeeded() {
                 let step = Step::single(index);
-                bind(&mut bound, self.steps(), &step, &stdout);
+                bind(&mut bound, self.steps(), &step, &stdout)?;
             }
 
             reported.push(StepOutcome {
@@ -641,9 +718,100 @@ impl Plan {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::PaneId;
-    use crate::plan::CapturePane;
+    use crate::command::{CommandRequest, CommandResult, ProcessStatus};
+    use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+    use crate::plan::{CapturePane, NewSession, SendKeys};
+
+    struct CreationOutputExecutor {
+        calls: AtomicUsize,
+        stdout: &'static [u8],
+    }
+
+    impl Executor for CreationOutputExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let stdout = if call == 0 {
+                self.stdout.to_vec()
+            } else {
+                Vec::new()
+            };
+            DispatchFuture::new(async move {
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn creation_binding_rejects_a_wrong_scope_without_partial_state() {
+        let mut plan = Plan::new();
+        plan.add(NewSession::new("work"));
+        let step = Planner::Sequential
+            .steps(&plan)
+            .into_iter()
+            .next()
+            .expect("one plan step");
+        let mut bound = HashMap::new();
+
+        let error = bind(
+            &mut bound,
+            plan.steps(),
+            &step,
+            b"$1 %2 sentinel-binding-output\n",
+        )
+        .expect_err("the second and third ids have the wrong scopes");
+
+        assert_eq!(error.kind(), crate::ErrorKind::Decode);
+        assert!(bound.is_empty(), "a failed decode binds nothing");
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains("sentinel-binding-output"));
+    }
+
+    #[tokio::test]
+    async fn malformed_creation_output_stops_before_a_dependent_operation() {
+        for stdout in [
+            b"$1 %2 @3\n".as_slice(),
+            b"$1 @2 sentinel-binding-output\n".as_slice(),
+            b"$1 @2 %3".as_slice(),
+        ] {
+            let executor = Arc::new(CreationOutputExecutor {
+                calls: AtomicUsize::new(0),
+                stdout,
+            });
+            let server = Server::from_executor_for_test(executor.clone());
+            let mut plan = Plan::new();
+            let session = plan.add(NewSession::new("work"));
+            plan.add(SendKeys::new(session.pane()).text("do-not-send"));
+
+            let outcome = plan.run(&server, Planner::Sequential).await;
+
+            assert_eq!(
+                executor.calls.load(Ordering::SeqCst),
+                1,
+                "the dependent operation must not be dispatched",
+            );
+            let error = outcome.expect_err("malformed creation output fails the run");
+            assert_eq!(error.kind(), crate::ErrorKind::Decode);
+            let diagnostic = format!("{error:?} {error}");
+            assert!(!diagnostic.contains("sentinel-binding-output"));
+        }
+    }
 
     #[test]
     fn raw_plan_output_is_absent_from_debug() {

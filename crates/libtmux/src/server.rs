@@ -2623,7 +2623,7 @@ impl Server {
     }
 
     #[cfg(test)]
-    fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
+    pub(crate) fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
         Self {
             core: Arc::new(Core::from_executor_for_test(executor)),
         }
