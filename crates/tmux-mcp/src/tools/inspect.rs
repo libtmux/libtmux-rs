@@ -1,4 +1,54 @@
-use super::super::*;
+use std::path::{Path, PathBuf};
+
+use libtmux::query::{FilterExpr, QueryIteratorExt as _};
+use libtmux::{CaptureOptions, Command, Server};
+use rmcp::handler::server::wrapper::{Json, Parameters};
+use rmcp::model::ErrorData;
+use rmcp::{tool, tool_router};
+
+use crate::exec::Patterns;
+use crate::{
+    Branch, BranchPane, BranchWindow, Busy, Capture, CapturePaneArgs, Changes, Environment,
+    EnvironmentEntry, FilterArgs, FormatArgs, Formatted, Hook, Hooks, Marks, MatchView, Matches,
+    OptionArgs, OptionValue, Panes, SearchPanesArgs, ServerListing, ServerListings, SessionArgs,
+    SessionView, Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs, TmuxTools,
+    Tree, TreeFilterArgs, WhatChangedArgs, WindowArgs, Windows,
+};
+
+use super::error::{bad_input, tmux_error};
+use super::{OptionScope, lossy, lossy_optional};
+
+/// Marks a tool a client should keep loaded rather than defer.
+///
+/// Claude Code stops sending MCP tool schemas to the model once they crowd the
+/// context, and this server's are around 19 KB. A deferred schema means a bare
+/// "what's in my pane" never reaches these tools at all.
+///
+/// Applied to three anchors only. Each one a client honours costs a fixed
+/// share of that budget, so widening the set makes the hint worth less to
+/// every tool that has it. Best-effort by design: a client that does not read
+/// the `anthropic` namespace simply ignores it.
+fn always_load() -> rmcp::model::MetaObject {
+    let mut meta = rmcp::model::MetaObject::new();
+    meta.0.insert(
+        "anthropic/alwaysLoad".to_owned(),
+        serde_json::Value::Bool(true),
+    );
+    meta
+}
+
+/// Separates the fields of a `snapshot_pane` format query.
+///
+/// U+241E rather than an ASCII control byte because tmux copies valid UTF-8
+/// through verbatim, while `vis()` would render a control byte as the literal
+/// text `\036` on some builds.
+const SEPARATOR: &str = "\u{241e}";
+
+/// The most matches a single `search_panes` call will report.
+///
+/// A pattern like `.` matches every line of every pane, and an agent that
+/// asked for that wants a signal, not a transcript of the server.
+const SEARCH_MATCHES: usize = 200;
 
 #[tool_router(router = inspect_router, vis = "pub(super)")]
 impl TmuxTools {

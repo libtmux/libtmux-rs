@@ -1,11 +1,43 @@
-use super::super::{
-    CancelJobArgs, CaptureOptions, CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, Duration,
-    ErrorData, IdleView, JobCancelled, JobList, JobStatusArgs, Json, Parameters, Patterns,
-    Reporter, RunCommandArgs, RunView, Since, StartCommandArgs, TmuxTools, WATCH_BYTES,
-    WaitForIdleArgs, WaitForTextArgs, WaitView, Watch, WatchPaneArgs, bad_input, exec, jobs,
-    tmux_error, tool, tool_router, unknown_job,
-};
+use std::time::Duration;
+
+use libtmux::CaptureOptions;
+use rmcp::handler::server::wrapper::{Json, Parameters};
+use rmcp::model::ErrorData;
+use rmcp::{tool, tool_router};
+
+use crate::exec::{self, Patterns};
+use crate::jobs;
 use crate::policy::reporting;
+use crate::{
+    CancelJobArgs, CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, IdleView, JobCancelled,
+    JobList, JobStatusArgs, Reporter, RunCommandArgs, RunView, Since, StartCommandArgs, TmuxTools,
+    WaitForIdleArgs, WaitForTextArgs, WaitView, Watch, WatchPaneArgs,
+};
+
+use super::error::{bad_input, tmux_error};
+
+/// The most a single `watch_pane` call will return.
+///
+/// A pane can produce output faster than any consumer reads it, so the ceiling
+/// belongs here rather than in the caller's hands.
+const WATCH_BYTES: usize = 64 * 1024;
+
+/// Report a job id this server does not hold.
+///
+/// Classified `stale` rather than as bad input: a job is forgotten when it
+/// ages out, so listing again is what helps, not a different argument.
+fn unknown_job(job: &str) -> ErrorData {
+    let mut data = serde_json::Map::new();
+    data.insert("kind".into(), "object_gone".into());
+    data.insert("retryable".into(), false.into());
+    data.insert("stale".into(), true.into());
+
+    ErrorData::new(
+        rmcp::model::ErrorCode::INVALID_PARAMS,
+        format!("no job {job}; it finished long enough ago to be forgotten, or never existed"),
+        Some(serde_json::Value::Object(data)),
+    )
+}
 
 #[tool_router(router = observe_router, vis = "pub(super)")]
 impl TmuxTools {

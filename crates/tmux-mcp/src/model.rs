@@ -1,7 +1,12 @@
-use super::{CoreOperationValue, Deserialize, PLAN_EVIDENCE_BYTES, Plan, Serialize, schemars};
+use libtmux::plan::{OperationValue as CoreOperationValue, Plan};
+use rmcp::schemars;
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-use super::TmuxText;
+use libtmux::TmuxText;
+
+/// The shared text budget for all evidence in one plan response.
+const PLAN_EVIDENCE_BYTES: usize = 64 * 1024;
 
 /// Arguments naming one session.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

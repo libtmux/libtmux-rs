@@ -1,7 +1,9 @@
-use super::{
-    Deserialize, Parameters, PromptMessage, Role, Serialize, TmuxTools, prompt, prompt_router,
-    schemars,
-};
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{PromptMessage, Role};
+use rmcp::{prompt, prompt_router, schemars};
+use serde::{Deserialize, Serialize};
+
+use crate::TmuxTools;
 
 /// Arguments naming one pane, for a prompt.
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]

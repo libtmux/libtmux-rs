@@ -1,13 +1,56 @@
 mod control;
+mod error;
 mod inspect;
 mod observe;
 mod plan;
 
-use super::{
-    Capture, CaptureOptions, Command, Duration, ErrorData, Json, Marks, OptionScope, PaneView,
-    Panes, Path, PathBuf, Relation, ServerView, SessionView, Sessions, TmuxTools, WindowView,
-    Windows, bad_input, lossy, lossy_optional, object_gone, resources, tmux_error,
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use libtmux::{CaptureOptions, Command, TmuxText};
+use rmcp::handler::server::wrapper::Json;
+use rmcp::model::ErrorData;
+
+use crate::caller::Relation;
+use crate::{
+    Capture, Marks, PaneView, Panes, ServerView, SessionView, Sessions, TmuxTools, WindowView,
+    Windows, resources,
 };
+
+use error::{bad_input, object_gone, tmux_error};
+
+/// Render tmux bytes for a protocol that requires valid UTF-8.
+///
+/// tmux permits names and titles that are not UTF-8. JSON cannot carry those
+/// bytes, so they are replaced rather than dropping the whole response.
+fn lossy(value: &TmuxText) -> String {
+    value.to_string_lossy().into_owned()
+}
+
+/// The same, for a field tmux may genuinely not report.
+fn lossy_optional(value: Option<&TmuxText>) -> Option<String> {
+    value.map(lossy)
+}
+
+/// Which tmux object an option belongs to.
+///
+/// Boxed because a `Session`, `Window` and `Pane` each carry their own
+/// snapshot, and the enum is a short-lived dispatch rather than something
+/// worth sizing to its largest arm.
+enum OptionScope {
+    /// The server's own options.
+    Server,
+    /// The session options a new session inherits.
+    GlobalSession,
+    /// The window options a new window inherits.
+    GlobalWindow,
+    /// One session's options.
+    Session(Box<libtmux::Session>),
+    /// One window's options.
+    Window(Box<libtmux::Window>),
+    /// One pane's options.
+    Pane(Box<libtmux::Pane>),
+}
 
 pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<TmuxTools> {
     TmuxTools::inspect_router()
@@ -135,7 +178,7 @@ impl TmuxTools {
     }
 
     /// Resolve the object an option belongs to.
-    pub(super) async fn option_scope(
+    async fn option_scope(
         &self,
         scope: Option<&str>,
         target: Option<&str>,

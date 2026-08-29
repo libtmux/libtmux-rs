@@ -101,29 +101,13 @@ pub use prompts::{PanePrompt, RunPrompt};
 pub use tail::Cursor;
 pub use views::*;
 
-use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
-use libtmux::plan::{
-    Attribution as PlanAttribution, Op as PlanOp, OperationValue as CoreOperationValue,
-    Outcome as PlanOutcome, PaneTarget, Plan, Planner, Safety as PlanSafety, WindowTarget,
-};
-use libtmux::query::{FilterExpr, QueryIteratorExt as _};
-use libtmux::{
-    CaptureOptions, Command, NewSessionOptions, PaneSize, ResizeDirection, Server, SplitDirection,
-    SplitOptions, TmuxText,
-};
-use rmcp::handler::server::wrapper::{Json, Parameters};
+use libtmux::Server;
 use rmcp::model::{ErrorData, ServerCapabilities, ServerInfo};
-use rmcp::model::{PromptMessage, Role};
-use rmcp::{
-    ServerHandler, prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router,
-};
-use serde::{Deserialize, Serialize};
+use rmcp::{ServerHandler, prompt_handler, tool_handler};
 
-use exec::Patterns;
 use jobs::Jobs;
 use tail::Tails;
 
@@ -169,28 +153,6 @@ impl std::fmt::Debug for TmuxTools {
             .finish_non_exhaustive()
     }
 }
-
-/// Render tmux bytes for a protocol that requires valid UTF-8.
-///
-/// tmux permits names and titles that are not UTF-8. JSON cannot carry those
-/// bytes, so they are replaced rather than dropping the whole response.
-fn lossy(value: &TmuxText) -> String {
-    value.to_string_lossy().into_owned()
-}
-
-/// The same, for a field tmux may genuinely not report.
-fn lossy_optional(value: Option<&TmuxText>) -> Option<String> {
-    value.map(lossy)
-}
-
-/// The most a single `watch_pane` call will return.
-///
-/// A pane can produce output faster than any consumer reads it, so the ceiling
-/// belongs here rather than in the caller's hands.
-const WATCH_BYTES: usize = 64 * 1024;
-
-/// The shared text budget for all evidence in one plan response.
-const PLAN_EVIDENCE_BYTES: usize = 64 * 1024;
 
 /// What the server tells a client before its first call.
 ///
@@ -244,176 +206,6 @@ const INSTRUCTIONS: &str = concat!(
      use expand_format. Anything else tmux can do is reachable by running the \
      tmux command itself with run_command.",
 );
-
-/// Report a job id this server does not hold.
-///
-/// Classified `stale` rather than as bad input: a job is forgotten when it
-/// ages out, so listing again is what helps, not a different argument.
-fn unknown_job(job: &str) -> ErrorData {
-    let mut data = serde_json::Map::new();
-    data.insert("kind".into(), "object_gone".into());
-    data.insert("retryable".into(), false.into());
-    data.insert("stale".into(), true.into());
-
-    ErrorData::new(
-        rmcp::model::ErrorCode::INVALID_PARAMS,
-        format!("no job {job}; it finished long enough ago to be forgotten, or never existed"),
-        Some(serde_json::Value::Object(data)),
-    )
-}
-
-/// Marks a tool a client should keep loaded rather than defer.
-///
-/// Claude Code stops sending MCP tool schemas to the model once they crowd the
-/// context, and this server's are around 19 KB. A deferred schema means a bare
-/// "what's in my pane" never reaches these tools at all.
-///
-/// Applied to three anchors only. Each one a client honours costs a fixed
-/// share of that budget, so widening the set makes the hint worth less to
-/// every tool that has it. Best-effort by design: a client that does not read
-/// the `anthropic` namespace simply ignores it.
-fn always_load() -> rmcp::model::MetaObject {
-    let mut meta = rmcp::model::MetaObject::new();
-    meta.0.insert(
-        "anthropic/alwaysLoad".to_owned(),
-        serde_json::Value::Bool(true),
-    );
-    meta
-}
-
-/// Separates the fields of a `snapshot_pane` format query.
-///
-/// U+241E rather than an ASCII control byte because tmux copies valid UTF-8
-/// through verbatim, while `vis()` would render a control byte as the literal
-/// text `\036` on some builds.
-const SEPARATOR: &str = "\u{241e}";
-
-/// The most matches a single `search_panes` call will report.
-///
-/// A pattern like `.` matches every line of every pane, and an agent that
-/// asked for that wants a signal, not a transcript of the server.
-const SEARCH_MATCHES: usize = 200;
-
-/// Which tmux object an option belongs to.
-///
-/// Boxed because a `Session`, `Window` and `Pane` each carry their own
-/// snapshot, and the enum is a short-lived dispatch rather than something
-/// worth sizing to its largest arm.
-enum OptionScope {
-    /// The server's own options.
-    Server,
-    /// The session options a new session inherits.
-    GlobalSession,
-    /// The window options a new window inherits.
-    GlobalWindow,
-    /// One session's options.
-    Session(Box<libtmux::Session>),
-    /// One window's options.
-    Window(Box<libtmux::Window>),
-    /// One pane's options.
-    Pane(Box<libtmux::Pane>),
-}
-
-// Every error this server returns carries the same three fields on its `data`,
-// so an agent decides what to do next by reading them rather than by matching
-// on prose. A pane that has closed and a tmux that is not running both fail;
-// the first wants the listing refreshed, the second wants the agent to stop.
-//
-// * `kind` — a short name for what went wrong.
-// * `retryable` — whether making the same call again could succeed.
-// * `stale` — whether the target is gone, so a listing taken now would say
-//   something different.
-//
-// The JSON-RPC code answers a different question: whose move it is. A caller
-// who named a dead pane gets `invalid_params`; a pane that died between two of
-// this server's own calls gets `internal_error`. Both are classified `stale`,
-// because in both cases looking again is what helps.
-
-/// Convert a tmux failure into a protocol error an agent can act on.
-///
-/// libtmux already draws the distinctions above, so they are carried through
-/// rather than flattened.
-fn tmux_error(error: &libtmux::Error) -> ErrorData {
-    use libtmux::ErrorKind;
-
-    let kind = error.kind();
-    let detail = serde_json::json!({
-        "kind": match kind {
-            ErrorKind::ObjectGone => "object_gone",
-            ErrorKind::Refused => "refused",
-            ErrorKind::ServerGone => "server_gone",
-            ErrorKind::Timeout => "timeout",
-            ErrorKind::Unreachable => "unreachable",
-            ErrorKind::UnsupportedVersion => "unsupported_version",
-            ErrorKind::InvalidInput => "invalid_input",
-            ErrorKind::Transport => "transport",
-            ErrorKind::Decode => "decode",
-            // ErrorKind is #[non_exhaustive]; a kind added upstream is
-            // reported rather than mistaken for one of these.
-            _ => "other",
-        },
-        "retryable": error.is_transient(),
-        "stale": error.is_object_gone(),
-    });
-    let message = error.to_string();
-
-    match kind {
-        // The caller named something. Whether it is gone or was refused, the
-        // request is what needs to change, so it is the caller's error.
-        ErrorKind::ObjectGone | ErrorKind::Refused | ErrorKind::InvalidInput => {
-            ErrorData::invalid_params(message, Some(detail))
-        }
-        _ => ErrorData::internal_error(message, Some(detail)),
-    }
-}
-
-/// The classification for a target that is not where it was said to be.
-///
-/// Shared by the two ways this server discovers that itself, so a change to
-/// what it promises cannot apply to one and not the other.
-fn stale_detail() -> serde_json::Value {
-    serde_json::json!({
-        "kind": "object_gone",
-        // Nothing will change on its own to make this id resolve; the caller
-        // has to look again and name something else.
-        "retryable": false,
-        "stale": true,
-    })
-}
-
-/// Report a target that a listing named but tmux no longer has.
-///
-/// The `find_*` helpers notice this themselves rather than learning it from
-/// libtmux, so they mint the classification directly. An agent should not have
-/// to tell the two apart: a pane that vanished between the listing and the call
-/// reads the same either way.
-fn object_gone(what: &str, id: &str) -> ErrorData {
-    ErrorData::invalid_params(format!("no {what} {id}"), Some(stale_detail()))
-}
-
-/// Report state that moved between two calls this server made.
-///
-/// Not the caller's mistake — the handle was good when it was taken — so the
-/// code stays an internal error. The classification is the one for a target
-/// that was already gone, because the useful response is the same: look again.
-fn vanished(message: &str) -> ErrorData {
-    ErrorData::internal_error(message.to_owned(), Some(stale_detail()))
-}
-
-/// Report an argument this server will not pass to tmux.
-///
-/// Nothing about the server needs to change for the next call to work, and
-/// nothing has gone stale: the caller has to send something else.
-fn bad_input(message: impl Into<String>) -> ErrorData {
-    ErrorData::invalid_params(
-        message.into(),
-        Some(serde_json::json!({
-            "kind": "invalid_input",
-            "retryable": false,
-            "stale": false,
-        })),
-    )
-}
 
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
