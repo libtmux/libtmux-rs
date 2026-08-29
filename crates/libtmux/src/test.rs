@@ -71,7 +71,53 @@ const TERM: &str = "xterm-256color";
 const FIXTURE_CONFIG: &str = "\
 set -g default-shell /bin/sh\n\
 set -g default-command /bin/sh\n";
+/// How long containment waits for a process group to go away.
 const CONTAINMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Widen every fixture deadline by `LIBTMUX_TEST_TIMEOUT_SCALE`.
+///
+/// Five seconds bounds a tmux that starts on a machine with a core to spare.
+/// It stops bounding one on a machine running several times its cores in
+/// work, and a deadline that fires on a healthy fixture reports the load
+/// rather than the thing under test -- which is the failure [design.md]
+/// already describes and the rule it draws from it.
+///
+/// Read once, because a deadline that changed inside a run would make two
+/// tests in the same suite measure different things. Unset, unparseable, or
+/// below `1` all mean `1`: this exists to widen a deadline, and narrowing one
+/// here would fail a fixture for a reason no caller asked for. A test wanting
+/// a short deadline sets its own through
+/// [`TestServerBuilder::lifecycle_timeout`], which this does not touch.
+///
+/// [design.md]: ../docs/design.md
+fn timeout_scale() -> f64 {
+    static SCALE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        parse_timeout_scale(std::env::var("LIBTMUX_TEST_TIMEOUT_SCALE").ok().as_deref())
+    })
+}
+
+/// Read a scale, taking anything that is not a number above `1` as `1`.
+///
+/// Separate from [`timeout_scale`] because that reads the environment once
+/// into a `OnceLock`, which a test cannot set and cannot reset. What is worth
+/// testing is this decision, and it is reachable without a process.
+fn parse_timeout_scale(value: Option<&str>) -> f64 {
+    value
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|scale| scale.is_finite())
+        .map_or(1.0, |scale| scale.max(1.0))
+}
+
+/// A fixture deadline, widened by [`timeout_scale`].
+fn scaled(base: Duration) -> Duration {
+    base.mul_f64(timeout_scale())
+}
+
+/// The grace ceiling this platform uses, widened like every other deadline.
+fn platform_fallback_grace_ceiling() -> Option<Duration> {
+    PLATFORM_FALLBACK_GRACE_CEILING.map(scaled)
+}
 /// How long a blocking wait sleeps before looking again.
 ///
 /// Sleeping rather than yielding, for the reason [design.md] gives about the
@@ -273,7 +319,7 @@ impl TestServerBuilder {
     fn new() -> Self {
         Self {
             executable: default_executable(),
-            lifecycle_timeout: Duration::from_secs(5),
+            lifecycle_timeout: scaled(Duration::from_secs(5)),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
         }
@@ -354,7 +400,7 @@ impl TestServerBuilder {
     /// # }
     /// ```
     pub async fn start(self) -> Result<TestServer, TestServerError> {
-        self.start_with_leader_observer(leader_exited_unreaped, PLATFORM_FALLBACK_GRACE_CEILING)
+        self.start_with_leader_observer(leader_exited_unreaped, platform_fallback_grace_ceiling())
             .await
     }
 
@@ -1056,7 +1102,7 @@ impl Lifecycle {
             child,
             files,
             leader_exited_unreaped,
-            PLATFORM_FALLBACK_GRACE_CEILING,
+            platform_fallback_grace_ceiling(),
         )
     }
 
@@ -1280,7 +1326,7 @@ impl Lifecycle {
         if !self
             .files
             .containment
-            .terminate_all(CONTAINMENT_TIMEOUT)
+            .terminate_all(scaled(CONTAINMENT_TIMEOUT))
             .is_success()
         {
             lifecycle_ok = false;
@@ -1584,6 +1630,43 @@ fn socket_path_fits_tmux(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
 
+    /// A deadline widens for a loaded machine and never narrows.
+    ///
+    /// The fixture's five seconds bound a tmux that starts with a core to
+    /// spare. Under a machine running several times its cores in work they
+    /// stop bounding startup and start deciding the result, which is the
+    /// failure `design.md` names and then leaves to a constant. A scale of
+    /// less than one would push it the wrong way, so it is refused rather
+    /// than honoured: nothing here is trying to make a fixture fail sooner.
+    #[test]
+    fn a_timeout_scale_only_ever_widens() {
+        use super::{parse_timeout_scale, scaled};
+
+        for (given, expected) in [
+            (None, 1.0),
+            (Some("2"), 2.0),
+            (Some("  3.5  "), 3.5),
+            // Anything that is not a number is a typo, not an instruction.
+            (Some(""), 1.0),
+            (Some("later"), 1.0),
+            (Some("NaN"), 1.0),
+            (Some("inf"), 1.0),
+            // Narrowing is refused, not obeyed.
+            (Some("0"), 1.0),
+            (Some("0.25"), 1.0),
+            (Some("-4"), 1.0),
+        ] {
+            assert!(
+                (parse_timeout_scale(given) - expected).abs() < f64::EPSILON,
+                "{given:?} should read as {expected}, got {}",
+                parse_timeout_scale(given),
+            );
+        }
+
+        // Unset, the deadline is exactly what it was before this existed.
+        assert_eq!(scaled(Duration::from_secs(5)), Duration::from_secs(5));
+    }
+
     use std::ffi::OsString;
     use std::fs;
     use std::io::Write as _;
@@ -1601,7 +1684,7 @@ mod tests {
 
     use super::{
         CleanupOutcome, LeaderObservation, Lifecycle, OwnedFiles, TestServerBuilder,
-        TestServerErrorKind, socket_path_fits_tmux,
+        TestServerErrorKind, scaled, socket_path_fits_tmux,
     };
 
     #[cfg(target_os = "linux")]
@@ -1653,7 +1736,7 @@ mod tests {
         drop(file);
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
             .expect("fake executable is executable");
-        let executable_deadline = Instant::now() + Duration::from_secs(5);
+        let executable_deadline = Instant::now() + scaled(Duration::from_secs(5));
         loop {
             match ProcessCommand::new(&executable)
                 .arg("__libtmux_fixture_ready__")
@@ -1700,7 +1783,7 @@ mod tests {
         assert_eq!(pids.len(), 2);
         for raw_pid in pids {
             let pid = Pid::from_raw(raw_pid).expect("published PID is nonzero");
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + scaled(Duration::from_secs(5));
             while !matches!(test_kill_process(pid), Err(Errno::SRCH)) {
                 assert!(
                     Instant::now() < deadline,
@@ -1740,7 +1823,7 @@ mod tests {
                 .process_group(0);
             let child = child.spawn().expect("fallback leader starts");
             let leader = Pid::from_child(&child);
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + scaled(Duration::from_secs(5));
             while super::leader_exited_unreaped(leader) != LeaderObservation::ExitedUnreaped {
                 assert!(
                     Instant::now() < deadline,
@@ -1913,7 +1996,7 @@ mod tests {
         let mut lifecycle = Lifecycle::new(child, files);
 
         kill_process(leader, Signal::KILL).expect("external owner kills the leader");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + scaled(Duration::from_secs(5));
         loop {
             match waitpid(Some(leader), WaitOptions::NOHANG) {
                 Ok(Some((_pid, _status))) => break,
