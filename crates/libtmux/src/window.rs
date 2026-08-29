@@ -1233,10 +1233,9 @@ impl Window {
 
     /// Expand a tmux format string in this window's context.
     ///
-    /// The reading half of tmux's `display-message`, separated from the
-    /// showing half ([`Self::display`]) because they answer different
-    /// questions: one returns text to the caller, the other puts text in
-    /// front of a person.
+    /// This returns `display-message` output instead of showing it in front of
+    /// a person with [`Self::display`]. See [`crate::Server::format`] for the
+    /// shell boundary around command and recursive formats.
     ///
     /// # Errors
     ///
@@ -1290,6 +1289,8 @@ impl Window {
     /// The showing half of tmux's `display-message`. Nothing is returned
     /// because nothing is read: use [`Self::format`] to get text back.
     /// Succeeds when nobody is watching, having shown it to nobody.
+    /// Like [`Self::format`], this interprets the message as a tmux format;
+    /// command and recursive formats can run shell commands.
     ///
     /// # Errors
     ///

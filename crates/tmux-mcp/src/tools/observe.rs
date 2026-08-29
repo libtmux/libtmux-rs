@@ -115,10 +115,12 @@ impl TmuxTools {
     #[tool(
         description = "Watch a pane and report everything it writes for a bounded time. \
                        Unlike capture_pane this misses nothing, including output that \
-                       scrolls past, but it blocks for the requested duration",
+                       scrolls past, but it blocks for the requested duration. The live \
+                       stream attaches a client for that duration, changing the session's \
+                       attached-client state.",
         title = "Watch Pane Bytes",
         annotations(
-            read_only_hint = true,
+            read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = false,
             open_world_hint = false
@@ -187,7 +189,7 @@ impl TmuxTools {
         title = "Run Command In Pane",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = true
         )
@@ -247,7 +249,7 @@ impl TmuxTools {
         title = "Start Command In Background",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = true
         )
@@ -339,7 +341,7 @@ impl TmuxTools {
         title = "Forget Background Command",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = false
         )
@@ -359,10 +361,12 @@ impl TmuxTools {
                        you cannot name what success looks like: a TUI settling, an installer \
                        finishing, a prompt whose glyph you cannot predict. Prefer run_command \
                        for a command you sent yourself, and wait_for_text when you know the \
-                       text to look for -- both are exact, and this one infers.",
+                       text to look for -- both are exact, and this one infers. The live stream \
+                       attaches a client while waiting, changing the session's attached-client \
+                       state.",
         title = "Wait For Pane To Go Quiet",
         annotations(
-            read_only_hint = true,
+            read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = false,
             open_world_hint = false
@@ -401,10 +405,12 @@ impl TmuxTools {
                        stream, so text that scrolls past between checks is still seen. Prefer \
                        run_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
-                       not author, such as a server logging that it is ready.",
+                       not author, such as a server logging that it is ready. The live stream \
+                       attaches a client while waiting, changing the session's attached-client \
+                       state.",
         title = "Wait For Pane Text",
         annotations(
-            read_only_hint = true,
+            read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = false,
             open_world_hint = false
@@ -450,10 +456,12 @@ impl TmuxTools {
                        and receive only what is new. Use this to follow a pane over several \
                        turns without re-reading the whole screen. The answer says missed=true \
                        if the cursor no longer names retained output, including when the pane \
-                       outran the buffer, its live tail was evicted, or the server restarted.",
+                       outran the buffer, its live tail was evicted, or the server restarted. \
+                       Starting a tail attaches a retained client, changing the session's \
+                       attached-client state until the tail is evicted or the server stops.",
         title = "Read New Pane Output",
         annotations(
-            read_only_hint = true,
+            read_only_hint = false,
             destructive_hint = false,
             idempotent_hint = false,
             open_world_hint = false
@@ -516,13 +524,14 @@ impl TmuxTools {
 
     /// Wait for a `wait-for` channel to be signalled.
     #[tool(
-        description = "Block until something signals a tmux wait-for channel. Pair this with \
-                       a shell command that ends in `tmux wait-for -S <channel>` to \
-                       synchronise with work this server did not start.",
+        description = "Block until something signals a tmux wait-for channel. A pending \
+                       signal is consumed. Pair this with a shell command that ends in \
+                       `tmux wait-for -S <channel>` to synchronise with work this server \
+                       did not start.",
         title = "Wait For Channel",
         annotations(
-            read_only_hint = true,
-            destructive_hint = false,
+            read_only_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = false
         )

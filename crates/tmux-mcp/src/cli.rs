@@ -18,9 +18,9 @@ pub struct Options {
     pub socket_path: Option<PathBuf>,
     /// The socket name to talk to, from `-L`.
     pub socket_name: Option<OsString>,
-    /// How much of the surface to offer, when the command line said.
+    /// Which route surface to offer, when the command line said.
     pub safety: Option<Safety>,
-    /// Whether to ask a person before destroying work.
+    /// Whether dedicated kills and destructive plans ask a person first.
     pub confirm: bool,
 }
 
@@ -48,10 +48,12 @@ pub const HELP: &str = concat!(
     "                            Talk to the tmux server with this socket name\n",
     "        --safety <TIER>     Which tools to offer: readonly, mutating, or\n",
     "                            destructive. Defaults to mutating, which offers\n",
-    "                            everything except the tools that destroy work.\n",
-    "                            Overrides TMUX_MCP_SAFETY.\n",
-    "        --confirm           Ask before destroying anything, and refuse when\n",
-    "                            the client cannot ask. Overrides TMUX_MCP_CONFIRM.\n",
+    "                            everything except the four dedicated kill tools.\n",
+    "                            This filter is not a sandbox. Overrides\n",
+    "                            TMUX_MCP_SAFETY.\n",
+    "        --confirm           Ask before dedicated kill tools and destructive\n",
+    "                            plan operations. Command text is not inspected.\n",
+    "                            Overrides TMUX_MCP_CONFIRM.\n",
     "    -h, --help              Print this help\n",
     "    -V, --version           Print the version\n",
     "\n",
@@ -189,9 +191,8 @@ mod tests {
 
     #[test]
     fn an_unknown_tier_stops_rather_than_widening() {
-        // The environment falls back to the default on nonsense, because it
-        // is read from wherever the process was started. A flag is typed on
-        // purpose, so a wrong one is a mistake worth reporting.
+        // The environment narrows to read-only on nonsense. A flag is typed
+        // on purpose, so a wrong one is a mistake worth reporting.
         let refused = parse(&["--safety", "yolo"]).expect_err("refused");
 
         assert!(matches!(refused, Stop::Misuse(reason) if reason.contains("yolo")));

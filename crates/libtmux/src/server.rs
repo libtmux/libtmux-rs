@@ -1043,6 +1043,13 @@ impl Server {
     /// The result is [`TmuxText`] because a format can interpolate names that
     /// are not valid UTF-8.
     ///
+    /// A literal `#(command)` starts `command` in a shell. Recursive expansion,
+    /// such as `#{E:status-left}`, can also expose a command stored in the
+    /// expanded value. The job is asynchronous, so this call may return before
+    /// it produces output. Escaping the outer template with `##` does not
+    /// escape text introduced by a recursive expansion. Use only validated,
+    /// simple `#{field}` lookups with untrusted input.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux rejects the format or the pane is gone.
@@ -1430,6 +1437,8 @@ impl Server {
     /// tmux keeps a signal nobody is waiting on, so a command that finishes
     /// before its watcher starts does not lose the race. The latch releases
     /// one wait, and one signal releases every waiter already there.
+    /// Signalling the same channel twice before a wait clears the latch, so
+    /// this operation is not idempotent.
     ///
     /// Signalling is not scoped to a pane or a session. The channel is a name
     /// on the server, so anything that can reach the socket can signal it,

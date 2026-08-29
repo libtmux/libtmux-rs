@@ -36,16 +36,24 @@ impl Process {
     /// from inside tmux, and a caller identity inherited from the developer's
     /// terminal would make the guard's behaviour depend on who ran the tests.
     fn start(args: &[&str]) -> Self {
-        let mut child = Command::new(BIN)
+        Self::start_with_environment(args, &[])
+    }
+
+    fn start_with_environment(args: &[&str], environment: &[(&str, &str)]) -> Self {
+        let mut command = Command::new(BIN);
+        command
             .args(args)
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
             .env_remove("TMUX_MCP_SAFETY")
+            .env_remove("TMUX_MCP_CONFIRM")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the binary runs");
+            .stderr(Stdio::piped());
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        let mut child = command.spawn().expect("the binary runs");
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
         let mut process = Self {
@@ -286,6 +294,44 @@ fn the_tier_reaches_the_running_process() {
 }
 
 #[test]
+fn invalid_environment_policy_fails_closed() {
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let socket = guard
+        .socket_path()
+        .to_str()
+        .expect("a utf-8 path")
+        .to_owned();
+
+    let mut safety =
+        Process::start_with_environment(&["--socket", &socket], &[("TMUX_MCP_SAFETY", "readonl")]);
+    let listed = safety.request("tools/list", &json!({}));
+    let names = listed["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list answered with {listed}"));
+    assert!(
+        names.iter().all(|tool| tool["name"] != "send_keys"),
+        "an invalid tier narrows to the readonly surface: {names:?}",
+    );
+    safety.finish();
+
+    let mut confirm =
+        Process::start_with_environment(&["--socket", &socket], &[("TMUX_MCP_CONFIRM", "ture")]);
+    let initialized = confirm.handshake();
+    let instructions = initialized["result"]["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("initialize answered with {initialized}"));
+    assert!(
+        instructions.contains("CONFIRMATION"),
+        "an invalid confirmation value leaves the gate enabled: {instructions}",
+    );
+    confirm.finish();
+
+    runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
+}
+
+#[test]
 fn a_failure_from_a_real_process_carries_its_classification() {
     let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
     let guard =
@@ -320,7 +366,7 @@ fn the_instructions_reach_a_client_that_only_ever_initialises() {
 
     // An agent reads these once, before it has called anything, so they are
     // the only thing steering the first call it makes.
-    let mut process = Process::start(&["--socket", &socket]);
+    let mut process = Process::start(&["--socket", &socket, "--confirm"]);
     let answer = process.handshake();
     let instructions = answer["result"]["instructions"]
         .as_str()
@@ -329,6 +375,8 @@ fn the_instructions_reach_a_client_that_only_ever_initialises() {
         "TRIGGERS",
         "NAMES ARE NOT CONTENTS",
         "WAIT, DO NOT POLL",
+        "SURFACE IS NOT A SANDBOX",
+        "Commands run or typed through open-ended tools do not",
         "repeating the same call unchanged is safe",
         "partial_effect",
     ] {

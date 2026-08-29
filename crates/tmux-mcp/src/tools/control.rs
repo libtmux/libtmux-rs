@@ -29,9 +29,9 @@ impl TmuxTools {
         title = "Create Window",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
-            open_world_hint = false
+            open_world_hint = true
         )
     )]
     pub async fn new_window(
@@ -70,7 +70,7 @@ impl TmuxTools {
         let window = self.find_window(&window).await?;
         let id = window.id().to_string();
         self.permitted(&asking, &format!("window {id}")).await?;
-        if let Some(own) = self.own_pane().await {
+        if let Some(own) = self.protected_pane().await {
             let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
             if panes.iter().any(|pane| pane.id().to_string() == own) {
                 return Err(Self::self_harm("window", own));
@@ -100,7 +100,7 @@ impl TmuxTools {
         let pane = self.find_pane(&pane).await?;
         let id = pane.id().to_string();
         self.permitted(&asking, &format!("pane {id}")).await?;
-        if self.own_pane().await == Some(id.as_str()) {
+        if self.protected_pane().await == Some(id.as_str()) {
             return Err(Self::self_harm("pane", &id));
         }
         pane.kill().await.map_err(|e| tmux_error(&e))?;
@@ -115,9 +115,9 @@ impl TmuxTools {
         title = "Rename Session Or Window",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
         )
     )]
     pub async fn rename(
@@ -162,9 +162,9 @@ impl TmuxTools {
         title = "Create Session",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
-            open_world_hint = false
+            open_world_hint = true
         )
     )]
     pub async fn create_session(
@@ -212,7 +212,7 @@ impl TmuxTools {
         let target = self.find_session(&session).await?;
         let id = target.id().to_string();
         self.permitted(&asking, &format!("session {id}")).await?;
-        if let Some(own) = self.own_pane().await {
+        if let Some(own) = self.protected_pane().await {
             let panes = target.panes().await.map_err(|e| tmux_error(&e))?;
             if panes.iter().any(|pane| pane.id().to_string() == own) {
                 return Err(Self::self_harm("session", own));
@@ -229,9 +229,9 @@ impl TmuxTools {
         title = "Split Pane",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
-            open_world_hint = false
+            open_world_hint = true
         )
     )]
     pub async fn split_pane(
@@ -290,7 +290,7 @@ impl TmuxTools {
         title = "Resize Pane",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = false
         )
@@ -337,7 +337,7 @@ impl TmuxTools {
         title = "Send Keys To Pane",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = true
         )
@@ -385,7 +385,7 @@ impl TmuxTools {
         title = "Select Pane",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = false
         )
@@ -474,7 +474,7 @@ impl TmuxTools {
         title = "Select Window",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = false
         )
@@ -551,9 +551,9 @@ impl TmuxTools {
         title = "Set tmux Option",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
         )
     )]
     pub async fn set_option(
@@ -605,7 +605,7 @@ impl TmuxTools {
     pub async fn kill_server(&self, asking: Asking) -> Result<Json<ServerKilled>, ErrorData> {
         // Nothing on this server survives, so the caller's pane need not be
         // looked up: being here at all is disqualifying.
-        if let Some(own) = self.own_pane().await {
+        if let Some(own) = self.protected_pane().await {
             return Err(Self::self_harm("server", own));
         }
         self.permitted(&asking, "this tmux server and every session on it")
@@ -632,7 +632,7 @@ impl TmuxTools {
         title = "Set tmux Environment Variable",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = true,
             open_world_hint = false
         )
@@ -681,7 +681,7 @@ impl TmuxTools {
         title = "Pipe A Pane Elsewhere",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = true
         )
@@ -708,8 +708,8 @@ impl TmuxTools {
         title = "Arrange Window Panes",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
+            destructive_hint = true,
+            idempotent_hint = false,
             open_world_hint = false
         )
     )]
@@ -747,7 +747,7 @@ impl TmuxTools {
         title = "Clear Pane History",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = true,
             open_world_hint = false
         )
@@ -773,7 +773,7 @@ impl TmuxTools {
         title = "Restart A Pane",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = true
         )
@@ -807,7 +807,7 @@ impl TmuxTools {
         title = "Paste Text Into Pane",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
             open_world_hint = true
         )
@@ -840,12 +840,14 @@ impl TmuxTools {
 
     /// Signal a `wait-for` channel.
     #[tool(
-        description = "Signal a tmux wait-for channel, releasing whatever waits on it",
+        description = "Signal a tmux wait-for channel, releasing every current waiter. With \
+                       no waiter, one signal is latched; signalling the same channel again \
+                       clears that latch.",
         title = "Signal Channel",
         annotations(
             read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
+            destructive_hint = true,
+            idempotent_hint = false,
             open_world_hint = false
         )
     )]

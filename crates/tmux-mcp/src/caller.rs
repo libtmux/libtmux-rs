@@ -2,8 +2,8 @@
 //!
 //! tmux sets `TMUX` and `TMUX_PANE` in every process it starts, so an MCP
 //! server launched from a pane can say which pane that is. Two things are
-//! built on that: pane listings say which pane is the caller's own, and the
-//! tools that destroy things refuse to destroy it.
+//! built on that: pane listings say which pane is the caller's own, and direct
+//! kill tools and destructive plan operations refuse it.
 //!
 //! A pane id is only unique within one tmux server. `%1` on the socket this
 //! process was started from and `%1` on the socket it was asked about are

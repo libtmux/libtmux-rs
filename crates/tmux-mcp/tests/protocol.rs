@@ -479,7 +479,7 @@ async fn every_tool_accepts_the_arguments_its_schema_describes() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// The tools that change nothing about the server.
+/// The tools advertised as read-only.
 const READING: &[&str] = &[
     "list_sessions",
     "list_windows",
@@ -492,38 +492,61 @@ const READING: &[&str] = &[
     "search_panes",
     "find_panes",
     "find_sessions",
-    "show_option",
-    "capture_since",
-    "watch_pane",
-    "wait_for_text",
-    "wait_for_idle",
-    "wait_for_channel",
     "job_status",
     "list_jobs",
     "list_servers",
-    "expand_format",
     "show_environment",
     "show_hooks",
     "what_changed",
 ];
 
-/// The tools that destroy work.
+/// Tools that can overwrite, delete, or execute caller-controlled payloads.
 const DESTRUCTIVE: &[&str] = &[
+    "expand_format",
+    "new_window",
     "kill_pane",
     "kill_window",
+    "rename",
+    "create_session",
     "kill_session",
     "kill_server",
+    "split_pane",
+    "resize_pane",
+    "send_keys",
+    "select_pane",
+    "select_window",
+    "run_command",
+    "start_command",
+    "forget_job",
+    "show_option",
+    "set_option",
+    "set_environment",
+    "pipe_pane",
+    "select_layout",
+    "clear_pane",
+    "respawn_pane",
+    "paste_text",
+    "signal_channel",
+    "wait_for_channel",
     "run_plan",
 ];
 
-/// The tools that put the caller's own payload into a live terminal.
+/// Tools that can execute outside tmux or configure later execution there.
 const OPEN_WORLD: &[&str] = &[
+    "expand_format",
+    "new_window",
+    "rename",
+    "create_session",
+    "split_pane",
     "send_keys",
     "run_command",
     "start_command",
+    "show_option",
+    "set_option",
     "pipe_pane",
     "respawn_pane",
     "paste_text",
+    "list_servers",
     "run_plan",
 ];
 
@@ -577,8 +600,8 @@ async fn every_tool_declares_what_it_does_to_the_server() {
         assert_eq!(
             hints.open_world_hint,
             Some(open),
-            "{name} should declare open_world_hint = {open}: the effects of \
-             these tools reach into whatever the caller supplied",
+            "{name} should declare open_world_hint = {open}: these tools can reach \
+             outside the selected tmux server or make it do so",
         );
         assert!(
             hints.idempotent_hint.is_some(),
@@ -617,7 +640,15 @@ async fn every_tool_declares_what_it_does_to_the_server() {
         );
     }
 
-    for name in ["select_pane", "select_window"] {
+    for name in [
+        "rename",
+        "select_layout",
+        "select_pane",
+        "select_window",
+        "set_option",
+        "show_option",
+        "signal_channel",
+    ] {
         let tool = listed
             .iter()
             .find(|tool| tool.name == name)
@@ -628,7 +659,7 @@ async fn every_tool_declares_what_it_does_to_the_server() {
                 .expect("the focus tool carries annotations")
                 .idempotent_hint,
             Some(false),
-            "{name} can select the previous target, which toggles when repeated",
+            "{name} has an additional effect when repeated",
         );
     }
 
@@ -721,6 +752,13 @@ async fn the_recipes_teach_what_no_single_tool_can_say() {
 #[tokio::test]
 async fn a_tier_withholds_the_tools_above_it() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let all_tools = TmuxTools::builder(guard.server().clone())
+        .safety(Safety::Destructive)
+        .caller(None)
+        .confirm(false)
+        .build()
+        .offered()
+        .len();
 
     // Withheld, not merely refused: an agent cannot choose what it cannot
     // see, and a refusal it never provokes is better than one it has to
@@ -744,6 +782,19 @@ async fn a_tier_withholds_the_tools_above_it() {
             .await
             .expect("tools are listed");
         let names: Vec<&str> = listed.iter().map(|tool| tool.name.as_ref()).collect();
+
+        match tier {
+            Safety::ReadOnly => {
+                let mut expected = READING.to_vec();
+                expected.push("run_plan");
+                expected.sort_unstable();
+                let mut actual = names.clone();
+                actual.sort_unstable();
+                assert_eq!(actual, expected, "readonly route classification drifted");
+            }
+            Safety::Mutating => assert_eq!(names.len(), all_tools - 4),
+            Safety::Destructive => assert_eq!(names.len(), all_tools),
+        }
 
         let kills = names
             .iter()
@@ -769,6 +820,23 @@ async fn a_tier_withholds_the_tools_above_it() {
             },
         );
 
+        assert_eq!(
+            names.contains(&"expand_format"),
+            tier != Safety::ReadOnly,
+            "{tier:?} offered {names:?}",
+        );
+
+        if tier == Safety::Mutating {
+            for name in DESTRUCTIVE {
+                if !name.starts_with("kill_") {
+                    assert!(
+                        names.contains(name),
+                        "protocol effect hints must not withhold {name}: {names:?}",
+                    );
+                }
+            }
+        }
+
         // A withheld tool is gone, not hidden-but-callable.
         if tier != Safety::Destructive {
             assert!(
@@ -784,11 +852,10 @@ async fn a_tier_withholds_the_tools_above_it() {
 }
 
 #[tokio::test]
-async fn the_default_tier_withholds_destruction() {
+async fn the_default_tier_withholds_dedicated_kill_tools() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    // What an operator gets without saying anything. This server can end
-    // every session on a machine, and the caller guard only protects the
-    // pane the agent talks through.
+    // What an operator gets without saying anything. Open-ended tools remain,
+    // so this proves surface selection rather than confinement.
     let wire = Wire::connect(
         TmuxTools::builder(guard.server().clone())
             .safety(Safety::default())
@@ -807,7 +874,7 @@ async fn the_default_tier_withholds_destruction() {
 
     assert!(
         !names.iter().any(|name| name.starts_with("kill_")),
-        "the default tier should withhold destruction: {names:?}",
+        "the default tier should withhold dedicated kill tools: {names:?}",
     );
     assert!(names.contains(&"run_command"), "but still allow work done");
 
@@ -1303,6 +1370,11 @@ async fn the_hierarchy_is_reachable_as_resources() {
             resource.uri,
         );
     }
+
+    let server: Value = serde_json::from_str(&body(&wire, "tmux://server".to_owned()).await)
+        .expect("the server resource is JSON");
+    assert!(server.get("inherited_caller_pane").is_some(), "{server}");
+    assert!(server.get("caller_pane").is_none(), "{server}");
 
     // The templated forms, filled the way a client fills them. A URI naming
     // one thing answers with that thing: wrapping it in the tools' list

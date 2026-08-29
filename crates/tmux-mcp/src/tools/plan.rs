@@ -43,7 +43,7 @@ impl TmuxTools {
 
     /// Refuse a plan that would destroy the pane carrying this conversation.
     async fn protect_plan_caller(&self, plan: &Plan) -> Result<(), ErrorData> {
-        let Some(own) = self.own_pane().await.map(ToOwned::to_owned) else {
+        let Some(own) = self.protected_pane().await.map(ToOwned::to_owned) else {
             return Ok(());
         };
 

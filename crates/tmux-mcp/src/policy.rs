@@ -15,44 +15,37 @@ use crate::{CallerIdentity, TmuxTools, prompts, schema, tools};
 /// The environment variable naming how much of the surface is offered.
 pub const SAFETY_ENV: &str = "TMUX_MCP_SAFETY";
 
-/// The environment variable asking for a person's approval before destroying.
+/// The environment variable asking before dedicated kills and destructive plans.
 pub const CONFIRM_ENV: &str = "TMUX_MCP_CONFIRM";
 
-/// How much of the tool surface an operator has allowed.
+/// An advertised tool-surface tier.
 ///
-/// A refusal an agent can see coming is better than one it discovers, so a
-/// tier does not merely reject calls: the tools above it are not advertised at
-/// all. An agent cannot choose what it cannot see, which is the difference
-/// between a policy and a warning.
+/// A tier filters routes and plan operations. It is not an authorization
+/// boundary: open-ended tools can run or type commands whose effects exceed
+/// their route class.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Safety {
-    /// Only the tools that change nothing.
+    /// Read-only routes and read-only plan operations.
     ReadOnly,
-    /// Everything except the tools that destroy work.
+    /// Every route except dedicated kill tools, plus non-destructive plans.
     ///
-    /// The default. This server can end every session on a machine, and the
-    /// caller guard only protects the pane the agent is talking through — it
-    /// says nothing about anyone else's work. Reaching that far should be a
-    /// decision an operator made rather than one they inherited.
+    /// The default. This includes open-ended command and terminal tools, so it
+    /// can still produce destructive effects indirectly.
     #[default]
     Mutating,
-    /// Everything, including plans that destroy work.
+    /// Every tool and plan operation.
     Destructive,
 }
 
 impl Safety {
-    /// Read the tier from the environment, falling back to the default.
+    /// Read the tier from the environment.
     ///
-    /// An unreadable value is not worth refusing to start over, and widening
-    /// the surface on a typo would be the wrong way to fail, so anything
-    /// unrecognised leaves the default in place.
+    /// An absent setting selects the default. An unreadable or unrecognised
+    /// setting selects [`Safety::ReadOnly`], so a typo cannot widen the
+    /// advertised surface.
     #[must_use]
     pub fn from_env() -> Self {
-        std::env::var(SAFETY_ENV)
-            .ok()
-            .as_deref()
-            .and_then(Self::parse)
-            .unwrap_or_default()
+        safety_from_value(std::env::var(SAFETY_ENV))
     }
 
     /// Read a tier by name.
@@ -76,19 +69,17 @@ impl Safety {
         }
     }
 
-    /// Whether a tool carrying these annotations is offered at this tier.
+    /// Whether a route is offered at this tier.
     ///
-    /// Decided from the annotations themselves rather than a list of names.
-    /// A list is a second place to say what a tool does, and the two drift:
-    /// the tool that gets mislabelled is the one nobody thought to add.
+    /// MCP annotations describe effects to clients; they are not capability
+    /// classes. In particular, `destructiveHint` cannot distinguish an
+    /// open-ended shell route from a dedicated kill route.
     fn admits(self, tool: &rmcp::model::Tool) -> bool {
-        let hints = tool.annotations.as_ref();
-        let reads = hints.and_then(|hints| hints.read_only_hint) == Some(true);
-        let destroys = hints.and_then(|hints| hints.destructive_hint) == Some(true);
-        match self {
-            Self::ReadOnly => reads,
-            Self::Mutating => !destroys,
-            Self::Destructive => true,
+        match (self, route_class(tool.name.as_ref())) {
+            (Self::ReadOnly, RouteClass::ReadOnly | RouteClass::Plan)
+            | (Self::Mutating, RouteClass::ReadOnly | RouteClass::Mutating | RouteClass::Plan)
+            | (Self::Destructive, _) => true,
+            (Self::ReadOnly | Self::Mutating, _) => false,
         }
     }
 
@@ -96,17 +87,59 @@ impl Safety {
     fn annotate_plan(self, tool: &mut rmcp::model::Tool) {
         let hints = tool.annotations.get_or_insert_default();
         hints.read_only_hint = Some(matches!(self, Self::ReadOnly));
-        hints.destructive_hint = Some(matches!(self, Self::Destructive));
+        hints.destructive_hint = Some(!matches!(self, Self::ReadOnly));
         hints.idempotent_hint = Some(matches!(self, Self::ReadOnly));
         hints.open_world_hint = Some(!matches!(self, Self::ReadOnly));
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RouteClass {
+    ReadOnly,
+    Mutating,
+    DedicatedKill,
+    Plan,
+    Unknown,
+}
+
+fn route_class(name: &str) -> RouteClass {
+    match name {
+        "list_sessions"
+        | "list_windows"
+        | "list_panes"
+        | "describe"
+        | "list_session_windows"
+        | "list_window_panes"
+        | "capture_pane"
+        | "snapshot_pane"
+        | "search_panes"
+        | "find_panes"
+        | "find_sessions"
+        | "job_status"
+        | "list_jobs"
+        | "list_servers"
+        | "show_environment"
+        | "show_hooks"
+        | "what_changed" => RouteClass::ReadOnly,
+        "expand_format" | "new_window" | "rename" | "create_session" | "split_pane"
+        | "resize_pane" | "send_keys" | "select_pane" | "select_window" | "run_command"
+        | "start_command" | "forget_job" | "show_option" | "set_option" | "set_environment"
+        | "pipe_pane" | "select_layout" | "clear_pane" | "respawn_pane" | "paste_text"
+        | "signal_channel" | "wait_for_channel" | "capture_since" | "watch_pane"
+        | "wait_for_text" | "wait_for_idle" => RouteClass::Mutating,
+        "kill_pane" | "kill_window" | "kill_session" | "kill_server" => RouteClass::DedicatedKill,
+        "run_plan" => RouteClass::Plan,
+        // An unclassified future route is withheld by both ordinary tiers.
+        // The exact-surface protocol test requires its author to classify it.
+        _ => RouteClass::Unknown,
     }
 }
 
 impl Safety {
     /// Whether this tier admits one plan operation.
     ///
-    /// The same rule the tool annotations get, read from the operation's own
-    /// declared safety rather than from a second list that would drift.
+    /// Plans carry libtmux's internal operation class. MCP annotations describe
+    /// the route as a whole and do not decide this gate.
     pub(super) const fn admits_operation(self, safety: PlanSafety) -> bool {
         match self {
             Self::ReadOnly => matches!(safety, PlanSafety::ReadOnly),
@@ -133,16 +166,17 @@ impl Builder {
         self
     }
 
-    /// Say how much of the surface to offer, rather than reading the
-    /// environment.
+    /// Choose the advertised surface, rather than reading the environment.
+    ///
+    /// This filters routes; it does not confine what an open-ended route can
+    /// do with caller-supplied commands or terminal input.
     #[must_use]
     pub const fn safety(mut self, safety: Safety) -> Self {
         self.safety = safety;
         self
     }
 
-    /// Ask a person before destroying work, rather than reading the
-    /// environment.
+    /// Ask before dedicated kills and destructive plans.
     #[must_use]
     pub const fn confirm(mut self, confirm: bool) -> Self {
         self.confirm = confirm;
@@ -157,8 +191,6 @@ impl Builder {
         if let Some(route) = router.map.get_mut("run_plan") {
             self.safety.annotate_plan(&mut route.attr);
         }
-        // Taken from the router's own advertisement, so the tier reads exactly
-        // what a client would.
         let withheld: Vec<String> = router
             .list_all()
             .iter()
@@ -333,19 +365,37 @@ where
 /// call open indefinitely.
 const CONFIRM_WITHIN: Duration = Duration::from_secs(120);
 
-/// Read whether to ask a person before destroying work.
+/// Read whether to ask before dedicated kills and destructive plans.
 ///
-/// Anything other than an explicit yes leaves it off, because a typo that
-/// silently started refusing every destructive call would look like a bug in
-/// the tool rather than in the setting.
+/// An absent setting or an explicit no leaves it off. An unreadable or
+/// unrecognised setting enables it, so a typo cannot silently remove a gate
+/// the operator intended to use.
 #[must_use]
 pub fn confirm_from_env() -> bool {
-    std::env::var(CONFIRM_ENV)
-        .is_ok_and(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+    confirm_from_value(std::env::var(CONFIRM_ENV))
+}
+
+fn safety_from_value(value: Result<String, std::env::VarError>) -> Safety {
+    match value {
+        Err(std::env::VarError::NotPresent) => Safety::default(),
+        Ok(value) => Safety::parse(&value).unwrap_or(Safety::ReadOnly),
+        Err(std::env::VarError::NotUnicode(_)) => Safety::ReadOnly,
+    }
+}
+
+fn confirm_from_value(value: Result<String, std::env::VarError>) -> bool {
+    match value {
+        Err(std::env::VarError::NotPresent) => false,
+        Err(std::env::VarError::NotUnicode(_)) => true,
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+    }
 }
 
 impl TmuxTools {
-    /// Ask a person before destroying something, when asked to.
+    /// Ask before a dedicated kill or destructive plan, when configured.
     ///
     /// Fails closed. A server told to confirm and given no way to ask has to
     /// refuse: proceeding would be exactly the unattended destruction the
@@ -416,5 +466,56 @@ impl TmuxTools {
             safety: Safety::from_env(),
             confirm: confirm_from_env(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env::VarError;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+    use std::sync::Arc;
+
+    use rmcp::model::Tool;
+
+    use super::{Safety, confirm_from_value, safety_from_value};
+
+    #[test]
+    fn an_unclassified_route_is_withheld_by_default() {
+        let tool = Tool::new(
+            "future_route",
+            "test route",
+            Arc::new(serde_json::Map::default()),
+        );
+
+        assert!(!Safety::ReadOnly.admits(&tool));
+        assert!(!Safety::Mutating.admits(&tool));
+        assert!(Safety::Destructive.admits(&tool));
+    }
+
+    #[test]
+    fn invalid_safety_configuration_closes_the_surface() {
+        assert_eq!(
+            safety_from_value(Err(VarError::NotPresent)),
+            Safety::Mutating
+        );
+        assert_eq!(
+            safety_from_value(Ok("readonl".to_owned())),
+            Safety::ReadOnly
+        );
+        assert_eq!(
+            safety_from_value(Err(VarError::NotUnicode(OsString::from_vec(vec![0xff])))),
+            Safety::ReadOnly,
+        );
+    }
+
+    #[test]
+    fn invalid_confirmation_configuration_enables_the_gate() {
+        assert!(!confirm_from_value(Err(VarError::NotPresent)));
+        assert!(!confirm_from_value(Ok("false".to_owned())));
+        assert!(confirm_from_value(Ok("ture".to_owned())));
+        assert!(confirm_from_value(Err(VarError::NotUnicode(
+            OsString::from_vec(vec![0xff]),
+        ))));
     }
 }

@@ -193,7 +193,7 @@ async fn mutating_tools_change_what_the_listing_tools_report() {
 async fn the_server_advertises_its_tools_over_the_protocol() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     // The full surface, named explicitly: the default tier withholds the
-    // tools that destroy work, and this test is about what is advertised.
+    // dedicated kill tools, and this test is about what is advertised.
     let tools = TmuxTools::builder(guard.server().clone())
         .safety(Safety::Destructive)
         .caller(None)
@@ -792,7 +792,7 @@ async fn run_plan_advertises_the_configured_safety_ceiling() {
 
     for (tier, read_only, destructive, idempotent, open_world) in [
         (Safety::ReadOnly, true, false, true, false),
-        (Safety::Mutating, false, false, false, true),
+        (Safety::Mutating, false, true, false, true),
         (Safety::Destructive, false, true, false, true),
     ] {
         let tools = TmuxTools::builder(guard.server().clone())

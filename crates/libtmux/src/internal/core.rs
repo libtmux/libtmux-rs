@@ -396,7 +396,12 @@ impl Core {
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
             &global_argv,
-            Command::new("attach").arg("-t").arg(session.to_string()),
+            // Opening an observer must not copy this process's environment
+            // into the session it is inspecting.
+            Command::new("attach")
+                .arg("-E")
+                .arg("-t")
+                .arg(session.to_string()),
         );
         let reservation = self
             .persistent_clients

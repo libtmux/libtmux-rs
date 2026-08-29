@@ -11,11 +11,13 @@
 //!
 //! When tmux starts this process, it says so through `TMUX` and `TMUX_PANE`.
 //! Every pane a listing returns carries a `caller` field naming its relation
-//! to this server — `self`, `other`, or `unknown` — and the tools that destroy
-//! things refuse to destroy the pane the conversation runs through. There is
-//! no `whoami` tool because there is no question left to ask.
+//! to this server — `self`, `other`, or `unknown`. Dedicated kill tools and
+//! destructive plan operations conservatively refuse targets that may hold
+//! the inherited caller; open-ended command and terminal tools do not. There
+//! is no `whoami` tool because there is no question left to ask.
 //!
-//! Both rest on comparing the socket as well as the pane id. `%1` names a
+//! Listings say `self` only after a confirmed socket match. The destructive
+//! guard errs toward refusal when socket evidence is incomplete. `%1` names a
 //! different pane on every server, so an id alone proves nothing.
 //!
 //! # Watching a pane
@@ -33,6 +35,11 @@
 //! The last three read what the pane wrote rather than what survived
 //! rendering, so output that scrolled past between calls is still seen and no
 //! scrollback anchor can be invalidated underneath them.
+//! Control-mode attaches do not update the session environment, but they do
+//! change its attached-client state while open. The surface policy therefore
+//! treats live-stream tools as mutating. Configured `client-attached` hooks
+//! remain an indirect tmux effect, just as configured `after-*` hooks do for
+//! ordinary read commands.
 //!
 //! `snapshot_pane` is the one that answers questions about the pane rather
 //! than its text: the cursor position that distinguishes a shell waiting from
@@ -119,9 +126,9 @@ pub struct TmuxTools {
     server: Arc<Server>,
     /// Where this process is running, when tmux started it.
     caller: Option<Arc<CallerIdentity>>,
-    /// How much of the surface this server was told to offer.
+    /// Which route surface this server was told to offer.
     safety: Safety,
-    /// Whether a person is asked before work is destroyed.
+    /// Whether dedicated kills and destructive plans ask a person first.
     confirm: bool,
     /// The server's own socket path, resolved once and kept.
     ///
@@ -182,14 +189,14 @@ const INSTRUCTIONS: &str = concat!(
      report names, ids and the running command. They do not look at what a \
      terminal is showing. For what a pane displays, mentions or contains, use \
      search_panes across every pane, capture_pane for one, snapshot_pane to \
-     also learn where its cursor is, or capture_since to follow one over \
+     also learn where its cursor is, or, when offered, capture_since to follow one over \
      several turns.",
     // The habit worth breaking before it starts.
     "\n\nWAIT, DO NOT POLL: run_command runs something and reports its exit \
      status. If it stops waiting first, continue from its job id with \
      job_status or forget_job. start_command returns that id immediately, for \
      anything slow or for several at once. \
-     wait_for_text watches for output you did not author, and wait_for_idle \
+     When offered, wait_for_text watches for output you did not author, and wait_for_idle \
      waits for a pane to go quiet when you cannot name what to look for. \
      capture_since returns only what is new since your last look. Reading \
      capture_pane in a loop is slower and misses whatever scrolled past \
@@ -206,10 +213,9 @@ const INSTRUCTIONS: &str = concat!(
     // Absences, so an agent stops hunting for them. These are server-shaped:
     // whole families that are missing rather than one tool's caveat.
     "\n\nNOT HERE: copy mode has no tools; leave it by sending the key q with \
-     send_keys. Hooks are read-only, because one set from here would vanish \
-     with this process. For any field tmux publishes that no tool carries, \
-     use expand_format. Anything else tmux can do is reachable by running the \
-     tmux command itself with run_command.",
+     send_keys. Hooks can be listed but have no dedicated setter. When offered, \
+     expand_format reaches fields that no other tool carries, and run_command \
+     reaches tmux commands without a dedicated tool.",
 );
 
 #[tool_handler(router = self.tool_router)]
@@ -262,29 +268,36 @@ impl ServerHandler for TmuxTools {
             .enable_resources()
             .build();
         let mut instructions = String::from(INSTRUCTIONS);
-        instructions.push_str("\n\nSURFACE: the ");
+        instructions.push_str("\n\nSURFACE IS NOT A SANDBOX: the ");
         instructions.push_str(self.safety.name());
         instructions.push_str(match self.safety {
-            Safety::ReadOnly => " tier — nothing here changes the server.",
+            Safety::ReadOnly => " tier offers read-only routes and plans.",
             Safety::Mutating => {
-                " tier — you can create, split and type, but the tools that \
-                 destroy work are not offered."
+                " tier withholds dedicated kill tools and destructive plan \
+                 operations, but offers open-ended command and terminal tools."
             }
-            Safety::Destructive => {
-                " tier — every tool is offered, including plans that destroy work."
-            }
+            Safety::Destructive => " tier offers every tool and plan operation.",
         });
-        instructions
-            .push_str(" An operator sets this with TMUX_MCP_SAFETY=readonly|mutating|destructive.");
-        // Saying where this process sits saves the agent a round trip, and
-        // makes the refusal it would otherwise hit from kill_session
-        // predictable rather than surprising.
+        instructions.push_str(
+            " Tiers filter advertised routes; they do not inspect arguments or \
+             confine indirect effects. An operator sets this with \
+             TMUX_MCP_SAFETY=readonly|mutating|destructive.",
+        );
+        if self.confirm {
+            instructions.push_str(
+                "\n\nCONFIRMATION: dedicated kill tools and destructive plan operations ask \
+                 first. Commands run or typed through open-ended tools do not.",
+            );
+        }
+        // This is launch context, not a claim about the selected server. The
+        // socket comparison that marks a listing as `self` happens later.
         if let Some(pane) = self.caller.as_ref().and_then(|caller| caller.pane_id()) {
-            instructions.push_str("\n\nWHERE YOU ARE: this server runs in pane ");
+            instructions.push_str("\n\nLAUNCH CONTEXT: this process inherited pane ");
             instructions.push_str(pane);
             instructions.push_str(
-                ". Pane listings mark it caller=self, and the tools that would destroy \
-                 it refuse.",
+                " from tmux. If its socket matches the selected server, pane listings \
+                 mark it caller=self. Dedicated kill tools and destructive plan \
+                 operations use a conservative caller guard; open-ended tools do not.",
             );
         }
         info.instructions = Some(instructions);

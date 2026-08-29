@@ -1,4 +1,4 @@
-//! Serve tmux over MCP, offering only the tools that change nothing.
+//! Serve tmux over MCP, offering only read-only routes.
 //!
 //! The shipped binary reads its tier from `--safety` or `TMUX_MCP_SAFETY`.
 //! Building the server yourself is how you decide it in code instead, which is
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // stdout carries the protocol, so this goes to stderr.
-    eprintln!("serving {} read-only tools", tools.offered().len());
+    eprintln!("serving {} readonly-surface tools", tools.offered().len());
 
     tools.serve(stdio()).await?.waiting().await?;
     Ok(())

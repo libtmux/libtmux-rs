@@ -514,13 +514,14 @@ impl TmuxTools {
     #[tool(
         description = "Read a tmux option, such as history-limit or a user option like \
                        @theme. Name the scope the option lives in; global-session is what \
-                       tmux uses when a command names no target.",
+                       tmux uses when a command names no target. tmux expands the option \
+                       name as a format, so #(command) can start a shell command.",
         title = "Read tmux Option",
         annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = true
         )
     )]
     pub async fn show_option(
@@ -553,19 +554,19 @@ impl TmuxTools {
         }))
     }
 
-    /// Find the tmux servers running on this machine.
+    /// Find tmux servers in the known socket locations.
     #[tool(
-        description = "Find every tmux server on this machine, by looking where tmux puts its \
-                       sockets. These tools are bound to one server for their whole life, so \
-                       this is the only way to learn that another exists; acting on one means \
-                       starting a server pointed at its socket. A pane id means nothing \
-                       across servers: %1 names a different pane on each.",
+        description = "Find tmux servers in the standard per-user socket directory and beside \
+                       the selected socket. Custom sockets elsewhere and other users' servers \
+                       are not included. These tools are bound to one server for their whole \
+                       life; acting on another means starting a server pointed at its socket. \
+                       A pane id means nothing across servers: %1 names a different pane on each.",
         title = "List tmux Servers",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = false,
-            open_world_hint = false
+            open_world_hint = true
         )
     )]
     pub async fn list_servers(&self) -> Result<Json<ServerListings>, ErrorData> {
@@ -730,13 +731,15 @@ impl TmuxTools {
                        every field tmux publishes, including ones no tool here has of its \
                        own, so use it for questions the listings cannot answer. Name a pane \
                        for anything pane, window or session shaped: tmux resolves the window \
-                       and session from it.",
+                       and session from it. A literal #(command), or a value expanded \
+                       recursively, can start a shell command asynchronously. Use only \
+                       simple, validated #{field} lookups when reading untrusted state.",
         title = "Expand A tmux Format",
         annotations(
-            read_only_hint = true,
-            destructive_hint = false,
+            read_only_hint = false,
+            destructive_hint = true,
             idempotent_hint = false,
-            open_world_hint = false
+            open_world_hint = true
         )
     )]
     pub async fn expand_format(
@@ -802,9 +805,10 @@ impl TmuxTools {
     /// Read the hooks tmux runs on its own events.
     #[tool(
         description = "List the hooks tmux runs when something happens on the server, such as \
-                       a pane exiting. Read-only: a hook set from here would vanish with this \
-                       process, so hooks belong in a tmux config file. Reach for this when \
-                       tmux does something no tool here asked for.",
+                       a pane exiting. This tool does not set hooks. Hooks set through another \
+                       path remain in their server or session until unset; configuration files \
+                       persist them across server restarts. Reach for this when tmux does \
+                       something no tool here asked for.",
         title = "Show tmux Hooks",
         annotations(
             read_only_hint = true,

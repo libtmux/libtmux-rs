@@ -129,17 +129,16 @@ pub struct Branch {
     pub windows: Vec<BranchWindow>,
 }
 
-/// What this process is attached to.
+/// The selected tmux server and inherited caller context.
 ///
-/// Answered by the `tmux://server` resource. The socket is what makes a pane
-/// id mean anything: `%1` names a different pane on every tmux server, so a
-/// reader comparing ids across two of these has to compare sockets first.
+/// Answered by the `tmux://server` resource. The inherited pane is launch
+/// context, not a claim that it belongs to the selected socket.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ServerView {
     /// The socket this server talks to, as tmux reports it.
     pub socket: Option<String>,
-    /// The pane this process runs in, when tmux started it in one.
-    pub caller_pane: Option<String>,
+    /// The pane id inherited at launch, without a selected-socket claim.
+    pub inherited_caller_pane: Option<String>,
     /// How many sessions are on the server.
     pub sessions: usize,
 }

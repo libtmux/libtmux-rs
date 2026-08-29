@@ -10,7 +10,7 @@
 //! The URIs mirror the hierarchy, so a reader who knows tmux can guess them:
 //!
 //! ```text
-//! tmux://server                                  what this server is attached to
+//! tmux://server                                  selected server and inherited caller context
 //! tmux://sessions                                every session
 //! tmux://sessions/{name}                         one session
 //! tmux://sessions/{name}/windows                 its windows
@@ -49,8 +49,8 @@ pub fn listed() -> ListResourcesResult {
         (
             "tmux://server",
             "tmux server",
-            "Which tmux this is attached to: socket, version, and the pane this \
-             process runs in when it runs in one.",
+            "The selected tmux server's socket and session count, plus the pane id \
+             inherited at launch when there was one.",
             JSON,
         ),
         (

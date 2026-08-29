@@ -285,11 +285,11 @@ impl TmuxTools {
         None
     }
 
-    /// The pane this process runs in, if it is a pane on *this* server.
+    /// The pane protected as the inherited caller on this server.
     ///
-    /// `None` means no destructive command needs checking: either tmux did not
-    /// start this process, or it started it somewhere else.
-    pub(super) async fn own_pane(&self) -> Option<&str> {
+    /// This errs toward protection when socket evidence is incomplete, so a
+    /// returned pane is not necessarily a confirmed location.
+    pub(super) async fn protected_pane(&self) -> Option<&str> {
         let caller = self.caller.as_deref()?;
         let pane = caller.pane_id()?;
         let socket_name = self.server.socket_name().and_then(|name| name.to_str());
@@ -313,13 +313,13 @@ impl TmuxTools {
         self.caller.as_ref().and_then(|caller| caller.pane_id())
     }
 
-    /// Refuse a command that would destroy the pane this process talks through.
+    /// Refuse a command that may destroy the pane this process talks through.
     pub(super) fn self_harm(what: &str, own: &str) -> ErrorData {
         ErrorData::invalid_params(
             format!(
-                "refusing to kill this {what}: it holds pane {own}, the pane this MCP server \
-                 runs in, so killing it would end this conversation. Run the command in a \
-                 terminal if that is what you meant."
+                "refusing to kill this {what}: pane {own} matches this MCP server's inherited \
+                 caller context, so killing it may end this conversation. Run the command in \
+                 a terminal if that is what you meant."
             ),
             // Its own kind, because this is the server declining rather than
             // tmux: an agent that reads `refused` might reasonably try a
@@ -353,7 +353,7 @@ impl TmuxTools {
                             .socket()
                             .await
                             .map(|path| path.to_string_lossy().into_owned()),
-                        caller_pane: self.caller_pane().map(ToOwned::to_owned),
+                        inherited_caller_pane: self.caller_pane().map(ToOwned::to_owned),
                         sessions: sessions.len(),
                     },
                 )

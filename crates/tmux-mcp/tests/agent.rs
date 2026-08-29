@@ -208,7 +208,7 @@ async fn a_pane_listing_says_which_pane_the_server_runs_in() {
 }
 
 #[tokio::test]
-async fn the_instructions_say_where_this_server_is_running() {
+async fn the_instructions_report_the_inherited_launch_pane() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let bare = bare_tools(guard.server());
     bare.create_session(args(serde_json::json!({"name": "work"})))
@@ -277,6 +277,15 @@ async fn the_same_pane_id_on_another_socket_is_not_the_callers() {
         listed[0]["caller"], "other",
         "a matching pane id on a different socket is a different pane"
     );
+    let instructions = tools.get_info().instructions.expect("instructions");
+    assert!(
+        instructions.contains(&format!("inherited pane {elsewhere}")),
+        "launch context should not claim a verified relation: {instructions}",
+    );
+    assert!(
+        !instructions.contains("this server runs in pane"),
+        "a pane id from another socket is not this server's pane: {instructions}",
+    );
 
     ours.shutdown().await.expect("tmux fixture shuts down");
     theirs.shutdown().await.expect("tmux fixture shuts down");
@@ -314,6 +323,12 @@ async fn killing_the_pane_the_server_runs_in_is_refused() {
         refused.message.contains(&own),
         "the refusal names the pane: {}",
         refused.message
+    );
+    assert!(
+        refused.message.contains("inherited caller context")
+            && refused.message.contains("may end this conversation"),
+        "the refusal distinguishes conservative protection from confirmed location: {}",
+        refused.message,
     );
     // Its own kind, not tmux's `refused`: an agent that reads a tmux refusal
     // might reasonably try different arguments, and none get past this guard.
