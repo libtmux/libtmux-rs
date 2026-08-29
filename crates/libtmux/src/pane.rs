@@ -1246,15 +1246,40 @@ impl Pane {
     /// tmux relinks the window rather than rejecting the command -- see
     /// `cmd-break-pane.c`, which links the window into the target session and
     /// unlinks it from the source when the pane count is one -- so within one
-    /// session nothing moves and the call still succeeds. The handle is
-    /// consumed either way, so a caller who wanted to know whether anything
-    /// happened should count [`crate::Window::panes`] first.
+    /// session nothing moves and the call still succeeds. The returned handle
+    /// names the window it is in either way, which is how a caller tells the
+    /// two apart.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command. Being the window's only
     /// pane is not one of those: tmux accepts that and does nothing.
-    pub async fn break_out(self) -> Result<(), Error> {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::{SplitDirection, SplitOptions};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("broken-out").await?;
+    /// let pane = session.panes().await?.remove(0);
+    /// let stays = pane.window_id().clone();
+    ///
+    /// let moved = pane.split(SplitOptions::new(SplitDirection::Below)).await?;
+    /// let moved = moved.break_out().await?;
+    ///
+    /// // The window it landed in, without listing the server to find it.
+    /// assert_ne!(moved.window_id(), &stays);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn break_out(self) -> Result<Self, Error> {
         listing::mutate(
             &self.core,
             "break-pane",
@@ -1263,7 +1288,9 @@ impl Pane {
                 .arg("-s")
                 .arg(self.id().to_string()),
         )
-        .await
+        .await?;
+
+        self.refreshed().await
     }
 
     /// Move this pane into another window, beside a pane already there.
