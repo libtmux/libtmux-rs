@@ -2000,9 +2000,15 @@ impl Server {
     ///
     /// The channel latches. Signalling one nothing is waiting on is kept, and
     /// the next wait returns at once; the latch is one-shot, so a second wait
-    /// blocks again. One signal releases every waiter present at the time.
-    /// Measured on 3.7c. So signalling before the wait starts is safe, which
-    /// is what makes this usable for a command that may finish first.
+    /// blocks again. One signal releases every waiter present at the time. So
+    /// signalling before the wait starts is safe, which is what makes this
+    /// usable for a command that may finish first.
+    ///
+    /// That holds across the supported range. `cmd-wait-for.c` is identical
+    /// between 3.5a and 3.7c, and the only changes since 3.2a are an argument
+    /// table gaining a field, an accessor replacing a direct index, and a
+    /// local being renamed -- none of them near the flag the latch is kept in.
+    /// Measured directly on 3.5a and 3.7c.
     ///
     /// `within` is capped at [`Server::default_timeout`], because a dispatch
     /// is bounded and this is one: ask for longer by building the server with
