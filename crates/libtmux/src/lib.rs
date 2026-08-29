@@ -320,7 +320,7 @@ pub use snapshot::PaneProgressState;
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{
     PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName, SessionNameError,
-    SessionTarget, WindowId, WindowTarget, escape_name,
+    SessionTarget, WindowId, WindowTarget, escape_format,
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, since};
 pub use window::{

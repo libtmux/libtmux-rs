@@ -9,34 +9,36 @@ use std::str::FromStr;
 
 use crate::error::IdParseError;
 
-/// Escape a name so tmux stores the text it was given.
+/// Escape text so tmux uses it as written rather than expanding it.
 ///
-/// tmux expands a name through its format machinery before it stores it, so
-/// `#(command)` runs `command` in a shell and `#{session_id}` becomes the id.
-/// Doubling `#` is what tmux's parser reads as one literal `#`, so the name
-/// arrives as itself.
+/// tmux runs its format machinery over more than names: `#(command)` runs
+/// `command` in a shell and `#{session_id}` becomes the id, in a session or
+/// window name and in the start directory `-c` names alike. Doubling `#` is
+/// what tmux's parser reads as one literal `#`, so the text arrives as
+/// itself -- which also makes a directory whose name really contains `#`
+/// reachable, where passing it through unescaped does not.
 ///
-/// This is not applied for you, because a name is sometimes meant as a
-/// format. Use it for the names a program did not write: an argument, a
-/// request field, a configuration file. Passing that text through unescaped
-/// gives whoever wrote it a shell.
+/// This is not applied for you, because such text is sometimes meant as a
+/// format. Use it for what a program did not write: an argument, a request
+/// field, a configuration file. Passing that through unescaped gives whoever
+/// wrote it a shell.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::ffi::OsString;
 ///
-/// use libtmux::escape_name;
+/// use libtmux::escape_format;
 ///
-/// // A name that would otherwise run a command.
-/// assert_eq!(escape_name("#(id)"), OsString::from("##(id)"));
+/// // Text that would otherwise run a command.
+/// assert_eq!(escape_format("#(id)"), OsString::from("##(id)"));
 ///
-/// // Ordinary names are unchanged.
-/// assert_eq!(escape_name("editor"), OsString::from("editor"));
+/// // Ordinary text is unchanged.
+/// assert_eq!(escape_format("editor"), OsString::from("editor"));
 /// ```
 #[must_use]
-pub fn escape_name(name: impl AsRef<OsStr>) -> OsString {
-    let bytes = name.as_ref().as_bytes();
+pub fn escape_format(text: impl AsRef<OsStr>) -> OsString {
+    let bytes = text.as_ref().as_bytes();
     let mut escaped = Vec::with_capacity(bytes.len());
     for byte in bytes {
         if *byte == b'#' {

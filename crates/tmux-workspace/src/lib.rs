@@ -42,7 +42,7 @@ use libtmux::plan::{
     KillWindow, NewSession, NewWindow, PaneSlot, Plan, Planner, SelectLayout, SelectPane,
     SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow,
 };
-use libtmux::{Server, Session, SessionId, escape_name};
+use libtmux::{Server, Session, SessionId, escape_format};
 
 /// A failure while building a workspace.
 #[derive(Debug, thiserror::Error)]
@@ -179,7 +179,7 @@ impl<'server> WorkspaceBuilder<'server> {
                 let directory = pane.start_directory.as_deref().or(directory);
                 let mut split = SplitWindow::new(window);
                 if let Some(directory) = directory {
-                    split = split.start_directory(directory);
+                    split = split.start_directory(escape_format(directory));
                 }
                 for (name, value) in config.environment.iter().chain(&pane.environment) {
                     split = split.environment(name.as_str(), value.as_str());
@@ -297,12 +297,12 @@ impl<'server> WorkspaceBuilder<'server> {
     }
 
     fn session_op(workspace: &Workspace) -> NewSession {
-        // A workspace file is not this program's own text. tmux expands a name
-        // as a format before storing it, so an unescaped `#(command)` here
-        // would run a shell for whoever wrote the file.
-        let mut session = NewSession::new(escape_name(workspace.session_name.as_str()));
+        // A workspace file is not this program's own text. tmux expands a
+        // name and a start directory alike as formats, so an unescaped
+        // `#(command)` in either would run a shell for whoever wrote the file.
+        let mut session = NewSession::new(escape_format(workspace.session_name.as_str()));
         if let Some(directory) = workspace.start_directory.as_deref() {
-            session = session.start_directory(directory);
+            session = session.start_directory(escape_format(directory));
         }
         session
     }
@@ -315,10 +315,10 @@ impl<'server> WorkspaceBuilder<'server> {
     ) -> NewWindow {
         let mut window = NewWindow::new(session);
         if let Some(name) = config.window_name.as_deref() {
-            window = window.name(escape_name(name));
+            window = window.name(escape_format(name));
         }
         if let Some(directory) = directory {
-            window = window.start_directory(directory);
+            window = window.start_directory(escape_format(directory));
         }
         if let Ok(index) = u32::try_from(config.window_index.unwrap_or(-1)) {
             window = window.index(index);

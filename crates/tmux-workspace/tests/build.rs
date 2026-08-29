@@ -757,3 +757,42 @@ windows:
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_start_directory_from_the_file_cannot_run_a_command() {
+    // tmux expands the `-c` start directory as a format too, not only a name,
+    // so a workspace file could choose what ran through the one field that
+    // looks least like text tmux would interpret.
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let marker = directory.path().join("marker");
+    let real = directory.path().join("work");
+    std::fs::create_dir(&real).expect("a directory to start in");
+
+    let workspace = Workspace::from_yaml(&format!(
+        "
+session_name: dirs
+start_directory: \"#(touch {0}){1}\"
+windows:
+  - window_name: one
+    panes:
+      - sleep 300
+",
+        marker.display(),
+        real.display(),
+    ))
+    .expect("configuration parses");
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    assert!(
+        !marker.exists(),
+        "a start directory from the file ran a command",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+    drop(session);
+}

@@ -741,7 +741,7 @@ function libtmux::control::PaneOutput::next_chunk: async fn(&mut self) -> Option
 function libtmux::control::PaneOutput::pane: const fn(&self) -> &libtmux::PaneId
 function libtmux::control::PaneOutput::shutdown: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::control::PaneOutput::snapshot: async fn(&mut self, on_output: impl FnMut(&[u8])) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
-function libtmux::escape_name: fn(name: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
+function libtmux::escape_format: fn(text: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
 function libtmux::option_schema: fn(name: &str) -> Option<&'static libtmux::OptionSchema>
 function libtmux::plan::CapturePane::escape_sequences: const fn(self) -> Self
 function libtmux::plan::CapturePane::new: fn(target: impl Into<libtmux::plan::PaneTarget>) -> Self
