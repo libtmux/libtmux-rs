@@ -1957,3 +1957,64 @@ async fn breaking_out_the_only_pane_moves_its_window() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// A handle whose index moved must not act on whatever took the slot.
+///
+/// Breaking a lone pane out of a window relinks that window at a free index,
+/// which renumbers nothing else but leaves every handle above it holding an
+/// index that now belongs to a different live window. tmux answers such a
+/// target without complaint, so an index-scoped command reports success on the
+/// wrong object.
+#[tokio::test]
+async fn a_window_acts_on_itself_after_its_index_moved() {
+    use libtmux::NewWindowOptions;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("renumber").await.expect("session");
+
+    let mut moved = session
+        .new_window(NewWindowOptions::new("moved"))
+        .await
+        .expect("window");
+    let moved_id = moved.id().clone();
+    let cached = moved.index();
+
+    // Breaking out its only pane relinks the window at a free index.
+    let pane = moved.panes().await.expect("panes").remove(0);
+    pane.break_out().await.expect("tmux accepts the command");
+
+    let after = moved.refreshed().await.expect("the window still exists");
+    assert_ne!(after.index(), cached, "the window moved");
+
+    // Put a window in the slot the handle still remembers. This is what
+    // separates dangerous from merely stale: an empty slot refuses, and an
+    // occupied one answers about somebody else.
+    let intruder = session
+        .new_window(NewWindowOptions::new("intruder").index(cached))
+        .await
+        .expect("a window takes the vacated slot");
+    let intruder_id = intruder.id().clone();
+    assert_eq!(intruder.index(), cached, "the slot is occupied again");
+    assert_ne!(intruder_id, moved_id, "by a different window");
+
+    // Selecting through the stale handle must reach the handle's own window.
+    moved.select().await.expect("select succeeds");
+    let active = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session always has one");
+    assert_eq!(
+        active.id(),
+        &moved_id,
+        "select acted on the handle's window, not on whatever took its index",
+    );
+    assert_ne!(
+        active.id(),
+        &intruder_id,
+        "and not on the window occupying its old index",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
