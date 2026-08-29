@@ -2109,6 +2109,61 @@ async fn the_environment_is_read_and_written_at_the_scope_named() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+async fn capture_until_any(tools: &TmuxTools, pane: &str, markers: &[&str]) -> String {
+    let mut shown = String::new();
+    for _ in 0..40 {
+        json(
+            tools
+                .capture_pane(args(serde_json::json!({"pane": pane})))
+                .await
+                .expect("the pane captures"),
+        )["text"]
+            .as_str()
+            .expect("the capture contains text")
+            .clone_into(&mut shown);
+        if markers.iter().any(|marker| shown.contains(marker)) {
+            return shown;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the pane did not show {markers:?}: {shown:?}");
+}
+
+async fn gated_paste(
+    gate: &Server,
+    tools: &TmuxTools,
+    pane: &str,
+    text: &str,
+    name: &str,
+) -> tokio::task::JoinHandle<()> {
+    let reached = format!("{name}-set");
+    let release = format!("{name}-release");
+    gate.set_hook(
+        "after-set-buffer",
+        format!("wait-for -S {reached}; wait-for {release}"),
+    )
+    .await
+    .expect("the buffer gate is installed");
+    let request = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.to_owned();
+        let text = text.to_owned();
+        async move {
+            tools
+                .paste_text(args(serde_json::json!({"pane": pane, "text": text})))
+                .await
+                .expect("the gated paste completes");
+        }
+    });
+    assert_eq!(
+        gate.wait_for_channel(&reached, Duration::from_secs(5))
+            .await
+            .expect("the buffer gate can be read"),
+        libtmux::ChannelWait::Signalled,
+    );
+    request
+}
+
 /// Pasting exists because typing is not the same thing: the text arrives as
 /// one block rather than as keystrokes a program can react to one at a time.
 #[tokio::test]
@@ -2130,26 +2185,7 @@ async fn pasted_text_reaches_the_pane_and_leaves_no_buffer_behind() {
     // Asserted on the pane rather than through a wait: the text is delivered
     // by the paste itself, and a wait attached afterwards races the output it
     // is looking for.
-    let mut shown = String::new();
-    for _ in 0..40 {
-        shown = json(
-            tools
-                .capture_pane(args(serde_json::json!({"pane": pane})))
-                .await
-                .expect("the capture runs"),
-        )["text"]
-            .as_str()
-            .expect("text")
-            .to_owned();
-        if shown.contains("echo pasted-marker") {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        shown.contains("echo pasted-marker"),
-        "the pasted text reached the pane: {shown:?}",
-    );
+    capture_until_any(&tools, &pane, &["echo pasted-marker"]).await;
 
     // The buffer this created is gone, so it cannot be pasted again by
     // accident or read by whoever looks at the buffer list next.
@@ -2163,6 +2199,59 @@ async fn pasted_text_reaches_the_pane_and_leaves_no_buffer_behind() {
         "the paste buffer was deleted afterwards: {buffers:?}",
     );
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn concurrent_pastes_do_not_overwrite_each_others_buffers() {
+    const FIRST_TEXT: &str = "first-concurrent-paste";
+    const SECOND_TEXT: &str = "second-concurrent-paste";
+
+    let (guard, tools, first_pane) = typing_fixture("concurrent-pastes").await;
+    let second_pane = id(tools
+        .split_pane(args(serde_json::json!({"pane": first_pane})))
+        .await
+        .expect("the pane splits"));
+    prompt_ready(guard.server(), &second_pane).await;
+    let gate = independent(guard.server()).await;
+
+    let first = gated_paste(&gate, &tools, &first_pane, FIRST_TEXT, "first-paste").await;
+    let second = gated_paste(&gate, &tools, &second_pane, SECOND_TEXT, "second-paste").await;
+
+    gate.signal_channel("first-paste-release")
+        .await
+        .expect("the first paste is released");
+    let first_result = first.await;
+    let first_screen = capture_until_any(&tools, &first_pane, &[FIRST_TEXT, SECOND_TEXT]).await;
+
+    gate.signal_channel("second-paste-release")
+        .await
+        .expect("the second paste is released");
+    let second_result = second.await;
+
+    first_result.expect("the first paste task completes");
+    assert!(
+        first_screen.contains(FIRST_TEXT) && !first_screen.contains(SECOND_TEXT),
+        "the first pane received only its paste: {first_screen:?}",
+    );
+    second_result.expect("the second paste task completes");
+    let second_screen = capture_until_any(&tools, &second_pane, &[SECOND_TEXT]).await;
+    assert!(
+        second_screen.contains(SECOND_TEXT) && !second_screen.contains(FIRST_TEXT),
+        "the second pane received only its paste: {second_screen:?}",
+    );
+
+    assert!(
+        guard
+            .server()
+            .buffer_names()
+            .await
+            .expect("buffers are listed")
+            .is_empty(),
+        "both temporary buffers were deleted",
+    );
+
+    gate.shutdown().await.expect("the gate executor stops");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

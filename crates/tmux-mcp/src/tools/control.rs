@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use libtmux::{
     Command, Error, NewSessionOptions, PaneSize, ResizeDirection, SplitDirection, SplitOptions,
 };
@@ -15,6 +17,9 @@ use crate::{
 
 use super::error::{EffectBoundary, bad_input, object_gone, tmux_error, vanished};
 use super::{OptionScope, lossy};
+
+/// Numbers temporary paste buffers so concurrent calls cannot share one.
+static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[tool_router(router = control_router, vis = "pub(super)")]
 impl TmuxTools {
@@ -813,9 +818,11 @@ impl TmuxTools {
     ) -> Result<Json<Pasted>, ErrorData> {
         let target = self.find_pane(&pane).await?;
         let bytes = text.len();
-        // Named after this process so two servers cannot collide, and deleted
-        // below so a buffer this created does not outlive the paste.
-        let buffer = format!("tmux-mcp-{}", std::process::id());
+        let buffer = format!(
+            "tmux-mcp-{}-{}",
+            std::process::id(),
+            PASTE_BUFFER_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
 
         self.server
             .set_buffer(Some(&buffer), std::ffi::OsString::from(text))
