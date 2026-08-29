@@ -242,6 +242,7 @@ constant libtmux::option_names::WORD_SEPARATORS
 constant libtmux::option_names::WRAP_SEARCH
 constant libtmux::option_names::XTERM_KEYS
 constant libtmux::since::CAPTURE_LINE_FLAGS
+constant libtmux::since::CLIENTS_HIDE_STOPPED
 constant libtmux::since::CONTROL_PANE_OFF
 constant libtmux::since::MIRRORED_LAYOUTS
 constant libtmux::since::PROMPT_HISTORY
@@ -1162,6 +1163,7 @@ variant libtmux::ControlModeErrorKind::UnrepresentableCommand
 variant libtmux::EnvironmentEntry::Removed
 variant libtmux::EnvironmentEntry::Set
 variant libtmux::Error::CapabilityDefective
+variant libtmux::Error::ClientSuspended
 variant libtmux::Error::CommandFailed
 variant libtmux::Error::ControlMode
 variant libtmux::Error::ControlModeFrameTooLarge

@@ -119,28 +119,103 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ObjectGone`] when the client has detached, or a
-    /// listing error when tmux could not be read.
+    /// Returns [`Error::ObjectGone`] when the client has detached, and
+    /// [`Error::ClientSuspended`] when it is stopped rather than gone --
+    /// suspended or locked, which tmux leaves out of the same listing. Keep
+    /// the handle for the second: the client is listed again once it resumes.
+    /// Returns a listing error when tmux could not be read.
     pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
-        let info = listing::clients(&self.core, None)
+        let listed = listing::clients(&self.core, None)
             .await?
             .into_iter()
-            .find(|info| info.client_name() == self.name())
-            .ok_or_else(|| Error::ObjectGone {
-                kind: ObjectKind::Client,
-                id: self.name().to_string_lossy().into_owned(),
-            })?;
+            .find(|info| info.client_name() == self.name());
+
+        let Some(info) = listed else {
+            return Err(self.why_unlisted().await);
+        };
 
         self.info = info;
         Ok(self)
+    }
+
+    /// Say why this client is not in the listing.
+    ///
+    /// `list-clients` leaves out the dead, the exiting and the suspended
+    /// alike, so absence from it does not say which happened. A suspended
+    /// client is still resolvable as a command target and reports itself,
+    /// which is what tells the temporary case from the permanent one.
+    ///
+    /// Only the miss path pays for this, and only tmux's own answer is
+    /// trusted: anything that does not resolve to this client by name, or
+    /// resolves without saying it is suspended, is reported gone exactly as
+    /// before. The probe cannot turn a gone client into a live one, only a
+    /// suspended one into something other than gone.
+    async fn why_unlisted(&self) -> Error {
+        let gone = || Error::ObjectGone {
+            kind: ObjectKind::Client,
+            id: self.name().to_string_lossy().into_owned(),
+        };
+
+        // Flags first: they are a comma-separated list of known words and so
+        // never hold the separator, while a client name is a terminal path
+        // and is not this crate's to constrain. Splitting once puts every
+        // ambiguous byte on the far side.
+        let Ok(result) = self
+            .core
+            .execute(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(OsString::from_vec(self.name().as_bytes().to_vec()))
+                    .arg(OsString::from("#{client_flags}|#{client_name}")),
+            )
+            .await
+        else {
+            return gone();
+        };
+        if !result.success() {
+            return gone();
+        }
+
+        let stdout = result.stdout();
+        let answer = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+        let Some(separator) = answer.iter().position(|byte| *byte == b'|') else {
+            return gone();
+        };
+        let (flags, separated) = answer.split_at(separator);
+        // Past the separator itself. `split_at` puts it at the head of the
+        // second half, so this is never out of range; asking rather than
+        // indexing keeps that true if the split ever moves.
+        let Some(name) = separated.get(1..) else {
+            return gone();
+        };
+        if name != self.name().as_bytes() {
+            return gone();
+        }
+
+        // `display-message` is allowed to fail its target, so an absent client
+        // expands every format empty rather than erroring. That makes the flag
+        // the whole signal: no flag, no claim.
+        if flags
+            .split(|byte| *byte == b',')
+            .any(|flag| flag == b"suspended")
+        {
+            return Error::ClientSuspended {
+                name: self.name().to_string_lossy().into_owned(),
+            };
+        }
+        gone()
     }
 
     /// Return a new handle holding the client's current state.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ObjectGone`] when the client has detached, or a
-    /// listing error when tmux could not be read.
+    /// Returns [`Error::ObjectGone`] when the client has detached, and
+    /// [`Error::ClientSuspended`] when it is stopped rather than gone. The
+    /// two are worth telling apart: [`Error::is_object_gone`] answers false
+    /// for the second, because the same handle works again once the client
+    /// resumes. Returns a listing error when tmux could not be read.
     pub async fn refreshed(&self) -> Result<Self, Error> {
         let mut refreshed = self.clone();
         refreshed.refresh().await?;
@@ -323,9 +398,20 @@ impl Client {
 
     /// Suspend this client, as if its user pressed the suspend key.
     ///
+    /// The handle survives, and deliberately: unlike [`Self::detach`], this
+    /// stops the client rather than ending it. tmux stops listing a suspended
+    /// client, so [`Server::clients`] will not show it and the session stops
+    /// counting it as attached, but it is still there. It returns when its
+    /// process continues, which for a suspended client is `SIGCONT`.
+    ///
+    /// [`Server::clients`]: crate::Server::clients
+    ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command.
+    /// Returns an error when tmux refuses the command. Reading through the
+    /// handle afterwards gives [`Error::ClientSuspended`] rather than
+    /// [`Error::ObjectGone`], so a caller can tell this from a client that
+    /// left.
     pub async fn suspend(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
@@ -344,9 +430,16 @@ impl Client {
     /// attached to one session and [`crate::Server::lock_all`] locks every
     /// client on the server; this locks exactly one.
     ///
+    /// tmux marks a locked client with the flag it uses for a suspended one,
+    /// so a locked client leaves [`crate::Server::clients`] the same way and
+    /// comes back when its `lock-command` exits. A server with
+    /// `lock-after-time` set reaches that state with nobody asking.
+    ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command.
+    /// Returns an error when tmux refuses the command. Reading through the
+    /// handle while the client is locked gives [`Error::ClientSuspended`],
+    /// not [`Error::ObjectGone`].
     pub async fn lock(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,

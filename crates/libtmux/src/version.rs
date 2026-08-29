@@ -625,6 +625,20 @@ pub mod since {
     /// which discards the queue on every supported release.
     pub const CONTROL_PANE_OFF: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 
+    /// `list-clients` leaving out a client that is stopped rather than gone,
+    /// and so [`crate::Error::ClientSuspended`] being reachable at all.
+    ///
+    /// From this release `sort_get_clients` screens the listing on
+    /// `CLIENT_UNATTACHEDFLAGS`, which covers the dead, the exiting and the
+    /// suspended together, so a suspended or locked client disappears from it.
+    /// Earlier releases screen on the session alone, and suspending a client
+    /// never clears that, so it stays listed and reads back normally.
+    ///
+    /// Measured on 3.2a, 3.4, 3.5a, 3.6b, 3.7 and 3.7c: the first four list a
+    /// suspended client, the last two do not.
+    pub const CLIENTS_HIDE_STOPPED: ReleaseVersion =
+        ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
     /// The mirrored layouts, and so [`crate::Layout::MainHorizontalMirrored`]
     /// and [`crate::Layout::MainVerticalMirrored`].
     ///
