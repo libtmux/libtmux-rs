@@ -74,17 +74,41 @@ def main(ledger: str, crates: str) -> int:
     defined = defined_names(roots)
 
     missing: list[tuple[int, str, str]] = []
+    done = 0
+    unchecked = 0
+    # Which column holds the Rust side is a property of the table, not a
+    # constant. `parity.md` carries two shapes -- one keyed by Python symbol
+    # and one by Python behaviour -- and a fixed index reads the Rust column of
+    # the first and the delivery slice of the second, which names no
+    # identifier and so quietly checked nothing for every row of it.
+    rust = 3
     for number, line in enumerate(document.splitlines(), start=1):
         if not line.startswith("|"):
             continue
         columns = [cell.strip() for cell in line.split("|")]
         if len(columns) < 6:
             continue
+        heading = next(
+            (i for i, cell in enumerate(columns) if "Rust" in cell), None
+        )
+        if heading is not None:
+            rust = heading
+            continue
         status = columns[-2].strip("`").strip()
         if status not in DONE:
             continue
 
-        for quoted in re.findall(r"`([^`]+)`", columns[3]):
+        done += 1
+        # A row whose Rust column is prose names nothing to look up, so this
+        # check passes over it without reading anything. Counted rather than
+        # skipped in silence: a row that says `implemented` and nothing this
+        # can verify is exactly where an overclaim survives, and three of them
+        # did -- `list_commands`, `if_shell`, and the `Path` half of the buffer
+        # methods, each sharing a row with a sibling that was implemented.
+        quotes = re.findall(r"`([^`]+)`", columns[rust])
+        if not quotes:
+            unchecked += 1
+        for quoted in quotes:
             for name in named(quoted):
                 if name in EXPECTED_ABSENT or name in defined:
                     continue
@@ -99,7 +123,14 @@ def main(ledger: str, crates: str) -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"every name in a done row is defined ({len(roots)} crate sources scanned)")
+    print(
+        f"every name in a done row is defined "
+        f"({done} done rows, {len(roots)} crate sources scanned)"
+    )
+    if unchecked:
+        print(
+            f"  {unchecked} of those name no Rust identifier, so nothing in them was checked"
+        )
     return 0
 
 
