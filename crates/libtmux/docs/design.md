@@ -1696,6 +1696,21 @@ something has to signal it, so it answers "tell me when this is done" only for
 work that was written to announce itself. Watching a pane that was not is the
 missing category, and it stays missing.
 
+`Pane::wait_for_text` and `Pane::wait_for_quiet` now answer the pane case, on
+the polling path this section argued for: no feature, because a caller who
+dispatches a command needs to know when it finished and a doorbell needs
+`control-mode`. Each look reads the scrollback with wrapped lines joined,
+which is what the two constrained failures demanded -- text that scrolled off
+before the look reads as absent, and a line wider than the pane arrives split,
+so a needle spanning the wrap never matches. A dead pane ends the wait rather
+than holding it to the deadline, and running out of time is
+`PaneWait::TimedOut` rather than an error.
+
+What is still unmeasured is what the doorbell would save, and what a flood
+does to a wait that rings on every byte. The polling floor exists now; the
+optimisation above it does not, and the numbers that would justify it have not
+been taken.
+
 `libtmux::test::retry_until` is the only waiting primitive this crate exposes,
 and `test` sits behind `test-support`, which the manifest calls out as
 belonging "to a dev-dependency, not to a build of the library". A caller who

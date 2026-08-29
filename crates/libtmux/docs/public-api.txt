@@ -266,6 +266,7 @@ enum libtmux::PaneDirection
 enum libtmux::PaneProgressState
 enum libtmux::PaneSize
 enum libtmux::PaneTarget
+enum libtmux::PaneWait
 enum libtmux::PromptKind
 enum libtmux::ReplaceMode
 enum libtmux::ResizeDirection
@@ -467,6 +468,8 @@ function libtmux::Pane::tty
 function libtmux::Pane::typed_option
 function libtmux::Pane::unset_hook
 function libtmux::Pane::unset_option
+function libtmux::Pane::wait_for_quiet
+function libtmux::Pane::wait_for_text
 function libtmux::Pane::width
 function libtmux::Pane::window
 function libtmux::Pane::window_id
@@ -1252,6 +1255,9 @@ variant libtmux::PaneProgressState::Paused
 variant libtmux::PaneSize::Cells
 variant libtmux::PaneSize::Percent
 variant libtmux::PaneTarget::Id
+variant libtmux::PaneWait::Arrived
+variant libtmux::PaneWait::Dead
+variant libtmux::PaneWait::TimedOut
 variant libtmux::PromptKind::Command
 variant libtmux::PromptKind::Search
 variant libtmux::PromptKind::Target

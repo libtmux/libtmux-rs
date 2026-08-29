@@ -306,7 +306,7 @@ pub use limits::{DispatchLimits, OutputLimits};
 pub use options::{
     OptionKind, OptionSchema, OptionScope, OptionValue, names as option_names, option_schema,
 };
-pub use pane::{CaptureOptions, CapturedLine, Pane};
+pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 pub use server::{
     AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, PromptKind, Server,
     ServerBuilder, SessionTree, WindowTree,

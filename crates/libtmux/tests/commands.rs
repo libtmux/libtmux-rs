@@ -1820,3 +1820,102 @@ async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Waiting answers without a feature, and survives the two shapes that made a
+/// rebuilt version report success while losing output.
+///
+/// A screen read misses text that scrolled away before the look, and splits a
+/// line wider than the pane into several. Both report success with the wrong
+/// content, which is the direction that costs a caller most, so both are
+/// asserted rather than assumed.
+#[tokio::test]
+async fn waiting_survives_scrollback_and_a_line_wider_than_the_pane() {
+    use libtmux::PaneWait;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("waits").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    // Wider than any sane pane, so tmux wraps it. A screen read would see
+    // several lines and never match a needle spanning the wrap.
+    let wide = "W".repeat(400);
+    pane.send_keys(format!("printf '{wide}\\n'"))
+        .await
+        .expect("keys are sent");
+    pane.send_key_names(["Enter"]).await.expect("it runs");
+
+    assert_eq!(
+        pane.wait_for_text(&wide, Duration::from_secs(10))
+            .await
+            .expect("waiting is not an error"),
+        PaneWait::Arrived,
+        "a line wider than the pane is matched across its wrap",
+    );
+
+    // Push the wide line off the visible screen. A screen read would now
+    // report it absent; the scrollback still holds it.
+    for _ in 0..60 {
+        pane.send_keys("printf 'filler\\n'").await.expect("keys");
+        pane.send_key_names(["Enter"]).await.expect("it runs");
+    }
+    assert_eq!(
+        pane.wait_for_text(&wide, Duration::from_secs(10))
+            .await
+            .expect("waiting is not an error"),
+        PaneWait::Arrived,
+        "text that scrolled off the screen is still found",
+    );
+
+    // Running out of time is an outcome, not an error.
+    assert_eq!(
+        pane.wait_for_text("nothing prints this", Duration::from_millis(400))
+            .await
+            .expect("a deadline is not an error"),
+        PaneWait::TimedOut,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane whose process ended stops the wait instead of holding the deadline.
+#[tokio::test]
+async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
+    use libtmux::{NewWindowOptions, PaneWait};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("dying").await.expect("session");
+
+    // `remain-on-exit` keeps the pane after its command ends, so the wait has
+    // a dead pane to observe rather than a missing one.
+    server
+        .cmd(
+            Command::new("set-option")
+                .arg("-g")
+                .arg("remain-on-exit")
+                .arg("on"),
+        )
+        .await
+        .expect("panes remain after exit");
+    let window = session
+        .new_window(NewWindowOptions::new("shortlived").command("true"))
+        .await
+        .expect("window");
+    let pane = window.panes().await.expect("panes").remove(0);
+
+    let started = std::time::Instant::now();
+    let outcome = pane
+        .wait_for_text("never printed", Duration::from_secs(20))
+        .await
+        .expect("waiting is not an error");
+    let waited = started.elapsed();
+
+    assert_eq!(outcome, PaneWait::Dead);
+    assert!(
+        waited < Duration::from_secs(15),
+        "a dead pane ends the wait early rather than at the deadline: {waited:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
