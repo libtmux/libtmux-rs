@@ -357,7 +357,7 @@ fn every_call(
         ("paste_text", json!({"pane": pane, "text": "pasted"})),
         ("job_status", json!({"job": job, "cursor": 0, "seconds": 0})),
         ("list_jobs", json!({})),
-        ("cancel_job", json!({"job": job})),
+        ("forget_job", json!({"job": job})),
         (
             "wait_for_idle",
             json!({"pane": pane, "quiet_seconds": 1, "seconds": 2}),

@@ -73,15 +73,14 @@ async fn wait_for_job_output(tools: &TmuxTools, job: &str, marker: &str) {
     .expect("the owned reader retains the command output");
 }
 
-async fn cancel_and_release(tools: &TmuxTools, guard: &TestServer, job: &str, release: &str) {
-    let cancelled = json(
+async fn forget_and_release(tools: &TmuxTools, guard: &TestServer, job: &str, release: &str) {
+    let forgotten = json(
         tools
-            .cancel_job(args(serde_json::json!({"job": job})))
+            .forget_job(args(serde_json::json!({"job": job})))
             .await
-            .expect("the retained job can be cancelled"),
+            .expect("the retained job can be forgotten"),
     );
-    assert_eq!(cancelled["job"], job);
-    assert_eq!(cancelled["interrupted"], true);
+    assert_eq!(forgotten["job"], job);
     guard
         .server()
         .signal_channel(release)
@@ -164,13 +163,13 @@ async fn uncertain_foreground_dispatch_names_the_owned_job() {
     );
     assert_eq!(status["job"], job);
     assert_eq!(status["state"], "dispatch_unknown");
-    let cancelled = json(
+    let forgotten = json(
         tools
-            .cancel_job(args(serde_json::json!({"job": job})))
+            .forget_job(args(serde_json::json!({"job": job})))
             .await
-            .expect("the uncertain job can be cancelled"),
+            .expect("the uncertain job can be forgotten"),
     );
-    assert_eq!(cancelled["interrupted"], true);
+    assert_eq!(forgotten["job"], job);
 
     drop(tools);
     short
@@ -215,7 +214,7 @@ async fn a_foreground_deadline_returns_a_recoverable_job() {
         .expect("the unfinished run names its retained job")
         .to_owned();
     wait_for_job_output(&tools, &job, marker).await;
-    cancel_and_release(&tools, &guard, &job, release).await;
+    forget_and_release(&tools, &guard, &job, release).await;
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -276,7 +275,7 @@ async fn cancelling_a_foreground_request_returns_a_recoverable_job() {
         .expect("the cancelled run names its retained job")
         .to_owned();
     wait_for_job_output(&tools, &job, marker).await;
-    cancel_and_release(&tools, &guard, &job, release).await;
+    forget_and_release(&tools, &guard, &job, release).await;
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -335,7 +334,7 @@ async fn dropping_a_foreground_future_leaves_a_discoverable_job() {
         .expect("the owner has an id")
         .to_owned();
     wait_for_job_output(&tools, &job, marker).await;
-    cancel_and_release(&tools, &guard, &job, release).await;
+    forget_and_release(&tools, &guard, &job, release).await;
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -383,9 +382,9 @@ async fn forgetting_a_foreground_job_wakes_its_waiter() {
         .expect("the foreground run is visible")
         .to_owned();
     tools
-        .cancel_job(args(serde_json::json!({"job": job})))
+        .forget_job(args(serde_json::json!({"job": job})))
         .await
-        .expect("the foreground owner can be cancelled");
+        .expect("the foreground owner can be forgotten");
     guard
         .server()
         .signal_channel(release)

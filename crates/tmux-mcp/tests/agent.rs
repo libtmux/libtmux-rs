@@ -1602,9 +1602,9 @@ async fn abandoning_a_run_keeps_one_owned_connection() {
         .expect("the reader has a discoverable owner")
         .to_owned();
     tools
-        .cancel_job(args(serde_json::json!({"job": job})))
+        .forget_job(args(serde_json::json!({"job": job})))
         .await
-        .expect("the owner can be cancelled");
+        .expect("the owner can be forgotten");
     server
         .signal_channel(release)
         .await
@@ -1832,14 +1832,69 @@ async fn starting_a_job_returns_before_the_command_finishes() {
     let listed = json(tools.list_jobs().await.expect("jobs list"));
     assert_eq!(listed["jobs"][0]["job"], job.as_str());
 
-    // Cancelling interrupts the pane rather than leaving it busy.
-    let cancelled = json(
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn forgetting_a_job_leaves_queued_pane_input_alone() {
+    let (guard, tools, pane) = typing_fixture("jobs-forget-queued-input").await;
+    let started = "jobs-forget-queued-input-started";
+    let release = "jobs-forget-queued-input-release";
+    let marker = "queued-marker";
+    let job = json(
         tools
-            .cancel_job(args(serde_json::json!({"job": job})))
+            .start_command(args(serde_json::json!({
+                "pane": pane,
+                "command": format!("tmux wait-for -S {started}; tmux wait-for {release}"),
+            })))
             .await
-            .expect("the job cancels"),
+            .expect("the tracked command starts"),
+    )["job"]
+        .as_str()
+        .expect("a job id")
+        .to_owned();
+
+    assert_eq!(
+        guard
+            .server()
+            .wait_for_channel(started, Duration::from_secs(5))
+            .await
+            .expect("the tracked command reports its gate"),
+        libtmux::ChannelWait::Signalled,
+        "the tracked command must be reading before terminal input is queued",
     );
-    assert_eq!(cancelled["interrupted"], true);
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "printf '\\161\\165\\145\\165\\145\\144\\055\\155\\141\\162\\153\\145\\162\\012'",
+            "enter": true,
+        })))
+        .await
+        .expect("the distinct command is queued in the pane");
+
+    tools
+        .forget_job(args(serde_json::json!({"job": job})))
+        .await
+        .expect("the tracked job is forgotten");
+    guard
+        .server()
+        .signal_channel(release)
+        .await
+        .expect("the tracked command is released");
+
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        tools
+            .capture_pane(args(serde_json::json!({"pane": pane})))
+            .await
+            .ok()
+            .is_some_and(|answer| {
+                json(answer)["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(marker))
+            })
+    })
+    .await
+    .expect("forgetting the job leaves the queued command for the pane to run");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

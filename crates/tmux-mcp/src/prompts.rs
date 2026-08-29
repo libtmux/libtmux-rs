@@ -57,7 +57,7 @@ impl TmuxTools {
                  Two answers are not failures and should not be retried blindly. \
                  outcome=deadline means the time ran out and the command is still running, \
                  so the pane is busy: continue from the returned job id with job_status or \
-                 stop it with cancel_job. outcome=no_shell means the pane was not at a \
+                 forget its retained output with forget_job. outcome=no_shell means the pane was not at a \
                  prompt, so the text went into whatever is running there; inspect the same \
                  job and look with snapshot_pane before trying again."
             ),

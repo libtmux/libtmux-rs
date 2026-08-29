@@ -621,24 +621,21 @@ impl Jobs {
         views
     }
 
-    /// Report whether a job is active, and which pane it is in.
-    pub(crate) fn active_in(&self, id: &str) -> Option<(String, bool)> {
-        let table = hold(&self.inner);
-        let JobSlot::Ready(job) = table.slots.get(id)? else {
-            return None;
-        };
-        let active = hold(&job.progress).state.is_active();
-        Some((job.pane.clone(), active))
-    }
-
     /// Report whether this table still owns a published job.
     fn holds(&self, id: &str) -> bool {
         matches!(hold(&self.inner).slots.get(id), Some(JobSlot::Ready(_)))
     }
 
-    /// Forget a job, ending its reader.
-    pub(crate) fn forget(&self, id: &str) -> bool {
-        matches!(hold(&self.inner).slots.remove(id), Some(JobSlot::Ready(_)))
+    /// Forget a published job and return its pane.
+    pub(crate) fn forget(&self, id: &str) -> Option<String> {
+        let job = {
+            let mut table = hold(&self.inner);
+            let JobSlot::Ready(job) = table.slots.remove(id)? else {
+                return None;
+            };
+            job
+        };
+        Some(job.pane.clone())
     }
 }
 

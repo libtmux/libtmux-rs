@@ -182,7 +182,7 @@ async fn a_full_running_table_refuses_before_sending() {
         matches!(started, Err(StartError::AtCapacity { limit: 1 })),
         "a full running table accepted a job: {started:?}",
     );
-    assert!(jobs.active_in(&first).is_some(), "the first job remains");
+    assert!(jobs.holds(&first), "the first job remains");
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let reached_pane = pane
         .capture()
@@ -304,14 +304,14 @@ async fn cancelling_after_send_keeps_the_start_visible() {
         .expect("the cancelled start remains visible");
     assert_eq!(owned.pane, pane.id().to_string());
     assert_eq!(owned.state, JobState::Starting);
-    assert!(jobs.active_in(&owned.job).is_some_and(|(_, active)| active));
+    assert!(jobs.holds(&owned.job));
     libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
         jobs.read(&owned.job, None)
             .is_some_and(|progress| progress.output.contains(marker))
     })
     .await
     .expect("the owned watcher retains output written before publication");
-    assert!(jobs.forget(&owned.job));
+    assert_eq!(jobs.forget(&owned.job), Some(pane.id().to_string()));
     assert!(jobs.read(&owned.job, None).is_none());
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -346,7 +346,7 @@ async fn forgetting_a_start_does_not_claim_that_it_was_retained() {
         .into_iter()
         .next()
         .expect("the starting job is visible");
-    assert!(jobs.forget(&owned.job));
+    assert_eq!(jobs.forget(&owned.job), Some(pane.id().to_string()));
     guard
         .server()
         .signal_channel(release)
@@ -428,11 +428,11 @@ async fn a_timed_out_send_retains_an_inspectable_job() {
     })
     .await
     .expect("the watcher retains output after dispatch times out");
-    assert!(jobs.active_in(&owned.job).is_some_and(|(_, active)| active));
+    assert!(jobs.holds(&owned.job));
     pane.send_key_names(["C-c"])
         .await
         .expect("an uncertain job can be interrupted");
-    assert!(jobs.forget(&owned.job));
+    assert_eq!(jobs.forget(&owned.job), Some(pane.id().to_string()));
     assert!(jobs.read(&owned.job, None).is_none());
     short
         .shutdown()
@@ -471,15 +471,12 @@ async fn a_finished_lru_is_evicted_before_a_running_job() {
 
     let next = jobs.reserve().expect("a finished slot makes room");
 
-    assert!(jobs.active_in(&ids[0]).is_some(), "the running job remains");
+    assert!(jobs.holds(&ids[0]), "the running job remains");
     assert!(
-        jobs.active_in(&ids[1]).is_none(),
+        !jobs.holds(&ids[1]),
         "the least recently read finished job is evicted",
     );
-    assert!(
-        jobs.active_in(&ids[2]).is_some(),
-        "the newer finished job remains",
-    );
+    assert!(jobs.holds(&ids[2]), "the newer finished job remains");
     drop(next);
 }
 
@@ -508,7 +505,8 @@ async fn forgetting_a_job_wakes_a_registered_status_waiter() {
     });
 
     ready.wait();
-    assert!(jobs.forget(&id), "the active owner is removed");
+    assert_eq!(jobs.forget(&id).as_deref(), Some("%0"));
+    assert!(!jobs.holds(&id), "the active owner is removed");
     release.wait();
 
     let woke = tokio::time::timeout(std::time::Duration::from_secs(2), waiting)
@@ -516,6 +514,63 @@ async fn forgetting_a_job_wakes_a_registered_status_waiter() {
         .expect("forgetting the owner wakes the registered waiter")
         .expect("the wait task stays healthy");
     assert!(woke, "the owner-drop notification reached the waiter");
+}
+
+#[tokio::test]
+async fn forgetting_a_ready_job_returns_its_pane_and_aborts_its_reader() {
+    let jobs = Jobs::with_limit(1);
+    let id = "job-forget-ready".to_owned();
+    let now = Instant::now();
+    let (started, started_by_reader) = oneshot::channel();
+    let reader = tokio::spawn(async move {
+        let _ = started.send(());
+        std::future::pending::<()>().await;
+    });
+    let abort = reader.abort_handle();
+    started_by_reader
+        .await
+        .expect("the reader starts before the table owns it");
+    hold(&jobs.inner).slots.insert(
+        id.clone(),
+        JobSlot::Ready(Job {
+            pane: "%7".to_owned(),
+            command: "sleep 60".to_owned(),
+            started: now,
+            progress: Arc::new(Mutex::new(Progress {
+                state: JobState::Running,
+                exit_status: None,
+                stream: Vec::new(),
+                body: None,
+                dropped: 0,
+                checkpoint: TextFilter::new(),
+                bytes: 0,
+                truncated: false,
+                terminal: None,
+            })),
+            finished: Arc::new(Notify::new()),
+            reader,
+            last_read: now,
+        }),
+    );
+
+    assert_eq!(jobs.forget(&id).as_deref(), Some("%7"));
+    assert!(!jobs.holds(&id), "forgetting removes the published job");
+    assert!(jobs.read(&id, None).is_none());
+    assert!(jobs.list().is_empty());
+    libtmux::test::retry_until(std::time::Duration::from_secs(2), async || {
+        abort.is_finished()
+    })
+    .await
+    .expect("forgetting an active job aborts its reader");
+}
+
+#[test]
+fn forgetting_an_absent_or_unpublished_job_returns_none() {
+    let jobs = Jobs::with_limit(1);
+
+    assert_eq!(jobs.forget("job-missing"), None);
+    let reservation = jobs.reserve().expect("the slot is available");
+    assert_eq!(jobs.forget(reservation.id()), None);
 }
 
 #[tokio::test]

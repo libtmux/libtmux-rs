@@ -351,15 +351,13 @@ pub struct JobList {
     pub jobs: Vec<crate::jobs::JobView>,
 }
 
-/// A background command that was stopped.
+/// A background command that is no longer retained.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct JobCancelled {
+pub struct JobForgotten {
     /// The job that was forgotten.
     pub job: String,
-    /// The pane it was running in.
+    /// The pane the job ran in.
     pub pane: String,
-    /// Whether an interrupt was sent, which it is not for a finished job.
-    pub interrupted: bool,
 }
 
 /// One tmux server found on this machine.

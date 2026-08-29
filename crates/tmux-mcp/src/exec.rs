@@ -116,7 +116,7 @@ pub struct RunView {
     /// The background job retaining this run after waiting stopped.
     ///
     /// Absent once the command has a terminal outcome. Pass this to
-    /// `job_status` or `cancel_job` instead of retrying the command.
+    /// `job_status` or `forget_job` instead of retrying the command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<String>,
 }

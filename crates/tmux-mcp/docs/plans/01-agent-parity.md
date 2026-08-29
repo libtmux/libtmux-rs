@@ -304,9 +304,9 @@ Polling is cheap because `job_status` answers from a cursor, the contract
 each poll -- costs the caller its own output again on every look, which is the
 cost the tool exists to avoid.
 
-`cancel_job` interrupts the pane, not the command, because tmux offers nothing
-finer: the job is a foreground process in a pane and `C-c` is what stops one.
-The answer says which pane was interrupted so a caller knows what else it hit.
+`forget_job` stops collecting and forgets retained output without changing the
+pane. To interrupt whatever a pane is running, use `send_keys` with
+`keys: ["C-c"]`; that pane-wide operation affects unrelated queued input too.
 
 ## Where a fallback has to be bounded
 

@@ -41,15 +41,16 @@
 //! To run something and learn whether it worked, use `run_command`: it reports
 //! the exit status rather than leaving an agent to infer success from text.
 //! Its deadline ends the waiting rather than the command and returns a job id
-//! for following or cancelling the run.
+//! for following or forgetting the retained output.
 //!
 //! # Driving a pane
 //!
 //! `send_keys` both types and presses. Its `text` is sent literally, so `C-c`
 //! there types three characters; its `keys` are tmux key names, which is the
 //! only way to press something with no character of its own — `C-c` to
-//! interrupt, `Escape`, `Up`. Use `cancel_job` for a run with a job id;
-//! `send_keys` addresses whatever the pane is doing when the key arrives.
+//! interrupt, `Escape`, `Up`. `forget_job` only stops collecting a run's
+//! output; `send_keys` addresses whatever the pane is doing when the key
+//! arrives.
 //!
 //! # Asking about layout
 //!
@@ -185,7 +186,7 @@ const INSTRUCTIONS: &str = concat!(
     // The habit worth breaking before it starts.
     "\n\nWAIT, DO NOT POLL: run_command runs something and reports its exit \
      status. If it stops waiting first, continue from its job id with \
-     job_status or cancel_job. start_command returns that id immediately, for \
+     job_status or forget_job. start_command returns that id immediately, for \
      anything slow or for several at once. \
      wait_for_text watches for output you did not author, and wait_for_idle \
      waits for a pane to go quiet when you cannot name what to look for. \

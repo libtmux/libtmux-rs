@@ -10,7 +10,7 @@ use crate::jobs;
 use crate::policy::reporting;
 use crate::tail::TailError;
 use crate::{
-    CancelJobArgs, CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, IdleView, JobCancelled,
+    CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, ForgetJobArgs, IdleView, JobForgotten,
     JobList, JobStatusArgs, Reporter, RunCommandArgs, RunView, Since, StartCommandArgs, TmuxTools,
     WaitForIdleArgs, WaitForTextArgs, WaitView, Watch, WatchPaneArgs,
 };
@@ -53,7 +53,7 @@ fn start_error(error: jobs::StartError) -> ErrorData {
             ErrorData::internal_error(
                 format!(
                     "tmux did not confirm whether it started {job}: {cause}; the job remains \
-                     tracked, so inspect it with job_status or stop it with cancel_job before \
+                     tracked, so inspect it with job_status or forget it with forget_job before \
                      retrying"
                 ),
                 Some(serde_json::json!({
@@ -165,7 +165,7 @@ impl TmuxTools {
                        runs in a subshell, so cd and export do not persist. \
                        Reaching the deadline or cancelling this request stops the waiting, not \
                        the command. The result includes a job id: inspect it with job_status or \
-                       stop it with cancel_job.",
+                       forget its retained output with forget_job.",
         title = "Run Command In Pane",
         annotations(
             read_only_hint = false,
@@ -311,13 +311,11 @@ impl TmuxTools {
         }))
     }
 
-    /// Stop a background command and forget it.
+    /// Stop collecting a background command and forget its retained output.
     #[tool(
-        description = "Interrupt an active or unconfirmed job with C-c and forget it. A job \
-                       that has already finished is forgotten without touching its pane. \
-                       This sends the interrupt to the pane the job runs in, so anything \
-                       else that pane is doing is interrupted too.",
-        title = "Cancel Background Command",
+        description = "Stop collecting and forget a job's retained output. This does not \
+                       interrupt the pane or change what it is running.",
+        title = "Forget Background Command",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -325,26 +323,13 @@ impl TmuxTools {
             open_world_hint = false
         )
     )]
-    pub async fn cancel_job(
+    pub async fn forget_job(
         &self,
-        Parameters(CancelJobArgs { job }): Parameters<CancelJobArgs>,
-    ) -> Result<Json<JobCancelled>, ErrorData> {
-        let (pane, active) = self.jobs.active_in(&job).ok_or_else(|| unknown_job(&job))?;
+        Parameters(ForgetJobArgs { job }): Parameters<ForgetJobArgs>,
+    ) -> Result<Json<JobForgotten>, ErrorData> {
+        let pane = self.jobs.forget(&job).ok_or_else(|| unknown_job(&job))?;
 
-        if active {
-            let target = self.find_pane(&pane).await?;
-            target
-                .send_key_names(["C-c"])
-                .await
-                .map_err(|e| tmux_error(&e))?;
-        }
-        self.jobs.forget(&job);
-
-        Ok(Json(JobCancelled {
-            job,
-            pane,
-            interrupted: active,
-        }))
+        Ok(Json(JobForgotten { job, pane }))
     }
 
     /// Wait until a pane stops writing.
@@ -590,7 +575,7 @@ mod tests {
         assert_eq!(data["stale"], false);
         assert_eq!(data["job"], "job-7");
         assert!(error.message.contains("job_status"));
-        assert!(error.message.contains("cancel_job"));
+        assert!(error.message.contains("forget_job"));
     }
 
     #[test]

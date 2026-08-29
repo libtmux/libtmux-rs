@@ -409,9 +409,9 @@ pub struct JobStatusArgs {
     pub seconds: Option<u64>,
 }
 
-/// Arguments for stopping a background command.
+/// Arguments for forgetting a background command.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct CancelJobArgs {
+pub struct ForgetJobArgs {
     /// The job id `start_command` returned.
     pub job: String,
 }

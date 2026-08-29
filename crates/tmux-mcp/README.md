@@ -215,7 +215,7 @@ decide what to run unattended and what to put in front of you.
 | **Read a pane** | `capture_pane`, `snapshot_pane`, `capture_since`, `watch_pane`, `search_panes` |
 | **Find** | `find_panes`, `find_sessions` |
 | **Run and wait** | `run_command`, `send_keys`, `wait_for_text`, `wait_for_idle`, `wait_for_channel`, `signal_channel` |
-| **Run in the background** | `start_command`, `job_status`, `list_jobs`, `cancel_job` |
+| **Run in the background** | `start_command`, `job_status`, `list_jobs`, `forget_job` |
 | **Arrange** | `create_session`, `new_window`, `split_pane`, `select_pane`, `select_window`, `resize_pane`, `rename`, `select_layout`, `respawn_pane` |
 | **Move text** | `paste_text`, `pipe_pane`, `clear_pane` |
 | **Configure** | `show_option`, `set_option`, `show_environment`, `set_environment`, `show_hooks` |
@@ -326,7 +326,9 @@ agent has to wait, look, or avoid breaking the terminal it is working in.
 finish, and answers with its exit status and the output the command wrote.
 Reaching the deadline ends the waiting, not the command, so the answer says
 `deadline` and includes a job id. Pass that id to `job_status` to keep
-following the same run, or to `cancel_job` to stop and forget it.
+following the same run, or to `forget_job` to stop collecting and forget its
+retained output. It leaves pane activity alone; use `send_keys` with
+`keys: ["C-c"]` to interrupt whatever that pane is running.
 
 **Running something slow.** `start_command` returns a job id immediately and
 collects the answer whether or not anyone is waiting, so a ten-minute build
