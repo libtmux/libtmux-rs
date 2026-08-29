@@ -730,6 +730,7 @@ async fn searching_a_window_finds_the_pane_that_matches() {
 ///
 /// `suspend` is deliberately absent: it sends SIGTSTP to the client, and the
 /// only client here is the control connection this test is holding.
+#[cfg(feature = "control-mode")]
 #[tokio::test]
 async fn a_client_reports_its_own_terminal_and_type() {
     use libtmux::control::ControlMode;
