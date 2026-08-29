@@ -56,6 +56,12 @@ required-features = ["control-mode", "test-support"]
 name = "matrix"
 required-features = ["plan", "control-mode", "blocking", "test-support", "query"]
 
+# Only for `unique_name`, so the jobs and their channels cannot collide with
+# another run on the same server. The waiting it demonstrates needs no feature.
+[[example]]
+name = "orchestrate"
+required-features = ["test-support"]
+
 [[bench]]
 name = "hierarchy"
 harness = false
