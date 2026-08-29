@@ -419,7 +419,7 @@ impl Connection {
                 // tmux hung up, or the watcher asked to stop. Either ends the
                 // connection whatever the other half is doing.
                 Step::Read(Ok(None)) => {
-                    self.drain_terminal_events().await;
+                    self.drain_terminal_events().await?;
                     return Ok(());
                 }
                 Step::Unwatched { asked: true } => {
@@ -429,7 +429,7 @@ impl Connection {
                 Step::TimedOut => return Err(Error::control_mode_timeout()),
                 Step::Read(Ok(Some(line))) => {
                     if !self.dispatch(line, &mut watching).await? {
-                        self.drain_terminal_events().await;
+                        self.drain_terminal_events().await?;
                         return Ok(());
                     }
                 }
@@ -597,14 +597,29 @@ impl Connection {
         }
     }
 
-    /// Close command admission and deliver every event parsed before tmux ended.
-    async fn drain_terminal_events(&mut self) {
+    /// Fail work tmux can no longer answer, then deliver its final events.
+    async fn drain_terminal_events(&mut self) -> Result<(), Error> {
         self.commands.close();
-        while let Some(delivery) = self.pending.pop_front() {
-            if self.events.send(delivery).await.is_err() {
-                break;
-            }
+        self.awaiting.fail_all(Error::control_mode_closed);
+        while let Ok(request) = self.commands.try_recv() {
+            let _ = request.result.send(Err(Error::control_mode_closed()));
         }
+
+        while let Some(delivery) = self.pending.pop_front() {
+            let permit = tokio::select! {
+                biased;
+                () = cancellation_requested(&mut self.core_stopped) => {
+                    return Err(self.child.shutdown_error());
+                }
+                _ = self.stopped.changed() => return Ok(()),
+                permit = self.events.reserve() => permit,
+            };
+            let Ok(permit) = permit else {
+                return Ok(());
+            };
+            permit.send(delivery);
+        }
+        Ok(())
     }
 
     /// Act on one protocol line, reporting whether to keep reading.

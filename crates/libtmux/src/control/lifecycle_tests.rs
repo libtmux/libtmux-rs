@@ -660,6 +660,46 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
 }
 
 #[tokio::test]
+async fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
+    let fixture = directory();
+    let executable = write_script(
+        fixture.path(),
+        &format!(
+            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone",
+            opening_success(),
+            EVENT_QUEUE + 1,
+        ),
+    );
+    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let (commands, events) = attach(&server)
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let outcome = tokio::time::timeout(TEST_TIMEOUT, async {
+        let send = commands.send(Command::new("display-message").arg("unanswered"));
+        let shutdown = async {
+            while !commands.is_closed() {
+                tokio::task::yield_now().await;
+            }
+            server.shutdown().await
+        };
+        tokio::join!(send, shutdown)
+    })
+    .await
+    .expect("terminal draining observes command and core shutdown");
+
+    let error = outcome
+        .0
+        .expect_err("EOF cannot answer the committed command");
+    assert_eq!(error.kind(), ErrorKind::Transport);
+    outcome
+        .1
+        .expect("server shutdown interrupts terminal draining");
+    drop(events);
+}
+
+#[tokio::test]
 async fn pane_snapshot_separates_output_at_the_capture_block() {
     let fixture = directory();
     let executable = write_script(
