@@ -212,6 +212,7 @@ impl Drop for Tail {
 pub(crate) struct Tails {
     identity: Arc<InstanceIdentity>,
     inner: Mutex<HashMap<String, Tail>>,
+    opening: tokio::sync::Semaphore,
     next_epoch: AtomicU64,
 }
 
@@ -234,6 +235,7 @@ impl Tails {
         Self {
             identity,
             inner: Mutex::new(HashMap::new()),
+            opening: tokio::sync::Semaphore::new(1),
             next_epoch: AtomicU64::new(0),
         }
     }
@@ -296,7 +298,24 @@ impl Tails {
             return Ok(found);
         }
 
-        // Attaching is the slow part, and it must not happen under a lock.
+        // One opener owns eviction and attachment, so the connection ceiling
+        // remains true while several first reads race.
+        let _opening = self.opening.acquire().await;
+        if let Some(found) = self.touch(id) {
+            return Ok(found);
+        }
+        {
+            let mut tails = hold(&self.inner);
+            if tails.len() >= MAX_TAILS
+                && let Some(stale) = tails
+                    .iter()
+                    .min_by_key(|(_, tail)| tail.last_read)
+                    .map(|(id, _)| id.clone())
+            {
+                tails.remove(&stale);
+            }
+        }
+
         let mut output = pane.stream_output().await?;
         let epoch = self.next_epoch();
         let ring = Arc::new(Mutex::new(Ring {
@@ -316,24 +335,7 @@ impl Tails {
             })
         };
 
-        let mut tails = hold(&self.inner);
-        // Another call may have attached the same pane while this one was
-        // awaiting. Theirs is as good as ours, and keeping one avoids two
-        // connections to the same pane.
-        if let Some(existing) = tails.get_mut(id) {
-            existing.last_read = Instant::now();
-            reader.abort();
-            return Ok((Arc::clone(&existing.ring), existing.epoch));
-        }
-        if tails.len() >= MAX_TAILS
-            && let Some(stale) = tails
-                .iter()
-                .min_by_key(|(_, tail)| tail.last_read)
-                .map(|(id, _)| id.clone())
-        {
-            tails.remove(&stale);
-        }
-        tails.insert(
+        hold(&self.inner).insert(
             id.to_owned(),
             Tail {
                 epoch,

@@ -577,7 +577,7 @@ fn tailing_many_panes_stays_within_its_connection_budget() {
         );
     }
 
-    // Twelve panes tailed, and the registry keeps eight.
+    // Ten panes requested, and the registry keeps eight.
     let held = control_clients(&socket);
     assert!(
         held <= 8,
