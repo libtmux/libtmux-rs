@@ -479,6 +479,9 @@ pub enum Error {
     /// with, so `mouse` through a pane handle becomes the whole session's
     /// `mouse` and reports success. Reading it back through the same handle
     /// resolves the same way and agrees, so nothing downstream notices.
+    ///
+    /// [`crate::OptionSchema::accepts`] answers ahead of the call, for a
+    /// caller choosing a handle rather than reacting to a refusal.
     #[error(
         "tmux keeps {option} in {declared:?}, so writing it through a \
          {requested:?} handle would land there instead"

@@ -90,9 +90,7 @@ impl Pane {
     /// Returns an error when tmux rejects the name or value.
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
-    /// option in another table, because it would carry such a write out
-    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
-    /// before the call.
+    /// option in another of its tables.
     pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(
@@ -112,9 +110,7 @@ impl Pane {
     /// Returns an error when tmux rejects the name or value.
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
-    /// option in another table, because it would carry such a write out
-    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
-    /// before the call.
+    /// option in another of its tables.
     pub async fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set(&self.core, options::Scope::Pane(&target), name, value, true).await
@@ -127,9 +123,7 @@ impl Pane {
     /// Returns an error when tmux rejects the name.
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
-    /// option in another table, because it would carry such a write out
-    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
-    /// before the call.
+    /// option in another of its tables.
     pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
         options::unset(&self.core, options::Scope::Pane(&target), name).await
@@ -146,9 +140,7 @@ impl Pane {
     /// Returns an error when tmux rejects the hook name or command.
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
-    /// option in another table, because it would carry such a write out
-    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
-    /// before the call.
+    /// option in another of its tables.
     pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
         let target = self.id().to_string();
         options::set_hook(&self.core, options::Scope::Pane(&target), name, command).await
@@ -161,9 +153,7 @@ impl Pane {
     /// Returns an error when tmux rejects the hook name.
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
-    /// option in another table, because it would carry such a write out
-    /// rather than refuse it. [`crate::OptionSchema::accepts`] answers
-    /// before the call.
+    /// option in another of its tables.
     pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
         let target = self.id().to_string();
         options::unset_hook(&self.core, options::Scope::Pane(&target), name).await
