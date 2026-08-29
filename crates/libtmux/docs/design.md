@@ -1045,7 +1045,9 @@ question with its own premise.
 
 `real_tmux_compat_a_coordinate_miss_is_not_an_object_miss` pins both halves
 against whichever tmux the lane runs, for the same reason the wording test
-exists. If a future release echoed the whole target, or dropped the sigil, the
+exists, and has passed on every one: 3.2a, 3.4, 3.5a, 3.6b and 3.7b. The split
+needs no version gate, and 3.2a -- the oldest supported, and the release most
+likely to answer differently -- echoes exactly as the current one does. If a future release echoed the whole target, or dropped the sigil, the
 unrecognized form classifies as `LinkGone` -- the reading that does not license
 discarding a live handle -- so the cost of being wrong is a distinction rather
 than a destroyed handle.
