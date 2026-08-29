@@ -106,7 +106,7 @@ assert!(!session_ended(&unrelated));
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ControlModeErrorKind {
-    /// The tmux client could not be started, or its pipes failed.
+    /// The live control connection could not read from or write to its pipes.
     Transport,
     /// tmux started without giving the crate the pipes it asked for.
     ///
@@ -114,11 +114,14 @@ pub enum ControlModeErrorKind {
     /// set up as requested.
     MissingPipes,
     /// The connection closed before the command was answered.
+    ///
+    /// This connection cannot reopen; attach another one to continue.
     Closed,
     /// The attach opening or a command response exceeded the server deadline.
     ///
     /// A command's deadline starts before it is written and runs until tmux
     /// closes its response block.
+    /// The connection ends at this boundary; attach another one to continue.
     TimedOut,
     /// The caller stopped reading events, so the connection could not reach
     /// this command's reply.
@@ -126,10 +129,14 @@ pub enum ControlModeErrorKind {
     /// A reply arrives on the connection the events arrive on. The connection
     /// holds what a caller has not taken and keeps reading while a reply is
     /// outstanding, but not without limit, and past that limit it stops rather
-    /// than growing. Nothing is lost and nothing is broken: the events are
-    /// still held, tmux is holding the rest, and the connection carries on the
-    /// moment they are taken. Drain the events and send again, or watch from
-    /// a task of its own so the two never contend.
+    /// than growing. The events remain held and the connection carries on once
+    /// they are taken.
+    ///
+    /// A new request can be refused before it is written, but an already-live
+    /// request gets the same error after crossing the write boundary. This
+    /// kind therefore does not prove that a mutation is safe to replay. Drain
+    /// the events before sending more work, or watch from a task of its own so
+    /// the two never contend.
     Unread,
     /// The command contains an argument no control-mode line can carry.
     ///
@@ -261,11 +268,12 @@ impl fmt::Display for ServerGoneKind {
 /// What tmux says when it has no client to act on.
 pub(crate) const NO_CURRENT_CLIENT: &str = "no current client";
 
-/// What a failure means for the caller.
+/// A coarse failure category for reporting and routing.
 ///
-/// [`Error`] carries the detail; this carries the decision. Each variant is a
-/// different thing to do about it, which is why there are fewer of these than
-/// there are error variants.
+/// [`Error`] carries the recovery detail. One category can contain failures
+/// with different retry scopes: overload and a bad argument are both refused,
+/// while executor shutdown and a failed child pipe are both transport errors.
+/// Use [`Error::is_transient`] before repeating a call unchanged.
 ///
 /// New kinds may be added, so match with a `_` arm.
 ///
@@ -274,23 +282,26 @@ pub(crate) const NO_CURRENT_CLIENT: &str = "no current client";
 /// ```
 /// use libtmux::ErrorKind;
 ///
-/// fn retryable(kind: ErrorKind) -> bool {
-///     matches!(kind, ErrorKind::Timeout | ErrorKind::Transport)
+/// fn target_is_stale(kind: ErrorKind) -> bool {
+///     matches!(kind, ErrorKind::ObjectGone)
 /// }
 ///
-/// assert!(retryable(ErrorKind::Transport));
-/// assert!(!retryable(ErrorKind::ObjectGone));
+/// assert!(target_is_stale(ErrorKind::ObjectGone));
+/// assert!(!target_is_stale(ErrorKind::InvalidInput));
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
+    /// tmux accepted an effectful step before a later part of the operation
+    /// failed.
+    PartialEffect,
     /// The object is not on the server. Look it up again, or create it.
     ObjectGone,
-    /// tmux ran the command and refused it. The arguments were wrong.
+    /// The operation was refused before or by tmux.
     Refused,
     /// No tmux server answered. Start one, or name the socket that has it.
     ServerGone,
-    /// The command did not finish in time. Retry, or allow longer.
+    /// The operation did not finish in time.
     Timeout,
     /// tmux could not be run at all: not installed, or not where the server
     /// was told to look. Nothing about the request will change this.
@@ -299,8 +310,7 @@ pub enum ErrorKind {
     UnsupportedVersion,
     /// The caller passed something that cannot be sent to tmux.
     InvalidInput,
-    /// The process or connection carrying the command failed. Usually the
-    /// environment rather than the request, so retrying may work.
+    /// The process, connection, or executor carrying the command failed.
     Transport,
     /// tmux answered in a shape the crate could not read. Worth reporting.
     Decode,
@@ -398,6 +408,22 @@ impl std::error::Error for IdParseError {}
 #[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// tmux accepted an effectful step before a later part of the operation
+    /// failed.
+    ///
+    /// Repeating the whole operation may repeat the accepted effect. Inspect
+    /// `source` to diagnose the later failure, but do not use its retryability
+    /// as evidence that the whole operation is safe to replay.
+    #[non_exhaustive]
+    #[error("tmux accepted an effect in {operation} before a later step failed: {source}")]
+    AfterEffect {
+        /// A fixed operation name, without targets or argument values.
+        operation: &'static str,
+        /// The failure that followed the accepted effect.
+        #[source]
+        source: Box<Error>,
+    },
+
     /// A server builder value was invalid.
     #[non_exhaustive]
     #[error("invalid server configuration ({kind:?})")]
@@ -674,6 +700,9 @@ pub enum Error {
     },
 
     /// The executor has stopped accepting requests.
+    ///
+    /// Shutdown is permanent for every handle sharing this Core. Build another
+    /// [`crate::Server`] to issue more requests.
     #[non_exhaustive]
     #[error("tmux executor is shut down for request {request_id} ({command})")]
     ExecutorShutdown {
@@ -973,6 +1002,26 @@ const fn is_identity(kind: ObjectKind, target: &str) -> bool {
 }
 
 impl Error {
+    /// Mark this failure as following an effect that tmux accepted.
+    ///
+    /// Use a fixed operation name without targets or argument values. Calling
+    /// this method on an already marked error leaves its existing operation
+    /// intact, so nested composed operations do not obscure the more specific
+    /// replay boundary.
+    ///
+    /// The returned error has [`ErrorKind::PartialEffect`] and
+    /// [`Self::is_transient`] returns `false`, regardless of the source.
+    #[must_use]
+    pub fn after_effect(self, operation: &'static str) -> Self {
+        match self {
+            Self::AfterEffect { .. } => self,
+            source => Self::AfterEffect {
+                operation,
+                source: Box::new(source),
+            },
+        }
+    }
+
     /// Classify a refused tmux command, recognizing a target that has gone.
     ///
     /// tmux reports a missing target as `can't find <kind>: <target>` and
@@ -1181,6 +1230,7 @@ impl Error {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
+            Self::AfterEffect { .. } => ErrorKind::PartialEffect,
             // A replaced daemon reissues ids from the start, so every handle
             // captured from the previous one names something that is not
             // there. That is the same decision as a missing object, and the
@@ -1249,14 +1299,70 @@ impl Error {
         self.kind() == ErrorKind::ObjectGone
     }
 
-    /// Report whether making the same call again could succeed.
+    /// Report whether retrying the same call unchanged is safe and may succeed.
     ///
-    /// True for a timeout and for a transport failure, which are usually the
-    /// machine rather than the request. False for anything tmux answered,
-    /// which will be answered the same way again.
+    /// `true` means this error proves that the requested mutation did not run,
+    /// or came from an operation that only reads state. The condition may need
+    /// to clear first: capacity can become available, a client can resume, a
+    /// resource-limited spawn can be retried, or a server can answer again.
+    ///
+    /// `false` does not mean that the handle is unusable. A subprocess timeout,
+    /// output-reader failure, child-wait failure, or lost supervisor can leave
+    /// the executor ready for another call, but tmux may already have carried
+    /// out the first one. Replaying a mutation could duplicate its effect. A
+    /// shut down executor and a closed or timed-out control connection are also
+    /// false because they require a new server or connection.
     #[must_use]
     pub fn is_transient(&self) -> bool {
-        matches!(self.kind(), ErrorKind::Timeout | ErrorKind::Transport)
+        match self {
+            Self::Overloaded { .. } | Self::ClientSuspended { .. } => true,
+            Self::Spawn { source, .. } => matches!(
+                source.kind(),
+                io::ErrorKind::Interrupted
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::OutOfMemory
+                    | io::ErrorKind::ResourceBusy
+                    | io::ErrorKind::ExecutableFileBusy
+            ),
+            Self::ServerGone {
+                kind: ServerGoneKind::NotRunning | ServerGoneKind::Unreachable,
+                ..
+            } => true,
+            Self::AfterEffect { .. }
+            | Self::InvalidServerConfiguration { .. }
+            | Self::InvalidVersionOutput { .. }
+            | Self::UnsupportedTmuxVersion { .. }
+            | Self::OptionRejected { .. }
+            | Self::UnreadableFormatValue { .. }
+            | Self::ServerGenerationChanged { .. }
+            | Self::OutputLimitExceeded { .. }
+            | Self::SessionExists { .. }
+            | Self::UnsupportedCapability { .. }
+            | Self::CapabilityDefective { .. }
+            | Self::VersionProbeFailed { .. }
+            | Self::InvalidCommandInput { .. }
+            | Self::ExecutableNotFound { .. }
+            | Self::ExecutorShutdown { .. }
+            | Self::DuplicateRequest { .. }
+            | Self::ReadOutput { .. }
+            | Self::WaitChild { .. }
+            | Self::Timeout { .. }
+            | Self::SupervisorLost { .. }
+            | Self::ObjectGone { .. }
+            | Self::LinkGone { .. }
+            | Self::RuntimeUnavailable { .. }
+            | Self::RuntimeNested
+            | Self::ServerGone {
+                kind: ServerGoneKind::Lost | ServerGoneKind::Stopped,
+                ..
+            }
+            | Self::CommandFailed { .. }
+            | Self::DecodeListing { .. } => false,
+            #[cfg(feature = "plan")]
+            Self::InvalidPlan { .. } => false,
+            #[cfg(feature = "control-mode")]
+            Self::ControlModeFrameTooLarge { .. } | Self::ControlMode { .. } => false,
+        }
     }
 
     #[cfg(feature = "control-mode")]
@@ -1509,6 +1615,11 @@ impl fmt::Debug for Error {
     )]
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AfterEffect { operation, source } => formatter
+                .debug_struct("AfterEffect")
+                .field("operation", operation)
+                .field("source", source)
+                .finish(),
             Self::RuntimeNested => formatter.debug_struct("RuntimeNested").finish(),
             Self::InvalidServerConfiguration { kind } => formatter
                 .debug_struct("InvalidServerConfiguration")
@@ -1743,6 +1854,7 @@ impl fmt::Debug for Error {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
     use std::os::unix::process::ExitStatusExt as _;
     use std::process::ExitStatus;
 
@@ -1758,17 +1870,19 @@ mod tests {
     /// asserted against the classifier rather than against tmux.
     #[test]
     fn a_server_that_is_not_there_is_not_a_refusal() {
-        for (stderr, expected) in [
+        for (stderr, expected, retryable) in [
             (
                 "no server running on /tmp/libtmux-rs-dev/absent",
                 ServerGoneKind::NotRunning,
+                true,
             ),
             (
                 "error connecting to /tmp/libtmux-rs-dev/absent (Connection refused)",
                 ServerGoneKind::Unreachable,
+                true,
             ),
-            ("server exited unexpectedly", ServerGoneKind::Lost),
-            ("server exited", ServerGoneKind::Stopped),
+            ("server exited unexpectedly", ServerGoneKind::Lost, false),
+            ("server exited", ServerGoneKind::Stopped, false),
         ] {
             let error = Error::refused("list-sessions", Some(1), stderr.to_owned(), None);
             assert_eq!(error.kind(), ErrorKind::ServerGone, "{stderr}");
@@ -1777,6 +1891,108 @@ mod tests {
                 "{stderr} should be {expected:?}, got {error:?}",
             );
             assert!(!error.is_object_gone(), "{stderr}");
+            assert_eq!(
+                error.is_transient(),
+                retryable,
+                "only a failure before connecting proves replay safe: {stderr}",
+            );
+        }
+    }
+
+    #[test]
+    fn only_resource_limited_spawn_failures_invite_unchanged_replay() {
+        let spawn = |kind| {
+            Error::spawn(
+                1,
+                Command::new("display-message").summary(),
+                std::io::Error::from(kind),
+                false,
+            )
+        };
+
+        for kind in [
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::OutOfMemory,
+            std::io::ErrorKind::ResourceBusy,
+            std::io::ErrorKind::ExecutableFileBusy,
+        ] {
+            assert!(spawn(kind).is_transient(), "{kind:?} may clear on retry");
+        }
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::InvalidData,
+        ] {
+            assert!(
+                !spawn(kind).is_transient(),
+                "{kind:?} needs repair, not replay",
+            );
+        }
+    }
+
+    #[test]
+    fn an_error_after_an_effect_cannot_invite_replay_or_be_relabelled() {
+        let error = Error::Overloaded {
+            request_id: 7,
+            command: Command::new("list-panes").summary(),
+            in_flight: 1,
+        }
+        .after_effect("resize-pane");
+
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
+        assert!(!error.is_object_gone());
+        assert!(!error.is_transient());
+
+        let error = error.after_effect("select-pane");
+        assert!(
+            matches!(
+                &error,
+                Error::AfterEffect { operation: "resize-pane", source }
+                    if source.kind() == ErrorKind::Refused && source.is_transient()
+            ),
+            "the existing, more specific effect is the useful replay boundary: {error:?}",
+        );
+    }
+
+    #[test]
+    fn an_effect_boundary_preserves_a_redacted_source_without_growing() {
+        let secret = "sentinel-after-effect-secret";
+        let command = Command::new("send-keys").sensitive_arg(secret);
+        let result = CommandResult::new(
+            RequestId::new(9),
+            command.summary(),
+            ProcessStatus::from_exit_status(ExitStatus::from_raw(1 << 8)),
+            Vec::new(),
+            format!("bad key: {secret}\n").into_bytes(),
+        );
+        let error = result
+            .refusal_for("send-keys")
+            .expect("the sensitive command was refused")
+            .after_effect("send-keys")
+            .after_effect("plan");
+
+        let source = StdError::source(&error).expect("the boundary exposes its source");
+        let source = source
+            .downcast_ref::<Box<Error>>()
+            .expect("the source owns a libtmux::Error")
+            .as_ref();
+        assert_eq!(source.kind(), ErrorKind::Refused);
+        assert!(source.source().is_none(), "the source chain has one edge");
+        assert!(matches!(
+            &error,
+            Error::AfterEffect {
+                operation: "send-keys",
+                ..
+            }
+        ));
+
+        for diagnostic in [
+            error.to_string(),
+            format!("{error:?}"),
+            source.to_string(),
+            format!("{source:?}"),
+        ] {
+            assert!(!diagnostic.contains(secret), "{diagnostic}");
         }
     }
 

@@ -494,6 +494,17 @@ decision a caller makes. `Error::is_object_gone` is the branch most programs
 write, because an object disappearing is an ordinary race rather than a failed
 request.
 
+`Error::is_transient` answers the narrower replay question: `true` means the
+same call can be repeated without duplicating an effect and may work after the
+condition clears. A timeout is `false` even when the server handle remains
+usable, because tmux may have completed the command before its caller stopped
+waiting.
+
+A composed call can also fail after tmux accepted one of its effects. That is
+`Error::AfterEffect`, classified as `ErrorKind::PartialEffect`: its source
+still explains the later failure, but `is_transient` is `false` for the whole
+call because replay may repeat the accepted effect.
+
 The block below shows the shape against a healthy server, so its interesting
 arms do not run. `examples/recover.rs` makes each failure happen instead --
 including the one that costs people, where a link is gone and the window it

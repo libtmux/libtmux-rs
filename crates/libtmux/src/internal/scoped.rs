@@ -9,6 +9,7 @@ use crate::Error;
 use tracing::instrument::WithSubscriber as _;
 
 pub(crate) async fn run<R, T, E, Create, Cleanup, CleanupFuture, Operation>(
+    operation_name: &'static str,
     create: Create,
     cleanup: Cleanup,
     operation: Operation,
@@ -26,11 +27,8 @@ where
 
     match (outcome, cleanup.finish().await) {
         (outcome, Ok(())) => outcome,
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(outcome), Err(cleanup)) => {
-            trace_cleanup_failure(&cleanup);
-            Err(outcome)
-        }
+        (Ok(_), Err(error)) => Err(error.after_effect(operation_name).into()),
+        (Err(_), Err(cleanup)) => Err(cleanup.after_effect(operation_name).into()),
     }
 }
 
@@ -134,9 +132,6 @@ fn trace_cleanup_failure(error: &impl std::fmt::Display) {
     tracing::debug!(error = %error, "scoped operation cleanup failed");
 }
 
-#[cfg(not(feature = "tracing"))]
-fn trace_cleanup_failure(_error: &impl std::fmt::Display) {}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -145,10 +140,7 @@ mod tests {
 
     use tokio::sync::Notify;
 
-    use crate::Error;
-
-    #[cfg(feature = "tracing")]
-    use crate::ObjectKind;
+    use crate::{Command, Error, ErrorKind, ObjectKind};
 
     #[cfg(feature = "tracing")]
     use tracing::subscriber::Subscriber;
@@ -162,6 +154,71 @@ mod tests {
     #[derive(Clone)]
     struct Resource {
         cleaned: Arc<Notify>,
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_after_a_successful_operation_marks_the_effect() {
+        let error = super::run(
+            "with-pane",
+            async {
+                Ok::<_, Error>(Resource {
+                    cleaned: Arc::new(Notify::new()),
+                })
+            },
+            |_resource: Resource| async {
+                Err(Error::Overloaded {
+                    request_id: 9,
+                    command: Command::new("kill-pane").summary(),
+                    in_flight: 1,
+                })
+            },
+            async |_resource: &Resource| Ok::<_, Error>(()),
+        )
+        .await
+        .expect_err("cleanup fails after the scoped operation succeeded");
+
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
+        assert!(
+            matches!(
+                error,
+                Error::AfterEffect { operation: "with-pane", source }
+                    if source.kind() == ErrorKind::Refused && source.is_transient()
+            ),
+            "cleanup keeps its diagnostic source",
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_owns_the_replay_boundary_when_the_operation_also_fails() {
+        let error = super::run(
+            "with-window",
+            async {
+                Ok::<_, Error>(Resource {
+                    cleaned: Arc::new(Notify::new()),
+                })
+            },
+            |_resource: Resource| async {
+                Err(Error::Overloaded {
+                    request_id: 10,
+                    command: Command::new("kill-window").summary(),
+                    in_flight: 1,
+                })
+            },
+            async |_resource: &Resource| {
+                Err::<(), Error>(Error::ObjectGone {
+                    kind: ObjectKind::Window,
+                    id: String::from("@1"),
+                })
+            },
+        )
+        .await
+        .expect_err("both operation and cleanup fail");
+
+        assert!(matches!(
+            error,
+            Error::AfterEffect { operation: "with-window", source }
+                if matches!(*source, Error::Overloaded { .. })
+        ));
     }
 
     #[cfg(feature = "tracing")]
@@ -207,6 +264,7 @@ mod tests {
         let operation_polled = Arc::new(AtomicBool::new(false));
 
         let scope = tokio::spawn(super::run(
+            "with-session",
             {
                 let creation_started = Arc::clone(&creation_started);
                 let creation_release = Arc::clone(&creation_release);
@@ -253,6 +311,7 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let mut scope = Box::pin(super::run(
+            "with-window",
             async {
                 Ok::<_, Error>(Resource {
                     cleaned: Arc::new(Notify::new()),
@@ -296,6 +355,7 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let outcome = super::run(
+            "with-pane",
             async {
                 Ok::<_, Error>(Resource {
                     cleaned: Arc::new(Notify::new()),

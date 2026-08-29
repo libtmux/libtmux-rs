@@ -62,7 +62,7 @@ use tokio::time::Instant;
 use crate::internal::process::PersistentChild;
 use crate::limits::ControlLimits;
 use crate::version::since::CONTROL_PANE_OFF;
-use crate::{Command, Error, PaneId, Server, SessionId, TmuxText, WindowId};
+use crate::{Command, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId};
 
 /// Something tmux reported that no command asked for.
 ///
@@ -347,6 +347,7 @@ pub struct BlockResult {
     number: u64,
     succeeded: bool,
     output: Vec<TmuxText>,
+    sensitive_input: bool,
 }
 
 impl BlockResult {
@@ -370,6 +371,45 @@ impl BlockResult {
     #[must_use]
     pub fn output(&self) -> &[TmuxText] {
         &self.output
+    }
+
+    /// Classify an error block as a refusal for a named operation.
+    ///
+    /// Use a fixed operation name without targets or argument values. Output
+    /// is withheld when the command carried sensitive input.
+    ///
+    /// Returns `None` when tmux closed the block successfully.
+    #[must_use]
+    pub fn refusal_for(&self, operation: &'static str) -> Option<Error> {
+        if self.succeeded {
+            return None;
+        }
+
+        let mut bytes = Vec::new();
+        for line in &self.output {
+            bytes.extend_from_slice(line.as_bytes());
+            bytes.push(b'\n');
+        }
+        let classified = Error::refused(
+            operation,
+            None,
+            String::from_utf8_lossy(&bytes).into_owned(),
+            None,
+        );
+        Some(
+            if self.sensitive_input && !matches!(&classified, Error::ServerGone { .. }) {
+                Error::refused_withheld(operation, None)
+            } else {
+                classified
+            },
+        )
+    }
+
+    fn require_success(self, operation: &'static str) -> Result<Self, Error> {
+        match self.refusal_for(operation) {
+            Some(error) => Err(error),
+            None => Ok(self),
+        }
     }
 }
 
@@ -618,6 +658,7 @@ impl ControlSender {
     /// line, the connection has closed, or its response exceeds the server
     /// deadline.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
+        let sensitive_input = command.summary().sensitive_argument_count() > 0;
         let line = command
             .control_mode_line()
             .ok_or_else(Error::control_mode_unrepresentable)?;
@@ -628,7 +669,9 @@ impl ControlSender {
             .await
             .map_err(|_| Error::control_mode_closed())?;
 
-        answer.await.map_err(|_| Error::control_mode_closed())?
+        let mut block = answer.await.map_err(|_| Error::control_mode_closed())??;
+        block.sensitive_input = sensitive_input;
+        Ok(block)
     }
 
     /// Stop tmux sending this connection what a pane writes.
@@ -650,7 +693,8 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection has closed.
+    /// Returns an error when the connection has closed or tmux refuses the
+    /// stream change.
     pub async fn mute_pane(&self, pane: &PaneId) -> Result<(), Error> {
         self.set_pane_stream(
             pane,
@@ -673,7 +717,8 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection has closed.
+    /// Returns an error when the connection has closed or tmux refuses the
+    /// stream change.
     pub async fn unmute_pane(&self, pane: &PaneId) -> Result<(), Error> {
         self.set_pane_stream(
             pane,
@@ -693,7 +738,8 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection has closed.
+    /// Returns an error when the connection has closed or tmux refuses the
+    /// stream change.
     pub async fn resume_pane(&self, pane: &PaneId) -> Result<(), Error> {
         self.set_pane_stream(pane, "continue").await
     }
@@ -709,8 +755,8 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection has closed, or when the name is
-    /// empty or contains a colon.
+    /// Returns an error when the connection has closed, tmux refuses the
+    /// subscription, or the name is empty or contains a colon.
     ///
     /// # Examples
     ///
@@ -760,7 +806,8 @@ impl ControlSender {
                 .arg("-B")
                 .arg(format!("{name}:{watching}:{format}")),
         )
-        .await
+        .await?
+        .require_success("refresh-client")
         .map(|_| ())
     }
 
@@ -772,12 +819,13 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection has closed, or when the name is
-    /// empty or contains a colon.
+    /// Returns an error when the connection has closed, tmux refuses the
+    /// request, or the name is empty or contains a colon.
     pub async fn unsubscribe(&self, name: &str) -> Result<(), Error> {
         check_subscription_name(name)?;
         self.send(Command::new("refresh-client").arg("-B").arg(name))
-            .await
+            .await?
+            .require_success("refresh-client")
             .map(|_| ())
     }
 
@@ -791,14 +839,16 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection has closed.
+    /// Returns an error when the connection has closed or tmux refuses the
+    /// pause policy.
     pub async fn pause_after(&self, behind: Duration) -> Result<(), Error> {
         self.send(
             Command::new("refresh-client")
                 .arg("-f")
                 .arg(format!("pause-after={}", behind.as_secs())),
         )
-        .await
+        .await?
+        .require_success("refresh-client")
         .map(|_| ())
     }
 
@@ -814,8 +864,9 @@ impl ControlSender {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection has closed, or tmux would not list
-    /// its panes.
+    /// Returns an error when the connection has closed, tmux would not list a
+    /// pane, returned an unreadable pane ID, or a later mute fails. A failure
+    /// after an accepted mute is [`Error::AfterEffect`].
     pub async fn watch_only(&self, panes: &[PaneId]) -> Result<(), Error> {
         let listed = self
             .send(
@@ -824,14 +875,27 @@ impl ControlSender {
                     .arg("-F")
                     .arg("#{pane_id}"),
             )
-            .await?;
+            .await?
+            .require_success("list-panes")?;
 
+        let mut effect_seen = false;
         for line in listed.output() {
-            let Some(found) = line.as_str().ok().and_then(|id| id.parse::<PaneId>().ok()) else {
-                continue;
-            };
+            let found = decode_watched_pane_id(line).map_err(|error| {
+                if effect_seen {
+                    error.after_effect("watch-only")
+                } else {
+                    error
+                }
+            })?;
             if !panes.contains(&found) {
-                self.mute_pane(&found).await?;
+                self.mute_pane(&found).await.map_err(|error| {
+                    if effect_seen {
+                        error.after_effect("watch-only")
+                    } else {
+                        error
+                    }
+                })?;
+                effect_seen = true;
             }
         }
 
@@ -844,7 +908,8 @@ impl ControlSender {
                 .arg("-A")
                 .arg(format!("{pane}:{state}")),
         )
-        .await
+        .await?
+        .require_success("refresh-client")
         .map(|_| ())
     }
 
@@ -853,6 +918,15 @@ impl ControlSender {
     pub fn is_closed(&self) -> bool {
         self.commands.is_closed()
     }
+}
+
+fn decode_watched_pane_id(line: &TmuxText) -> Result<PaneId, Error> {
+    let invalid = |detail| Error::UnreadableFormatValue {
+        format: "#{pane_id}",
+        detail,
+    };
+    let id = line.as_str().map_err(|_| invalid(IdParseError::new('%')))?;
+    id.parse().map_err(invalid)
 }
 
 /// Receives what tmux reports without being asked.
@@ -1544,6 +1618,7 @@ impl Connection {
                         number,
                         succeeded,
                         output,
+                        sensitive_input: false,
                     }));
                 }
                 Some(Line::Text(text)) => {
@@ -2044,19 +2119,20 @@ mod tests {
 
     use std::time::Duration;
 
-    use tokio::sync::oneshot;
+    use tokio::sync::{mpsc, oneshot};
 
     use super::{
-        BlockResult, Event, HELD_WHILE_AWAITING, Line, ReplySlots, Request, admit_request,
-        unescape_output,
+        BlockResult, ControlSender, Event, HELD_WHILE_AWAITING, Line, ReplySlots, Request,
+        admit_request, decode_watched_pane_id, unescape_output,
     };
-    use crate::{Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId};
+    use crate::{Command, Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId};
 
     fn reply(number: u64) -> BlockResult {
         BlockResult {
             number,
             succeeded: true,
             output: Vec::new(),
+            sensitive_input: false,
         }
     }
 
@@ -2071,12 +2147,150 @@ mod tests {
         )
     }
 
-    fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> ErrorKind {
+    fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> Error {
         answer
             .try_recv()
             .expect("the request is answered")
             .expect_err("the request is refused")
-            .kind()
+    }
+
+    #[test]
+    fn block_refusal_classification_withholds_sensitive_output() {
+        assert!(reply(1).refusal_for("display-message").is_none());
+
+        let secret = "sentinel-control-refusal";
+        let block = BlockResult {
+            number: 2,
+            succeeded: false,
+            output: vec![TmuxText::from(secret)],
+            sensitive_input: true,
+        };
+        let error = block
+            .refusal_for("display-message")
+            .expect("an error block is a refusal");
+        let diagnostic = format!("{error:?} {error}");
+        assert!(matches!(error, Error::CommandFailed { .. }));
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
+
+    #[test]
+    fn watch_only_rejects_unreadable_pane_ids_without_echoing_them() {
+        for line in [
+            TmuxText::from("sentinel-not-a-pane-id"),
+            TmuxText::from_bytes([0xff]),
+        ] {
+            let error = decode_watched_pane_id(&line).expect_err("pane id is unreadable");
+            let diagnostic = format!("{error:?} {error}");
+            assert_eq!(error.kind(), ErrorKind::Decode);
+            assert!(!diagnostic.contains("sentinel"), "{diagnostic}");
+        }
+    }
+
+    #[tokio::test]
+    async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
+        let (commands, mut requests) = mpsc::channel(4);
+        let sender = ControlSender {
+            commands,
+            pane_off_is_safe: true,
+        };
+        let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
+
+        let listing = requests.recv().await.expect("list-panes request");
+        assert!(listing.line.starts_with("list-panes "));
+        listing
+            .result
+            .send(Ok(BlockResult {
+                number: 1,
+                succeeded: true,
+                output: vec![TmuxText::from_bytes(*b"%1"), TmuxText::from_bytes(*b"%2")],
+                sensitive_input: false,
+            }))
+            .expect("watch is waiting for the listing");
+
+        let first_mute = requests.recv().await.expect("first mute request");
+        assert!(first_mute.line.contains("%1:off"));
+        first_mute
+            .result
+            .send(Ok(reply(2)))
+            .expect("watch is waiting for the first mute");
+
+        let second_mute = requests.recv().await.expect("second mute request");
+        assert!(second_mute.line.contains("%2:off"));
+        second_mute
+            .result
+            .send(Err(Error::Overloaded {
+                request_id: 11,
+                command: Command::new("refresh-client").summary(),
+                in_flight: 1,
+            }))
+            .expect("watch is waiting for the second mute");
+
+        let error = watch
+            .await
+            .expect("watch task does not panic")
+            .expect_err("the second mute fails");
+        assert!(matches!(
+            error,
+            Error::AfterEffect { operation: "watch-only", source }
+                if source.kind() == ErrorKind::Refused && source.is_transient()
+        ));
+    }
+
+    #[tokio::test]
+    async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
+        let (commands, mut requests) = mpsc::channel(2);
+        let sender = ControlSender {
+            commands,
+            pane_off_is_safe: true,
+        };
+        let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
+
+        let listing = requests.recv().await.expect("list-panes request");
+        listing
+            .result
+            .send(Ok(BlockResult {
+                number: 1,
+                succeeded: false,
+                output: vec![TmuxText::from_bytes(*b"listing refused")],
+                sensitive_input: false,
+            }))
+            .expect("watch is waiting for the listing");
+
+        let error = watch
+            .await
+            .expect("watch task does not panic")
+            .expect_err("a failed listing is not pane data");
+        assert_eq!(error.kind(), ErrorKind::Refused);
+        assert!(!matches!(error, Error::AfterEffect { .. }));
+        assert!(requests.try_recv().is_err(), "no mute was dispatched");
+    }
+
+    #[tokio::test]
+    async fn mute_pane_reports_a_control_error_block() {
+        let (commands, mut requests) = mpsc::channel(1);
+        let sender = ControlSender {
+            commands,
+            pane_off_is_safe: true,
+        };
+        let pane: PaneId = "%1".parse().expect("a pane id");
+        let mute = tokio::spawn(async move { sender.mute_pane(&pane).await });
+
+        let request = requests.recv().await.expect("mute request");
+        request
+            .result
+            .send(Ok(BlockResult {
+                number: 1,
+                succeeded: false,
+                output: vec![TmuxText::from_bytes(*b"mute refused")],
+                sensitive_input: false,
+            }))
+            .expect("mute is waiting for its block");
+
+        let error = mute
+            .await
+            .expect("mute task does not panic")
+            .expect_err("an error block is not success");
+        assert_eq!(error.kind(), ErrorKind::Refused);
     }
 
     #[test]
@@ -2086,10 +2300,15 @@ mod tests {
         replies.push(b_request.result, None);
 
         replies.refuse_live();
+        let refused = refused(b_reply);
         assert_eq!(
-            refused(b_reply),
+            refused.kind(),
             ErrorKind::Refused,
             "B reports the unread-event cutoff",
+        );
+        assert!(
+            !refused.is_transient(),
+            "this command crossed the write boundary before it was refused",
         );
         assert!(!replies.has_live(), "event reading may pause");
 
@@ -2129,10 +2348,15 @@ mod tests {
                 admit_request(retry, HELD_WHILE_AWAITING).is_none(),
                 "the retry does not cross the write boundary",
             );
+            let error = refused(answer);
             assert_eq!(
-                refused(answer),
+                error.kind(),
                 ErrorKind::Refused,
                 "the retry reports the unread-event cutoff",
+            );
+            assert!(
+                !error.is_transient(),
+                "the kind also covers live requests that were already written",
             );
         }
 

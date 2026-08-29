@@ -1781,6 +1781,10 @@ async fn a_suspended_client_is_not_reported_gone() {
         !error.is_object_gone(),
         "this is what a caller consults before discarding the handle",
     );
+    assert!(
+        error.is_transient(),
+        "the same client handle works once the process resumes",
+    );
 
     // And the reason the misreading was tempting: every count a caller might
     // consult goes quiet at once. The client still carries tmux's `attached`

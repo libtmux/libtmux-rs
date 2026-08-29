@@ -401,13 +401,10 @@ pub(crate) async fn typed_all(
     Ok(decoded)
 }
 
-/// Write a whole hook at once.
+/// Write a whole hook with an exact replay boundary.
 ///
-/// Sent as one tmux invocation rather than one per index, which costs one
-/// process instead of several. That is not atomicity: tmux applies a shared
-/// invocation in order and stops at the first refusal, so a rejected entry
-/// leaves the ones before it written. It narrows the window, it does not
-/// close it.
+/// The first mutation is sent alone. A later failure follows an accepted
+/// effect; a first-command failure remains its leaf error.
 pub(crate) async fn set_hooks(
     core: &Core,
     scope: Scope<'_>,
@@ -441,19 +438,25 @@ pub(crate) async fn set_hooks(
     let Some(first) = commands.next() else {
         return Ok(());
     };
+    let Some(second) = commands.next() else {
+        return run(core, "set-hook", None, first).await;
+    };
+
+    run(core, "set-hook", None, first).await?;
     let result = match commands.next() {
-        None => core.execute(first).await?,
-        Some(second) => {
-            let mut chain = CommandChain::new(first).then(second);
+        None => core.execute(second).await,
+        Some(third) => {
+            let mut chain = CommandChain::new(second).then(third);
             for command in commands {
                 chain = chain.then(command);
             }
-            core.execute_chain(chain).await?
+            core.execute_chain(chain).await
         }
     };
+    let result = result.map_err(|error| error.after_effect("set-hooks"))?;
     if result.success() {
         return Ok(());
     }
 
-    Err(mutation_failure("set-hook", None, &result))
+    Err(mutation_failure("set-hook", None, &result).after_effect("set-hooks"))
 }

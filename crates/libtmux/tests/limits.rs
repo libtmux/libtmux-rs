@@ -152,8 +152,17 @@ async fn a_full_server_says_so_instead_of_waiting_forever() {
         matches!(&error, libtmux::Error::Overloaded { in_flight, .. } if *in_flight == 1),
         "got {error:?}",
     );
+    assert!(
+        error.is_transient(),
+        "capacity becomes available without replacing the server handle",
+    );
 
     holder.await.expect("the holder joins").expect("it ran");
+    let retried = server
+        .cmd(Command::new("display-message").arg("-p").arg("hello"))
+        .await
+        .expect("the same call is admitted once capacity clears");
+    assert!(retried.success());
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

@@ -536,7 +536,9 @@ impl Pane {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("resize-pane"))?;
         Ok(self)
     }
 
@@ -586,7 +588,9 @@ impl Pane {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("resize-pane"))?;
         Ok(self)
     }
 
@@ -961,7 +965,9 @@ impl Pane {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-pane"))?;
         Ok(self)
     }
 
@@ -984,7 +990,9 @@ impl Pane {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("resize-pane"))?;
         Ok(self)
     }
 
@@ -1320,7 +1328,9 @@ impl Pane {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-pane"))?;
         Ok(self)
     }
 
@@ -1399,7 +1409,9 @@ impl Pane {
         }
 
         listing::mutate(&self.core, "respawn-pane", respawn).await?;
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("respawn-pane"))?;
         Ok(self)
     }
 
@@ -1420,7 +1432,9 @@ impl Pane {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("swap-pane"))?;
         Ok(self)
     }
 
@@ -1482,7 +1496,9 @@ impl Pane {
         )
         .await?;
 
-        self.refreshed().await
+        self.refreshed()
+            .await
+            .map_err(|error| error.after_effect("break-pane"))
     }
 
     /// Move this pane into another window, beside a pane already there.
@@ -1539,7 +1555,9 @@ impl Pane {
         );
         listing::mutate(&self.core, "join-pane", command).await?;
 
-        self.refreshed().await
+        self.refreshed()
+            .await
+            .map_err(|error| error.after_effect("join-pane"))
     }
 
     /// Enter copy mode.

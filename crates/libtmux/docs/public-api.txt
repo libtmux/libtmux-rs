@@ -361,6 +361,7 @@ function libtmux::CommandChain::then
 function libtmux::CommandResult::command
 function libtmux::CommandResult::exit_code
 function libtmux::CommandResult::into_streams
+function libtmux::CommandResult::refusal_for
 function libtmux::CommandResult::request_id
 function libtmux::CommandResult::signal
 function libtmux::CommandResult::stderr
@@ -381,6 +382,7 @@ function libtmux::DispatchLimits::acquire_timeout
 function libtmux::DispatchLimits::in_flight
 function libtmux::DispatchLimits::max_in_flight
 function libtmux::EngineCapabilities::tmux_version
+function libtmux::Error::after_effect
 function libtmux::Error::found_version
 function libtmux::Error::invalid_version_output_len
 function libtmux::Error::is_object_gone
@@ -737,6 +739,7 @@ function libtmux::blocking::Runtime::run
 function libtmux::blocking::Runtime::try_run
 function libtmux::control::BlockResult::number
 function libtmux::control::BlockResult::output
+function libtmux::control::BlockResult::refusal_for
 function libtmux::control::BlockResult::succeeded
 function libtmux::control::ControlEvents::next_event
 function libtmux::control::ControlEvents::shutdown
@@ -1033,6 +1036,8 @@ struct_field libtmux::ClientFields::client_user
 struct_field libtmux::ClientFields::client_utf8
 struct_field libtmux::ClientFields::client_width
 struct_field libtmux::ClientFields::client_written
+struct_field libtmux::Error::AfterEffect::operation
+struct_field libtmux::Error::AfterEffect::source
 struct_field libtmux::Error::CapabilityDefective::broken_in
 struct_field libtmux::Error::CapabilityDefective::capability
 struct_field libtmux::Error::CapabilityDefective::fixed_in
@@ -1282,6 +1287,7 @@ variant libtmux::ControlModeErrorKind::Unread
 variant libtmux::ControlModeErrorKind::UnrepresentableCommand
 variant libtmux::EnvironmentEntry::Removed
 variant libtmux::EnvironmentEntry::Set
+variant libtmux::Error::AfterEffect
 variant libtmux::Error::CapabilityDefective
 variant libtmux::Error::ClientSuspended
 variant libtmux::Error::CommandFailed
@@ -1317,6 +1323,7 @@ variant libtmux::Error::WaitChild
 variant libtmux::ErrorKind::Decode
 variant libtmux::ErrorKind::InvalidInput
 variant libtmux::ErrorKind::ObjectGone
+variant libtmux::ErrorKind::PartialEffect
 variant libtmux::ErrorKind::Refused
 variant libtmux::ErrorKind::ServerGone
 variant libtmux::ErrorKind::Timeout

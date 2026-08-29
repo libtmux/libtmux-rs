@@ -303,18 +303,31 @@ impl Plan {
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(steps.len());
         let mut dispatches = 0;
+        let mut effect_seen = false;
 
         for step in steps {
-            let (result, marked_creation) = self.dispatch(server, &step, &bound).await?;
+            let (result, marked_creation) = self
+                .dispatch(server, &step, &bound)
+                .await
+                .map_err(|error| after_plan_effect(error, effect_seen))?;
             dispatches += 1;
 
             let succeeded = result.success();
+            let step_committed = (succeeded
+                && step.indices().iter().any(|index| {
+                    self.steps()
+                        .get(*index)
+                        .is_some_and(|op| !op.effects().read_only)
+                }))
+                || (marked_creation && !result.stdout().is_empty());
+            let effect_through_step = effect_seen || step_committed;
             let step_outcomes = attribute(step.indices().len(), succeeded);
             for (position, index) in step.indices().iter().enumerate() {
                 outcomes[*index] = step_outcomes[position];
             }
             if succeeded || (marked_creation && !result.stdout().is_empty()) {
-                bind(&mut bound, self.steps(), &step, result.stdout())?;
+                bind(&mut bound, self.steps(), &step, result.stdout())
+                    .map_err(|error| after_plan_effect(error, effect_through_step))?;
             }
 
             reported.push(StepOutcome {
@@ -338,6 +351,7 @@ impl Plan {
             if !succeeded {
                 break;
             }
+            effect_seen = effect_through_step;
         }
 
         let operations = operation_reports(self.steps(), &outcomes, &reported, &bound);
@@ -655,6 +669,7 @@ impl Plan {
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());
         let mut dispatches = 0;
+        let mut effect_seen = false;
 
         for (index, op) in self.steps().iter().enumerate() {
             let resolve = |slot: usize, part: Part| bound.get(&(slot, part)).cloned();
@@ -667,20 +682,26 @@ impl Plan {
                         "step {index} targets an object no earlier step created; \
                      a plan cannot address what it has not made"
                     ),
-                })?;
+                })
+                .map_err(|error| after_plan_effect(error, effect_seen))?;
 
             let sensitive_input = command.summary().sensitive_argument_count() > 0;
-            let block = sender.send(command).await?;
+            let block = sender
+                .send(command)
+                .await
+                .map_err(|error| after_plan_effect(error, effect_seen))?;
             dispatches += 1;
 
-            let outcome = if block.succeeded() {
+            let succeeded = block.succeeded();
+            let outcome = if succeeded {
                 Outcome::Complete
             } else {
                 Outcome::Failed
             };
             outcomes[index] = outcome;
+            let effect_through_step = effect_seen || (succeeded && !op.effects().read_only);
 
-            let stdout = block
+            let output = block
                 .output()
                 .iter()
                 .flat_map(|line| {
@@ -689,9 +710,15 @@ impl Plan {
                     bytes
                 })
                 .collect::<Vec<u8>>();
-            if block.succeeded() {
+            let (stdout, stderr) = if succeeded {
+                (output, Vec::new())
+            } else {
+                (Vec::new(), output)
+            };
+            if succeeded {
                 let step = Step::single(index);
-                bind(&mut bound, self.steps(), &step, &stdout)?;
+                bind(&mut bound, self.steps(), &step, &stdout)
+                    .map_err(|error| after_plan_effect(error, effect_through_step))?;
             }
 
             reported.push(StepOutcome {
@@ -702,12 +729,13 @@ impl Plan {
                 // One block per command, so tmux says which one failed.
                 attribution: Attribution::PerCommand,
                 stdout,
-                stderr: Vec::new(),
+                stderr,
             });
 
-            if !block.succeeded() {
+            if !succeeded {
                 break;
             }
+            effect_seen = effect_through_step;
         }
 
         let operations = operation_reports(self.steps(), &outcomes, &reported, &bound);
@@ -717,6 +745,14 @@ impl Plan {
             bound,
             dispatches,
         })
+    }
+}
+
+fn after_plan_effect(error: Error, effect_seen: bool) -> Error {
+    if effect_seen {
+        error.after_effect("plan")
+    } else {
+        error
     }
 }
 
@@ -732,6 +768,66 @@ mod tests {
     use crate::command::{CommandRequest, CommandResult, ProcessStatus};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
     use crate::plan::{CapturePane, NewSession, SendKeys};
+
+    #[derive(Clone, Copy)]
+    enum SecondOutcome {
+        DispatchError,
+        Refused,
+    }
+
+    struct SequentialExecutor {
+        calls: AtomicUsize,
+        second: SecondOutcome,
+    }
+
+    impl Executor for SequentialExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let second = self.second;
+            DispatchFuture::new(async move {
+                if call == 0 {
+                    return Ok(CommandResult::new(
+                        request.request_id(),
+                        request.summary().clone(),
+                        ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                        Vec::new(),
+                        Vec::new(),
+                    ));
+                }
+
+                match second {
+                    SecondOutcome::DispatchError => Err(Error::Overloaded {
+                        request_id: request.request_id().get(),
+                        command: request.summary().clone(),
+                        in_flight: 1,
+                    }),
+                    SecondOutcome::Refused => Ok(CommandResult::new(
+                        request.request_id(),
+                        request.summary().clone(),
+                        ProcessStatus::from_exit_status(ExitStatus::from_raw(256)),
+                        Vec::new(),
+                        b"second operation refused".to_vec(),
+                    )),
+                }
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    fn two_step_plan(first_read_only: bool) -> Plan {
+        let pane: PaneId = "%1".parse().expect("a pane id");
+        let mut plan = Plan::new();
+        if first_read_only {
+            plan.add(CapturePane::new(pane.clone()));
+        } else {
+            plan.add(SendKeys::new(pane.clone()).text("first"));
+        }
+        plan.add(SendKeys::new(pane).text("second"));
+        plan
+    }
 
     struct CreationOutputExecutor {
         calls: AtomicUsize,
@@ -811,10 +907,93 @@ mod tests {
                 "the dependent operation must not be dispatched",
             );
             let error = outcome.expect_err("malformed creation output fails the run");
-            assert_eq!(error.kind(), crate::ErrorKind::Decode);
+            assert_eq!(error.kind(), crate::ErrorKind::PartialEffect);
+            assert!(!error.is_transient());
             let diagnostic = format!("{error:?} {error}");
             assert!(!diagnostic.contains("sentinel-binding-output"));
         }
+    }
+
+    #[tokio::test]
+    async fn a_later_dispatch_error_follows_the_first_mutating_plan_effect() {
+        let executor = Arc::new(SequentialExecutor {
+            calls: AtomicUsize::new(0),
+            second: SecondOutcome::DispatchError,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+
+        let error = two_step_plan(false)
+            .run(&server, Planner::Sequential)
+            .await
+            .expect_err("the second dispatch fails");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        assert!(
+            matches!(
+                &error,
+                Error::AfterEffect { operation: "plan", source }
+                    if source.kind() == crate::ErrorKind::Refused && source.is_transient()
+            ),
+            "{error:?}",
+        );
+        assert!(!error.is_transient());
+    }
+
+    #[tokio::test]
+    async fn a_dispatch_error_after_only_reads_keeps_its_retryability() {
+        let executor = Arc::new(SequentialExecutor {
+            calls: AtomicUsize::new(0),
+            second: SecondOutcome::DispatchError,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+
+        let error = two_step_plan(true)
+            .run(&server, Planner::Sequential)
+            .await
+            .expect_err("the second dispatch fails");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(error.kind(), crate::ErrorKind::Refused);
+        assert!(error.is_transient());
+        assert!(!matches!(error, Error::AfterEffect { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_later_refusal_remains_plan_result_data_after_a_mutation() {
+        let executor = Arc::new(SequentialExecutor {
+            calls: AtomicUsize::new(0),
+            second: SecondOutcome::Refused,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+
+        let result = two_step_plan(false)
+            .run(&server, Planner::Sequential)
+            .await
+            .expect("tmux refusals remain inspectable plan data");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        assert!(!result.is_complete());
+        assert_eq!(result.operations()[0].outcome(), Outcome::Complete);
+        assert_eq!(result.operations()[1].outcome(), Outcome::Failed);
+        assert!(result.steps()[1].refusal().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_refusal_after_only_reads_remains_plan_result_data() {
+        let executor = Arc::new(SequentialExecutor {
+            calls: AtomicUsize::new(0),
+            second: SecondOutcome::Refused,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+
+        let result = two_step_plan(true)
+            .run(&server, Planner::Sequential)
+            .await
+            .expect("nothing changed before the refusal");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        assert!(!result.is_complete());
+        assert!(result.steps()[1].refusal().is_some());
     }
 
     #[test]

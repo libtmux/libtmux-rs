@@ -462,6 +462,10 @@ printf 'tmux 3.7b\n'
         _ => None,
     }
     .expect("first error is a failed version probe");
+    assert!(
+        !first.is_transient(),
+        "a nonzero probe gives no reason that replaying unchanged will help",
+    );
     assert!(StdError::source(&first).is_none());
     assert!(!first.to_string().contains("sentinel-probe-stderr"));
     assert!(!format!("{first:?}").contains("sentinel-probe-stderr"));
@@ -475,6 +479,10 @@ printf 'tmux 3.7b\n'
         _ => None,
     }
     .expect("second error is a failed version probe");
+    assert!(
+        !second.is_transient(),
+        "a later artificial recovery does not make nonzero probes retryable",
+    );
     assert!(second_request_id > 0);
     assert_ne!(first_request_id, second_request_id);
     assert!(StdError::source(&second).is_none());
@@ -785,13 +793,16 @@ exit 93
     for child_pid in child_pids {
         assert_process_gone(child_pid).await;
     }
-    assert!(matches!(
-        server
-            .clone()
-            .cmd(Command::new("rejected").arg(rejected_marker.clone().into_os_string()))
-            .await,
-        Err(Error::ExecutorShutdown { .. })
-    ));
+    let rejected = server
+        .clone()
+        .cmd(Command::new("rejected").arg(rejected_marker.clone().into_os_string()))
+        .await
+        .expect_err("the shut down executor refuses every later call");
+    assert!(matches!(rejected, Error::ExecutorShutdown { .. }));
+    assert!(
+        !rejected.is_transient(),
+        "waiting cannot reopen this Core's executor",
+    );
     assert!(
         !rejected_marker.exists(),
         "closed executor never spawns again"
@@ -809,6 +820,12 @@ if [ "$#" -eq 1 ] && [ "$1" = "-V" ]; then
     printf 'tmux 3.7b\n'
     exit 0
 fi
+for argument do
+    if [ "$argument" = probe ]; then
+        printf 'executor-alive\n'
+        exit 0
+    fi
+done
 previous=''
 for argument do
     if [ "$previous" = block ]; then
@@ -841,7 +858,18 @@ exit 94
         .expect_err("blocking command reaches configured timeout");
 
     assert!(matches!(error, Error::Timeout { .. }));
+    assert!(
+        !error.is_transient(),
+        "the child ran before timing out, so replay could duplicate its effect",
+    );
+    assert!(pid_path.exists(), "the command crossed the spawn boundary");
     assert_process_gone(child_pid).await;
+    let probe = server
+        .cmd(Command::new("probe"))
+        .await
+        .expect("a different call can use the same live server handle");
+    assert!(probe.success());
+    assert_eq!(probe.stdout(), b"executor-alive\n");
     server.shutdown().await.expect("shutdown remains clean");
 }
 
@@ -873,6 +901,14 @@ async fn missing_executable_is_inert_until_use_and_errors_are_path_safe() {
         &capability_error,
         Error::ExecutableNotFound { .. }
     ));
+    assert!(
+        !command_error.is_transient(),
+        "the unchanged call cannot start a missing executable",
+    );
+    assert!(
+        !capability_error.is_transient(),
+        "the unchanged probe cannot start a missing executable",
+    );
     assert_error_path_safe(&command_error, "sentinel-missing-tmux");
     assert_error_path_safe(&capability_error, "sentinel-missing-tmux");
     symlink(&available, &executable).expect("missing executable path becomes available atomically");
@@ -885,6 +921,43 @@ async fn missing_executable_is_inert_until_use_and_errors_are_path_safe() {
             .raw(),
         "3.7b"
     );
+    server.shutdown().await.expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn a_spawn_failure_needs_more_than_replaying_unchanged() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let script = write_script(
+        directory.path(),
+        "temporarily-unexecutable-tmux",
+        "printf 'transport recovered\n'",
+    );
+    let mut permissions = fs::metadata(&script)
+        .expect("script metadata is readable")
+        .permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(&script, permissions.clone()).expect("execution is refused");
+    let server = fake_server(&script, &directory.path().join("spawn.sock"));
+
+    let error = server
+        .cmd(Command::new("display-message"))
+        .await
+        .expect_err("the executable cannot be started");
+    assert!(matches!(error, Error::Spawn { .. }));
+    assert!(
+        !error.is_transient(),
+        "permission failure needs repair rather than unchanged replay",
+    );
+
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).expect("execution is restored");
+    let retried = server
+        .cmd(Command::new("display-message"))
+        .await
+        .expect("the unchanged call runs on the same server handle");
+    assert!(retried.success());
+    assert_eq!(retried.stdout(), b"transport recovered\n");
+
     server.shutdown().await.expect("shutdown succeeds");
 }
 

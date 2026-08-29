@@ -243,13 +243,17 @@ async fn create_one<T>(
         ));
     }
 
-    hydrate(result.stdout())?
+    hydrate(result.stdout())
+        .map_err(|error| error.after_effect(command_name))?
         .into_iter()
         .next()
-        .ok_or(Error::CommandFailed {
-            command: command_name,
-            exit_code: result.exit_code(),
-            stderr: String::from("tmux printed no object for a creating command"),
+        .ok_or_else(|| {
+            Error::CommandFailed {
+                command: command_name,
+                exit_code: result.exit_code(),
+                stderr: String::from("tmux printed no object for a creating command"),
+            }
+            .after_effect(command_name)
         })
 }
 
@@ -329,10 +333,44 @@ fn mutation_failure(
 mod tests {
     use std::os::unix::process::ExitStatusExt as _;
     use std::process::ExitStatus;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::mutation_failure;
-    use crate::command::{CommandResult, ProcessStatus, RequestId};
-    use crate::{Command, Error};
+    use super::{create_session, mutation_failure};
+    use crate::command::{CommandRequest, CommandResult, ProcessStatus, RequestId};
+    use crate::internal::core::Core;
+    use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+    use crate::{Command, Error, ErrorKind};
+
+    struct CreationExecutor {
+        calls: AtomicUsize,
+        stdout: &'static [u8],
+    }
+
+    impl Executor for CreationExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let stdout = if call == 0 {
+                b"tmux 3.7b\n".to_vec()
+            } else {
+                assert_eq!(call, 1, "one probe and one creating command");
+                self.stdout.to_vec()
+            };
+            DispatchFuture::new(async move {
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
 
     #[test]
     fn sensitive_mutation_failure_withholds_tmux_output() {
@@ -353,5 +391,30 @@ mod tests {
         assert!(matches!(&error, Error::CommandFailed { .. }));
         let diagnostic = format!("{error:?} {error}");
         assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
+
+    #[tokio::test]
+    async fn successful_creation_marks_decode_and_missing_object_failures() {
+        for stdout in [b"malformed\n".as_slice(), b"".as_slice()] {
+            let executor = Arc::new(CreationExecutor {
+                calls: AtomicUsize::new(0),
+                stdout,
+            });
+            let core = Core::from_executor_for_test(executor.clone());
+
+            let error = create_session(&core, |_format| Command::new("new-session"))
+                .await
+                .expect_err("tmux succeeded but did not describe the created session");
+
+            assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+            assert_eq!(error.kind(), ErrorKind::PartialEffect);
+            assert!(matches!(
+                error,
+                Error::AfterEffect {
+                    operation: "new-session",
+                    ..
+                }
+            ));
+        }
     }
 }

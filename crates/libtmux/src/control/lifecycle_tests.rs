@@ -330,7 +330,19 @@ async fn an_open_response_block_has_one_deadline() {
     .expect("the open block reaches its deadline")
     .expect_err("the open block times out");
     assert_eq!(error.kind(), ErrorKind::Timeout);
+    assert!(
+        !error.is_transient(),
+        "a response timeout terminates this connection",
+    );
     assert!(marker.exists(), "the command reached the fake client");
+    let closed = commands
+        .send(Command::new("display-message"))
+        .await
+        .expect_err("the timed out sender remains closed");
+    assert!(
+        !closed.is_transient(),
+        "waiting cannot reopen the timed out sender",
+    );
     let shutdown = events
         .shutdown()
         .await
@@ -339,6 +351,13 @@ async fn an_open_response_block_has_one_deadline() {
     assert_process_gone(wait_for_pid(&parent).await).await;
     assert_process_gone(wait_for_pid(&descendant).await).await;
 
+    let replacement = attach(&server)
+        .await
+        .expect("a new connection can attach through the same server");
+    replacement
+        .shutdown()
+        .await
+        .expect("the replacement connection shuts down");
     server.shutdown().await.expect("server shuts down");
 }
 
@@ -455,10 +474,29 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
         .expect("sender task joins")
         .expect_err("the interrupted command closes");
     assert_eq!(send_error.kind(), ErrorKind::Transport);
+    assert!(
+        !send_error.is_transient(),
+        "the stopped sender cannot reopen its connection",
+    );
+    let same_sender = commands
+        .send(Command::new("display-message"))
+        .await
+        .expect_err("the same sender remains closed");
+    assert!(
+        !same_sender.is_transient(),
+        "waiting cannot reopen a closed sender",
+    );
     assert_process_gone(wait_for_pid(&parent).await).await;
     assert_process_gone(wait_for_pid(&descendant).await).await;
 
     drop(commands);
+    let replacement = attach(&server)
+        .await
+        .expect("a new connection can attach through the same server");
+    replacement
+        .shutdown()
+        .await
+        .expect("the replacement connection shuts down");
     server.shutdown().await.expect("server shuts down");
 }
 

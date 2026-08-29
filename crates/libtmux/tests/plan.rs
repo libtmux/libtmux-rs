@@ -516,6 +516,79 @@ async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("control-plan-refusal")
+        .await
+        .expect("session is created");
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let absent: PaneId = "%999999".parse().expect("a pane id");
+    let mut missing = Plan::new();
+    missing.add(KillPane::new(absent));
+    let missing = missing
+        .run_over_control_mode(&commands)
+        .await
+        .expect("tmux refusals remain plan result data");
+    let step = &missing.steps()[0];
+    assert!(step.stdout().is_empty(), "an error block is not stdout");
+    assert!(
+        String::from_utf8_lossy(step.stderr()).contains("can't find pane: %999999"),
+        "the error block keeps tmux's diagnostic: {step:?}",
+    );
+    assert!(
+        matches!(
+            step.refusal(),
+            Some(libtmux::Error::ObjectGone {
+                kind: libtmux::ObjectKind::Pane,
+                ref id,
+                ..
+            }) if id == "%999999"
+        ),
+        "the preserved diagnostic remains classifiable",
+    );
+
+    let window = session
+        .windows()
+        .await
+        .expect("windows are listed")
+        .remove(0);
+    let secret = "sentinel-sensitive-control-value";
+    let mut sensitive = Plan::new();
+    sensitive.add(SetOption::window(
+        window.id().clone(),
+        "synchronize-panes",
+        secret,
+    ));
+    let sensitive = sensitive
+        .run_over_control_mode(&commands)
+        .await
+        .expect("tmux refusals remain plan result data");
+    let step = &sensitive.steps()[0];
+    assert!(step.has_sensitive_input());
+    assert!(
+        String::from_utf8_lossy(step.stderr()).contains(secret),
+        "the raw error stream remains inspectable",
+    );
+    let refusal = step.refusal().expect("the operation was refused");
+    assert!(matches!(refusal, libtmux::Error::CommandFailed { .. }));
+    for diagnostic in [format!("{refusal:?} {refusal}"), format!("{sensitive:?}")] {
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
+
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[cfg(feature = "serde")]
 #[test]
 fn a_plan_survives_a_round_trip_through_json() {

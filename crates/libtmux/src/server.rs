@@ -1332,17 +1332,18 @@ impl Server {
     ///
     /// Setup and teardown failures convert into the operation's own error
     /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and the cleanup fail, the operation's error is
-    /// returned, because that is the work the caller was doing; the discarded
-    /// cleanup failure is recorded through `tracing` when that feature is on.
+    /// both the operation and cleanup fail, the cleanup error is returned as
+    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
+    /// creation; the operation error is discarded. When the operation fails
+    /// and cleanup succeeds, its generic error is returned unchanged: the
+    /// scope cannot certify replay safety for arbitrary callback work.
     /// A canceled caller cannot receive a cleanup error, so tracing is its
     /// only report.
     ///
     /// # Errors
     ///
     /// Returns the operation's error, or a converted [`Error`] when the
-    /// session could not be created, or could not be killed after the
-    /// operation succeeded.
+    /// session could not be created or could not be killed after creation.
     pub async fn with_session<T, E>(
         &self,
         options: impl Into<NewSessionOptions>,
@@ -1354,6 +1355,7 @@ impl Server {
         let server = self.clone();
         let options = options.into();
         scoped::run(
+            "with-session",
             async move { server.new_session(options).await },
             Session::kill,
             operation,
@@ -2123,12 +2125,101 @@ mod tests {
     use tokio::sync::{Notify, watch};
 
     use super::{NewSessionOptions, Server};
-    use crate::Error;
     use crate::command::{CommandRequest, CommandResult, ProcessStatus};
+    use crate::formats::{DecoderKind, FormatDescriptor, FormatPlan, ListProfile};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+    use crate::{Error, ErrorKind, TmuxVersion};
 
     struct RefusingExecutor {
         calls: AtomicUsize,
+    }
+
+    #[derive(Clone, Copy)]
+    enum SessionFollowup {
+        DispatchError,
+        EmptyListing,
+    }
+
+    struct ComposedSessionExecutor {
+        calls: AtomicUsize,
+        sessions_stdout: Vec<u8>,
+        followup: SessionFollowup,
+    }
+
+    impl Executor for ComposedSessionExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let sessions_stdout = self.sessions_stdout.clone();
+            let followup = self.followup;
+            DispatchFuture::new(async move {
+                if call == 3 && matches!(followup, SessionFollowup::DispatchError) {
+                    return Err(Error::Overloaded {
+                        request_id: request.request_id().get(),
+                        command: request.summary().clone(),
+                        in_flight: 1,
+                    });
+                }
+
+                let stdout = match call {
+                    0 => b"tmux 3.7b\n".to_vec(),
+                    1 => sessions_stdout,
+                    2 | 3 => Vec::new(),
+                    _ => panic!("one probe, one listing, one mutation, and one refresh"),
+                };
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    fn default_format_value(descriptor: &FormatDescriptor) -> &'static [u8] {
+        match descriptor.name() {
+            "session_id" => b"$1",
+            "window_id" => b"@1",
+            "pane_id" => b"%1",
+            "client_name" => b"client",
+            _ => match descriptor.decoder() {
+                DecoderKind::Ascii => b"ascii",
+                DecoderKind::Text => b"text",
+                DecoderKind::Bool
+                | DecoderKind::U8
+                | DecoderKind::U32
+                | DecoderKind::U64
+                | DecoderKind::I32
+                | DecoderKind::Timestamp
+                | DecoderKind::PaneProgress => b"0",
+                DecoderKind::SessionId => b"$1",
+                DecoderKind::WindowId => b"@1",
+                DecoderKind::PaneId => b"%1",
+                DecoderKind::PaneProgressState => b"normal",
+            },
+        }
+    }
+
+    fn session_listing_stdout() -> Vec<u8> {
+        let version = TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version");
+        let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
+        let mut stdout = Vec::new();
+        for descriptor in plan.descriptors_for_test() {
+            for byte in default_format_value(descriptor) {
+                if matches!(*byte, b'\\' | b'%') {
+                    stdout.push(b'\\');
+                }
+                stdout.push(*byte);
+            }
+            stdout.push(b'%');
+        }
+        stdout.push(b'\n');
+        stdout
     }
 
     impl Executor for RefusingExecutor {
@@ -2243,6 +2334,66 @@ mod tests {
         for secret in ["sentinel-run-shell-command", "sentinel-run-shell-output"] {
             assert!(!diagnostic.contains(secret), "{diagnostic}");
         }
+    }
+
+    #[tokio::test]
+    async fn session_refresh_failure_after_rename_marks_the_completed_effect() {
+        let executor = Arc::new(ComposedSessionExecutor {
+            calls: AtomicUsize::new(0),
+            sessions_stdout: session_listing_stdout(),
+            followup: SessionFollowup::DispatchError,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+        let mut session = server
+            .sessions()
+            .await
+            .expect("fixture session listing")
+            .pop()
+            .expect("one fixture session");
+
+        let error = session
+            .rename("renamed")
+            .await
+            .expect_err("refresh dispatch fails after rename succeeds");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
+        assert!(
+            matches!(
+                error,
+                Error::AfterEffect { operation: "rename-session", source }
+                    if source.kind() == ErrorKind::Refused && source.is_transient()
+            ),
+            "the refresh error remains available as the source",
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_session_step_requires_an_active_window_postcondition() {
+        let executor = Arc::new(ComposedSessionExecutor {
+            calls: AtomicUsize::new(0),
+            sessions_stdout: session_listing_stdout(),
+            followup: SessionFollowup::EmptyListing,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+        let session = server
+            .sessions()
+            .await
+            .expect("fixture session listing")
+            .pop()
+            .expect("one fixture session");
+
+        let error = session
+            .next_window()
+            .await
+            .expect_err("an accepted step must leave an active window");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
+        assert!(matches!(
+            error,
+            Error::AfterEffect { operation: "next-window", source }
+                if matches!(*source, Error::ObjectGone { .. })
+        ));
     }
 
     #[test]

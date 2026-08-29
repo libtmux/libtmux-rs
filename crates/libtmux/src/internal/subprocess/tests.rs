@@ -578,12 +578,15 @@ async fn duplicate_active_request_id_is_rejected_before_spawn() {
         tokio::spawn(executor.execute(request(11, [first_path.as_os_str().to_os_string()])));
     let child_pid = read_pids(&first_path, 1).await[0];
 
-    assert!(matches!(
-        executor
-            .execute(request(11, [duplicate_path.as_os_str().to_os_string()]))
-            .await,
-        Err(Error::DuplicateRequest { .. })
-    ));
+    let duplicate = executor
+        .execute(request(11, [duplicate_path.as_os_str().to_os_string()]))
+        .await
+        .expect_err("the active identity is refused");
+    assert!(matches!(duplicate, Error::DuplicateRequest { .. }));
+    assert!(
+        !duplicate.is_transient(),
+        "a duplicate identity is an internal invariant failure, not backoff",
+    );
     assert!(!duplicate_path.exists());
     first.abort();
     let _ = first.await;
@@ -791,6 +794,10 @@ async fn reader_failure_and_supervisor_loss_are_sanitized_and_cleanup() {
         .expect("reader dispatch task remains healthy")
         .expect_err("injected reader failure is surfaced");
     assert!(matches!(reader_error, Error::ReadOutput { .. }));
+    assert!(
+        !reader_error.is_transient(),
+        "the child started before its output failed",
+    );
     assert!(StdError::source(&reader_error).is_none());
     assert_eq!(reader.active_request_count(), 0);
     assert_process_reaped(reader_pid);
@@ -811,6 +818,10 @@ async fn reader_failure_and_supervisor_loss_are_sanitized_and_cleanup() {
         .expect("lost-supervisor dispatch task remains healthy")
         .expect_err("lost supervisor is surfaced");
     assert!(matches!(lost_error, Error::SupervisorLost { .. }));
+    assert!(
+        !lost_error.is_transient(),
+        "the child started before its supervisor was lost",
+    );
     assert!(StdError::source(&lost_error).is_none());
     assert_eq!(lost.active_request_count(), 0);
     assert_process_reaped(lost_pid);
@@ -844,6 +855,10 @@ async fn wait_failure_is_typed_and_cleanup_reaps_the_child() {
         .expect_err("injected wait failure is surfaced");
 
     assert!(matches!(error, Error::WaitChild { .. }));
+    assert!(
+        !error.is_transient(),
+        "the child started before waiting for it failed",
+    );
     assert!(StdError::source(&error).is_some());
     assert_eq!(executor.active_request_count(), 0);
     assert_process_reaped(child_pid);

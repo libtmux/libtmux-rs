@@ -46,6 +46,46 @@ fn command_result(
 }
 
 #[test]
+fn command_results_classify_refusals_without_exposing_sensitive_output() {
+    let success = command_result(Command::new("select-pane"), exit_status(0), b"", b"");
+    assert!(success.refusal_for("select-pane").is_none());
+
+    let server_gone = command_result(
+        Command::new("select-pane"),
+        exit_status(1),
+        b"",
+        b"no server running on /tmp/libtmux-rs-dev/absent\n",
+    )
+    .refusal_for("select-pane")
+    .expect("a nonzero result is a refusal");
+    assert!(matches!(server_gone, crate::Error::ServerGone { .. }));
+
+    let object_gone = command_result(
+        Command::new("select-pane").arg("-t").arg("%77"),
+        exit_status(1),
+        b"",
+        b"can't find pane: %77\n",
+    )
+    .refusal_for("select-pane")
+    .expect("the target was refused");
+    assert_eq!(object_gone.kind(), crate::ErrorKind::ObjectGone);
+
+    let secret = "sentinel-command-result-secret";
+    let sensitive = command_result(
+        Command::new("send-keys").sensitive_arg(secret),
+        exit_status(1),
+        b"",
+        format!("bad key: {secret}\n").as_bytes(),
+    );
+    let refusal = sensitive
+        .refusal_for("send-keys")
+        .expect("the sensitive command was refused");
+    let diagnostic = format!("{refusal:?} {refusal}");
+    assert!(matches!(refusal, crate::Error::CommandFailed { .. }));
+    assert!(!diagnostic.contains(secret), "{diagnostic}");
+}
+
+#[test]
 fn dispatch_lowering_escapes_only_each_final_semicolon() {
     let cases: &[(&[u8], &[u8])] = &[
         (b";", b"\\;"),

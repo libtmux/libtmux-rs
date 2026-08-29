@@ -1086,6 +1086,23 @@ impl CommandResult {
         self.status.success()
     }
 
+    /// Classify a nonzero status as a refusal for a named operation.
+    ///
+    /// Use a fixed operation name without targets or argument values. The
+    /// result keeps no original target, so classification uses only what tmux
+    /// echoed in stderr. Sensitive command output is withheld from the
+    /// returned error.
+    ///
+    /// Returns `None` when the command succeeded.
+    #[must_use]
+    pub fn refusal_for(&self, operation: &'static str) -> Option<crate::Error> {
+        if self.success() {
+            None
+        } else {
+            Some(crate::Error::from_refused_result(operation, self, None))
+        }
+    }
+
     /// Return the process exit code, or `None` when it ended by signal.
     ///
     /// # Examples

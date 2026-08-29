@@ -423,7 +423,19 @@ impl Session {
             ));
         }
 
-        self.active_window().await
+        let active = self
+            .active_window()
+            .await
+            .map_err(|error| error.after_effect(command))?;
+        active
+            .ok_or_else(|| {
+                Error::ObjectGone {
+                    kind: ObjectKind::Session,
+                    id: target,
+                }
+                .after_effect(command)
+            })
+            .map(Some)
     }
     /// Return the session's active window.
     ///
@@ -537,7 +549,9 @@ impl Session {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("rename-session"))?;
         Ok(self)
     }
 
@@ -1049,17 +1063,18 @@ impl Session {
     ///
     /// Setup and teardown failures convert into the operation's own error
     /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and the cleanup fail, the operation's error is
-    /// returned, because that is the work the caller was doing; the discarded
-    /// cleanup failure is recorded through `tracing` when that feature is on.
+    /// both the operation and cleanup fail, the cleanup error is returned as
+    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
+    /// creation; the operation error is discarded. When the operation fails
+    /// and cleanup succeeds, its generic error is returned unchanged: the
+    /// scope cannot certify replay safety for arbitrary callback work.
     /// A canceled caller cannot receive a cleanup error, so tracing is its
     /// only report.
     ///
     /// # Errors
     ///
     /// Returns the operation's error, or a converted [`Error`] when the
-    /// window could not be created, or could not be killed after the
-    /// operation succeeded.
+    /// window could not be created or could not be killed after creation.
     pub async fn with_window<T, E>(
         &self,
         options: impl Into<NewWindowOptions>,
@@ -1071,6 +1086,7 @@ impl Session {
         let session = self.clone();
         let options = options.into();
         scoped::run(
+            "with-window",
             async move { session.new_window(options).await },
             Window::kill,
             operation,

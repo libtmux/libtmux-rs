@@ -634,6 +634,85 @@ async fn writing_a_whole_hook_replaces_or_merges_as_asked() {
 }
 
 #[tokio::test]
+async fn a_later_bulk_hook_refusal_reports_the_hook_already_written() {
+    use libtmux::{Error, ErrorKind, IndexedHooks, ReplaceMode, TmuxText};
+    use std::collections::BTreeMap;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut entries = BTreeMap::new();
+    entries.insert(0, TmuxText::from("display-message first"));
+    entries.insert(1, TmuxText::from("no-such-tmux-command"));
+
+    let error = server
+        .set_hooks(
+            "alert-bell",
+            &IndexedHooks::from(entries),
+            ReplaceMode::Merge,
+        )
+        .await
+        .expect_err("tmux refuses the second hook command");
+
+    let hooks = server
+        .hook("alert-bell")
+        .await
+        .expect("the partly written hook can be read")
+        .expect("the first hook remains set");
+    assert_eq!(
+        hooks.get(0).map(TmuxText::as_bytes),
+        Some(b"display-message first".as_slice()),
+    );
+    assert!(hooks.get(1).is_none(), "the refused hook was not stored");
+
+    assert_eq!(error.kind(), ErrorKind::PartialEffect);
+    assert!(matches!(
+        error,
+        Error::AfterEffect {
+            operation: "set-hooks",
+            source,
+            ..
+        } if source.kind() == ErrorKind::Refused
+    ));
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_first_bulk_hook_refusal_has_no_partial_effect() {
+    use libtmux::{ErrorKind, IndexedHooks, ReplaceMode, TmuxText};
+    use std::collections::BTreeMap;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut entries = BTreeMap::new();
+    entries.insert(0, TmuxText::from("no-such-tmux-command"));
+    entries.insert(1, TmuxText::from("display-message never-written"));
+
+    let error = server
+        .set_hooks(
+            "alert-bell",
+            &IndexedHooks::from(entries),
+            ReplaceMode::Merge,
+        )
+        .await
+        .expect_err("tmux refuses the first hook command");
+
+    assert_eq!(error.kind(), ErrorKind::Refused);
+    assert!(
+        server
+            .hook("alert-bell")
+            .await
+            .expect("the hook can be read")
+            .is_none(),
+        "the member after the refusal never ran",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn tmux_refusing_an_option_says_which_of_three_things_went_wrong() {
     use libtmux::OptionErrorKind;
 

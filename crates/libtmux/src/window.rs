@@ -458,10 +458,16 @@ impl Window {
         )
         .await?;
 
-        self.active_pane().await?.ok_or(Error::ObjectGone {
-            kind: ObjectKind::Window,
-            id: target,
-        })
+        self.active_pane()
+            .await
+            .map_err(|error| error.after_effect("select-pane"))?
+            .ok_or_else(|| {
+                Error::ObjectGone {
+                    kind: ObjectKind::Window,
+                    id: target,
+                }
+                .after_effect("select-pane")
+            })
     }
 
     /// Move to the pane that was active before this one, and return it.
@@ -517,7 +523,19 @@ impl Window {
             ));
         }
 
-        self.active_pane().await
+        let active = self
+            .active_pane()
+            .await
+            .map_err(|error| error.after_effect("last-pane"))?;
+        active
+            .ok_or_else(|| {
+                Error::ObjectGone {
+                    kind: ObjectKind::Window,
+                    id: target,
+                }
+                .after_effect("last-pane")
+            })
+            .map(Some)
     }
 
     /// The sessions this window is linked into, in the order tmux lists them.
@@ -695,7 +713,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("rename-window"))?;
         Ok(self)
     }
 
@@ -723,7 +743,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-window"))?;
         Ok(self)
     }
 
@@ -785,7 +807,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-layout"))?;
         Ok(self)
     }
 
@@ -815,7 +839,9 @@ impl Window {
         }
 
         listing::mutate(&self.core, "respawn-window", respawn).await?;
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("respawn-window"))?;
         Ok(self)
     }
 
@@ -853,7 +879,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-layout"))?;
         Ok(self)
     }
 
@@ -1329,17 +1357,18 @@ impl Window {
     ///
     /// Setup and teardown failures convert into the operation's own error
     /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and the cleanup fail, the operation's error is
-    /// returned, because that is the work the caller was doing; the discarded
-    /// cleanup failure is recorded through `tracing` when that feature is on.
+    /// both the operation and cleanup fail, the cleanup error is returned as
+    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
+    /// creation; the operation error is discarded. When the operation fails
+    /// and cleanup succeeds, its generic error is returned unchanged: the
+    /// scope cannot certify replay safety for arbitrary callback work.
     /// A canceled caller cannot receive a cleanup error, so tracing is its
     /// only report.
     ///
     /// # Errors
     ///
     /// Returns the operation's error, or a converted [`Error`] when the
-    /// pane could not be created, or could not be killed after the
-    /// operation succeeded.
+    /// pane could not be created or could not be killed after creation.
     pub async fn with_pane<T, E>(
         &self,
         options: impl Into<SplitOptions>,
@@ -1351,6 +1380,7 @@ impl Window {
         let window = self.clone();
         let options = options.into();
         scoped::run(
+            "with-pane",
             async move { window.split(options).await },
             Pane::kill,
             operation,
@@ -1391,7 +1421,9 @@ impl Window {
             .await);
         }
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("swap-window"))?;
         Ok(self)
     }
 
@@ -1416,7 +1448,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("move-window"))?;
         Ok(self)
     }
 
@@ -1472,7 +1506,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("resize-window"))?;
         Ok(self)
     }
 
@@ -1572,7 +1608,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("resize-window"))?;
         Ok(self)
     }
 
