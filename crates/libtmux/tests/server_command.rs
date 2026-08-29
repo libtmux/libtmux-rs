@@ -574,7 +574,7 @@ printf '<TMUX_PANE=%s>\n' "${TMUX_PANE-unset}"
     assert_eq!(
         stdout,
         format!(
-            "<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<display-message>\n<value\\;>\n<TMUX=unset>\n<TMUX_PANE=unset>\n",
+            "<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<display-message>\n<value\\;>\n<TMUX=unset>\n<TMUX_PANE=unset>\n",
             socket.display(),
             config.display(),
         )
