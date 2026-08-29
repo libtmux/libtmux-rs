@@ -46,7 +46,6 @@
 //! `examples/watch.rs` is this as a program that runs, against a server it
 //! starts and cleans up.
 
-use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -1037,40 +1036,6 @@ const NARROW_IDLE: u8 = 0;
 const NARROW_RUNNING: u8 = 1;
 const NARROW_DIRTY: u8 = 2;
 
-/// An ordered boundary between a pane's rendered screen and raw output stream.
-///
-/// The visible screen and preceding output answer different questions and may
-/// overlap: the screen is tmux's rendered grid, while the output is the raw
-/// terminal byte stream that reached that grid.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PaneOutputSnapshot {
-    visible: Vec<TmuxText>,
-    preceding_output: Vec<u8>,
-}
-
-impl PaneOutputSnapshot {
-    /// Return the pane's visible screen at the boundary.
-    #[must_use]
-    pub fn visible(&self) -> &[TmuxText] {
-        &self.visible
-    }
-
-    /// Return every unread output byte ordered before the boundary.
-    ///
-    /// These bytes have been consumed from the stream. The next chunk from
-    /// the [`PaneOutput`] that made this snapshot is strictly after them.
-    #[must_use]
-    pub fn preceding_output(&self) -> &[u8] {
-        &self.preceding_output
-    }
-
-    /// Separate the visible screen from the preceding raw output.
-    #[must_use]
-    pub fn into_parts(self) -> (Vec<TmuxText>, Vec<u8>) {
-        (self.visible, self.preceding_output)
-    }
-}
-
 /// What one pane writes, as it writes it.
 ///
 /// Built by [`crate::Pane::stream_output`]. This is a [`Stream`] of the bytes
@@ -1087,11 +1052,6 @@ impl PaneOutputSnapshot {
 pub struct PaneOutput {
     pane: PaneId,
     events: ControlEvents,
-    /// Output consumed while establishing a snapshot boundary.
-    ///
-    /// This belongs to the stream rather than the snapshot future so
-    /// cancelling that future cannot discard bytes.
-    buffered: VecDeque<Vec<u8>>,
     boundary: u64,
     closed: bool,
     /// Kept to re-narrow the subscription, not to send a caller's commands.
@@ -1111,7 +1071,6 @@ impl PaneOutput {
         Self {
             pane,
             events,
-            buffered: VecDeque::new(),
             boundary: 0,
             closed: false,
             sender,
@@ -1167,18 +1126,42 @@ impl PaneOutput {
 
     /// Capture the pane's visible screen at an ordered point in this stream.
     ///
-    /// [`PaneOutputSnapshot::preceding_output`] contains every unread byte
-    /// tmux ordered before the capture block. Those bytes are consumed here;
-    /// the next chunk is strictly after that boundary. Previously returned
-    /// chunks are never repeated. Cancelling this future leaves any bytes it
-    /// has already received available to [`Self::next_chunk`] or a later
-    /// snapshot.
+    /// `on_output` receives every unread chunk tmux ordered before the capture
+    /// block. The callback owns any retention policy, so libtmux does not
+    /// retain those chunks. It runs synchronously and should return promptly.
+    ///
+    /// Each chunk passed to `on_output` is consumed from this stream and is
+    /// not repeated by [`Self::next_chunk`]. That remains true when this
+    /// future is cancelled or returns an error: caller-owned storage keeps
+    /// the prefix it already accepted.
+    ///
+    /// The visible screen and preceding output may overlap: the screen is
+    /// tmux's rendered grid, while the callback receives the raw terminal
+    /// byte stream that reached that grid.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn inspect(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+    /// let mut output = pane.stream_output().await?;
+    /// let mut preceding = Vec::new();
+    /// let visible = output
+    ///     .snapshot(|chunk| preceding.extend_from_slice(chunk))
+    ///     .await?;
+    ///
+    /// println!("{} visible lines after {} raw bytes", visible.len(), preceding.len());
+    /// output.shutdown().await
+    /// # }
+    /// ```
     ///
     /// # Errors
     ///
     /// Returns an error when the connection closes, the command deadline
     /// elapses, or tmux refuses the capture, including when the pane vanished.
-    pub async fn snapshot(&mut self) -> Result<PaneOutputSnapshot, Error> {
+    pub async fn snapshot(
+        &mut self,
+        mut on_output: impl FnMut(&[u8]),
+    ) -> Result<Vec<TmuxText>, Error> {
         self.boundary = self.boundary.wrapping_add(1);
         let boundary = Boundary(self.boundary);
         let command = Command::new("capture-pane")
@@ -1205,7 +1188,7 @@ impl PaneOutput {
                         Some(Delivery::Event(
                             Event::Output { pane, bytes }
                             | Event::ExtendedOutput { pane, bytes, .. },
-                        )) if pane == self.pane => self.buffered.push_back(bytes),
+                        )) if pane == self.pane => on_output(&bytes),
                         Some(Delivery::Event(Event::Exit { .. })) => self.closed = true,
                         Some(Delivery::Event(event)) => {
                             if event.may_have_added_a_pane() {
@@ -1235,14 +1218,7 @@ impl PaneOutput {
                 None => reply.as_mut().await?,
             }
             .require_success("capture-pane")?;
-            let mut preceding_output = Vec::with_capacity(self.buffered.iter().map(Vec::len).sum());
-            while let Some(bytes) = self.buffered.pop_front() {
-                preceding_output.extend_from_slice(&bytes);
-            }
-            return Ok(PaneOutputSnapshot {
-                visible: block.output,
-                preceding_output,
-            });
+            return Ok(block.output);
         }
     }
 
@@ -1251,9 +1227,6 @@ impl PaneOutput {
     /// A chunk is what tmux chose to report at once, which is not a line and
     /// not a fixed size. Callers wanting lines should buffer.
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
-        if let Some(bytes) = self.buffered.pop_front() {
-            return Some(bytes);
-        }
         if self.closed {
             return None;
         }
@@ -1290,9 +1263,6 @@ impl Stream for PaneOutput {
     type Item = Vec<u8>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
-        if let Some(bytes) = self.buffered.pop_front() {
-            return Poll::Ready(Some(bytes));
-        }
         if self.closed {
             return Poll::Ready(None);
         }

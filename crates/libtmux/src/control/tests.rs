@@ -1,4 +1,8 @@
 use std::time::Duration;
+use std::{
+    sync::Arc,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -201,7 +205,7 @@ async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
 }
 
 #[tokio::test]
-async fn cancelling_a_snapshot_preserves_output_it_already_consumed() {
+async fn cancelling_a_snapshot_leaves_consumed_output_in_the_callers_sink() {
     let (commands, mut requests) = mpsc::channel(1);
     let sender = sender(commands, Duration::from_secs(5));
     let (deliveries, received) = mpsc::channel(1);
@@ -217,12 +221,10 @@ async fn cancelling_a_snapshot_preserves_output_it_already_consumed() {
         sender,
     );
     let (staged, staged_answer) = oneshot::channel();
+    let (release, release_answer) = oneshot::channel();
     let driver = tokio::spawn(async move {
         let request = requests.recv().await.expect("the capture request");
-        assert!(
-            request.boundary.is_some(),
-            "the capture requests a boundary"
-        );
+        let boundary = request.boundary.expect("the capture boundary");
         deliveries
             .send(Delivery::Event(Event::Output {
                 pane: "%1".parse().expect("a pane id"),
@@ -237,11 +239,24 @@ async fn cancelling_a_snapshot_preserves_output_it_already_consumed() {
             .await
             .expect("the output receiver remains open");
         staged.send(()).expect("the test still waits for staging");
-        std::future::pending::<()>().await;
+        release_answer.await.expect("the test releases the reply");
+        deliveries
+            .send(Delivery::Boundary(boundary))
+            .await
+            .expect("the output receiver remains open");
+        let _ = request.result.send(Ok(reply(1)));
+        deliveries
+            .send(Delivery::Event(Event::Output {
+                pane: "%1".parse().expect("a pane id"),
+                bytes: b"after".to_vec(),
+            }))
+            .await
+            .expect("the output receiver remains open");
     });
 
+    let mut consumed = Vec::new();
     {
-        let snapshot = output.snapshot();
+        let snapshot = output.snapshot(|bytes| consumed.extend_from_slice(bytes));
         tokio::pin!(snapshot);
         tokio::select! {
             outcome = snapshot.as_mut() => panic!("the unreplied capture finished: {outcome:?}"),
@@ -249,12 +264,92 @@ async fn cancelling_a_snapshot_preserves_output_it_already_consumed() {
         }
     }
 
+    assert_eq!(consumed, b"before");
+    release
+        .send(())
+        .expect("the driver still waits for release");
     assert_eq!(
         output.next_chunk().await.as_deref(),
-        Some(b"before".as_slice())
+        Some(b"after".as_slice()),
+        "the stale boundary is ignored and retained output is not repeated",
     );
-    driver.abort();
-    let _ = driver.await;
+    driver.await.expect("the driver task joins");
+    output.shutdown().await.expect("connection shuts down");
+}
+
+#[tokio::test]
+async fn a_snapshot_streams_a_flood_into_caller_owned_storage() {
+    const CHUNKS: usize = 128;
+    const CHUNK_BYTES: usize = 4096;
+
+    let (commands, mut requests) = mpsc::channel(1);
+    let sender = sender(commands, Duration::from_secs(5));
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, _stopped) = watch::channel(());
+    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+    let mut output = PaneOutput::new(
+        "%1".parse().expect("a pane id"),
+        ControlEvents {
+            events: received,
+            stop,
+            connection,
+        },
+        sender,
+    );
+    let (staged, staged_answer) = oneshot::channel();
+    let (release, release_answer) = oneshot::channel();
+    let driver = tokio::spawn(async move {
+        let request = requests.recv().await.expect("the capture request");
+        let boundary = request.boundary.expect("the capture boundary");
+        for _ in 0..CHUNKS {
+            deliveries
+                .send(Delivery::Event(Event::Output {
+                    pane: "%1".parse().expect("a pane id"),
+                    bytes: vec![b'x'; CHUNK_BYTES],
+                }))
+                .await
+                .expect("the output receiver remains open");
+        }
+        deliveries
+            .send(Delivery::Event(Event::SessionsChanged))
+            .await
+            .expect("the output receiver remains open");
+        staged.send(()).expect("the test still waits for staging");
+        release_answer.await.expect("the test releases the reply");
+        deliveries
+            .send(Delivery::Boundary(boundary))
+            .await
+            .expect("the output receiver remains open");
+        request
+            .result
+            .send(Ok(reply(1)))
+            .expect("the snapshot still waits for its result");
+    });
+
+    let observed = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::clone(&observed);
+    let visible = {
+        let snapshot = output.snapshot(move |bytes| {
+            sink.fetch_add(bytes.len(), Ordering::Relaxed);
+        });
+        tokio::pin!(snapshot);
+        tokio::select! {
+            outcome = snapshot.as_mut() => panic!("the unreplied capture finished: {outcome:?}"),
+            result = staged_answer => result.expect("the driver reports streamed output"),
+        }
+        assert_eq!(observed.load(Ordering::Relaxed), CHUNKS * CHUNK_BYTES);
+
+        release
+            .send(())
+            .expect("the driver still waits for release");
+        snapshot.await.expect("the pane is captured")
+    };
+    assert!(visible.is_empty());
+    driver.await.expect("the driver task joins");
+    assert!(
+        output.next_chunk().await.is_none(),
+        "output handed to the sink is not retained again"
+    );
     output.shutdown().await.expect("connection shuts down");
 }
 
@@ -282,7 +377,7 @@ async fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
             .expect("the snapshot still waits for its result");
     });
 
-    let error = tokio::time::timeout(Duration::from_secs(1), output.snapshot())
+    let error = tokio::time::timeout(Duration::from_secs(1), output.snapshot(|_| {}))
         .await
         .expect("a rejected request needs no stream boundary")
         .expect_err("the rejected capture fails");

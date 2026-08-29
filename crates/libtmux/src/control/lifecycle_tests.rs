@@ -729,10 +729,14 @@ async fn pane_snapshot_separates_output_at_the_capture_block() {
         .split();
     let mut output = PaneOutput::new("%1".parse().expect("a pane id"), events, commands);
 
-    let snapshot = output.snapshot().await.expect("the pane is captured");
+    let mut preceding = Vec::new();
+    let visible = output
+        .snapshot(|bytes| preceding.extend_from_slice(bytes))
+        .await
+        .expect("the pane is captured");
 
-    assert_eq!(snapshot.visible(), &[TmuxText::from("visible")]);
-    assert_eq!(snapshot.preceding_output(), b"before");
+    assert_eq!(visible, [TmuxText::from("visible")]);
+    assert_eq!(preceding, b"before");
     assert_eq!(
         output.next_chunk().await.as_deref(),
         Some(b"after".as_slice())

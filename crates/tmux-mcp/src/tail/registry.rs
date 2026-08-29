@@ -80,15 +80,16 @@ impl Tail {
                     tokio::select! {
                         biased;
                         Some(request) = requests.recv() => {
-                            let result = output.snapshot().await.map(|snapshot| {
-                                let (visible, preceding) = snapshot.into_parts();
-                                let offset = {
-                                    let mut ring = hold(&ring);
-                                    ring.push(&preceding);
-                                    ring.end()
-                                };
-                                TailSnapshot { visible, offset }
-                            });
+                            let result = match output
+                                .snapshot(|preceding| hold(&ring).push(preceding))
+                                .await
+                            {
+                                Ok(visible) => Ok(TailSnapshot {
+                                    visible,
+                                    offset: hold(&ring).end(),
+                                }),
+                                Err(error) => Err(error),
+                            };
                             let _ = request.result.send(result);
                         }
                         chunk = output.next_chunk() => {
