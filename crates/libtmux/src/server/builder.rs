@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::Server;
+#[cfg(feature = "control-mode")]
+use crate::ControlClientLimits;
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
 use crate::{DispatchLimits, Error, OutputLimits, ServerConfigurationErrorKind};
 
@@ -41,6 +43,8 @@ pub struct ServerBuilder {
     timeout: Duration,
     output_limits: OutputLimits,
     dispatch_limits: DispatchLimits,
+    #[cfg(feature = "control-mode")]
+    control_client_limits: ControlClientLimits,
     #[cfg(feature = "test-support")]
     prevent_server_start: bool,
 }
@@ -50,8 +54,8 @@ pub struct ServerBuilder {
 // debugging should not put either into a log.
 impl fmt::Debug for ServerBuilder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ServerBuilder")
+        let mut debug = formatter.debug_struct("ServerBuilder");
+        debug
             .field(
                 "socket_name",
                 &self.socket_name.as_ref().map(|_| "<redacted>"),
@@ -67,8 +71,10 @@ impl fmt::Debug for ServerBuilder {
             .field("colors", &self.colors)
             .field("timeout", &self.timeout)
             .field("output_limits", &self.output_limits)
-            .field("dispatch_limits", &self.dispatch_limits)
-            .finish_non_exhaustive()
+            .field("dispatch_limits", &self.dispatch_limits);
+        #[cfg(feature = "control-mode")]
+        debug.field("control_client_limits", &self.control_client_limits);
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -83,6 +89,8 @@ impl ServerBuilder {
             timeout: CoreConfiguration::default_timeout(),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
+            #[cfg(feature = "control-mode")]
+            control_client_limits: ControlClientLimits::default(),
             #[cfg(feature = "test-support")]
             prevent_server_start: false,
         }
@@ -134,6 +142,17 @@ impl ServerBuilder {
     #[must_use = "use the returned builder to retain the limits"]
     pub const fn dispatch_limits(mut self, limits: DispatchLimits) -> Self {
         self.dispatch_limits = limits;
+        self
+    }
+
+    /// Bound how many control-mode clients may remain attached.
+    ///
+    /// This lane is separate from short command dispatches, so a long-lived
+    /// watcher cannot consume the capacity needed to inspect or stop it.
+    #[cfg(feature = "control-mode")]
+    #[must_use = "use the returned builder to retain the limits"]
+    pub const fn control_client_limits(mut self, limits: ControlClientLimits) -> Self {
+        self.control_client_limits = limits;
         self
     }
 
@@ -282,6 +301,8 @@ impl ServerBuilder {
         )
         .map_err(Error::invalid_server_configuration)?
         .with_limits(self.output_limits, self.dispatch_limits);
+        #[cfg(feature = "control-mode")]
+        let configuration = configuration.with_control_client_limits(self.control_client_limits);
         #[cfg(feature = "test-support")]
         let configuration = if self.prevent_server_start {
             configuration.prevent_server_start()

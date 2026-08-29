@@ -510,14 +510,14 @@ pub enum Error {
         limit: usize,
     },
 
-    /// The server is already running as much work as it admits.
+    /// The server is already running as much work of this kind as it admits.
     ///
-    /// The dispatch never started, so retrying it is safe: nothing was sent
+    /// The work never started, so retrying it is safe: nothing was sent
     /// to tmux and no state changed. Distinct from
     /// [`Self::Timeout`](Self::Timeout), which means the work may have run.
     #[non_exhaustive]
     #[error(
-        "a dispatch was not admitted: {in_flight} already running is this endpoint's limit, \
+        "work was not admitted: {in_flight} already running is this kind's limit, \
          and nothing was sent, so retrying is safe (request {request_id}, {command})"
     )]
     Overloaded {
@@ -525,7 +525,7 @@ pub enum Error {
         request_id: u64,
         /// Sanitized command context.
         command: CommandSummary,
-        /// How many dispatches the server admits at once.
+        /// How many operations of this kind the server admits at once.
         in_flight: usize,
     },
 

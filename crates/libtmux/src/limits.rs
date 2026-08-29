@@ -156,6 +156,62 @@ impl Default for DispatchLimits {
     }
 }
 
+/// How many persistent control-mode clients one server may hold.
+///
+/// Kept separate from [`DispatchLimits`]: a watcher may live for minutes,
+/// while an ordinary command should still get a short-lived client process.
+#[cfg(feature = "control-mode")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ControlClientLimits {
+    pub(crate) max_clients: usize,
+    pub(crate) acquire_timeout: Option<Duration>,
+}
+
+#[cfg(feature = "control-mode")]
+impl ControlClientLimits {
+    /// How many persistent clients one server admits by default.
+    pub const DEFAULT_CLIENTS: usize = 16;
+
+    /// Set how many persistent clients may remain attached.
+    ///
+    /// Zero is treated as one: a server that admits nothing cannot observe.
+    #[must_use]
+    pub const fn max_clients(self, clients: usize) -> Self {
+        Self {
+            max_clients: if clients == 0 { 1 } else { clients },
+            ..self
+        }
+    }
+
+    /// Set how long a client waits for a place before reporting overload.
+    ///
+    /// `None` uses the server's ordinary request deadline. A shorter value
+    /// makes saturation fail promptly without extending that deadline.
+    #[must_use]
+    pub const fn acquire_timeout(self, timeout: Option<Duration>) -> Self {
+        Self {
+            acquire_timeout: timeout,
+            ..self
+        }
+    }
+
+    /// How many persistent clients may remain attached.
+    #[must_use]
+    pub const fn clients(self) -> usize {
+        self.max_clients
+    }
+}
+
+#[cfg(feature = "control-mode")]
+impl Default for ControlClientLimits {
+    fn default() -> Self {
+        Self {
+            max_clients: Self::DEFAULT_CLIENTS,
+            acquire_timeout: None,
+        }
+    }
+}
+
 /// What one control-mode connection may accumulate before it gives up.
 ///
 /// Control mode is a framed text protocol read from a process that keeps

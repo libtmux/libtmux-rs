@@ -1578,7 +1578,7 @@ The command deadline starts before that wait. An explicit admission timeout
 may shorten it, but cannot extend it.
 
 `Error::Overloaded` is deliberately distinct from `Error::Timeout`: overload
-means the dispatch never started, so retrying is safe, where a timeout means
+means the work never started, so retrying is safe, where a timeout means
 tmux may have run the command already.
 
 Both are measured rather than asserted. The admission test times twelve
@@ -1611,6 +1611,12 @@ reconnect. The frame reason now reaches the pending requests instead.
 
 The budgets are large -- 8 MiB for a line, 64 MiB for a block -- because they
 exist to stop unbounded growth, not to police ordinary output.
+
+Connections need a separate count as well. `ControlClientLimits` bounds the
+persistent clients owned by one server, independently of `DispatchLimits`.
+Combining the two would let a handful of long-lived watchers starve every
+short command. Admission lasts until the control process is cleaned up, and a
+full lane returns `Error::Overloaded` before another process starts.
 
 ### Which tmux releases the lanes build
 

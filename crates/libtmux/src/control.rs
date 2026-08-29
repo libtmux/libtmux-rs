@@ -468,7 +468,7 @@ impl ControlMode {
             .await
             .is_ok_and(|capabilities| capabilities.tmux_version().meets(&CONTROL_PANE_OFF));
 
-        let mut child = server.spawn_control(session)?;
+        let mut child = server.spawn_control(session).await?;
         let Some(stdin) = child.take_stdin() else {
             let _ = child.terminate().await;
             return Err(Error::control_mode_pipes());

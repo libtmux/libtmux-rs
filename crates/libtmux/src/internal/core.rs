@@ -16,6 +16,8 @@ use crate::internal::process::LaunchContext;
 #[cfg(feature = "control-mode")]
 use crate::internal::process::{PersistentChild, PersistentClients};
 use crate::internal::subprocess::SubprocessExecutor;
+#[cfg(feature = "control-mode")]
+use crate::limits::ControlClientLimits;
 use crate::limits::{DispatchLimits, OutputLimits};
 use crate::target::endpoint_resolution::{
     EndpointInputs, IdentityError, ResolvedSocketSelector, resolve_server_endpoint,
@@ -86,6 +88,8 @@ pub(crate) struct CoreConfiguration {
     launch: LaunchContext,
     output_limits: OutputLimits,
     dispatch_limits: DispatchLimits,
+    #[cfg(feature = "control-mode")]
+    control_client_limits: ControlClientLimits,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_supervisor_drop: bool,
 }
@@ -99,6 +103,12 @@ impl CoreConfiguration {
     ) -> Self {
         self.output_limits = output;
         self.dispatch_limits = dispatch;
+        self
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn with_control_client_limits(mut self, limits: ControlClientLimits) -> Self {
+        self.control_client_limits = limits;
         self
     }
 
@@ -197,6 +207,8 @@ impl CoreConfiguration {
             launch,
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
+            #[cfg(feature = "control-mode")]
+            control_client_limits: ControlClientLimits::default(),
             #[cfg(feature = "test-support")]
             synchronous_reap_on_supervisor_drop: false,
         })
@@ -317,13 +329,15 @@ impl Core {
     }
 
     fn with_executor(configuration: CoreConfiguration, executor: Arc<dyn Executor>) -> Self {
+        #[cfg(feature = "control-mode")]
+        let control_client_limits = configuration.control_client_limits;
         Self {
             configuration,
             executor,
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
             #[cfg(feature = "control-mode")]
-            persistent_clients: PersistentClients::new(),
+            persistent_clients: PersistentClients::new(control_client_limits),
         }
     }
 
@@ -337,6 +351,8 @@ impl Core {
             timeout: DEFAULT_TIMEOUT,
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
+            #[cfg(feature = "control-mode")]
+            control_client_limits: ControlClientLimits::default(),
             global_argv: Vec::new(),
             launch: LaunchContext::new("tmux").with_current_dir("/"),
             #[cfg(feature = "test-support")]
@@ -390,7 +406,10 @@ impl Core {
     }
 
     #[cfg(feature = "control-mode")]
-    pub(crate) fn spawn_control(&self, session: &SessionId) -> Result<PersistentChild, Error> {
+    pub(crate) async fn spawn_control(
+        &self,
+        session: &SessionId,
+    ) -> Result<PersistentChild, Error> {
         let mut global_argv = self.configuration.global_argv.clone();
         global_argv.push(OsString::from("-C"));
         let request = CommandRequest::with_global_argv(
@@ -405,7 +424,12 @@ impl Core {
         );
         let reservation = self
             .persistent_clients
-            .reserve(request.request_id(), request.summary().clone())?;
+            .reserve(
+                request.request_id(),
+                request.summary().clone(),
+                tokio::time::Instant::now().checked_add(self.configuration.timeout),
+            )
+            .await?;
         PersistentChild::spawn(&self.configuration.launch, &request, reservation)
     }
 

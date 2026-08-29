@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::{Child, ChildStderr, ChildStdout};
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
+use tokio::sync::{Notify, OwnedSemaphorePermit, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -25,7 +25,9 @@ use tracing::instrument::WithSubscriber as _;
 use crate::Error;
 use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatus, RequestId};
 use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
-use crate::internal::process::{LaunchContext, ProcessGroupGuard, validate_request};
+use crate::internal::process::{
+    LaunchContext, ProcessAdmission, ProcessGroupGuard, validate_request,
+};
 
 #[derive(Clone)]
 pub(crate) struct SubprocessExecutor {
@@ -38,7 +40,6 @@ struct Configuration {
     launch: LaunchContext,
     timeout: Duration,
     output_limits: OutputLimits,
-    dispatch_limits: DispatchLimits,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_supervisor_drop: bool,
     #[cfg(test)]
@@ -54,7 +55,7 @@ struct Shared {
     /// ceiling a caller's own fan-out becomes the machine's problem, and tmux
     /// serializes on the far side regardless, so the extra clients buy
     /// queueing rather than throughput.
-    permits: Arc<Semaphore>,
+    admission: ProcessAdmission,
 }
 
 struct Lifecycle {
@@ -105,47 +106,21 @@ impl SubprocessExecutor {
         &self,
         context: &RequestContext,
     ) -> Result<OwnedSemaphorePermit, Error> {
-        let permits = Arc::clone(&self.shared.permits);
-        let limits = self.configuration.dispatch_limits;
-
-        let acquire_deadline = match limits.acquire_timeout {
-            Some(timeout) => {
-                earliest_deadline(context.deadline, Instant::now().checked_add(timeout))
-            }
-            None => context.deadline,
-        };
-        let acquired = match acquire_deadline {
-            Some(deadline) => {
-                match tokio::time::timeout_at(deadline, permits.acquire_owned()).await {
-                    Ok(acquired) => acquired,
-                    // Waited the whole budget without room, which is overload
-                    // rather than slowness: nothing was sent to tmux.
-                    Err(_) => {
-                        return Err(Error::Overloaded {
-                            request_id: context.request_id(),
-                            command: context.command.clone(),
-                            in_flight: limits.max_in_flight,
-                        });
-                    }
-                }
-            }
-            None => permits.acquire_owned().await,
-        };
-
-        acquired
-            .map_err(|_| Error::executor_shutdown(context.request_id(), context.command.clone()))
+        self.shared
+            .admission
+            .acquire(context.request_id, &context.command, context.deadline)
+            .await
     }
 
     /// Replace how many dispatches may run at once.
     pub(crate) fn with_dispatch_limits(mut self, limits: DispatchLimits) -> Self {
-        Arc::make_mut(&mut self.configuration).dispatch_limits = limits;
         self.shared = Arc::new(Shared {
             lifecycle: Mutex::new(Lifecycle {
                 accepting: true,
                 entries: HashMap::new(),
             }),
             empty: Notify::new(),
-            permits: Arc::new(Semaphore::new(limits.max_in_flight)),
+            admission: ProcessAdmission::new(limits.max_in_flight, limits.acquire_timeout),
         });
         self
     }
@@ -162,7 +137,6 @@ impl SubprocessExecutor {
                 launch: LaunchContext::new(executable),
                 timeout,
                 output_limits: OutputLimits::default(),
-                dispatch_limits: DispatchLimits::default(),
                 #[cfg(feature = "test-support")]
                 synchronous_reap_on_supervisor_drop: false,
                 #[cfg(test)]
@@ -174,7 +148,7 @@ impl SubprocessExecutor {
                     entries: HashMap::new(),
                 }),
                 empty: Notify::new(),
-                permits: Arc::new(Semaphore::new(DispatchLimits::DEFAULT_IN_FLIGHT)),
+                admission: ProcessAdmission::new(DispatchLimits::DEFAULT_IN_FLIGHT, None),
             }),
         }
     }
@@ -241,7 +215,10 @@ impl SubprocessExecutor {
 
         let permit = match self.acquire_permit(&context).await {
             Ok(permit) => permit,
-            Err(error) => return Err(error),
+            Err(error) => {
+                trace_failed(&context, &error);
+                return Err(error);
+            }
         };
 
         let (cancellation_sender, cancellation_receiver) = watch::channel(false);
@@ -384,6 +361,7 @@ impl Executor for SubprocessExecutor {
                     let _ = sender.send(true);
                 }
             }
+            shared.admission.close();
 
             loop {
                 let notified = shared.empty.notified();
@@ -668,14 +646,6 @@ async fn deadline_elapsed(deadline: Option<Instant>) {
         tokio::time::sleep_until(deadline).await;
     } else {
         std::future::pending::<()>().await;
-    }
-}
-
-fn earliest_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(left.min(right)),
-        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-        (None, None) => None,
     }
 }
 

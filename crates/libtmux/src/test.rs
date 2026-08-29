@@ -32,6 +32,8 @@ use rustix::io::{Errno, write as write_all};
 use rustix::process::{Pid, Signal, getpgid, kill_process, kill_process_group, test_kill_process};
 
 use self::containment::OwnerContainment;
+#[cfg(feature = "control-mode")]
+use crate::ControlClientLimits;
 use crate::limits::{DispatchLimits, OutputLimits};
 use crate::{Command, Server};
 
@@ -292,6 +294,8 @@ pub struct TestServerBuilder {
     lifecycle_timeout: Duration,
     output_limits: OutputLimits,
     dispatch_limits: DispatchLimits,
+    #[cfg(feature = "control-mode")]
+    control_client_limits: ControlClientLimits,
 }
 
 /// The tmux to run, unless a caller names one.
@@ -322,6 +326,8 @@ impl TestServerBuilder {
             lifecycle_timeout: scaled(Duration::from_secs(5)),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
+            #[cfg(feature = "control-mode")]
+            control_client_limits: ControlClientLimits::default(),
         }
     }
 
@@ -338,6 +344,14 @@ impl TestServerBuilder {
     #[must_use = "use the returned builder to retain the limits"]
     pub const fn dispatch_limits(mut self, limits: DispatchLimits) -> Self {
         self.dispatch_limits = limits;
+        self
+    }
+
+    /// Bound persistent clients as [`crate::ServerBuilder`] does.
+    #[cfg(feature = "control-mode")]
+    #[must_use = "use the returned builder to retain the limits"]
+    pub const fn control_client_limits(mut self, limits: ControlClientLimits) -> Self {
+        self.control_client_limits = limits;
         self
     }
 
@@ -418,12 +432,15 @@ impl TestServerBuilder {
             return Err(TestServerError::new(TestServerErrorKind::SocketPathTooLong));
         }
 
-        let server = Server::builder()
+        let builder = Server::builder()
             .socket_path(&files.socket_path)
             .config_file(&files.config_path)
             .tmux_executable(self.executable.clone())
             .output_limits(self.output_limits)
-            .dispatch_limits(self.dispatch_limits)
+            .dispatch_limits(self.dispatch_limits);
+        #[cfg(feature = "control-mode")]
+        let builder = builder.control_client_limits(self.control_client_limits);
+        let server = builder
             .prevent_server_start()
             .build()
             .map_err(|_| TestServerError::new(TestServerErrorKind::FilesystemSetupFailed))?;

@@ -1,15 +1,19 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 #[cfg(feature = "control-mode")]
 use std::io;
 #[cfg(feature = "control-mode")]
 use std::process::Stdio;
 #[cfg(feature = "control-mode")]
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 
 use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::process::Command as TokioCommand;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::Instant;
 
 #[cfg(feature = "control-mode")]
 use tokio::process::{Child, ChildStdin, ChildStdout};
@@ -17,9 +21,9 @@ use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Notify, watch};
 
 use crate::Error;
-use crate::command::CommandRequest;
+use crate::command::{CommandRequest, CommandSummary, RequestId};
 #[cfg(feature = "control-mode")]
-use crate::command::{CommandSummary, RequestId};
+use crate::limits::ControlClientLimits;
 
 #[derive(Clone)]
 pub(crate) struct LaunchContext {
@@ -139,6 +143,62 @@ pub(crate) fn validate_request(
     Ok(())
 }
 
+#[derive(Clone)]
+pub(crate) struct ProcessAdmission {
+    permits: Arc<Semaphore>,
+    limit: usize,
+    acquire_timeout: Option<Duration>,
+}
+
+impl ProcessAdmission {
+    pub(crate) fn new(limit: usize, acquire_timeout: Option<Duration>) -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(limit)),
+            limit,
+            acquire_timeout,
+        }
+    }
+
+    pub(crate) async fn acquire(
+        &self,
+        request_id: RequestId,
+        command: &CommandSummary,
+        deadline: Option<Instant>,
+    ) -> Result<OwnedSemaphorePermit, Error> {
+        let deadline = match (
+            deadline,
+            self.acquire_timeout
+                .and_then(|timeout| Instant::now().checked_add(timeout)),
+        ) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+            (None, None) => None,
+        };
+        let acquired = match deadline {
+            Some(deadline) => {
+                match tokio::time::timeout_at(deadline, Arc::clone(&self.permits).acquire_owned())
+                    .await
+                {
+                    Ok(acquired) => acquired,
+                    Err(_) => {
+                        return Err(Error::Overloaded {
+                            request_id: request_id.get(),
+                            command: command.clone(),
+                            in_flight: self.limit,
+                        });
+                    }
+                }
+            }
+            None => Arc::clone(&self.permits).acquire_owned().await,
+        };
+        acquired.map_err(|_| Error::executor_shutdown(request_id.get(), command.clone()))
+    }
+
+    pub(crate) fn close(&self) {
+        self.permits.close();
+    }
+}
+
 pub(crate) struct ProcessGroupGuard {
     process_group: Option<Pid>,
     armed: bool,
@@ -183,6 +243,7 @@ impl Drop for ProcessGroupGuard {
 #[derive(Clone)]
 pub(crate) struct PersistentClients {
     shared: Arc<PersistentShared>,
+    admission: ProcessAdmission,
 }
 
 #[cfg(feature = "control-mode")]
@@ -200,7 +261,7 @@ struct PersistentLifecycle {
 
 #[cfg(feature = "control-mode")]
 impl PersistentClients {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(limits: ControlClientLimits) -> Self {
         let (stopped, _) = watch::channel(false);
         Self {
             shared: Arc::new(PersistentShared {
@@ -211,14 +272,20 @@ impl PersistentClients {
                 stopped,
                 empty: Notify::new(),
             }),
+            admission: ProcessAdmission::new(limits.max_clients, limits.acquire_timeout),
         }
     }
 
-    pub(crate) fn reserve(
+    pub(crate) async fn reserve(
         &self,
         request_id: RequestId,
         command: CommandSummary,
+        deadline: Option<Instant>,
     ) -> Result<PersistentReservation, Error> {
+        let permit = self
+            .admission
+            .acquire(request_id, &command, deadline)
+            .await?;
         let stopped = {
             let mut lifecycle = lock_persistent(&self.shared);
             if !lifecycle.accepting {
@@ -232,6 +299,7 @@ impl PersistentClients {
             stopped,
             registration: PersistentRegistration {
                 shared: Arc::clone(&self.shared),
+                _permit: permit,
             },
         })
     }
@@ -242,6 +310,7 @@ impl PersistentClients {
             lifecycle.accepting = false;
             self.shared.stopped.send_replace(true);
         }
+        self.admission.close();
 
         loop {
             let notified = self.shared.empty.notified();
@@ -262,6 +331,7 @@ pub(crate) struct PersistentReservation {
 #[cfg(feature = "control-mode")]
 struct PersistentRegistration {
     shared: Arc<PersistentShared>,
+    _permit: OwnedSemaphorePermit,
 }
 
 #[cfg(feature = "control-mode")]

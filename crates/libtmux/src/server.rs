@@ -313,8 +313,11 @@ impl Server {
     }
 
     #[cfg(feature = "control-mode")]
-    pub(crate) fn spawn_control(&self, session: &SessionId) -> Result<PersistentChild, Error> {
-        self.core.spawn_control(session)
+    pub(crate) async fn spawn_control(
+        &self,
+        session: &SessionId,
+    ) -> Result<PersistentChild, Error> {
+        self.core.spawn_control(session).await
     }
 
     /// Construct a server from the captured default endpoint context.
