@@ -2302,6 +2302,10 @@ def test_timed_out_case_cleans_nested_supervisor_root() -> None:
                 [RUNNER_INNER_TIMEOUT_PROBE],
                 case_timeout=0.5,
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
+                after_owner_validation=lambda process: wait_for_path(
+                    process,
+                    control / "inner-root",
+                ),
             )
             elapsed = time.monotonic() - started
             inner_root = pathlib.Path(
@@ -3027,6 +3031,9 @@ def run_internal_case(arguments: list[str]) -> int:
         os.close(case_root_fd)
         print("internal case root identity changed", file=sys.stderr)
         return 2
+    previous_tempdir = tempfile.tempdir
+    # The enclosing owner cleans temporary fixtures after a hard-killed case.
+    tempfile.tempdir = raw_build_root
     os.environ[CASE_ROOT_PARENT_FD_ENV] = str(case_root_fd)
     try:
         os.kill(os.getpid(), signal.SIGSTOP)
@@ -3041,6 +3048,7 @@ def run_internal_case(arguments: list[str]) -> int:
             return 1
         return 0
     finally:
+        tempfile.tempdir = previous_tempdir
         os.environ.pop(CASE_ROOT_PARENT_FD_ENV, None)
         os.close(case_root_fd)
 
@@ -3051,6 +3059,7 @@ def run_selected_cases(
     case_timeout: float = CASE_TIMEOUT,
     case_cleanup_timeout: float = CASE_CLEANUP_TIMEOUT,
     environment: dict[str, str] | None = None,
+    after_owner_validation: t.Callable[[subprocess.Popen[str]], None] | None = None,
     hold_signal_mask_on_return: bool = False,
 ) -> int:
     """Run selected cases sequentially with independent outer containment."""
@@ -3072,6 +3081,7 @@ def run_selected_cases(
                     timeout=case_timeout,
                     cleanup_timeout=case_cleanup_timeout,
                     environment=environment,
+                    after_owner_validation=after_owner_validation,
                     signal_guard=guard,
                 )
             except Exception:
