@@ -1713,3 +1713,110 @@ async fn a_suspended_client_is_not_reported_gone() {
         "a suspended client stops counting toward its session",
     );
 }
+
+/// A capture can now reach what only `Pane::cmd` could before.
+///
+/// `capture-pane` trims trailing spaces unless given `-N`, and no typed path
+/// passed it, so every capture normalised away whatever a program printed at
+/// a line's end. A caller asserting on exact pane content had to drop to the
+/// untyped API and read bytes.
+#[tokio::test]
+async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
+    use libtmux::CaptureOptions;
+
+    fn printed(lines: Vec<libtmux::TmuxText>) -> String {
+        lines
+            .into_iter()
+            .map(|line| line.to_string_lossy().into_owned())
+            .find(|line| line.starts_with("AB"))
+            .expect("the printed line is captured")
+    }
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("trailing").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    // Three spaces a program printed, which is what tmux strips.
+    pane.send_keys("printf 'AB   \\n'")
+        .await
+        .expect("keys are sent");
+    pane.send_key_names(["Enter"]).await.expect("the line runs");
+
+    retry_until(Duration::from_secs(10), async || {
+        pane.capture()
+            .await
+            .is_ok_and(|lines| lines.iter().any(|l| l.to_string_lossy().starts_with("AB")))
+    })
+    .await
+    .expect("the pane prints");
+
+    let trimmed = printed(pane.capture().await.expect("default capture"));
+    let exact = printed(
+        pane.capture_with(CaptureOptions::visible().trailing_spaces())
+            .await
+            .expect("capture keeping trailing spaces"),
+    );
+
+    assert_eq!(trimmed, "AB", "tmux trims trailing spaces without `-N`");
+    assert!(
+        exact.starts_with("AB   "),
+        "`-N` keeps what the program printed: {exact:?}",
+    );
+    assert!(
+        exact.len() > trimmed.len(),
+        "the exact capture is longer: {exact:?} vs {trimmed:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `capture-pane -T` arrived in 3.4, and the crate refuses it below that.
+///
+/// Asserted on both sides rather than skipped: a capability check that is
+/// never exercised on the releases producing the refusal is a branch nothing
+/// runs. `just compat` puts 3.2a below the boundary and four releases above.
+#[tokio::test]
+async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
+    use libtmux::{CaptureOptions, since};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("blankcells").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    let supported = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .meets(&since::CAPTURE_TRIM_BLANK_CELLS);
+
+    let asked = pane
+        .capture_with(CaptureOptions::visible().trim_blank_cells())
+        .await;
+
+    if supported {
+        asked.expect("3.4 and later accept -T");
+    } else {
+        assert!(
+            matches!(
+                asked.as_ref().map_err(libtmux::Error::kind),
+                Err(libtmux::ErrorKind::UnsupportedVersion),
+            ),
+            "an older tmux reports the version rather than dispatching a flag \
+             it will reject: {asked:?}",
+        );
+    }
+
+    // `-N` and `-P` are present at the supported floor, so neither is gated
+    // and both must work on every release the lanes build.
+    pane.capture_with(CaptureOptions::visible().trailing_spaces())
+        .await
+        .expect("-N works on every supported release");
+    pane.capture_with(CaptureOptions::visible().pending_escape())
+        .await
+        .expect("-P works on every supported release");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

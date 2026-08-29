@@ -18,6 +18,14 @@ full.
 
 ### Added
 
+- `CaptureOptions::trailing_spaces`, `trim_blank_cells`, and
+  `pending_escape`, covering `capture-pane`'s `-N`, `-T` and `-P`. Without
+  `-N` tmux strips the spaces a program printed at a line's end, so no typed
+  capture could return byte-exact pane content and a caller wanting it had to
+  drop to `Pane::cmd`. `-T` needs tmux 3.4 and is refused below it;
+  `since::CAPTURE_TRIM_BLANK_CELLS` names the boundary. `-N` and `-P` are
+  available on every supported release.
+
 - `Server::wait_for_channel`, the blocking half of `wait-for`.
   `Server::signal_channel` had no counterpart, so waiting meant dropping to
   `Server::cmd`, which `tmux-mcp` did. Nothing polls: tmux releases the wait

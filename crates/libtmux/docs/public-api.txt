@@ -242,6 +242,7 @@ constant libtmux::option_names::WORD_SEPARATORS
 constant libtmux::option_names::WRAP_SEARCH
 constant libtmux::option_names::XTERM_KEYS
 constant libtmux::since::CAPTURE_LINE_FLAGS
+constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS
 constant libtmux::since::CLIENTS_HIDE_STOPPED
 constant libtmux::since::CONTROL_PANE_OFF
 constant libtmux::since::MIRRORED_LAYOUTS
@@ -318,7 +319,10 @@ function libtmux::CaptureOptions::end
 function libtmux::CaptureOptions::escape_sequences
 function libtmux::CaptureOptions::history
 function libtmux::CaptureOptions::join_wrapped
+function libtmux::CaptureOptions::pending_escape
 function libtmux::CaptureOptions::start
+function libtmux::CaptureOptions::trailing_spaces
+function libtmux::CaptureOptions::trim_blank_cells
 function libtmux::CaptureOptions::visible
 function libtmux::Client::attached_pane
 function libtmux::Client::attached_session
