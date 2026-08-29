@@ -352,7 +352,8 @@ bench *args:
 [group: 'release']
 package:
     cargo package --locked --allow-dirty \
-        --package libtmux --package libtmux-macros --all-features
+        --package libtmux --package libtmux-macros \
+        --package tmux-mcp --package tmux-workspace --all-features
     bash scripts/check-package-contents.sh
 
 # Regenerate the tmux option schema from tmux's own source
