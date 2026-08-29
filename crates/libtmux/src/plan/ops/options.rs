@@ -1,13 +1,15 @@
 //! Operations that set tmux options.
 
 use std::ffi::OsString;
+use std::fmt;
 
 use super::Resolver;
-use super::{Chainable, Effects, Op, Operation, Part, Safety, SessionTarget, WindowTarget};
+use super::{Chainable, Effects, Op, Operation, Safety, SessionTarget, WindowTarget};
 use crate::Command;
+use crate::plan::SlotUse;
 
 /// Set a tmux option.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SetOption {
     scope: OptionScope,
@@ -77,7 +79,7 @@ impl SetOption {
         }
     }
 
-    pub(crate) fn target(&self) -> Option<(usize, Part)> {
+    pub(in crate::plan) fn target(&self) -> Option<SlotUse> {
         match &self.scope {
             OptionScope::Global => None,
             OptionScope::Session(target) => target.slot(),
@@ -100,8 +102,18 @@ impl SetOption {
             command
                 .arg("--")
                 .arg(self.name.clone())
-                .arg(self.value.clone()),
+                .sensitive_arg(self.value.clone()),
         )
+    }
+}
+
+impl fmt::Debug for SetOption {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SetOption")
+            .field("scope", &self.scope)
+            .field("name", &self.name)
+            .finish_non_exhaustive()
     }
 }
 
@@ -121,7 +133,7 @@ operation!(
 /// Applied before anything runs in the session, so a command started later
 /// sees the environment the caller described rather than the one tmux
 /// happened to inherit.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SetEnvironment {
     pub(crate) target: SessionTarget,
@@ -165,8 +177,18 @@ impl SetEnvironment {
                 .arg(self.target.token(resolve)?)
                 .arg("--")
                 .arg(self.name.clone())
-                .arg(self.value.clone()),
+                .sensitive_arg(self.value.clone()),
         )
+    }
+}
+
+impl fmt::Debug for SetEnvironment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SetEnvironment")
+            .field("target", &self.target)
+            .field("name", &self.name)
+            .finish_non_exhaustive()
     }
 }
 

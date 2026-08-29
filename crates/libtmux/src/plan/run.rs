@@ -9,10 +9,11 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fmt;
 
 use super::planner::Planner;
-use super::{Op, Part, Plan, Step};
-use crate::{Command, CommandChain, Error, Server};
+use super::{Op, OperationKind, Part, Plan, Step};
+use crate::{Command, CommandChain, Error, PaneId, Server, SessionId, TmuxText, WindowId};
 
 /// How an operation ended.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,15 +50,106 @@ pub enum Attribution {
     Merged,
 }
 
+/// The typed value one operation produced.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OperationValue {
+    /// tmux accepted an operation that has no other return value.
+    Acknowledged,
+    /// A session and the first window and pane it created.
+    CreatedSession {
+        /// The created session.
+        session: SessionId,
+        /// The session's first window.
+        window: WindowId,
+        /// The first window's pane.
+        pane: PaneId,
+    },
+    /// A window and its first pane.
+    CreatedWindow {
+        /// The created window.
+        window: WindowId,
+        /// The window's first pane.
+        pane: PaneId,
+    },
+    /// A pane created by splitting another pane.
+    CreatedPane {
+        /// The created pane.
+        pane: PaneId,
+    },
+    /// Pane contents, exactly as tmux wrote them.
+    CapturedPane(TmuxText),
+}
+
+/// What one recorded operation produced, in plan order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationReport {
+    index: usize,
+    kind: OperationKind,
+    outcome: Outcome,
+    attribution: Option<Attribution>,
+    value: Option<OperationValue>,
+}
+
+impl OperationReport {
+    /// The operation's zero-based index in the plan.
+    #[must_use]
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Which recorded operation this report describes.
+    #[must_use]
+    pub const fn kind(&self) -> OperationKind {
+        self.kind
+    }
+
+    /// How the operation ended.
+    #[must_use]
+    pub const fn outcome(&self) -> Outcome {
+        self.outcome
+    }
+
+    /// How directly the dispatch evidence applies to this operation.
+    ///
+    /// `None` means the plan stopped before this operation's invocation.
+    #[must_use]
+    pub const fn attribution(&self) -> Option<Attribution> {
+        self.attribution
+    }
+
+    /// The operation's typed value, when the run established one.
+    #[must_use]
+    pub const fn value(&self) -> Option<&OperationValue> {
+        self.value.as_ref()
+    }
+}
+
 /// What one dispatched invocation produced.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct StepOutcome {
     step: Step,
     outcomes: Vec<Outcome>,
     attribution: Attribution,
     command: &'static str,
+    sensitive_input: bool,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
+}
+
+impl fmt::Debug for StepOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StepOutcome")
+            .field("step", &self.step)
+            .field("outcomes", &self.outcomes)
+            .field("attribution", &self.attribution)
+            .field("command", &self.command)
+            .field("sensitive_input", &self.sensitive_input)
+            .field("stdout_len", &self.stdout.len())
+            .field("stderr_len", &self.stderr.len())
+            .finish()
+    }
 }
 
 impl StepOutcome {
@@ -91,6 +183,12 @@ impl StepOutcome {
         &self.stderr
     }
 
+    /// Whether any command in this invocation carried a sensitive argument.
+    #[must_use]
+    pub const fn has_sensitive_input(&self) -> bool {
+        self.sensitive_input
+    }
+
     /// Why tmux refused this invocation, in the crate's error vocabulary.
     ///
     /// A refusal is data rather than an error here, because a plan may expect
@@ -116,19 +214,31 @@ impl StepOutcome {
 }
 
 /// What running a plan produced.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PlanResult {
-    outcomes: Vec<Outcome>,
+    operations: Vec<OperationReport>,
     steps: Vec<StepOutcome>,
     bound: HashMap<(usize, Part), OsString>,
     dispatches: usize,
 }
 
+impl fmt::Debug for PlanResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PlanResult")
+            .field("operations", &self.operations)
+            .field("steps", &self.steps)
+            .field("binding_count", &self.bound.len())
+            .field("dispatches", &self.dispatches)
+            .finish()
+    }
+}
+
 impl PlanResult {
-    /// One outcome per recorded operation, in plan order.
+    /// One report per recorded operation, in plan order.
     #[must_use]
-    pub fn outcomes(&self) -> &[Outcome] {
-        &self.outcomes
+    pub fn operations(&self) -> &[OperationReport] {
+        &self.operations
     }
 
     /// What each dispatched invocation produced.
@@ -151,7 +261,9 @@ impl PlanResult {
     /// so this is false while any remains.
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        self.outcomes.iter().copied().all(Outcome::is_complete)
+        self.operations
+            .iter()
+            .all(|report| report.outcome().is_complete())
     }
 
     /// The concrete id a creating operation produced, if it bound one.
@@ -170,9 +282,13 @@ impl Plan {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or a process cannot be
-    /// captured. A command tmux *refuses* is reported through the returned
-    /// [`PlanResult`], not as an error, because a plan may expect one.
+    /// captured, or when a slot dependency is invalid. Validation happens
+    /// before the first command. A command tmux *refuses* is reported through
+    /// the returned [`PlanResult`], not as an error, because a plan may expect
+    /// one.
     pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
+        self.validate()
+            .map_err(|source| Error::InvalidPlan { source })?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -203,6 +319,7 @@ impl Plan {
                     .first()
                     .and_then(|index| self.steps().get(*index))
                     .map_or("plan", Op::name),
+                sensitive_input: result.command().sensitive_argument_count() > 0,
                 step,
                 outcomes: step_outcomes,
                 stdout: result.stdout().to_vec(),
@@ -214,8 +331,9 @@ impl Plan {
             }
         }
 
+        let operations = operation_reports(self.steps(), &outcomes, &reported, &bound);
         Ok(PlanResult {
-            outcomes,
+            operations,
             steps: reported,
             bound,
             dispatches,
@@ -357,6 +475,75 @@ fn bind(bound: &mut HashMap<(usize, Part), OsString>, ops: &[Op], step: &Step, s
     }
 }
 
+/// Correlate dispatch evidence back to the operations that produced it.
+fn operation_reports(
+    ops: &[Op],
+    outcomes: &[Outcome],
+    steps: &[StepOutcome],
+    bound: &HashMap<(usize, Part), OsString>,
+) -> Vec<OperationReport> {
+    let mut attributions = vec![None; ops.len()];
+    let mut stdout = vec![None; ops.len()];
+    for step in steps {
+        for index in step.step().indices() {
+            attributions[*index] = Some(step.attribution());
+            if step.step().indices().len() == 1 {
+                stdout[*index] = Some(step.stdout());
+            }
+        }
+    }
+
+    ops.iter()
+        .enumerate()
+        .map(|(index, op)| {
+            let outcome = outcomes[index];
+            OperationReport {
+                index,
+                kind: op.kind(),
+                outcome,
+                attribution: attributions[index],
+                value: operation_value(index, op, outcome, stdout[index], bound),
+            }
+        })
+        .collect()
+}
+
+fn operation_value(
+    index: usize,
+    op: &Op,
+    outcome: Outcome,
+    stdout: Option<&[u8]>,
+    bound: &HashMap<(usize, Part), OsString>,
+) -> Option<OperationValue> {
+    match op {
+        Op::NewSession(_) => Some(OperationValue::CreatedSession {
+            session: bound_id(bound, index, Part::Created)?,
+            window: bound_id(bound, index, Part::FirstWindow)?,
+            pane: bound_id(bound, index, Part::FirstPane)?,
+        }),
+        Op::NewWindow(_) => Some(OperationValue::CreatedWindow {
+            window: bound_id(bound, index, Part::Created)?,
+            pane: bound_id(bound, index, Part::FirstPane)?,
+        }),
+        Op::SplitWindow(_) => Some(OperationValue::CreatedPane {
+            pane: bound_id(bound, index, Part::Created)?,
+        }),
+        Op::CapturePane(_) if outcome.is_complete() => Some(OperationValue::CapturedPane(
+            TmuxText::from_bytes(stdout?.to_vec()),
+        )),
+        _ if outcome.is_complete() => Some(OperationValue::Acknowledged),
+        _ => None,
+    }
+}
+
+fn bound_id<T: std::str::FromStr>(
+    bound: &HashMap<(usize, Part), OsString>,
+    index: usize,
+    part: Part,
+) -> Option<T> {
+    bound.get(&(index, part))?.to_str()?.parse().ok()
+}
+
 #[cfg(feature = "control-mode")]
 impl Plan {
     /// Run this plan over an open control-mode connection.
@@ -374,11 +561,15 @@ impl Plan {
     /// # Errors
     ///
     /// Returns an error when the connection is closed or a command cannot be
-    /// written. A command tmux refuses is reported in the [`PlanResult`].
+    /// written, or when a slot dependency is invalid. Validation happens before
+    /// the first command. A command tmux refuses is reported in the
+    /// [`PlanResult`].
     pub async fn run_over_control_mode(
         &self,
         sender: &crate::control::ControlSender,
     ) -> Result<PlanResult, Error> {
+        self.validate()
+            .map_err(|source| Error::InvalidPlan { source })?;
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());
@@ -397,6 +588,7 @@ impl Plan {
                     ),
                 })?;
 
+            let sensitive_input = command.summary().sensitive_argument_count() > 0;
             let block = sender.send(command).await?;
             dispatches += 1;
 
@@ -424,6 +616,7 @@ impl Plan {
             reported.push(StepOutcome {
                 step: Step::single(index),
                 command: op.name(),
+                sensitive_input,
                 outcomes: vec![outcome],
                 // One block per command, so tmux says which one failed.
                 attribution: Attribution::PerCommand,
@@ -436,11 +629,58 @@ impl Plan {
             }
         }
 
+        let operations = operation_reports(self.steps(), &outcomes, &reported, &bound);
         Ok(PlanResult {
-            outcomes,
+            operations,
             steps: reported,
             bound,
             dispatches,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PaneId;
+    use crate::plan::CapturePane;
+
+    #[test]
+    fn raw_plan_output_is_absent_from_debug() {
+        let secret = b"sentinel-plan-output";
+        let pane: PaneId = "%1".parse().expect("a pane id");
+        let mut plan = Plan::new();
+        plan.add(CapturePane::new(pane));
+        let step = Planner::Sequential
+            .steps(&plan)
+            .into_iter()
+            .next()
+            .expect("one plan step");
+        let reported = StepOutcome {
+            step,
+            outcomes: vec![Outcome::Failed],
+            attribution: Attribution::PerCommand,
+            command: "capture-pane",
+            sensitive_input: true,
+            stdout: secret.to_vec(),
+            stderr: secret.to_vec(),
+        };
+        let result = PlanResult {
+            operations: vec![OperationReport {
+                index: 0,
+                kind: OperationKind::CapturePane,
+                outcome: Outcome::Failed,
+                attribution: Some(Attribution::PerCommand),
+                value: None,
+            }],
+            steps: vec![reported.clone()],
+            bound: HashMap::new(),
+            dispatches: 1,
+        };
+        let exposed = format!("{:?}", secret.to_vec());
+
+        for diagnostic in [format!("{reported:?}"), format!("{result:?}")] {
+            assert!(!diagnostic.contains(&exposed), "{diagnostic}");
+        }
     }
 }

@@ -580,6 +580,15 @@ pub enum Error {
         input: &'static str,
     },
 
+    /// A plan has a dependency that cannot be resolved before dispatch.
+    #[cfg(feature = "plan")]
+    #[error("invalid plan: {source}")]
+    InvalidPlan {
+        /// The payload-free dependency failure.
+        #[source]
+        source: crate::plan::PlanValidationError,
+    },
+
     /// The configured tmux executable was not found.
     #[non_exhaustive]
     #[error("tmux executable was not found for request {request_id} ({command})")]
@@ -1155,6 +1164,8 @@ impl Error {
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
             Self::InvalidCommandInput { .. } => ErrorKind::InvalidInput,
+            #[cfg(feature = "plan")]
+            Self::InvalidPlan { .. } => ErrorKind::InvalidInput,
             Self::Spawn { .. }
             | Self::ReadOutput { .. }
             | Self::WaitChild { .. }
@@ -1541,6 +1552,11 @@ impl fmt::Debug for Error {
                 .debug_struct("InvalidCommandInput")
                 .field("request_id", request_id)
                 .field("input", input)
+                .finish(),
+            #[cfg(feature = "plan")]
+            Self::InvalidPlan { source } => formatter
+                .debug_struct("InvalidPlan")
+                .field("source", source)
                 .finish(),
             Self::ExecutableNotFound {
                 request_id,

@@ -1,6 +1,7 @@
 //! Operations that make or address a window.
 
 use std::ffi::OsString;
+use std::fmt;
 
 use super::{
     Chainable, Effects, Op, Operation, Safety, Scope, SessionTarget, Slot, WindowSlot, WindowTarget,
@@ -10,7 +11,7 @@ use crate::Command;
 use crate::window::assignment;
 
 /// Create a window in a session.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NewWindow {
     pub(crate) target: SessionTarget,
@@ -138,14 +139,29 @@ impl NewWindow {
             command = command.arg("-c").arg(directory.clone());
         }
         for (name, value) in &self.environment {
-            command = command.arg("-e").arg(assignment(name, value));
+            command = command.arg("-e").sensitive_arg(assignment(name, value));
         }
         // The shell command is positional, so it goes last: tmux stops parsing
         // flags at the first one.
         if let Some(shell_command) = &self.command {
-            command = command.arg(shell_command.clone());
+            command = command.sensitive_arg(shell_command.clone());
         }
         Some(command)
+    }
+}
+
+impl fmt::Debug for NewWindow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewWindow")
+            .field("target", &self.target)
+            .field("has_name", &self.name.is_some())
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("environment_count", &self.environment.len())
+            .field("index", &self.index)
+            .field("focus", &self.focus)
+            .finish()
     }
 }
 
@@ -256,6 +272,12 @@ impl KillWindow {
         Self {
             target: target.into(),
         }
+    }
+
+    /// The window this operation will destroy.
+    #[must_use]
+    pub const fn target(&self) -> &WindowTarget {
+        &self.target
     }
 
     pub(crate) fn render(&self, resolve: Resolver<'_>) -> Option<Command> {

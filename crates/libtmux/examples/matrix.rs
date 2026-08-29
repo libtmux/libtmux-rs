@@ -81,8 +81,11 @@ async fn query(server: &Server, session: &str) -> String {
 }
 
 /// How each outcome column is summarised.
-fn fidelity(outcomes: &[Outcome], attribution: Attribution) -> &'static str {
-    if outcomes.contains(&Outcome::Unknown) {
+fn fidelity(outcomes: impl IntoIterator<Item = Outcome>, attribution: Attribution) -> &'static str {
+    if outcomes
+        .into_iter()
+        .any(|outcome| outcome == Outcome::Unknown)
+    {
         return "unknown";
     }
     match attribution {
@@ -118,7 +121,13 @@ async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row
         // A subprocess transport spends one tmux client per invocation.
         processes: result.dispatches(),
         elapsed,
-        attribution: fidelity(result.outcomes(), attribution),
+        attribution: fidelity(
+            result
+                .operations()
+                .iter()
+                .map(libtmux::plan::OperationReport::outcome),
+            attribution,
+        ),
         query: query(server, name).await,
     };
 
@@ -157,7 +166,13 @@ async fn run_control_mode(name: &str) -> Row {
         // Every block shares one connection, so the whole plan costs one.
         processes: 1,
         elapsed,
-        attribution: fidelity(result.outcomes(), Attribution::PerCommand),
+        attribution: fidelity(
+            result
+                .operations()
+                .iter()
+                .map(libtmux::plan::OperationReport::outcome),
+            Attribution::PerCommand,
+        ),
         query: query(server, name).await,
     };
 
@@ -248,7 +263,11 @@ async fn what_a_fold_costs_when_something_fails() {
             "  {:<12} {} dispatch(es) -> {:?}",
             format!("{planner:?}"),
             result.dispatches(),
-            result.outcomes(),
+            result
+                .operations()
+                .iter()
+                .map(libtmux::plan::OperationReport::outcome)
+                .collect::<Vec<_>>(),
         );
     }
     println!("  Sequential names the failing operation; Folding cannot, because tmux");
