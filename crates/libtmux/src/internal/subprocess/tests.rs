@@ -22,6 +22,7 @@ use rustix::process::{Pid, WaitOptions, test_kill_process, waitpid};
 use super::{ReaderFailure, SubprocessExecutor, TestHooks, validate_request};
 use crate::command::{CommandRequest, RequestId};
 use crate::internal::executor::Executor;
+use crate::internal::process::LaunchContext;
 use crate::{Command, DispatchLimits, Error};
 
 const CHILD_ENV: &str = "LIBTMUX_RS_TEST_CHILD";
@@ -93,7 +94,7 @@ fn nul_validation_distinguishes_global_subcommand_and_argument_positions() {
 
     for (global_argv, command, expected) in cases {
         let request = CommandRequest::with_global_argv(RequestId::new(31), &global_argv, command);
-        let error = validate_request(OsStr::new("tmux"), &request, RequestId::new(31))
+        let error = validate_request(&LaunchContext::new("tmux"), &request)
             .expect_err("fixture contains NUL");
         assert!(matches!(
             error,

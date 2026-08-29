@@ -770,8 +770,10 @@ What the earlier framing was right about is kept:
   something this end had stopped listening for, and it deadlocked: measured
   identically on 3.2a through 3.7c, with no error and `is_closed` reporting
   false. While a reply is outstanding the connection keeps reading and holds
-  what the consumer has not taken, which is bounded by how long a reply takes
-  rather than by a number, and resumes pausing the moment none is;
+  a fixed maximum of what the consumer has not taken. At that ceiling it
+  refuses live replies but retains their correlation slots; an absolute reply
+  deadline bounds the write through the complete block. Pausing resumes the
+  moment no live reply remains;
 - the connection lives while either handle is in use and ends when both are
   gone, so a caller who only watches and a caller who only sends are both
   ordinary;

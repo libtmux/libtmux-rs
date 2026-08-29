@@ -55,9 +55,11 @@ use std::time::Duration;
 
 use futures_core::Stream;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::Instant;
 
+use crate::internal::process::PersistentChild;
 use crate::limits::ControlLimits;
 use crate::version::since::CONTROL_PANE_OFF;
 use crate::{Command, Error, PaneId, Server, SessionId, TmuxText, WindowId};
@@ -396,8 +398,8 @@ impl ControlMode {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be started, does not give the crate
-    /// the pipes it asked for, or exits before attaching -- which is what a
-    /// session that is already gone looks like.
+    /// the pipes it asked for, exits before attaching, or does not finish its
+    /// opening block before the server deadline.
     pub async fn attach(server: &Server, session: &SessionId) -> Result<Self, Error> {
         Self::attach_with_limits(server, session, ControlLimits::default()).await
     }
@@ -411,7 +413,8 @@ impl ControlMode {
     /// # Errors
     ///
     /// Returns an error when the connection cannot be opened, as
-    /// [`Self::attach`] does.
+    /// [`Self::attach`] does. [`Server::shutdown`] cancels an attach in
+    /// progress and refuses later attempts.
     pub async fn attach_with_limits(
         server: &Server,
         session: &SessionId,
@@ -425,44 +428,53 @@ impl ControlMode {
             .await
             .is_ok_and(|capabilities| capabilities.tmux_version().meets(&CONTROL_PANE_OFF));
 
-        let mut command = tokio::process::Command::new(server.tmux_executable());
-        command
-            .arg("-S")
-            .arg(server.socket_path())
-            .arg("-C")
-            .arg("attach")
-            .arg("-t")
-            .arg(session.to_string())
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-
-        let mut child = command.spawn().map_err(Error::control_mode)?;
-        let stdin = child.stdin.take().ok_or_else(Error::control_mode_pipes)?;
-        let stdout = child.stdout.take().ok_or_else(Error::control_mode_pipes)?;
+        let mut child = server.spawn_control(session)?;
+        let Some(stdin) = child.take_stdin() else {
+            let _ = child.terminate().await;
+            return Err(Error::control_mode_pipes());
+        };
+        let Some(stdout) = child.take_stdout() else {
+            let _ = child.terminate().await;
+            return Err(Error::control_mode_pipes());
+        };
+        let core_stopped = child.stopped();
 
         let (commands, queue) = mpsc::channel(COMMAND_QUEUE);
         let (events, received) = mpsc::channel(EVENT_QUEUE);
         let (stop, stopped) = watch::channel(());
-        let mut connection = Connection {
+        let connection = Connection {
             child,
             stdin,
             stdout: BufReader::new(stdout),
             limits,
+            timeout: server.default_timeout(),
             line: Vec::new(),
             commands: queue,
             events,
             stopped,
+            core_stopped,
             awaiting: ReplySlots::default(),
             pending: VecDeque::new(),
         };
 
-        // tmux answers the attach with a block of its own. Waiting for it here
-        // is what makes the guarantee above true, and it costs nothing: the
-        // caller was awaiting this call anyway.
-        if !connection.discard_opening_block().await? {
-            return Err(Error::control_mode_closed());
+        let (ready, mut opened) = oneshot::channel();
+        let mut connection = tokio::spawn(connection.run(ready));
+        tokio::select! {
+            biased;
+            result = &mut opened => {
+                if result.is_err() {
+                    return match connection.await {
+                        Ok(Err(error)) => Err(error),
+                        Ok(Ok(())) | Err(_) => Err(Error::control_mode_closed()),
+                    };
+                }
+            }
+            result = &mut connection => {
+                return match result {
+                    Ok(Err(error)) => Err(error),
+                    Ok(Ok(())) | Err(_) => Err(Error::control_mode_closed()),
+                };
+            }
         }
 
         Ok(Self {
@@ -473,7 +485,7 @@ impl ControlMode {
             events: ControlEvents {
                 events: received,
                 stop,
-                connection: tokio::spawn(connection.run()),
+                connection,
             },
         })
     }
@@ -489,7 +501,8 @@ impl ControlMode {
     /// # Errors
     ///
     /// Returns an error when the command cannot be written as a control-mode
-    /// line, or the connection has closed.
+    /// line, the connection has closed, or its response exceeds the server
+    /// deadline.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
         self.sender.send(command).await
     }
@@ -602,7 +615,8 @@ impl ControlSender {
     /// # Errors
     ///
     /// Returns an error when the command cannot be written as a control-mode
-    /// line, or the connection has closed.
+    /// line, the connection has closed, or its response exceeds the server
+    /// deadline.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
         let line = command
             .control_mode_line()
@@ -1051,9 +1065,20 @@ fn admit_request(request: Request, pending_events: usize) -> Option<Request> {
 /// Reply ownership in the order tmux will answer it.
 #[derive(Debug)]
 enum ReplySlot {
-    Live(oneshot::Sender<Result<BlockResult, Error>>),
+    Live {
+        result: oneshot::Sender<Result<BlockResult, Error>>,
+        deadline: Option<Instant>,
+    },
     /// Consume this block without giving it to a later caller.
-    Tombstone,
+    Tombstone { deadline: Option<Instant> },
+}
+
+impl ReplySlot {
+    const fn deadline(&self) -> Option<Instant> {
+        match self {
+            Self::Live { deadline, .. } | Self::Tombstone { deadline } => *deadline,
+        }
+    }
 }
 
 /// Ordered reply slots, including blocks whose callers were refused.
@@ -1064,8 +1089,12 @@ struct ReplySlots {
 }
 
 impl ReplySlots {
-    fn push(&mut self, result: oneshot::Sender<Result<BlockResult, Error>>) {
-        self.slots.push_back(ReplySlot::Live(result));
+    fn push(
+        &mut self,
+        result: oneshot::Sender<Result<BlockResult, Error>>,
+        deadline: Option<Instant>,
+    ) {
+        self.slots.push_back(ReplySlot::Live { result, deadline });
         self.live += 1;
     }
 
@@ -1073,9 +1102,26 @@ impl ReplySlots {
         self.live != 0
     }
 
+    fn has_slots(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
+    fn front_deadline(&self) -> Option<Instant> {
+        self.slots.front().and_then(ReplySlot::deadline)
+    }
+
+    fn block_deadline(&self, timeout: Duration) -> Option<Instant> {
+        self.slots
+            .front()
+            .map_or_else(|| Instant::now().checked_add(timeout), ReplySlot::deadline)
+    }
+
     fn refuse_live(&mut self) {
         for slot in &mut self.slots {
-            let ReplySlot::Live(result) = std::mem::replace(slot, ReplySlot::Tombstone) else {
+            let deadline = slot.deadline();
+            let ReplySlot::Live { result, .. } =
+                std::mem::replace(slot, ReplySlot::Tombstone { deadline })
+            else {
                 continue;
             };
             let _ = result.send(Err(Error::control_mode_unread()));
@@ -1084,7 +1130,7 @@ impl ReplySlots {
     }
 
     fn complete(&mut self, block: BlockResult) {
-        if let Some(ReplySlot::Live(result)) = self.slots.pop_front() {
+        if let Some(ReplySlot::Live { result, .. }) = self.slots.pop_front() {
             self.live -= 1;
             let _ = result.send(Ok(block));
         }
@@ -1092,7 +1138,7 @@ impl ReplySlots {
 
     fn fail_all(&mut self, mut reason: impl FnMut() -> Error) {
         while let Some(slot) = self.slots.pop_front() {
-            if let ReplySlot::Live(result) = slot {
+            if let ReplySlot::Live { result, .. } = slot {
                 let _ = result.send(Err(reason()));
             }
         }
@@ -1110,15 +1156,42 @@ enum Step {
     Unwatched {
         asked: bool,
     },
+    CoreStopped,
+    TimedOut,
+}
+
+enum BlockRead {
+    Complete(BlockResult),
+    Stopped,
+}
+
+#[derive(Clone, Copy)]
+enum TerminalError {
+    Closed,
+    Frame(&'static str, usize),
+    Shutdown,
+    TimedOut,
+}
+
+impl TerminalError {
+    fn build(self, child: &PersistentChild) -> Error {
+        match self {
+            Self::Closed => Error::control_mode_closed(),
+            Self::Frame(frame, limit) => Error::control_mode_frame_too_large(frame, limit),
+            Self::Shutdown => child.shutdown_error(),
+            Self::TimedOut => Error::control_mode_timeout(),
+        }
+    }
 }
 
 /// The task that owns the pipes and multiplexes both directions.
 struct Connection {
-    child: Child,
+    child: PersistentChild,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     /// What one line and one block may accumulate before this gives up.
     limits: ControlLimits,
+    timeout: Duration,
     /// Bytes of a line that is not complete yet.
     ///
     /// This outlives one read because a cancelled read leaves what it got
@@ -1128,6 +1201,7 @@ struct Connection {
     events: mpsc::Sender<Event>,
     /// Resolves when the watching half asks to stop, or is dropped.
     stopped: watch::Receiver<()>,
+    core_stopped: watch::Receiver<bool>,
     /// Commands whose result block has not arrived yet.
     ///
     /// tmux answers in order and blocks do not nest, so the front of this
@@ -1142,8 +1216,16 @@ struct Connection {
 }
 
 impl Connection {
-    async fn run(mut self) -> Result<(), Error> {
-        let outcome = self.serve().await;
+    async fn run(mut self, mut ready: oneshot::Sender<()>) -> Result<(), Error> {
+        let opening_deadline = Instant::now().checked_add(self.timeout);
+        let outcome = match self
+            .discard_opening_block(&mut ready, opening_deadline)
+            .await
+        {
+            Ok(true) if ready.send(()).is_ok() => self.serve().await,
+            Ok(_) => Ok(()),
+            Err(error) => Err(error),
+        };
 
         // Whatever is still waiting will never be answered. It is told why
         // where the reason is more specific than "closed": a caller who blew
@@ -1151,24 +1233,27 @@ impl Connection {
         // connection can only reconnect.
         let reason = match &outcome {
             Err(Error::ControlModeFrameTooLarge { frame, limit }) => {
-                Some(Error::control_mode_frame_too_large(frame, *limit))
+                TerminalError::Frame(frame, *limit)
             }
-            _ => None,
+            Err(Error::ControlMode {
+                kind: crate::ControlModeErrorKind::TimedOut,
+                ..
+            }) => TerminalError::TimedOut,
+            Err(Error::ExecutorShutdown { .. }) => TerminalError::Shutdown,
+            _ => TerminalError::Closed,
         };
-        self.awaiting.fail_all(|| {
-            reason
-                .as_ref()
-                .map_or_else(Error::control_mode_closed, |error| match error {
-                    Error::ControlModeFrameTooLarge { frame, limit } => {
-                        Error::control_mode_frame_too_large(frame, *limit)
-                    }
-                    _ => Error::control_mode_closed(),
-                })
-        });
+        let child = &self.child;
+        self.awaiting.fail_all(|| reason.build(child));
+        while let Ok(request) = self.commands.try_recv() {
+            let _ = request.result.send(Err(reason.build(child)));
+        }
         drop(self.stdin);
-        let _ = self.child.wait().await;
+        let cleanup = self.child.terminate().await;
 
-        outcome
+        match outcome {
+            Err(error) => Err(error),
+            Ok(()) => cleanup,
+        }
     }
 
     async fn serve(&mut self) -> Result<(), Error> {
@@ -1180,31 +1265,12 @@ impl Connection {
         let mut watching = true;
 
         while sending || watching {
-            // Unbiased on purpose. Reading first would starve commands under
-            // a busy pane, and ordering is the queue's job, not the poll
-            // order's.
-            // Reading stops only when the caller has fallen far enough
-            // behind AND nothing is waiting for a reply. That is the
-            // backpressure tmux already applies to a slow client, and it
-            // costs nothing while it is the only thing happening. With a
-            // reply outstanding it is not available: the reply arrives on
-            // the connection that would stop, so pausing would be waiting
-            // for something this end has stopped listening for.
-            // Reading pauses when the caller is behind, which is the
-            // backpressure tmux already applies to a slow client and what
-            // makes a pane's output lossless. It cannot pause while a reply is
-            // outstanding, because the reply arrives on the connection that
-            // would pause.
-            // Past the ceiling with a reply outstanding, stopping would
-            // strand it and only the caller can help: the one who would drain
-            // is the one awaiting. Saying so beats waiting to be rescued by
-            // somebody who is waiting for us. Events stay held; refused reply
-            // blocks are consumed only to preserve later ownership.
             if self.awaiting.has_live() && self.pending.len() >= HELD_WHILE_AWAITING {
                 self.awaiting.refuse_live();
             }
 
             let held_back = !self.awaiting.has_live() && self.pending.len() >= EVENT_QUEUE;
+            let reply_deadline = self.awaiting.front_deadline();
 
             let step = tokio::select! {
                 line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
@@ -1214,15 +1280,21 @@ impl Connection {
                 asked = self.stopped.changed(), if watching => Step::Unwatched {
                     asked: asked.is_ok(),
                 },
+                () = cancellation_requested(&mut self.core_stopped) => Step::CoreStopped,
+                () = deadline_elapsed(reply_deadline), if self.awaiting.has_slots() => Step::TimedOut,
             };
 
             match step {
                 Step::Read(Err(error)) => return Err(error),
                 // tmux hung up, or the watcher asked to stop. Either ends the
                 // connection whatever the other half is doing.
-                Step::Read(Ok(None)) | Step::Unwatched { asked: true } => return Ok(()),
+                Step::Read(Ok(None)) | Step::Unwatched { asked: true } => {
+                    return Ok(());
+                }
+                Step::CoreStopped => return Err(self.child.shutdown_error()),
+                Step::TimedOut => return Err(Error::control_mode_timeout()),
                 Step::Read(Ok(Some(line))) => {
-                    if !self.dispatch(line).await? {
+                    if !self.dispatch(line, &mut watching).await? {
                         return Ok(());
                     }
                 }
@@ -1230,11 +1302,38 @@ impl Connection {
                     let Some(request) = admit_request(request, self.pending.len()) else {
                         continue;
                     };
-                    if let Err(error) = write_line(&mut self.stdin, &request.line).await {
-                        let _ = request.result.send(Err(Error::control_mode_closed()));
-                        return Err(error);
+                    let deadline = Instant::now().checked_add(self.timeout);
+                    let write_deadline = earliest_deadline(reply_deadline, deadline);
+                    let write = write_line(&mut self.stdin, &request.line);
+                    tokio::pin!(write);
+                    loop {
+                        let result = tokio::select! {
+                            biased;
+                            () = cancellation_requested(&mut self.core_stopped) => {
+                                let _ = request.result.send(Err(self.child.shutdown_error()));
+                                return Err(self.child.shutdown_error());
+                            }
+                            changed = self.stopped.changed(), if watching => {
+                                if changed.is_ok() {
+                                    let _ = request.result.send(Err(Error::control_mode_closed()));
+                                    return Ok(());
+                                }
+                                watching = false;
+                                continue;
+                            }
+                            () = deadline_elapsed(write_deadline) => {
+                                let _ = request.result.send(Err(Error::control_mode_timeout()));
+                                return Err(Error::control_mode_timeout());
+                            }
+                            result = &mut write => result,
+                        };
+                        if let Err(error) = result {
+                            let _ = request.result.send(Err(Error::control_mode_closed()));
+                            return Err(error);
+                        }
+                        break;
                     }
-                    self.awaiting.push(request.result);
+                    self.awaiting.push(request.result, deadline);
                 }
                 // The caller took one, so the next one can go.
                 Step::Deliver(true) => {
@@ -1264,33 +1363,105 @@ impl Connection {
     /// arrival order, and leaving this block to the serving loop would hand it
     /// to the first command's caller as that command's result -- an empty
     /// success, whatever the command was.
-    ///
-    /// Reports whether the connection survived to be served.
-    async fn discard_opening_block(&mut self) -> Result<bool, Error> {
+    async fn discard_opening_block(
+        &mut self,
+        ready: &mut oneshot::Sender<()>,
+        deadline: Option<Instant>,
+    ) -> Result<bool, Error> {
         loop {
-            match read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes).await? {
+            let held_back = self.events.capacity() == 0;
+            let line = tokio::select! {
+                biased;
+                () = ready.closed() => return Ok(false),
+                () = cancellation_requested(&mut self.core_stopped) => {
+                    return Err(self.child.shutdown_error());
+                }
+                () = deadline_elapsed(deadline) => {
+                    return Err(Error::control_mode_timeout());
+                }
+                line = read_line(
+                    &mut self.stdout,
+                    &mut self.line,
+                    self.limits.max_line_bytes,
+                ), if !held_back => line?,
+            };
+            match line {
                 Some(Line::BlockStart(number)) => {
-                    self.read_block(number).await?;
-                    return Ok(true);
+                    return match self.read_opening_block(number, ready, deadline).await? {
+                        Some(true) => Ok(true),
+                        Some(false) => Err(Error::control_mode_closed()),
+                        None => Ok(false),
+                    };
                 }
                 Some(Line::Event(exit @ Event::Exit { .. })) => {
-                    self.report(exit);
-                    return Ok(false);
+                    let _ = self.events.try_send(exit);
+                    return Err(Error::control_mode_closed());
                 }
-                Some(Line::Event(event)) => self.report(event),
+                Some(Line::Event(event)) => {
+                    let _ = self.events.try_send(event);
+                }
                 Some(Line::Text(_) | Line::BlockEnd { .. }) => {}
-                None => return Ok(false),
+                None => return Err(Error::control_mode_closed()),
+            }
+        }
+    }
+
+    async fn read_opening_block(
+        &mut self,
+        number: u64,
+        ready: &mut oneshot::Sender<()>,
+        deadline: Option<Instant>,
+    ) -> Result<Option<bool>, Error> {
+        let mut accumulated = 0usize;
+        loop {
+            let line = tokio::select! {
+                biased;
+                () = ready.closed() => return Ok(None),
+                () = cancellation_requested(&mut self.core_stopped) => {
+                    return Err(self.child.shutdown_error());
+                }
+                () = deadline_elapsed(deadline) => {
+                    return Err(Error::control_mode_timeout());
+                }
+                line = read_line_within(
+                    &mut self.stdout,
+                    &mut self.line,
+                    self.limits.max_line_bytes,
+                    Some(number),
+                ) => line?,
+            };
+            match line {
+                Some(Line::BlockEnd {
+                    number: end,
+                    succeeded,
+                }) if end == number => return Ok(Some(succeeded)),
+                Some(Line::Text(text)) => {
+                    accumulated = accumulated.saturating_add(text.as_bytes().len());
+                    if accumulated > self.limits.max_block_bytes {
+                        return Err(Error::control_mode_frame_too_large(
+                            "block",
+                            self.limits.max_block_bytes,
+                        ));
+                    }
+                }
+                Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
+                None => return Err(Error::control_mode_closed()),
             }
         }
     }
 
     /// Act on one protocol line, reporting whether to keep reading.
-    async fn dispatch(&mut self, line: Line) -> Result<bool, Error> {
+    async fn dispatch(&mut self, line: Line, watching: &mut bool) -> Result<bool, Error> {
         match line {
             Line::BlockStart(number) => {
-                let block = self.read_block(number).await?;
-                self.awaiting.complete(block);
-                Ok(true)
+                let deadline = self.awaiting.block_deadline(self.timeout);
+                match self.read_block(number, deadline, watching).await? {
+                    BlockRead::Complete(block) => {
+                        self.awaiting.complete(block);
+                        Ok(true)
+                    }
+                    BlockRead::Stopped => Ok(false),
+                }
             }
             Line::Event(exit @ Event::Exit { .. }) => {
                 self.report(exit);
@@ -1333,27 +1504,47 @@ impl Connection {
     }
 
     /// Read to the end of a block that has already begun.
-    async fn read_block(&mut self, number: u64) -> Result<BlockResult, Error> {
+    async fn read_block(
+        &mut self,
+        number: u64,
+        deadline: Option<Instant>,
+        watching: &mut bool,
+    ) -> Result<BlockRead, Error> {
         let mut output = Vec::new();
         let mut accumulated = 0usize;
         loop {
-            match read_line_within(
-                &mut self.stdout,
-                &mut self.line,
-                self.limits.max_line_bytes,
-                Some(number),
-            )
-            .await?
-            {
+            let line = tokio::select! {
+                biased;
+                () = cancellation_requested(&mut self.core_stopped) => {
+                    return Err(self.child.shutdown_error());
+                }
+                changed = self.stopped.changed(), if *watching => {
+                    if changed.is_ok() {
+                        return Ok(BlockRead::Stopped);
+                    }
+                    *watching = false;
+                    continue;
+                }
+                () = deadline_elapsed(deadline) => {
+                    return Err(Error::control_mode_timeout());
+                }
+                line = read_line_within(
+                    &mut self.stdout,
+                    &mut self.line,
+                    self.limits.max_line_bytes,
+                    Some(number),
+                ) => line?,
+            };
+            match line {
                 Some(Line::BlockEnd {
                     number: end,
                     succeeded,
                 }) if end == number => {
-                    return Ok(BlockResult {
+                    return Ok(BlockRead::Complete(BlockResult {
                         number,
                         succeeded,
                         output,
-                    });
+                    }));
                 }
                 Some(Line::Text(text)) => {
                     // A block whose `%end` never arrives grows without bound,
@@ -1378,6 +1569,32 @@ impl Connection {
     }
 }
 
+async fn cancellation_requested(stopped: &mut watch::Receiver<bool>) {
+    loop {
+        if *stopped.borrow() {
+            return;
+        }
+        if stopped.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn deadline_elapsed(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+fn earliest_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
+}
+
 /// Read and classify one protocol line.
 ///
 /// `pending` carries a line across calls. `read_until` appends what it read
@@ -1394,11 +1611,10 @@ async fn read_line(
 
 /// Read one line, classifying it for the block it arrived in.
 ///
-/// `within` names the open block, if any. tmux queues a notification raised
-/// while a block is open and writes it after the `%end` (`control.c`,
-/// `control_write`), so inside a block every line but its own terminator is
-/// command output -- including one that looks like a notification, which is
-/// what `list-panes -F '#{pane_id}'` produces for every row.
+/// `within` names the open block, if any. tmux(1) guarantees a notification
+/// never appears inside an output block, so every line but its own terminator
+/// is command output -- including one that looks like a notification, which
+/// is what `list-panes -F '#{pane_id}'` produces for every row.
 async fn read_line_within(
     stdout: &mut BufReader<ChildStdout>,
     pending: &mut Vec<u8>,
@@ -1867,7 +2083,7 @@ mod tests {
     fn a_refused_reply_keeps_the_next_reply_aligned() {
         let mut replies = ReplySlots::default();
         let (b_request, b_reply) = request();
-        replies.push(b_request.result);
+        replies.push(b_request.result, None);
 
         replies.refuse_live();
         assert_eq!(
@@ -1880,7 +2096,7 @@ mod tests {
         let (c_request, mut c_reply) = request();
         let c_request = admit_request(c_request, HELD_WHILE_AWAITING - 1)
             .expect("C is admitted after the caller drains below the limit");
-        replies.push(c_request.result);
+        replies.push(c_request.result, None);
         assert!(replies.has_live(), "C keeps reply reading unpaused");
         replies.complete(reply(2));
         assert!(
@@ -1903,7 +2119,7 @@ mod tests {
     fn retries_at_the_unread_limit_do_not_grow_reply_slots() {
         let mut replies = ReplySlots::default();
         let (in_flight, _answer) = request();
-        replies.push(in_flight.result);
+        replies.push(in_flight.result, None);
         replies.refuse_live();
         let slots_at_cutoff = replies.slots.len();
 
@@ -2282,3 +2498,7 @@ mod tests {
         assert_eq!(unescape_output(br"a\zb"), b"a\\zb");
     }
 }
+
+#[cfg(test)]
+#[path = "control/lifecycle_tests.rs"]
+mod lifecycle_tests;

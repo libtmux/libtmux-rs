@@ -84,8 +84,9 @@ pub enum ServerConfigurationErrorKind {
 use libtmux::{ControlModeErrorKind, Error};
 
 // `Closed` means the far side ended, often just the session going away. The
-// rest mean the connection never worked. The variant is `#[non_exhaustive]`,
-// so a caller matches it rather than building one.
+// other variants distinguish setup failures, deadline expiry, and refusals.
+// The enum is `#[non_exhaustive]`, so a caller matches it rather than building
+// one.
 fn session_ended(failure: &Error) -> bool {
     matches!(
         failure,
@@ -114,6 +115,11 @@ pub enum ControlModeErrorKind {
     MissingPipes,
     /// The connection closed before the command was answered.
     Closed,
+    /// The attach opening or a command response exceeded the server deadline.
+    ///
+    /// A command's deadline starts before it is written and runs until tmux
+    /// closes its response block.
+    TimedOut,
     /// The caller stopped reading events, so the connection could not reach
     /// this command's reply.
     ///
@@ -1220,6 +1226,7 @@ impl Error {
                 // A limit was reached and the command was not carried out,
                 // which is what `Refused` says. The connection is fine.
                 ControlModeErrorKind::Unread => ErrorKind::Refused,
+                ControlModeErrorKind::TimedOut => ErrorKind::Timeout,
                 ControlModeErrorKind::Transport
                 | ControlModeErrorKind::MissingPipes
                 | ControlModeErrorKind::Closed => ErrorKind::Transport,
@@ -1306,6 +1313,15 @@ impl Error {
     pub(crate) const fn control_mode_closed() -> Self {
         Self::ControlMode {
             kind: ControlModeErrorKind::Closed,
+            source: None,
+        }
+    }
+
+    /// The connection did not attach or answer a command in time.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_timeout() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::TimedOut,
             source: None,
         }
     }

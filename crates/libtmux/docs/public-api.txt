@@ -1275,6 +1275,7 @@ variant libtmux::Chooser::Tree
 variant libtmux::ControlModeErrorKind::Closed
 variant libtmux::ControlModeErrorKind::InvalidSubscriptionName
 variant libtmux::ControlModeErrorKind::MissingPipes
+variant libtmux::ControlModeErrorKind::TimedOut
 variant libtmux::ControlModeErrorKind::Transport
 variant libtmux::ControlModeErrorKind::Unread
 variant libtmux::ControlModeErrorKind::UnrepresentableCommand

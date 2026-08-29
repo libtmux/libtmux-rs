@@ -1,20 +1,18 @@
 use std::any::Any;
 use std::collections::{HashMap, hash_map::Entry};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fmt;
 use std::future::Future;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::{Child, ChildStderr, ChildStdout, Command as TokioCommand};
+use tokio::process::{Child, ChildStderr, ChildStdout};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -27,6 +25,7 @@ use tracing::instrument::WithSubscriber as _;
 use crate::Error;
 use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatus, RequestId};
 use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+use crate::internal::process::{LaunchContext, ProcessGroupGuard, validate_request};
 
 #[derive(Clone)]
 pub(crate) struct SubprocessExecutor {
@@ -36,47 +35,14 @@ pub(crate) struct SubprocessExecutor {
 
 #[derive(Clone)]
 struct Configuration {
-    executable: OsString,
+    launch: LaunchContext,
     timeout: Duration,
     output_limits: OutputLimits,
     dispatch_limits: DispatchLimits,
-    current_dir: Option<PathBuf>,
-    environment: Vec<(OsString, Option<OsString>)>,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_supervisor_drop: bool,
     #[cfg(test)]
     hooks: TestHooks,
-}
-
-impl Configuration {
-    /// Report whether a bare executable name resolves through `PATH`.
-    ///
-    /// Spawn failures cannot be classified by [`io::ErrorKind`] alone. On WSL
-    /// with Windows directories on `PATH`, a bare name that resolves nowhere
-    /// fails with `EIO` rather than `ENOENT`, which would otherwise degrade a
-    /// missing tmux into an untyped spawn failure on a supported platform.
-    ///
-    /// Only bare names are answered here. A name containing a separator is a
-    /// path that the operating system resolves against the child's working
-    /// directory, so `ENOENT` already identifies it.
-    fn executable_missing_from_path(&self) -> bool {
-        let executable = std::path::Path::new(&self.executable);
-        if executable.components().count() != 1 {
-            return false;
-        }
-
-        let path = self
-            .environment
-            .iter()
-            .rev()
-            .find(|(key, _)| key == "PATH")
-            .map_or_else(|| std::env::var_os("PATH"), |(_, value)| value.clone());
-        let Some(path) = path else {
-            return true;
-        };
-
-        !std::env::split_paths(&path).any(|directory| directory.join(executable).is_file())
-    }
 }
 
 struct Shared {
@@ -192,12 +158,10 @@ impl SubprocessExecutor {
     pub(crate) fn new(executable: impl Into<OsString>, timeout: Duration) -> Self {
         Self {
             configuration: Arc::new(Configuration {
-                executable: executable.into(),
+                launch: LaunchContext::new(executable),
                 timeout,
                 output_limits: OutputLimits::default(),
                 dispatch_limits: DispatchLimits::default(),
-                current_dir: None,
-                environment: Vec::new(),
                 #[cfg(feature = "test-support")]
                 synchronous_reap_on_supervisor_drop: false,
                 #[cfg(test)]
@@ -214,29 +178,21 @@ impl SubprocessExecutor {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_environment(
         mut self,
         key: impl Into<OsString>,
         value: impl Into<OsString>,
     ) -> Self {
         let mut configuration = (*self.configuration).clone();
-        configuration
-            .environment
-            .push((key.into(), Some(value.into())));
+        configuration.launch = configuration.launch.with_environment(key, value);
         self.configuration = Arc::new(configuration);
         self
     }
 
-    pub(crate) fn with_environment_removed(mut self, key: impl Into<OsString>) -> Self {
+    pub(crate) fn with_launch_context(mut self, launch: LaunchContext) -> Self {
         let mut configuration = (*self.configuration).clone();
-        configuration.environment.push((key.into(), None));
-        self.configuration = Arc::new(configuration);
-        self
-    }
-
-    pub(crate) fn with_current_dir(mut self, current_dir: impl Into<PathBuf>) -> Self {
-        let mut configuration = (*self.configuration).clone();
-        configuration.current_dir = Some(current_dir.into());
+        configuration.launch = launch;
         self.configuration = Arc::new(configuration);
         self
     }
@@ -273,7 +229,7 @@ impl SubprocessExecutor {
     )]
     async fn run(self, request: CommandRequest) -> Result<CommandResult, Error> {
         let request_id = request.request_id();
-        validate_request(&self.configuration.executable, &request, request_id)?;
+        validate_request(&self.configuration.launch, &request)?;
         let context = RequestContext {
             request_id,
             command: request.summary().clone(),
@@ -339,24 +295,11 @@ impl SubprocessExecutor {
             return Err(error);
         }
 
-        let mut process = TokioCommand::new(&self.configuration.executable);
+        let mut process = self.configuration.launch.command(request.argv());
         process
-            .args(request.argv())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .process_group(0);
-        if let Some(current_dir) = &self.configuration.current_dir {
-            process.current_dir(current_dir);
-        }
-        for (key, value) in &self.configuration.environment {
-            if let Some(value) = value {
-                process.env(key, value);
-            } else {
-                process.env_remove(key);
-            }
-        }
+            .stderr(Stdio::piped());
 
         let mut child = match process.spawn() {
             Ok(child) => child,
@@ -365,10 +308,10 @@ impl SubprocessExecutor {
                 let executable_not_found = (source.kind() == io::ErrorKind::NotFound
                     && self
                         .configuration
-                        .current_dir
-                        .as_deref()
+                        .launch
+                        .current_dir()
                         .is_none_or(std::path::Path::is_dir))
-                    || self.configuration.executable_missing_from_path();
+                    || self.configuration.launch.executable_missing_from_path();
                 let error = Error::spawn(
                     context.request_id(),
                     context.command.clone(),
@@ -456,32 +399,6 @@ impl Executor for SubprocessExecutor {
     }
 }
 
-fn validate_request(
-    executable: &OsStr,
-    request: &CommandRequest,
-    request_id: RequestId,
-) -> Result<(), Error> {
-    use std::os::unix::ffi::OsStrExt as _;
-
-    if executable.as_bytes().contains(&0) {
-        return Err(Error::invalid_command_input(
-            request_id.get(),
-            "tmux executable",
-        ));
-    }
-    for (index, argument) in request.argv().iter().enumerate() {
-        if argument.as_os_str().as_bytes().contains(&0) {
-            let input = match index.cmp(&request.logical_subcommand_index()) {
-                std::cmp::Ordering::Less => "tmux global argument",
-                std::cmp::Ordering::Equal => "tmux subcommand",
-                std::cmp::Ordering::Greater => "tmux argument",
-            };
-            return Err(Error::invalid_command_input(request_id.get(), input));
-        }
-    }
-    Ok(())
-}
-
 async fn await_result(
     receiver: oneshot::Receiver<Result<CommandResult, Error>>,
     mut cancellation: CancellationGuard,
@@ -517,7 +434,7 @@ struct ChildOwnership {
 impl Drop for ChildOwnership {
     fn drop(&mut self) {
         #[cfg(feature = "test-support")]
-        if self.synchronous_reap_on_drop && self.process_group.armed {
+        if self.synchronous_reap_on_drop && self.process_group.is_armed() {
             self.readers.abort();
             self.process_group.signal();
             let _ = self.child.start_kill();
@@ -986,41 +903,6 @@ impl fmt::Display for OutputTooLarge {
 }
 
 impl std::error::Error for OutputTooLarge {}
-
-struct ProcessGroupGuard {
-    process_group: Option<Pid>,
-    armed: bool,
-}
-
-impl ProcessGroupGuard {
-    fn new(child_id: Option<u32>) -> Self {
-        let process_group = child_id
-            .and_then(|value| i32::try_from(value).ok())
-            .and_then(Pid::from_raw);
-        Self {
-            process_group,
-            armed: true,
-        }
-    }
-
-    fn signal(&self) {
-        if self.armed {
-            if let Some(process_group) = self.process_group {
-                let _ = kill_process_group(process_group, Signal::KILL);
-            }
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for ProcessGroupGuard {
-    fn drop(&mut self) {
-        self.signal();
-    }
-}
 
 struct RegistryGuard {
     shared: Arc<Shared>,

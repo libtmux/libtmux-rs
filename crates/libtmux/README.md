@@ -523,16 +523,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Cancellation and shutdown
 
-Each command runs in an isolated process group with a supervised deadline,
-30 seconds by default and configurable through `ServerBuilder::default_timeout`.
-The deadline starts before the command waits for dispatch capacity.
+Each subprocess command runs in an isolated process group with a supervised
+deadline, 30 seconds by default and configurable through
+`ServerBuilder::default_timeout`. The deadline starts before the command waits
+for dispatch capacity.
 Dropping the command future, reaching its timeout, or shutting the server down
 signals the group and waits for the direct child while the runtime is alive.
 
-`Server::shutdown()` is shared by all clones: it cancels active work, rejects
-later commands, and is safe to call concurrently or repeatedly. Await it, or
-await your commands, before tearing the runtime down — runtime destruction
-signals best-effort but cannot promise that child reaping finished.
+A control-mode connection has its own isolated process group. Its attach
+handshake and each command response use the same default timeout; a response's
+deadline starts before its line is written and ends with the complete block.
+Dropping both handles terminates and reaps the connection.
+
+`Server::shutdown()` is shared by all clones: it cancels active subprocess
+work and persistent control connections, rejects later commands and attaches,
+and is safe to call concurrently or repeatedly. Await it, or await your
+commands, before tearing the runtime down — runtime destruction signals
+best-effort but cannot promise that child reaping finished.
 
 ## Testing against real tmux
 

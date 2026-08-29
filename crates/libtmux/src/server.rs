@@ -12,6 +12,8 @@ use crate::internal::core::Core;
 #[cfg(test)]
 use crate::internal::executor::Executor;
 use crate::internal::listing::{self, Pushdown as _};
+#[cfg(feature = "control-mode")]
+use crate::internal::process::PersistentChild;
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
@@ -310,6 +312,11 @@ impl Server {
         Self { core }
     }
 
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn spawn_control(&self, session: &SessionId) -> Result<PersistentChild, Error> {
+        self.core.spawn_control(session)
+    }
+
     /// Construct a server from the captured default endpoint context.
     ///
     /// # Errors
@@ -547,11 +554,12 @@ impl Server {
         self.core.execute_chain(chain).await
     }
 
-    /// Close the shared client executor and wait for active child cleanup.
+    /// Stop accepting clients and wait for every active client process.
     ///
     /// Shutdown is idempotent and affects every clone of this server.
     /// It never stops the tmux daemon itself. Await it before dropping the
-    /// Tokio runtime when deterministic reaping of client subprocesses matters.
+    /// Tokio runtime when deterministic reaping matters. With control mode
+    /// enabled, this also closes persistent control connections.
     ///
     /// # Errors
     ///
