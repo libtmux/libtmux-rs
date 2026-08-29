@@ -135,6 +135,50 @@ Control mode is never the default transport, and turning the feature on does
 not make it one: normal commands stay one process per command until you attach
 a connection and use it.
 
+## When the typed API does not cover it
+
+tmux has more commands than this crate has methods, and a method can be narrower
+than the command behind it. `Server::cmd` runs anything, through the same
+transport, timeout and error classification as the typed calls -- so reaching
+for it costs you the method, not the machinery.
+
+```rust
+use libtmux::{Command, test::TestServer};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = TestServer::new().await?;
+    let server = guard.server();
+    let session = server.new_session("escape-hatch").await?;
+    let pane = session.panes().await?.remove(0);
+
+    // `Pane::clock_mode` has no typed way back out for every mode, so this is
+    // how you leave one the API does not model.
+    server
+        .cmd(
+            Command::new("copy-mode")
+                .arg("-q")
+                .arg("-t")
+                .arg(pane.id().to_string()),
+        )
+        .await?;
+
+    // The answer carries tmux's own bytes. A command tmux refuses is an `Err`
+    // classified the same way a typed call's would be.
+    let version = server
+        .cmd(Command::new("display-message").arg("-p").arg("#{version}"))
+        .await?;
+    assert!(!version.stdout().is_empty());
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
+A command you needed here is worth reporting: `tmux-mcp` and `tmux-workspace`
+use this crate from outside it, and when either reaches for `cmd` that counts as
+a gap in the API rather than a use of the escape hatch.
+
 ## Walking the hierarchy
 
 `Server::hierarchy` gathers the whole tree in three tmux commands, rather than
