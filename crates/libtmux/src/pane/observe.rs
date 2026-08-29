@@ -14,8 +14,9 @@ impl Pane {
     ///
     /// [`Pane::capture`] reads what is on screen now; this reports every byte
     /// the pane produces from here on, including what scrolls away. It opens a
-    /// control-mode connection to the pane's session and keeps it, so there is
-    /// no polling and no sampling interval to get wrong.
+    /// control-mode connection to the session holding the pane and keeps it,
+    /// so there is no polling and no sampling interval to get wrong. Where the
+    /// pane lives is resolved here rather than taken from this handle.
     ///
     /// The bytes are the pane's own, terminal escapes included. tmux reports
     /// them in whatever sized chunks it has, so a caller wanting lines has to
@@ -27,7 +28,8 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns an error when the control-mode connection cannot be opened.
+    /// Returns [`Error::ObjectGone`] when the pane no longer exists, or an
+    /// error when the control-mode connection cannot be opened.
     ///
     /// # Examples
     ///
@@ -44,13 +46,23 @@ impl Pane {
     /// ```
     #[cfg(feature = "control-mode")]
     pub async fn stream_output(&self) -> Result<crate::control::PaneOutput, Error> {
+        // tmux reports a pane only to a client attached to a session that
+        // links its window, so attaching through this handle's cached session
+        // would deliver silence after the pane was joined elsewhere.
+        let window = self
+            .window()
+            .await?
+            .ok_or_else(|| Error::ObjectGone {
+                kind: crate::ObjectKind::Pane,
+                id: self.id().to_string(),
+            })?;
         let server = crate::Server::from_core(Arc::clone(&self.core));
-        let (sender, events) = crate::control::ControlMode::attach(&server, self.session_id())
+        let (sender, events) = crate::control::ControlMode::attach(&server, window.session_id())
             .await?
             .split();
 
-        // tmux sends a control client every pane on the server, so narrowing
-        // happens before the caller reads rather than after the bytes arrive.
+        // One session can hold many panes, and the connection carries all of
+        // them, so narrowing happens before the caller reads.
         sender.watch_only(std::slice::from_ref(self.id())).await?;
 
         Ok(crate::control::PaneOutput::new(

@@ -1375,3 +1375,55 @@ async fn the_pause_threshold_and_its_resume_are_accepted() {
     events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_pane_is_watched_wherever_it_now_lives() {
+    use libtmux::{JoinOptions, SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let origin = server.new_session("origin").await.expect("session");
+    let destination = server.new_session("destination").await.expect("session");
+
+    let origin_window = origin
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+    let writer = origin_window
+        .split(
+            SplitOptions::new(SplitDirection::Below)
+                .command(r"while true; do printf 'moved '; sleep 0.1; done"),
+        )
+        .await
+        .expect("pane is created");
+
+    let landing = destination
+        .panes()
+        .await
+        .expect("panes")
+        .into_iter()
+        .next()
+        .expect("one pane");
+
+    // The handle kept here still names `origin`, which outlives the move.
+    // tmux reports a pane only to a client attached to a session linking its
+    // window, so attaching through the stale session is silence, not an error.
+    let stale = writer.clone();
+    writer
+        .join_into(&landing, JoinOptions::new(SplitDirection::Below))
+        .await
+        .expect("the pane moves between sessions");
+
+    let mut output = stale.stream_output().await.expect("the pane streams");
+    let chunk = tokio::time::timeout(Duration::from_secs(10), output.next_chunk())
+        .await
+        .expect("a relocated pane still reports its output")
+        .expect("the pane is still open");
+    assert!(!chunk.is_empty(), "the relocated pane wrote something");
+
+    output.shutdown().await.expect("the stream shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

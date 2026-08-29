@@ -697,10 +697,11 @@ impl ControlSender {
 
     /// Stop tmux sending this connection what a pane writes.
     ///
-    /// A control client is sent the output of *every* pane on the server. One
-    /// pane running `yes` moves more than 20 MB in two seconds, and a client
-    /// tmux judges five minutes behind is disconnected with `too far behind`,
-    /// so discarding the unwanted panes on arrival is not enough.
+    /// A control client is sent the output of every pane in the session it
+    /// attached to, which is one window's worth or a hundred. One pane running
+    /// `yes` moves more than 20 MB in two seconds, and a client tmux judges
+    /// five minutes behind is disconnected with `too far behind`, so
+    /// discarding the unwanted panes on arrival is not enough.
     ///
     /// Muting a pane that does not exist is not an error; tmux ignores an
     /// unresolvable id here.
