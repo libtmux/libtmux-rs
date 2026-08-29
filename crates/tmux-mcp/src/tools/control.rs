@@ -608,10 +608,14 @@ impl TmuxTools {
         // `Server::shutdown` closes this crate's own subprocess executor and
         // leaves the daemon running, which is the opposite of what this tool
         // promises.
-        self.server
+        let result = self
+            .server
             .cmd(Command::new("kill-server"))
             .await
             .map_err(|e| tmux_error(&e))?;
+        if let Some(error) = result.refusal_for("kill-server") {
+            return Err(tmux_error(&error));
+        }
 
         Ok(Json(ServerKilled { killed: true }))
     }

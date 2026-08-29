@@ -1393,6 +1393,31 @@ async fn killing_an_unrelated_server_is_allowed() {
     ours.shutdown().await.expect("tmux fixture shuts down");
 }
 
+#[tokio::test]
+async fn real_tmux_compat_kill_server_reports_an_absent_server() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = bare_tools(guard.server());
+    let stopped = guard
+        .server()
+        .cmd(Command::new("kill-server"))
+        .await
+        .expect("the running server answers");
+    assert!(stopped.success(), "the setup stops the daemon");
+
+    let error = tools
+        .kill_server(tmux_mcp::Asking::nobody())
+        .await
+        .map(|_| ())
+        .expect_err("an absent server cannot be killed");
+    assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+    let detail = error.data.expect("the error carries detail");
+    assert_eq!(detail["kind"], "server_gone", "{detail}");
+    assert_eq!(detail["retryable"], true, "{detail}");
+    assert_eq!(detail["stale"], false, "{detail}");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// How many clients tmux has, which is how a control-mode connection shows up.
 async fn client_count(server: &Server) -> usize {
     server.clients().await.map_or(0, |found| found.len())
