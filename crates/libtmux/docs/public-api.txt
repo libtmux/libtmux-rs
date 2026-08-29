@@ -10,6 +10,7 @@ assoc_const libtmux::TmuxVersion::MIN_SUPPORTED: libtmux::ReleaseVersion
 assoc_const libtmux::plan::Operation::EFFECTS: libtmux::plan::Effects
 assoc_const libtmux::plan::Operation::MIN_VERSION: Option<(u32, u32)>
 assoc_const libtmux::plan::Operation::SAFETY: libtmux::plan::Safety
+assoc_const libtmux::plan::OperationKind::ALL: &'static [Self]
 assoc_const libtmux::query::FilterEnum::FILTER_VARIANTS: &'static [&'static str]
 assoc_const libtmux::query::Filterable::FILTER_TARGET: &'static str
 assoc_type libtmux::plan::Operation::Creates: libtmux::plan::FromStep

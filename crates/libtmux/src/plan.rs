@@ -606,6 +606,13 @@ macro_rules! operation_set {
         }
 
         impl OperationKind {
+            /// Every kind, in the order the plan grammar declares them.
+            ///
+            /// A consumer projecting this set into a schema reads it from here
+            /// rather than restating it, which is what keeps the two from
+            /// drifting as operations are added.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
             /// The tmux subcommand this operation runs.
             #[must_use]
             pub const fn name(self) -> &'static str {
