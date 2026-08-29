@@ -49,13 +49,10 @@ impl Pane {
         // tmux reports a pane only to a client attached to a session that
         // links its window, so attaching through this handle's cached session
         // would deliver silence after the pane was joined elsewhere.
-        let window = self
-            .window()
-            .await?
-            .ok_or_else(|| Error::ObjectGone {
-                kind: crate::ObjectKind::Pane,
-                id: self.id().to_string(),
-            })?;
+        let window = self.window().await?.ok_or_else(|| Error::ObjectGone {
+            kind: crate::ObjectKind::Pane,
+            id: self.id().to_string(),
+        })?;
         let server = crate::Server::from_core(Arc::clone(&self.core));
         let (sender, events) = crate::control::ControlMode::attach(&server, window.session_id())
             .await?
