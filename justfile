@@ -35,6 +35,20 @@ doctest:
 examples:
     bash scripts/run-examples.sh
 
+# Ownership, not tidiness, is what this decides. A directory belonging to a run
+# in progress is not a leak even though it is new, and one belonging to a run
+# that is gone is a leak even though it is old -- so it asks who owns a thing
+# rather than what it is called or how old it is.
+#
+# The `owner` file holds the PID that made the fixture, and a living owner
+# means skip. Reaping by name, by age, or by "is a server answering here"
+# inverts that: aliveness is the reason to leave a fixture alone, and using it
+# as the reason to remove one destroys the fixtures of whatever is running now.
+# That failure does not look like a leak. It looks like someone else's test
+# failing somewhere unrelated, with a message pointing at their code -- which
+# is what happened on 2026-08-24, when a second agent reaped four servers here
+# and two `tmux-mcp` waiting tests failed reporting a closed pane.
+#
 # Report anything the suite left in the fixture root
 [group: 'test']
 fixture-root:
