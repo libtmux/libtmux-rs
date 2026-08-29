@@ -520,6 +520,13 @@ async fn a_global_window_option_is_read_globally() {
 ///
 /// `pipe-pane` toggles when given no command, so a caller who cannot stop it
 /// leaves tmux writing into a process for the life of the pane.
+///
+/// The sink lives in a directory of its own rather than beside the fixture's
+/// socket. An earlier version wrote it next to the socket and removed it on
+/// the way out, which meant a failing run left a file behind that outlived
+/// the fixture's own cleanup and kept the directory in the shared root --
+/// `just fixture-root` reported it. A temporary directory is removed whether
+/// the test returns or panics.
 #[tokio::test]
 async fn a_pane_pipes_until_it_is_told_to_stop() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -527,14 +534,40 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
     let session = server.new_session("piped").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
-    let sink = guard.socket_path().with_extension("piped");
+    let piping = |server: &libtmux::Server, pane: libtmux::PaneId| {
+        let server = server.clone();
+        async move {
+            server
+                .cmd(
+                    Command::new("display-message")
+                        .arg("-p")
+                        .arg("-t")
+                        .arg(pane.to_string())
+                        .arg("#{pane_pipe}"),
+                )
+                .await
+                .expect("tmux answers")
+                .stdout_lossy()
+                .trim()
+                .to_owned()
+        }
+    };
+
+    assert_eq!(piping(server, pane.id().clone()).await, "0", "nothing yet");
+
+    let sink_dir = tempfile::Builder::new()
+        .prefix("libtmux-pipe-")
+        .tempdir()
+        .expect("a directory of its own");
+    let sink = sink_dir.path().join("seen");
+
     pane.pipe(Some(format!("cat >{}", sink.display())))
         .await
         .expect("the pane pipes");
+    assert_eq!(piping(server, pane.id().clone()).await, "1", "now piping");
 
     pane.send_keys("printf 'piped\n'").await.expect("keys");
     pane.send_key_names(["Enter"]).await.expect("enter");
-
     retry_until(Duration::from_secs(10), async || {
         std::fs::read(&sink).is_ok_and(|seen| seen.windows(5).any(|word| word == b"piped"))
     })
@@ -542,19 +575,12 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
     .expect("what the pane printed reaches the pipe");
 
     pane.pipe(None::<String>).await.expect("the pipe stops");
-    let after = std::fs::metadata(&sink).map_or(0, |meta| meta.len());
-
-    pane.send_keys("printf 'later\n'").await.expect("keys");
-    pane.send_key_names(["Enter"]).await.expect("enter");
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
     assert_eq!(
-        std::fs::metadata(&sink).map_or(0, |meta| meta.len()),
-        after,
-        "nothing more arrives once the pipe is stopped"
+        piping(server, pane.id().clone()).await,
+        "0",
+        "the same call with no command stops it"
     );
 
-    let _ = std::fs::remove_file(&sink);
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
