@@ -11,6 +11,8 @@ use crate::plan::SlotUse;
 /// Set a tmux option.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SetOption {
     scope: OptionScope,
     #[cfg_attr(
@@ -20,6 +22,7 @@ pub struct SetOption {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     name: OsString,
     #[cfg_attr(
         feature = "serde",
@@ -28,12 +31,15 @@ pub struct SetOption {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     value: OsString,
 }
 
 /// Where a [`SetOption`] applies.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 enum OptionScope {
     Global,
     Session(SessionTarget),
@@ -135,6 +141,8 @@ operation!(
 /// happened to inherit.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SetEnvironment {
     pub(crate) target: SessionTarget,
     #[cfg_attr(
@@ -144,6 +152,7 @@ pub struct SetEnvironment {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     name: OsString,
     #[cfg_attr(
         feature = "serde",
@@ -152,6 +161,7 @@ pub struct SetEnvironment {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     value: OsString,
 }
 

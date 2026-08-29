@@ -103,6 +103,7 @@ impl Effects {
 /// The tmux object an operation addresses or makes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Scope {
     /// A tmux session.
     Session,
@@ -253,6 +254,9 @@ pub enum Safety {
 /// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(bound = ""))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(bound = ""))]
 pub struct Slot<T> {
     index: usize,
     part: Part,
@@ -267,6 +271,7 @@ pub struct Slot<T> {
 /// trip.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) enum Part {
     /// The object the operation is named for.
     Created,
@@ -360,6 +365,8 @@ impl Slot<WindowSlot> {
 /// A `-t` target naming a pane, resolved when the plan runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum PaneTarget {
     /// A pane that already exists.
     Id(
@@ -367,6 +374,7 @@ pub enum PaneTarget {
             feature = "serde",
             serde(serialize_with = "wire::id", deserialize_with = "wire::parse_id")
         )]
+        #[cfg_attr(feature = "schema", schemars(schema_with = "wire::pane_id_schema"))]
         PaneId,
     ),
     /// The pane an earlier step creates.
@@ -376,6 +384,8 @@ pub enum PaneTarget {
 /// A `-t` target naming a window, resolved when the plan runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WindowTarget {
     /// A window that already exists.
     Id(
@@ -383,6 +393,7 @@ pub enum WindowTarget {
             feature = "serde",
             serde(serialize_with = "wire::id", deserialize_with = "wire::parse_id")
         )]
+        #[cfg_attr(feature = "schema", schemars(schema_with = "wire::window_id_schema"))]
         WindowId,
     ),
     /// The window an earlier step creates.
@@ -392,6 +403,8 @@ pub enum WindowTarget {
 /// A `-t` target naming a session, resolved when the plan runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SessionTarget {
     /// A session that already exists.
     Id(
@@ -399,6 +412,7 @@ pub enum SessionTarget {
             feature = "serde",
             serde(serialize_with = "wire::id", deserialize_with = "wire::parse_id")
         )]
+        #[cfg_attr(feature = "schema", schemars(schema_with = "wire::session_id_schema"))]
         SessionId,
     ),
     /// The session an earlier step creates.
@@ -512,6 +526,8 @@ impl<T> FromStep for Slot<T> {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Op {
     /// Create a session.
     NewSession(NewSession),
@@ -765,6 +781,7 @@ impl Op {
 /// ```
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 // A plan is its steps, so it reads as a list rather than an object wrapping
 // one. That is the shape a plan written by hand wants.
 #[cfg_attr(feature = "serde", serde(transparent))]

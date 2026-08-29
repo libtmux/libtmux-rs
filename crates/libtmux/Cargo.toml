@@ -90,7 +90,7 @@ default = ["query"]
 # Everything a caller might reach for, so a preset replaces remembering the
 # list. `test-support` is deliberately absent: it belongs to a dev-dependency,
 # not to a build of the library.
-full = ["blocking", "control-mode", "derive", "plan", "query", "serde", "tracing"]
+full = ["blocking", "control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
 # Exposes internal parsers to a fuzzer. Not a supported API, not in
 # `full`, and nothing but `fuzz/` turns it on.
 unstable-fuzzing = ["control-mode", "query", "serde"]
@@ -102,6 +102,9 @@ derive = ["dep:libtmux-macros", "query"]
 # because it is API surface a caller who only dispatches commands never needs.
 plan = []
 query = ["dep:caseless", "dep:regex"]
+# Describe serde's plan wire grammar without making schema generation part of
+# the ordinary serialization feature.
+schema = ["dep:schemars", "serde"]
 serde = ["dep:serde"]
 test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
 tracing = ["dep:tracing"]
@@ -112,6 +115,7 @@ futures-core = { version = "0.3", optional = true }
 libtmux-macros = { workspace = true, optional = true }
 regex = { version = "1.13", optional = true }
 rustix = { version = "1.1.4", features = ["process"] }
+schemars = { version = "1", optional = true }
 serde = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 thiserror.workspace = true

@@ -1005,7 +1005,7 @@ pub struct NewWindowArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RunPlanArgs {
     /// The plan, as the JSON a `libtmux` plan serializes to.
-    pub plan: serde_json::Value,
+    pub plan: Plan,
     /// How to group the plan: `sequential`, `folding`, or `marked`.
     ///
     /// Defaults to `sequential`, which is the only grouping that can say
@@ -2002,9 +2002,6 @@ impl TmuxTools {
         Parameters(RunPlanArgs { plan, grouping }): Parameters<RunPlanArgs>,
         asking: Asking,
     ) -> Result<Json<PlanRun>, ErrorData> {
-        let plan: Plan = serde_json::from_value(plan).map_err(|error| {
-            ErrorData::invalid_params(format!("the plan could not be read: {error}"), None)
-        })?;
         let planner = match grouping.as_deref() {
             None | Some("sequential") => Planner::Sequential,
             Some("folding") => Planner::Folding,

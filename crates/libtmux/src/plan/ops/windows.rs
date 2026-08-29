@@ -13,6 +13,8 @@ use crate::window::assignment;
 /// Create a window in a session.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NewWindow {
     pub(crate) target: SessionTarget,
     #[cfg_attr(
@@ -22,6 +24,10 @@ pub struct NewWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     name: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -29,6 +35,10 @@ pub struct NewWindow {
             serialize_with = "crate::plan::wire::optional_argument",
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
     )]
     start_directory: Option<OsString>,
     #[cfg_attr(
@@ -38,6 +48,10 @@ pub struct NewWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     command: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -45,6 +59,10 @@ pub struct NewWindow {
             serialize_with = "crate::plan::wire::pairs",
             deserialize_with = "crate::plan::wire::parse_pairs"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<(crate::plan::wire::Argument, crate::plan::wire::Argument)>")
     )]
     environment: Vec<(OsString, OsString)>,
     index: Option<u32>,
@@ -178,6 +196,8 @@ operation!(
 /// Make a window the active one.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SelectWindow {
     pub(crate) target: WindowTarget,
 }
@@ -214,6 +234,8 @@ operation!(
 /// Rename a window.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RenameWindow {
     pub(crate) target: WindowTarget,
     #[cfg_attr(
@@ -223,6 +245,7 @@ pub struct RenameWindow {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     name: OsString,
 }
 
@@ -261,6 +284,8 @@ operation!(
 /// Destroy a window.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct KillWindow {
     pub(crate) target: WindowTarget,
 }
@@ -306,6 +331,8 @@ operation!(
 /// split, so applying it earlier is work the next split undoes.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SelectLayout {
     pub(crate) target: WindowTarget,
     #[cfg_attr(
@@ -315,6 +342,7 @@ pub struct SelectLayout {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     layout: OsString,
 }
 

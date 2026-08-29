@@ -845,6 +845,7 @@ dependencies = [
  "libtmux-macros",
  "regex",
  "rustix",
+ "schemars",
  "serde",
  "serde_json",
  "static_assertions",
@@ -1600,6 +1601,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 name = "tmux-mcp"
 version = "0.1.0-alpha.9"
 dependencies = [
+ "jsonschema",
  "libtmux",
  "regex",
  "rmcp",

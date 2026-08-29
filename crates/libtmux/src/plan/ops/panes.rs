@@ -17,6 +17,8 @@ use crate::window::assignment;
 /// Split a window, making a pane.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SplitWindow {
     pub(crate) target: WindowTarget,
     vertical: bool,
@@ -27,6 +29,10 @@ pub struct SplitWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     start_directory: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -35,6 +41,10 @@ pub struct SplitWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     command: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -42,6 +52,10 @@ pub struct SplitWindow {
             serialize_with = "crate::plan::wire::pairs",
             deserialize_with = "crate::plan::wire::parse_pairs"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<(crate::plan::wire::Argument, crate::plan::wire::Argument)>")
     )]
     environment: Vec<(OsString, OsString)>,
     focus: bool,
@@ -154,6 +168,8 @@ operation!(
 /// Send text or named keys to a pane.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SendKeys {
     pub(crate) target: PaneTarget,
     #[cfg_attr(
@@ -163,6 +179,10 @@ pub struct SendKeys {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     text: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -170,6 +190,10 @@ pub struct SendKeys {
             serialize_with = "crate::plan::wire::list",
             deserialize_with = "crate::plan::wire::parse_list"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<crate::plan::wire::Argument>")
     )]
     keys: Vec<OsString>,
     enter: bool,
@@ -253,6 +277,8 @@ operation!(
 /// Make a pane the active one.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SelectPane {
     pub(crate) target: PaneTarget,
 }
@@ -293,6 +319,8 @@ operation!(
 /// mix its lines with its neighbours'.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CapturePane {
     pub(crate) target: PaneTarget,
     escape_sequences: bool,
@@ -342,6 +370,8 @@ operation!(
 /// Destroy a pane.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct KillPane {
     pub(crate) target: PaneTarget,
 }
