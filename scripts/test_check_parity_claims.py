@@ -26,7 +26,8 @@ class ParityClaimsTest(unittest.TestCase):
             (crate / "docs").mkdir()
             (crate / "src/lib.rs").write_text(source, encoding="utf-8")
             (crate / "docs/public-api.txt").write_text(
-                "function libtmux::Server::sessions\n"
+                "function libtmux::Server::sessions: async fn(&self) -> Vec<Session>\n"
+                "primitive str\n"
                 "struct libtmux::Pane\n"
                 "struct libtmux::Server\n",
                 encoding="utf-8",

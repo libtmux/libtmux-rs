@@ -190,6 +190,7 @@ api:
 api-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    python3 -m unittest scripts/test_public_api.py
     cargo +nightly rustdoc -p libtmux --all-features \
         -- -Zunstable-options --output-format json > /dev/null
     # A fixed path in /tmp is one file shared between checkouts.
@@ -297,7 +298,7 @@ docs:
 # Fail when a done parity row has no caller-reachable Rust path
 [group: 'docs']
 parity-claims:
-    python3 -m unittest scripts/test_check_parity_claims.py
+    python3 -m unittest scripts/test_public_api.py scripts/test_check_parity_claims.py
     python3 scripts/check-parity-claims.py crates/libtmux/docs/parity.md crates
 
 # Report formats tmux publishes that the catalog does not carry

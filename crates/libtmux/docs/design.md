@@ -1724,10 +1724,11 @@ between releases. `cargo-semver-checks` could not provide one -- it skips every
 lint on a prerelease-to-prerelease step and then reports success -- and human
 review does not reliably notice a method that quietly changed shape.
 
-`crates/libtmux/docs/public-api.txt` records every public item, one per line,
-generated from rustdoc's JSON by `scripts/public-api.py`. `just api`
-regenerates it and `just api-check` fails when the tree and the record
-disagree, naming what moved.
+`crates/libtmux/docs/public-api.txt` records every public item with its
+callable or data signature, plus each non-blanket trait implementation.
+`scripts/public-api.py` generates one record per line from rustdoc's JSON.
+`just api` regenerates it and `just api-check` fails when the tree and the
+record disagree, naming what moved.
 
 It is deliberately not a semver oracle. It says a change happened, and leaves
 whether that change is allowed to the person reading the diff -- which is the

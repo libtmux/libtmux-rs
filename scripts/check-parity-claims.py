@@ -37,8 +37,14 @@ def public_paths(roots: list[pathlib.Path]) -> set[str]:
         if not ledger.is_file():
             continue
         for line in ledger.read_text(encoding="utf-8").splitlines():
-            _, separator, path = line.partition(" ")
-            if not separator or "::" not in path:
+            kind, separator, surface = line.partition(" ")
+            if not separator or kind == "impl":
+                continue
+            match = CODE_PATH.match(surface)
+            if match is None:
+                continue
+            path = match.group()
+            if "::" not in path:
                 continue
             paths.add(path.split("::", 1)[1])
     return paths

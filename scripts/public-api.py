@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Print the public API surface of a crate, one item per line.
+"""Print the public API surface of a crate, one record per line.
 
 Built from rustdoc's JSON rather than a separate tool, so the only thing it
 needs is the nightly the fuzz targets already require. The output is sorted and
-stable enough to diff: a line appearing or disappearing is a change to what a
-caller can reach.
+stable enough to diff: item signatures and non-blanket trait implementations
+change when a caller-visible contract changes.
 
 It is not a semver oracle. It says what moved, which is what
 `cargo-semver-checks` cannot say while every version is a prerelease and it
@@ -16,13 +16,389 @@ from __future__ import annotations
 import json
 import sys
 
-# Item kinds that are part of the surface. A module is a path component rather
-# than a thing to call, and an impl is reported through the items inside it.
+# Item kinds that are part of the surface. Modules only contribute paths;
+# trait implementation headers are recorded separately.
 KINDS = {
     "struct", "enum", "trait", "function", "type_alias", "constant",
     "macro", "proc_macro", "struct_field", "variant", "assoc_const",
     "assoc_type", "primitive", "union",
 }
+
+
+def lookup(mapping: dict, identifier):
+    """Read a rustdoc map whose integer IDs are serialized as strings."""
+    return mapping.get(str(identifier)) or mapping.get(identifier)
+
+
+def render_constant(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return value.get("expr") or value.get("value") or "_"
+    return str(value)
+
+
+def render_path(value: dict, paths: dict, reachable: dict) -> str:
+    identifier = value.get("id")
+    name = reachable.get(str(identifier))
+    if name is None:
+        summary = lookup(paths, identifier) or {}
+        recorded = summary.get("path") or []
+        raw = value.get("path")
+        if raw and raw.startswith(("$crate::", "_serde::")) and recorded:
+            name = recorded[-1]
+        else:
+            name = raw or ("::".join(recorded) if recorded else "_")
+    return name + render_args(value.get("args"), paths, reachable)
+
+
+def render_arg(value: dict, paths: dict, reachable: dict) -> str:
+    if "type" in value:
+        return render_type(value["type"], paths, reachable)
+    if "lifetime" in value:
+        return value["lifetime"]
+    if "const" in value:
+        return render_constant(value["const"])
+    if "infer" in value:
+        return "_"
+    raise ValueError(f"unsupported rustdoc generic argument: {value!r}")
+
+
+def render_term(value: dict, paths: dict, reachable: dict) -> str:
+    if "type" in value:
+        return render_type(value["type"], paths, reachable)
+    if "constant" in value:
+        return render_constant(value["constant"])
+    raise ValueError(f"unsupported rustdoc term: {value!r}")
+
+
+def render_constraint(value: dict, paths: dict, reachable: dict) -> str:
+    name = value["name"] + render_args(value.get("args"), paths, reachable)
+    binding = value.get("binding") or {}
+    if "equality" in binding:
+        return f"{name} = {render_term(binding['equality'], paths, reachable)}"
+    if "constraint" in binding:
+        bounds = render_bounds(binding["constraint"], paths, reachable)
+        return f"{name}: {bounds}"
+    return name
+
+
+def render_args(value, paths: dict, reachable: dict) -> str:
+    if not value:
+        return ""
+    if "angle_bracketed" in value:
+        inside = value["angle_bracketed"]
+        parts = [render_arg(arg, paths, reachable) for arg in inside.get("args") or []]
+        parts.extend(
+            render_constraint(constraint, paths, reachable)
+            for constraint in inside.get("constraints") or []
+        )
+        return f"<{', '.join(parts)}>" if parts else ""
+    if "parenthesized" in value:
+        inside = value["parenthesized"]
+        inputs = ", ".join(
+            render_type(item, paths, reachable) for item in inside.get("inputs") or []
+        )
+        output = inside.get("output")
+        suffix = (
+            f" -> {render_type(output, paths, reachable)}" if output is not None else ""
+        )
+        return f"({inputs}){suffix}"
+    raise ValueError(f"unsupported rustdoc generic arguments: {value!r}")
+
+
+def render_bound(value: dict, paths: dict, reachable: dict) -> str:
+    if "trait_bound" in value:
+        bound = value["trait_bound"]
+        prefix = {
+            "none": "",
+            "maybe": "?",
+            "maybe_const": "~const ",
+        }.get(bound.get("modifier"), f"{bound.get('modifier')} ")
+        generic = render_generic_params(
+            bound.get("generic_params") or [], paths, reachable
+        )
+        higher_ranked = f"for{generic} " if generic else ""
+        return higher_ranked + prefix + render_path(bound["trait"], paths, reachable)
+    if "outlives" in value:
+        return value["outlives"]
+    if "use" in value:
+        captured = value["use"]
+        if isinstance(captured, list):
+            captured = ", ".join(captured)
+        return f"use<{captured}>"
+    raise ValueError(f"unsupported rustdoc bound: {value!r}")
+
+
+def render_bounds(values: list, paths: dict, reachable: dict) -> str:
+    return " + ".join(render_bound(value, paths, reachable) for value in values)
+
+
+def render_type(value: dict, paths: dict, reachable: dict) -> str:
+    if "resolved_path" in value:
+        return render_path(value["resolved_path"], paths, reachable)
+    if "generic" in value:
+        return value["generic"]
+    if "primitive" in value:
+        return value["primitive"]
+    if "tuple" in value:
+        parts = [render_type(item, paths, reachable) for item in value["tuple"]]
+        comma = "," if len(parts) == 1 else ""
+        return f"({', '.join(parts)}{comma})"
+    if "slice" in value:
+        return f"[{render_type(value['slice'], paths, reachable)}]"
+    if "array" in value:
+        array = value["array"]
+        return (
+            f"[{render_type(array['type'], paths, reachable)}; "
+            f"{render_constant(array['len'])}]"
+        )
+    if "borrowed_ref" in value:
+        reference = value["borrowed_ref"]
+        lifetime = f"{reference['lifetime']} " if reference.get("lifetime") else ""
+        mutable = "mut " if reference.get("is_mutable") else ""
+        held = render_type(reference["type"], paths, reachable)
+        return f"&{lifetime}{mutable}{held}"
+    if "raw_pointer" in value:
+        pointer = value["raw_pointer"]
+        mutable = "mut" if pointer.get("is_mutable") else "const"
+        return f"*{mutable} {render_type(pointer['type'], paths, reachable)}"
+    if "impl_trait" in value:
+        return f"impl {render_bounds(value['impl_trait'], paths, reachable)}"
+    if "dyn_trait" in value:
+        dynamic = value["dyn_trait"]
+        bounds = []
+        for trait in dynamic.get("traits") or []:
+            generic = render_generic_params(
+                trait.get("generic_params") or [], paths, reachable
+            )
+            higher_ranked = f"for{generic} " if generic else ""
+            bounds.append(higher_ranked + render_path(trait["trait"], paths, reachable))
+        if dynamic.get("lifetime"):
+            bounds.append(dynamic["lifetime"])
+        return f"dyn {' + '.join(bounds)}"
+    if "function_pointer" in value:
+        pointer = value["function_pointer"]
+        generic = render_generic_params(
+            pointer.get("generic_params") or [], paths, reachable
+        )
+        return render_function(
+            pointer["sig"], pointer["header"], {"params": [], "where_predicates": []},
+            paths, reachable, generic_override=generic,
+        )
+    if "qualified_path" in value:
+        qualified = value["qualified_path"]
+        held = render_type(qualified["self_type"], paths, reachable)
+        trait = qualified.get("trait")
+        prefix = f"<{held} as {render_path(trait, paths, reachable)}>" if trait else held
+        return (
+            f"{prefix}::{qualified['name']}"
+            f"{render_args(qualified.get('args'), paths, reachable)}"
+        )
+    if "pat" in value:
+        return render_type(value["pat"]["type"], paths, reachable)
+    if "infer" in value:
+        return "_"
+    raise ValueError(f"unsupported rustdoc type: {value!r}")
+
+
+def render_generic_param(value: dict, paths: dict, reachable: dict) -> str | None:
+    name = value["name"]
+    kind = value.get("kind") or {}
+    if "type" in kind:
+        detail = kind["type"]
+        if detail.get("is_synthetic"):
+            return None
+        bounds = render_bounds(detail.get("bounds") or [], paths, reachable)
+        suffix = f": {bounds}" if bounds else ""
+        if detail.get("default") is not None:
+            suffix += f" = {render_type(detail['default'], paths, reachable)}"
+        return name + suffix
+    if "lifetime" in kind:
+        outlives = kind["lifetime"].get("outlives") or []
+        return name + (f": {' + '.join(outlives)}" if outlives else "")
+    if "const" in kind:
+        detail = kind["const"]
+        rendered = f"const {name}: {render_type(detail['type'], paths, reachable)}"
+        if detail.get("default") is not None:
+            rendered += f" = {render_constant(detail['default'])}"
+        return rendered
+    raise ValueError(f"unsupported rustdoc generic parameter: {value!r}")
+
+
+def render_generic_params(values: list, paths: dict, reachable: dict) -> str:
+    rendered = [render_generic_param(value, paths, reachable) for value in values]
+    rendered = [value for value in rendered if value is not None]
+    return f"<{', '.join(rendered)}>" if rendered else ""
+
+
+def render_generics(value: dict, paths: dict, reachable: dict) -> tuple[str, str]:
+    parameters = render_generic_params(value.get("params") or [], paths, reachable)
+    predicates = []
+    for wrapped in value.get("where_predicates") or []:
+        if "bound_predicate" in wrapped:
+            predicate = wrapped["bound_predicate"]
+            generic = render_generic_params(
+                predicate.get("generic_params") or [], paths, reachable
+            )
+            higher_ranked = f"for{generic} " if generic else ""
+            bounds = render_bounds(predicate.get("bounds") or [], paths, reachable)
+            predicates.append(
+                f"{higher_ranked}{render_type(predicate['type'], paths, reachable)}: {bounds}"
+            )
+        elif "lifetime_predicate" in wrapped:
+            predicate = wrapped["lifetime_predicate"]
+            predicates.append(
+                f"{predicate['lifetime']}: {' + '.join(predicate.get('outlives') or [])}"
+            )
+        elif "eq_predicate" in wrapped:
+            predicate = wrapped["eq_predicate"]
+            predicates.append(
+                f"{render_term(predicate['lhs'], paths, reachable)} = "
+                f"{render_term(predicate['rhs'], paths, reachable)}"
+            )
+        else:
+            raise ValueError(f"unsupported rustdoc where predicate: {wrapped!r}")
+    where = f" where {', '.join(predicates)}" if predicates else ""
+    return parameters, where
+
+
+def render_abi(value) -> str:
+    if value == "Rust":
+        return ""
+    if isinstance(value, str):
+        return f'extern "{value}" '
+    if isinstance(value, dict):
+        name, detail = next(iter(value.items()))
+        unwind = "-unwind" if isinstance(detail, dict) and detail.get("unwind") else ""
+        return f'extern "{name}{unwind}" '
+    raise ValueError(f"unsupported rustdoc ABI: {value!r}")
+
+
+def render_input(name: str, value: dict, paths: dict, reachable: dict) -> str:
+    if name == "self":
+        if value == {"generic": "Self"}:
+            return "self"
+        reference = value.get("borrowed_ref")
+        if reference and reference.get("type") == {"generic": "Self"}:
+            lifetime = f"{reference['lifetime']} " if reference.get("lifetime") else ""
+            mutable = "mut " if reference.get("is_mutable") else ""
+            return f"&{lifetime}{mutable}self"
+    return f"{name}: {render_type(value, paths, reachable)}"
+
+
+def render_function(
+    signature: dict,
+    header: dict,
+    generics: dict,
+    paths: dict,
+    reachable: dict,
+    *,
+    generic_override: str | None = None,
+) -> str:
+    parameters, where = render_generics(generics, paths, reachable)
+    if generic_override is not None:
+        parameters = generic_override
+    qualifiers = ""
+    if header.get("is_const"):
+        qualifiers += "const "
+    if header.get("is_async"):
+        qualifiers += "async "
+    if header.get("is_unsafe"):
+        qualifiers += "unsafe "
+    qualifiers += render_abi(header.get("abi", "Rust"))
+    inputs = [
+        render_input(name, value, paths, reachable)
+        for name, value in signature.get("inputs") or []
+    ]
+    if signature.get("is_c_variadic"):
+        inputs.append("...")
+    output = signature.get("output")
+    result = f"{qualifiers}fn{parameters}({', '.join(inputs)})"
+    if output is not None:
+        result += f" -> {render_type(output, paths, reachable)}"
+    return result + where
+
+
+def item_suffix(kind: str, value, paths: dict, reachable: dict) -> str:
+    if kind == "function":
+        return ": " + render_function(
+            value["sig"], value["header"], value["generics"], paths, reachable
+        )
+    if kind == "struct_field":
+        return f": {render_type(value, paths, reachable)}"
+    if kind in ("constant", "assoc_const"):
+        return f": {render_type(value['type'], paths, reachable)}"
+    if kind == "type_alias":
+        parameters, where = render_generics(value["generics"], paths, reachable)
+        return f"{parameters} = {render_type(value['type'], paths, reachable)}{where}"
+    if kind == "assoc_type":
+        parameters, where = render_generics(value["generics"], paths, reachable)
+        bounds = render_bounds(value.get("bounds") or [], paths, reachable)
+        suffix = parameters + (f": {bounds}" if bounds else "")
+        if value.get("type") is not None:
+            suffix += f" = {render_type(value['type'], paths, reachable)}"
+        return suffix + where
+    if kind in ("struct", "enum", "union", "trait"):
+        parameters, where = render_generics(value["generics"], paths, reachable)
+        bounds = render_bounds(value.get("bounds") or [], paths, reachable)
+        suffix = parameters + (f": {bounds}" if bounds else "") + where
+        if kind == "trait":
+            flags = [name for name in ("unsafe", "auto") if value.get(f"is_{name}")]
+            if flags:
+                suffix += f" [{' '.join(flags)}]"
+        return suffix
+    return ""
+
+
+def type_mentions_reachable(value: dict, reachable: dict) -> bool:
+    resolved = value.get("resolved_path")
+    if resolved and str(resolved.get("id")) in reachable:
+        return True
+    return any(
+        type_mentions_reachable(child, reachable)
+        for child in value.values()
+        if isinstance(child, dict)
+    ) or any(
+        type_mentions_reachable(child, reachable)
+        for children in value.values()
+        if isinstance(children, list)
+        for child in children
+        if isinstance(child, dict)
+    )
+
+
+def explicit_impls(index: dict, paths: dict, reachable: dict) -> set[str]:
+    lines = set()
+    for item in index.values():
+        implementation = (item.get("inner") or {}).get("impl")
+        if not implementation:
+            continue
+        trait = implementation.get("trait")
+        if (
+            not trait
+            or implementation.get("is_synthetic")
+            or implementation.get("blanket_impl") is not None
+            or trait.get("path") == "StructuralPartialEq"
+        ):
+            continue
+        target = implementation.get("for") or {}
+        if not (
+            str(trait.get("id")) in reachable
+            or type_mentions_reachable(target, reachable)
+        ):
+            continue
+        parameters, where = render_generics(
+            implementation.get("generics") or {"params": [], "where_predicates": []},
+            paths,
+            reachable,
+        )
+        negative = "!" if implementation.get("is_negative") else ""
+        lines.add(
+            f"impl{parameters} {negative}{render_path(trait, paths, reachable)} for "
+            f"{render_type(target, paths, reachable)}{where}"
+        )
+    return lines
 
 
 def public_paths(index: dict, root, crate: str) -> dict:
@@ -158,8 +534,8 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
             resolved = target.get("resolved_path") or {}
             here = name_of(resolved.get("id")) or resolved.get("path")
             trait = inner["impl"].get("trait") or {}
-            # A trait implementation adds no new surface: the trait already
-            # declared it. Only inherent items are listed.
+            # The trait declares its members; its implementation header is
+            # recorded separately. Only inherent items need an owner here.
             if trait:
                 implemented.update(str(child) for child in inner["impl"].get("items") or [])
                 continue
@@ -210,7 +586,9 @@ def main(path: str) -> int:
         else:
             continue
 
-        lines.add(f"{kind} {name}")
+        lines.add(f"{kind} {name}{item_suffix(kind, inner[kind], paths, reachable)}")
+
+    lines.update(explicit_impls(index, paths, reachable))
 
     for line in sorted(lines):
         print(line)

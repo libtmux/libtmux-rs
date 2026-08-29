@@ -273,8 +273,9 @@ instead — `#![cfg_attr(feature = "x", doc = "…")]`. When adding a doctest fo
 gated API, break it once and confirm it fails.
 
 **The public surface is recorded.** `crates/libtmux/docs/public-api.txt` lists
-every public item. `just api` regenerates it; `just api-check` fails when the
-tree disagrees. Adding or changing public API means committing the regenerated
+every public item with its signature and each non-blanket trait
+implementation. `just api` regenerates it; `just api-check` fails when the tree
+disagrees. Adding or changing public API means committing the regenerated
 file, and that diff is the review artefact. There is no semver gate while the
 crates are prerelease: `cargo-semver-checks` treats a prerelease-to-prerelease
 step as a major change and skips every lint, reporting `0 checks: 0 pass, 254
