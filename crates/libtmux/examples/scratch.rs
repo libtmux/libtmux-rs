@@ -22,20 +22,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The scope kills the session whether the body succeeds or fails, so a
     // failure partway through does not leave a session behind.
+    println!("server on {}", socket.display());
+
     let output = server
         .with_session(unique_name("scratch").as_str(), async |session| {
+            println!("  session {} created", session.id());
+
             let window = session
                 .new_window(NewWindowOptions::new("work").command("sh"))
                 .await?;
+            println!("  window {} running sh", window.id());
+
             window
                 .split(SplitOptions::new(SplitDirection::Below).command("sh"))
                 .await?;
+            println!("  split it: {} panes", window.panes().await?.len());
 
             // A window always has an active pane, but saying so with a panic
             // would be a worse example than handling it.
             let Some(pane) = window.active_pane().await? else {
                 return Ok(0);
             };
+            println!("  typing into {}", pane.id());
             pane.send_keys("printf 'hello from tmux\\n'").await?;
             pane.send_key_names(["Enter"]).await?;
 
@@ -50,11 +58,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .await?;
 
-            Ok::<_, Box<dyn std::error::Error>>(pane.capture().await?.len())
+            let lines = pane.capture().await?;
+            for line in lines.iter().filter(|line| !line.as_bytes().is_empty()) {
+                println!("  | {}", line.to_string_lossy());
+            }
+
+            Ok::<_, Box<dyn std::error::Error>>(lines.len())
         })
         .await?;
 
-    println!("captured {output} lines");
+    println!("captured {output} lines, then the scope killed the session");
 
     // The lenient form is the one that answers this question. The scope killed
     // the only session, so tmux exited with it, and the loud form reports that
@@ -62,6 +75,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(
         server.sessions_or_empty().await.is_empty(),
         "the scope cleaned up",
+    );
+
+    println!(
+        "sessions left behind: {}",
+        server.sessions_or_empty().await.len()
     );
 
     server.shutdown().await?;

@@ -23,18 +23,24 @@ readonly dev_root=/tmp/libtmux-rs-dev
 # Blank lines and `#` comments are ignored; every other row must name an
 # example that exists, and every example must have a row.
 #
-# The last column is a containment assertion, and it exists because a leak
-# check cannot make one. `inspect` and `find` resolve their server with
+# The last column is what the example must print, and it answers two questions
+# a leak check cannot.
+#
+# Containment: `inspect` and `find` resolve their server with
 # `Server::from_env().or_else(|_| Server::new())`, so a `$TMUX` this script
 # failed to set would send them to the reader's own default server -- where
-# they would run perfectly, create nothing, and leave no socket behind for a
-# leak check to notice. Naming a session this script made is the positive
-# half: it can only be printed by the server this script owns.
+# they would run perfectly, create nothing, and leave no socket behind to
+# notice. Naming a session this script made can only come from this server.
+#
+# Demonstration: an example that runs and shows nothing passes an exit-code
+# check. `find` searched for `sh` against a fixture running the login shell and
+# matched nothing every time; `scratch` printed a line count and none of the
+# session it built. Naming what each is for makes that a failure.
 readonly table="
 libtmux  | inspect  |                                               |    |               | examples
 libtmux  | find     | query                                         | sh |               | in window
-libtmux  | scratch  | test-support                                  |    |               |
-libtmux  | sweep    | test-support                                  |    |               |
+libtmux  | scratch  | test-support                                  |    |               | hello from tmux
+libtmux  | sweep    | test-support                                  |    |               | fixture
 libtmux  | watch    | control-mode,test-support                     |    |               |
 libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               |
 tmux-mcp | budget   |                                               |    |               |
@@ -165,7 +171,7 @@ while IFS='|' read -r crate name features args driver expect; do
         out="$run_dir/$name.out"
         if cargo run "${opts[@]}" -- $args </dev/null | tee "$out"; then
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
-                printf 'did not print %s, so it did not see this run'"'"'s server\n' "$expect" >&2
+                printf 'did not print %s\n' "$expect" >&2
                 failures+=("$crate/$name")
             fi
         else
