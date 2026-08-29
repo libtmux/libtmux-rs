@@ -15,7 +15,7 @@ use crate::{
     WaitForIdleArgs, WaitForTextArgs, WaitView, Watch, WatchPaneArgs,
 };
 
-use super::error::{at_capacity, bad_input, tmux_error};
+use super::error::{EffectBoundary, at_capacity, bad_input, tmux_error};
 
 /// The most a single `watch_pane` call will return.
 ///
@@ -117,6 +117,14 @@ fn tail_error(error: TailError) -> ErrorData {
             })),
         ),
     }
+}
+
+fn tail_visible_capture_error(error: libtmux::Error, opened: bool) -> ErrorData {
+    let mut boundary = EffectBoundary::new("capture_since");
+    if opened {
+        boundary.mark();
+    }
+    boundary.error(error)
 }
 
 #[tool_router(router = observe_router, vis = "pub(super)")]
@@ -510,7 +518,7 @@ impl TmuxTools {
             let lines = target
                 .capture_with(CaptureOptions::visible())
                 .await
-                .map_err(|e| tmux_error(&e))?;
+                .map_err(|error| tail_visible_capture_error(error, since.opened))?;
             lines
                 .iter()
                 .map(|line| line.to_string_lossy().into_owned())
@@ -663,5 +671,27 @@ mod tests {
         assert_eq!(data["stale"], false);
         assert_eq!(data["resource"], "tail_opening");
         assert_eq!(data["capacity"], 1);
+    }
+
+    #[test]
+    fn a_failed_visible_capture_after_opening_reports_a_partial_effect() {
+        let configuration_error = || {
+            libtmux::Server::builder()
+                .socket_name("conflicting")
+                .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
+                .build()
+                .expect_err("two socket selectors are refused")
+        };
+        let existing = tail_visible_capture_error(configuration_error(), false);
+        let existing_data = existing.data.expect("the failure is classified");
+        assert_eq!(existing_data["kind"], "unreachable");
+
+        let error = tail_visible_capture_error(configuration_error(), true);
+        let data = error.data.expect("the failure is classified");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(data["kind"], "partial_effect");
+        assert_eq!(data["retryable"], false);
+        assert_eq!(data["stale"], false);
     }
 }

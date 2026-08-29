@@ -110,6 +110,8 @@ pub(crate) struct Since {
     pub missed: bool,
     /// Whether the pane has stopped writing for good.
     pub closed: bool,
+    /// Whether this call established the retained tail.
+    pub opened: bool,
 }
 
 /// One pane's ring of recent output.
@@ -274,7 +276,7 @@ impl Tails {
         let id = pane.id().to_string();
 
         let opened = self.ensure(pane, &id).await?;
-        let (ring, epoch) = opened;
+        let (ring, epoch, opened) = opened;
 
         let (read, missed, closed, end) = {
             let ring = hold(&ring);
@@ -295,13 +297,18 @@ impl Tails {
             // A first call has nothing to have missed.
             missed: cursor.is_some() && missed,
             closed,
+            opened,
         })
     }
 
     /// Return the ring for a pane, attaching a tail if there is not one.
-    async fn ensure(&self, pane: &Pane, id: &str) -> Result<(Arc<Mutex<Ring>>, u64), TailError> {
+    async fn ensure(
+        &self,
+        pane: &Pane,
+        id: &str,
+    ) -> Result<(Arc<Mutex<Ring>>, u64, bool), TailError> {
         if let Some(found) = self.touch(id) {
-            return Ok(found);
+            return Ok((found.0, found.1, false));
         }
 
         // Do not retain an unbounded queue of tool calls behind a slow attach.
@@ -313,7 +320,7 @@ impl Tails {
                 limit: MAX_TAIL_OPENERS,
             })?;
         if let Some(found) = self.touch(id) {
-            return Ok(found);
+            return Ok((found.0, found.1, false));
         }
 
         let mut output = pane.stream_output().await?;
@@ -354,7 +361,7 @@ impl Tails {
             },
         );
 
-        Ok((ring, epoch))
+        Ok((ring, epoch, true))
     }
 
     /// Mark a tail as recently read, and hand back its ring.
