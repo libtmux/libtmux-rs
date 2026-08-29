@@ -70,6 +70,7 @@ pub(crate) async fn get(
     let command = scope
         .apply(Command::new("show-options"))
         .arg("-v")
+        .arg("--")
         .arg(OsString::from(name));
     let result = core.execute(command).await?;
 
@@ -148,6 +149,7 @@ pub(crate) async fn set(
         "set-option",
         Some(name),
         command
+            .arg("--")
             .arg(OsString::from(name))
             .sensitive_arg(value.into()),
     )
@@ -163,6 +165,7 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
         scope
             .apply(Command::new("set-option"))
             .arg("-u")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
@@ -181,6 +184,7 @@ pub(crate) async fn set_hook(
         None,
         scope
             .apply(Command::new("set-hook"))
+            .arg("--")
             .arg(OsString::from(name))
             .sensitive_arg(command_text.into()),
     )
@@ -196,6 +200,7 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
         scope
             .apply(Command::new("set-hook"))
             .arg("-u")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
@@ -337,6 +342,7 @@ async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<Strin
         .execute(
             scope
                 .apply(Command::new("show-options"))
+                .arg("--")
                 .arg(OsString::from(name)),
         )
         .await?;
@@ -420,6 +426,7 @@ pub(crate) async fn set_hooks(
             scope
                 .apply(Command::new("set-hook"))
                 .arg("-u")
+                .arg("--")
                 .arg(OsString::from(name)),
         );
     }

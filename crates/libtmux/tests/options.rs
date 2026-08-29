@@ -974,3 +974,52 @@ async fn an_array_option_keeps_the_gaps_tmux_leaves() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_name_shaped_like_a_flag_is_refused_not_obeyed() {
+    // tmux reads a leading `-` as a flag wherever it appears, so an option
+    // name a caller did not write could act on a different option. `-u` is
+    // the sharp one: it unsets.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("flags").await.expect("session");
+
+    session
+        .set_option("@kept", "original")
+        .await
+        .expect("a plain user option is set");
+
+    session
+        .set_option("-u", "@kept")
+        .await
+        .expect_err("a name that is a flag is refused");
+
+    assert_eq!(
+        bytes(session.get_option("@kept").await.expect("the option reads")),
+        b"original".to_vec(),
+        "the option a flag name pointed at survived",
+    );
+
+    // A variable may legitimately be named anything, so the guard does not
+    // refuse this one; what it stops is `-u` being read as the flag that
+    // removes a different variable.
+    session
+        .set_environment("KEPT", "original")
+        .await
+        .expect("a plain variable is set");
+    session
+        .set_environment("-u", "KEPT")
+        .await
+        .expect("a variable named like a flag is a variable");
+
+    let kept = session
+        .environment("KEPT")
+        .await
+        .expect("the variable reads");
+    assert!(
+        matches!(&kept, Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"original"),
+        "the variable a flag name pointed at survived, got {kept:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

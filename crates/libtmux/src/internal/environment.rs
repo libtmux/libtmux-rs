@@ -45,6 +45,7 @@ pub(crate) async fn set(
         "set-environment",
         scope
             .apply(Command::new("set-environment"))
+            .arg("--")
             .arg(OsString::from(name))
             // An environment carries tokens, so the value never reaches a log.
             .sensitive_arg(value),
@@ -60,6 +61,7 @@ pub(crate) async fn hide(core: &Core, scope: Scope<'_>, name: &str) -> Result<()
         scope
             .apply(Command::new("set-environment"))
             .arg("-r")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
@@ -73,6 +75,7 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
         scope
             .apply(Command::new("set-environment"))
             .arg("-u")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
@@ -97,6 +100,7 @@ pub(crate) async fn get(
         .execute(
             scope
                 .apply(Command::new("show-environment"))
+                .arg("--")
                 .arg(OsString::from(name)),
         )
         .await?;
