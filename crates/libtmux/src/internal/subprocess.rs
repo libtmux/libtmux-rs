@@ -101,6 +101,7 @@ struct RequestContext {
     request_id: RequestId,
     command: CommandSummary,
     timeout: Duration,
+    deadline: Option<Instant>,
 }
 
 impl RequestContext {
@@ -140,19 +141,27 @@ impl SubprocessExecutor {
         let permits = Arc::clone(&self.shared.permits);
         let limits = self.configuration.dispatch_limits;
 
-        let acquired = match limits.acquire_timeout {
-            Some(timeout) => match tokio::time::timeout(timeout, permits.acquire_owned()).await {
-                Ok(acquired) => acquired,
-                // Waited the whole budget without room, which is overload
-                // rather than slowness: nothing was sent to tmux.
-                Err(_) => {
-                    return Err(Error::Overloaded {
-                        request_id: context.request_id(),
-                        command: context.command.clone(),
-                        in_flight: limits.max_in_flight,
-                    });
+        let acquire_deadline = match limits.acquire_timeout {
+            Some(timeout) => {
+                earliest_deadline(context.deadline, Instant::now().checked_add(timeout))
+            }
+            None => context.deadline,
+        };
+        let acquired = match acquire_deadline {
+            Some(deadline) => {
+                match tokio::time::timeout_at(deadline, permits.acquire_owned()).await {
+                    Ok(acquired) => acquired,
+                    // Waited the whole budget without room, which is overload
+                    // rather than slowness: nothing was sent to tmux.
+                    Err(_) => {
+                        return Err(Error::Overloaded {
+                            request_id: context.request_id(),
+                            command: context.command.clone(),
+                            in_flight: limits.max_in_flight,
+                        });
+                    }
                 }
-            },
+            }
             None => permits.acquire_owned().await,
         };
 
@@ -269,6 +278,7 @@ impl SubprocessExecutor {
             request_id,
             command: request.summary().clone(),
             timeout: self.configuration.timeout,
+            deadline: Instant::now().checked_add(self.configuration.timeout),
         };
         trace_requested(&context);
 
@@ -314,6 +324,20 @@ impl SubprocessExecutor {
             self.configuration.hooks.after_reservation_reached.as_ref(),
             self.configuration.hooks.after_reservation_release.as_ref(),
         );
+
+        if context
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            drop(registry);
+            let error = Error::timeout(
+                context.request_id(),
+                context.command.clone(),
+                context.timeout,
+            );
+            trace_failed(&context, &error);
+            return Err(error);
+        }
 
         let mut process = TokioCommand::new(&self.configuration.executable);
         process
@@ -608,7 +632,7 @@ async fn supervise_inner(
         ));
     }
 
-    let deadline = Instant::now().checked_add(context.timeout);
+    let deadline = context.deadline;
     let (stdout, stderr) = match drain_readers(readers, cancellation, deadline, context).await {
         Ok(streams) => streams,
         Err(error) => return InnerOutcome::Failed(error),
@@ -728,6 +752,14 @@ async fn deadline_elapsed(deadline: Option<Instant>) {
         tokio::time::sleep_until(deadline).await;
     } else {
         std::future::pending::<()>().await;
+    }
+}
+
+fn earliest_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
     }
 }
 

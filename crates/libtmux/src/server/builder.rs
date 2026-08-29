@@ -219,7 +219,10 @@ impl ServerBuilder {
         self
     }
 
-    /// Set the per-command process deadline.
+    /// Set the per-command dispatch deadline.
+    ///
+    /// The deadline includes waiting for dispatch capacity and running the
+    /// tmux process.
     ///
     /// A duration too large for the platform's monotonic clock is treated as
     /// unbounded while command cancellation remains available.

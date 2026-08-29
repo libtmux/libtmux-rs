@@ -22,7 +22,7 @@ use rustix::process::{Pid, WaitOptions, test_kill_process, waitpid};
 use super::{ReaderFailure, SubprocessExecutor, TestHooks, validate_request};
 use crate::command::{CommandRequest, RequestId};
 use crate::internal::executor::Executor;
-use crate::{Command, Error};
+use crate::{Command, DispatchLimits, Error};
 
 const CHILD_ENV: &str = "LIBTMUX_RS_TEST_CHILD";
 const CHILD_TEST: &str = "internal::subprocess::tests::child_helper";
@@ -386,6 +386,60 @@ async fn deadline_kills_awaits_and_unregisters_the_child() {
     assert_eq!(executor.active_request_count(), 0);
     assert_process_reaped(child_pid);
     executor.shutdown().await.expect("shutdown succeeds");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dispatch_deadline_bounds_waiting_for_capacity() {
+    const DEADLINE: Duration = Duration::from_millis(200);
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    for (case, acquire_timeout) in [None, Some(DEADLINE * 10)].into_iter().enumerate() {
+        let holder_path = directory.path().join(format!("holder-{case}.pid"));
+        let waiting_path = directory.path().join(format!("waiting-{case}.pid"));
+        let reached = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let hooks = TestHooks {
+            after_reservation_reached: Some(Arc::clone(&reached)),
+            after_reservation_release: Some(Arc::clone(&release)),
+            ..TestHooks::default()
+        };
+        let limits = DispatchLimits::default()
+            .max_in_flight(1)
+            .acquire_timeout(acquire_timeout);
+        let executor = executor("block", DEADLINE)
+            .with_dispatch_limits(limits)
+            .with_test_hooks(hooks);
+        let base = 26 + u64::try_from(case).expect("small case index") * 2;
+        let holder =
+            tokio::spawn(executor.execute(request(base, [holder_path.as_os_str().to_os_string()])));
+
+        tokio::task::spawn_blocking(move || reached.wait())
+            .await
+            .expect("barrier task succeeds");
+        let mut waiting = tokio::spawn(
+            executor.execute(request(base + 1, [waiting_path.as_os_str().to_os_string()])),
+        );
+        let outcome = tokio::time::timeout(DEADLINE * 3, &mut waiting).await;
+        if outcome.is_err() {
+            waiting.abort();
+            let _ = (&mut waiting).await;
+        }
+        tokio::task::spawn_blocking(move || release.wait())
+            .await
+            .expect("barrier task succeeds");
+        let holder_error = holder
+            .await
+            .expect("holder task remains healthy")
+            .expect_err("holder exhausts its deadline before spawn");
+
+        let error = outcome
+            .expect("the dispatch deadline includes capacity waiting")
+            .expect("waiting task remains healthy")
+            .expect_err("capacity remains occupied until the deadline");
+        assert!(matches!(error, Error::Overloaded { .. }), "{error:?}");
+        assert!(matches!(holder_error, Error::Timeout { .. }));
+        executor.shutdown().await.expect("shutdown succeeds");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

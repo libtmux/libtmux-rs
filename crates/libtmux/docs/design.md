@@ -1564,6 +1564,8 @@ pane -- turned its own concurrency into process, descriptor, and memory
 pressure, and tmux serializes on the far side regardless, so the extra clients
 bought queueing rather than throughput. `DispatchLimits` is a semaphore
 acquired before the request is registered, so a refusal costs nothing.
+The command deadline starts before that wait. An explicit admission timeout
+may shorten it, but cannot extend it.
 
 `Error::Overloaded` is deliberately distinct from `Error::Timeout`: overload
 means the dispatch never started, so retrying is safe, where a timeout means

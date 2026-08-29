@@ -127,8 +127,9 @@ impl DispatchLimits {
 
     /// How long a dispatch waits for a permit before giving up.
     ///
-    /// `None` waits as long as the dispatch's own timeout allows. A value
-    /// here makes overload distinguishable from slowness:
+    /// `None` waits as long as the dispatch's own deadline allows. A value
+    /// may shorten that wait but never extends the dispatch deadline. It
+    /// makes overload distinguishable from slowness:
     /// [`Error::Overloaded`](crate::Error::Overloaded) says the server never
     /// started the work, so retrying it is safe.
     #[must_use]

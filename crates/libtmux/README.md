@@ -525,6 +525,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Each command runs in an isolated process group with a supervised deadline,
 30 seconds by default and configurable through `ServerBuilder::default_timeout`.
+The deadline starts before the command waits for dispatch capacity.
 Dropping the command future, reaching its timeout, or shutting the server down
 signals the group and waits for the direct child while the runtime is alive.
 
