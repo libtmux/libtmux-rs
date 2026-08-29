@@ -715,6 +715,96 @@ async fn searching_a_window_finds_the_pane_that_matches() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A client's own fields must each name the client, not its neighbour.
+///
+/// `tty` and `term_name` are both `TmuxText` off the same projection, so one
+/// reading the other's field type-checks and returns a plausible string. A
+/// control client makes the two differ -- it has no terminal, so `client_tty`
+/// is empty while `client_termname` is not -- which is what lets a swap show.
+///
+/// `suspend` is deliberately absent: it sends SIGTSTP to the client, and the
+/// only client here is the control connection this test is holding.
+#[tokio::test]
+async fn a_client_reports_its_own_terminal_and_type() {
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("client-fields").await.expect("session");
+    let control = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches");
+
+    retry_until(Duration::from_secs(10), async || {
+        server
+            .clients()
+            .await
+            .is_ok_and(|clients| !clients.is_empty())
+    })
+    .await
+    .expect("the attached client is listed");
+
+    let client = server.clients().await.expect("clients").remove(0);
+    let name = client.name().to_string_lossy().into_owned();
+
+    assert_ne!(
+        client.tty().as_str().expect("client text"),
+        client.term_name().as_str().expect("client text"),
+        "the two fields differ here, so a swap between them would show"
+    );
+
+    for (reported, format) in [
+        (client.tty(), "#{client_tty}"),
+        (client.term_name(), "#{client_termname}"),
+    ] {
+        let asked = server
+            .cmd(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("-c")
+                    .arg(&name)
+                    .arg(format),
+            )
+            .await
+            .expect("tmux answers for this client");
+        assert_eq!(
+            reported.as_str().expect("client text"),
+            asked.stdout_lossy().trim(),
+            "{format} agrees with the accessor"
+        );
+    }
+
+    assert!(
+        !client.is_readonly(),
+        "a client that attached without -r may act"
+    );
+    client.redraw().await.expect("the client redraws");
+
+    let _ = control.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The remaining dispatch-only commands must reach tmux and be accepted.
+///
+/// These change something a headless server cannot show back -- a prefix key
+/// arriving, a prompt history no client has filled -- so what is covered is
+/// that the command is built and accepted, not what it did.
+#[tokio::test]
+async fn dispatch_only_commands_are_accepted() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("dispatch").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    pane.send_prefix().await.expect("the prefix key is sent");
+    server
+        .clear_prompt_history()
+        .await
+        .expect("the prompt history is cleared");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
