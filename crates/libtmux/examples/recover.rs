@@ -76,21 +76,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_iter()
         .find(|w| w.id() == shared.id())
         .ok_or("the shared window is linked here")?;
+    // Kept deliberately: `unlink` consumes the handle, and the second attempt
+    // is the one with something to say.
+    let same_link = from_home.clone();
     from_home.unlink().await?;
 
     // Unlinking the same link twice: the second attempt fails, and what it
-    // says decides whether the caller should stop.
-    let again = elsewhere
-        .windows()
-        .await?
-        .into_iter()
-        .find(|w| w.id() == shared.id());
-    if again.is_some() {
-        println!("  still linked, which would be a bug");
-    } else {
-        let alive = server.window_by_id(shared.id()).await?.is_some();
-        println!("  the link is gone and the window is alive: {alive}");
+    // says decides whether the caller should stop. The window is still
+    // running under the other session's link, so an error that read as "gone"
+    // here would tell a caller to discard a handle that still works.
+    match same_link.unlink().await {
+        Ok(()) => println!("  unlinked the same link twice, which would be a bug"),
+        Err(error) => {
+            println!("  second unlink says: {error}");
+            println!("    debug:          {error:?}");
+            println!("    is_object_gone: {}", error.is_object_gone());
+            println!("    is_transient:   {}", error.is_transient());
+        }
     }
+
+    let alive = server.window_by_id(shared.id()).await?.is_some();
+    println!("  and the window is still alive: {alive}");
 
     home.kill().await?;
     elsewhere.kill().await?;
