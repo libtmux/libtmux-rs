@@ -14,7 +14,7 @@ use crate::{
     WaitForIdleArgs, WaitForTextArgs, WaitView, Watch, WatchPaneArgs,
 };
 
-use super::error::{bad_input, tmux_error};
+use super::error::{at_capacity, bad_input, tmux_error};
 
 /// The most a single `watch_pane` call will return.
 ///
@@ -37,6 +37,14 @@ fn unknown_job(job: &str) -> ErrorData {
         format!("no job {job}; it finished long enough ago to be forgotten, or never existed"),
         Some(serde_json::Value::Object(data)),
     )
+}
+
+/// Translate a background-start failure at the protocol boundary.
+fn start_error(error: jobs::StartError) -> ErrorData {
+    match error {
+        jobs::StartError::AtCapacity { limit } => at_capacity(limit),
+        jobs::StartError::Tmux(error) => tmux_error(&error),
+    }
 }
 
 #[tool_router(router = observe_router, vis = "pub(super)")]
@@ -167,7 +175,9 @@ impl TmuxTools {
                        slow -- a build, a test suite, a deploy -- and for running several at \
                        once: the answer is collected whether or not you are waiting for it. \
                        Poll with job_status, which returns only what is new. Prefer \
-                       run_command when the command is quick and you want its answer now.",
+                       run_command when the command is quick and you want its answer now. If \
+                       every job slot is active, this refuses before sending anything to the \
+                       pane.",
         title = "Start Command In Background",
         annotations(
             read_only_hint = false,
@@ -198,7 +208,7 @@ impl TmuxTools {
             .jobs
             .start(&target, &command, suppress_history)
             .await
-            .map_err(|e| tmux_error(&e))?;
+            .map_err(start_error)?;
 
         Ok(Json(view))
     }
@@ -240,7 +250,8 @@ impl TmuxTools {
     #[tool(
         description = "List every job started with start_command, running and finished, \
                        newest first. A finished job is kept so its answer can still be \
-                       collected, and the oldest is forgotten once too many pile up.",
+                       collected. The least recently read finished job is forgotten when a \
+                       new job needs its slot; a running job is never forgotten.",
         title = "List Background Commands",
         annotations(
             read_only_hint = true,
@@ -499,5 +510,22 @@ impl TmuxTools {
             channel,
             outcome: outcome.to_owned(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_capacity_is_retryable_without_stale_state() {
+        let error = start_error(jobs::StartError::AtCapacity { limit: 3 });
+        let data = error.data.expect("capacity carries metadata");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(data["kind"], "capacity");
+        assert_eq!(data["retryable"], true);
+        assert_eq!(data["stale"], false);
+        assert_eq!(data["capacity"], 3);
     }
 }

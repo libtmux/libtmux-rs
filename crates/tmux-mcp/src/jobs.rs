@@ -30,9 +30,24 @@ fn hold<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 /// How many jobs this server remembers, running and finished together.
 ///
 /// A finished job is kept so its answer can still be collected; the least
-/// recently touched is dropped to make room. Only running jobs hold a
-/// control-mode connection.
+/// recently touched is dropped to make room. Only a pending start or a
+/// running job can hold a control-mode connection.
 const MAX_JOBS: usize = 32;
+
+/// Why a background command could not be started.
+#[derive(Debug)]
+pub(crate) enum StartError {
+    /// Every remembered slot belongs to a command still starting or running.
+    AtCapacity { limit: usize },
+    /// tmux could not attach to the pane or send the command.
+    Tmux(Error),
+}
+
+impl From<Error> for StartError {
+    fn from(error: Error) -> Self {
+        Self::Tmux(error)
+    }
+}
 
 /// Numbers job ids, so one is never reused within a process.
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -158,32 +173,131 @@ impl Drop for Job {
     }
 }
 
+/// One slot in the bounded job table.
+#[derive(Debug)]
+enum JobSlot {
+    /// Reserved before tmux is touched, but not yet visible to callers.
+    Pending,
+    /// A command visible to callers and owned by the table.
+    Ready(Job),
+}
+
+/// Running jobs, completed jobs, and starts that are between those states.
+#[derive(Debug)]
+struct JobTable {
+    slots: HashMap<String, JobSlot>,
+    limit: usize,
+}
+
+impl JobTable {
+    fn new(limit: usize) -> Self {
+        Self {
+            slots: HashMap::new(),
+            limit,
+        }
+    }
+
+    /// Reserve a slot, evicting only a finished job when the table is full.
+    fn reserve(&mut self) -> Result<String, StartError> {
+        if self.slots.len() >= self.limit
+            && let Some(stale) = self
+                .slots
+                .iter()
+                .filter_map(|(id, slot)| match slot {
+                    JobSlot::Ready(job)
+                        if !matches!(hold(&job.progress).state, JobState::Running) =>
+                    {
+                        Some((id, job.last_read))
+                    }
+                    JobSlot::Pending | JobSlot::Ready(_) => None,
+                })
+                .min_by_key(|(_, last_read)| *last_read)
+                .map(|(id, _)| id.clone())
+        {
+            self.slots.remove(&stale);
+        }
+
+        if self.slots.len() >= self.limit {
+            return Err(StartError::AtCapacity { limit: self.limit });
+        }
+
+        let id = format!("job-{}", JOB_COUNTER.fetch_add(1, Ordering::Relaxed));
+        self.slots.insert(id.clone(), JobSlot::Pending);
+        Ok(id)
+    }
+}
+
+/// A slot that is released unless a started job takes ownership of it.
+struct Reservation<'a> {
+    table: &'a Mutex<JobTable>,
+    id: String,
+    committed: bool,
+}
+
+impl Reservation<'_> {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn commit(mut self, job: Job) {
+        let previous = hold(self.table)
+            .slots
+            .insert(self.id.clone(), JobSlot::Ready(job));
+        debug_assert!(matches!(previous, Some(JobSlot::Pending)));
+        self.committed = true;
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            hold(self.table).slots.remove(&self.id);
+        }
+    }
+}
+
 /// The jobs this server is holding.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Jobs {
-    inner: Mutex<HashMap<String, Job>>,
+    inner: Mutex<JobTable>,
 }
 
 impl Jobs {
     /// Hold no jobs yet.
     #[must_use]
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self::with_limit(MAX_JOBS)
+    }
+
+    fn with_limit(limit: usize) -> Self {
+        Self {
+            inner: Mutex::new(JobTable::new(limit)),
+        }
+    }
+
+    fn reserve(&self) -> Result<Reservation<'_>, StartError> {
+        let id = hold(&self.inner).reserve()?;
+        Ok(Reservation {
+            table: &self.inner,
+            id,
+            committed: false,
+        })
     }
 
     /// Start a command in a pane and return once it is under way.
     ///
     /// # Errors
     ///
-    /// Returns an error when the pane cannot be watched or the keys cannot be
-    /// sent.
+    /// Returns an error when every job slot is active, the pane cannot be
+    /// watched, or the keys cannot be sent.
     pub(crate) async fn start(
         &self,
         pane: &Pane,
         command: &str,
         suppress_history: bool,
-    ) -> Result<JobView, Error> {
-        let id = format!("job-{}", JOB_COUNTER.fetch_add(1, Ordering::Relaxed));
+    ) -> Result<JobView, StartError> {
+        let reservation = self.reserve()?;
+        let id = reservation.id().to_owned();
         let progress = Arc::new(Mutex::new(Progress {
             state: JobState::Running,
             exit_status: None,
@@ -227,29 +341,15 @@ impl Jobs {
             age_seconds: 0,
         };
 
-        let mut jobs = hold(&self.inner);
-        if jobs.len() >= MAX_JOBS
-            && let Some(stale) = jobs
-                .iter()
-                .filter(|(_, job)| !matches!(hold(&job.progress).state, JobState::Running))
-                .min_by_key(|(_, job)| job.last_read)
-                .or_else(|| jobs.iter().min_by_key(|(_, job)| job.last_read))
-                .map(|(id, _)| id.clone())
-        {
-            jobs.remove(&stale);
-        }
-        jobs.insert(
-            id,
-            Job {
-                pane: pane.id().to_string(),
-                command: command.to_owned(),
-                started,
-                progress,
-                finished,
-                reader,
-                last_read: started,
-            },
-        );
+        reservation.commit(Job {
+            pane: pane.id().to_string(),
+            command: command.to_owned(),
+            started,
+            progress,
+            finished,
+            reader,
+            last_read: started,
+        });
 
         Ok(view)
     }
@@ -258,8 +358,10 @@ impl Jobs {
     ///
     /// Returns `None` when no such job is held.
     pub(crate) fn read(&self, id: &str, cursor: Option<u64>) -> Option<JobProgress> {
-        let mut jobs = hold(&self.inner);
-        let job = jobs.get_mut(id)?;
+        let mut table = hold(&self.inner);
+        let JobSlot::Ready(job) = table.slots.get_mut(id)? else {
+            return None;
+        };
         job.last_read = Instant::now();
         let pane = job.pane.clone();
         let progress = hold(&job.progress);
@@ -279,8 +381,10 @@ impl Jobs {
 
     /// Resolve a job to what it needs to be awaited without holding the lock.
     fn awaitable(&self, id: &str) -> Option<(Arc<Notify>, Arc<Mutex<Progress>>)> {
-        let jobs = hold(&self.inner);
-        let job = jobs.get(id)?;
+        let table = hold(&self.inner);
+        let JobSlot::Ready(job) = table.slots.get(id)? else {
+            return None;
+        };
         Some((Arc::clone(&job.finished), Arc::clone(&job.progress)))
     }
 
@@ -306,19 +410,23 @@ impl Jobs {
 
     /// Describe every job this server holds, newest first.
     pub(crate) fn list(&self) -> Vec<JobView> {
-        let jobs = hold(&self.inner);
-        let mut views: Vec<_> = jobs
+        let table = hold(&self.inner);
+        let mut views: Vec<_> = table
+            .slots
             .iter()
-            .map(|(id, job)| {
+            .filter_map(|(id, slot)| {
+                let JobSlot::Ready(job) = slot else {
+                    return None;
+                };
                 let progress = hold(&job.progress);
-                JobView {
+                Some(JobView {
                     job: id.clone(),
                     pane: job.pane.clone(),
                     command: job.command.clone(),
                     state: progress.state,
                     exit_status: progress.exit_status,
                     age_seconds: job.started.elapsed().as_secs(),
-                }
+                })
             })
             .collect();
         views.sort_by_key(|view| view.age_seconds);
@@ -327,15 +435,17 @@ impl Jobs {
 
     /// Report whether a job is still running, and which pane it is in.
     pub(crate) fn running_in(&self, id: &str) -> Option<(String, bool)> {
-        let jobs = hold(&self.inner);
-        let job = jobs.get(id)?;
+        let table = hold(&self.inner);
+        let JobSlot::Ready(job) = table.slots.get(id)? else {
+            return None;
+        };
         let running = hold(&job.progress).state == JobState::Running;
         Some((job.pane.clone(), running))
     }
 
     /// Forget a job, ending its reader.
     pub(crate) fn forget(&self, id: &str) -> bool {
-        hold(&self.inner).remove(id).is_some()
+        matches!(hold(&self.inner).slots.remove(id), Some(JobSlot::Ready(_)))
     }
 }
 
@@ -355,6 +465,38 @@ pub(crate) const fn ended(view: &RunView) -> (JobState, Option<i32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn job(index: usize, state: JobState, last_read: Instant) -> Job {
+        let progress = Arc::new(Mutex::new(Progress {
+            state,
+            exit_status: None,
+            output: Vec::new(),
+            dropped: 0,
+        }));
+        Job {
+            pane: format!("%{index}"),
+            command: "sleep 60".to_owned(),
+            started: last_read,
+            progress,
+            finished: Arc::new(Notify::new()),
+            reader: tokio::spawn(std::future::pending()),
+            last_read,
+        }
+    }
+
+    async fn wait_for_prompt(pane: &Pane) {
+        for _ in 0..600 {
+            let lines = pane.capture().await.expect("pane captures");
+            if lines
+                .iter()
+                .any(|line| matches!(line.as_bytes().last(), Some(b'$' | b'#')))
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("the pane never drew a prompt");
+    }
 
     fn progress(output: &[u8], dropped: u64) -> Progress {
         Progress {
@@ -394,5 +536,161 @@ mod tests {
         let held = progress(b"hello", 0);
 
         assert_eq!(held.read_from(99), (&b""[..], 5, false));
+    }
+
+    #[tokio::test]
+    async fn a_full_running_table_refuses_before_sending() {
+        let guard = libtmux::test::TestServer::builder()
+            .start()
+            .await
+            .expect("tmux starts");
+        let session = guard
+            .server()
+            .new_session("job-capacity-red")
+            .await
+            .expect("session starts");
+        let pane = session.panes().await.expect("panes list").remove(0);
+        wait_for_prompt(&pane).await;
+        let jobs = Jobs::with_limit(1);
+        let reservation = jobs.reserve().expect("the first slot is free");
+        let first = reservation.id().to_owned();
+        reservation.commit(job(0, JobState::Running, Instant::now()));
+
+        let marker = "capacity-rejection-must-not-reach-the-pane";
+        let started = jobs.start(&pane, &format!("echo {marker}"), false).await;
+
+        assert!(
+            matches!(started, Err(StartError::AtCapacity { limit: 1 })),
+            "a full running table accepted a job: {started:?}",
+        );
+        assert!(jobs.running_in(&first).is_some(), "the first job remains");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let reached_pane = pane
+            .capture()
+            .await
+            .expect("pane captures")
+            .iter()
+            .any(|line| line.to_string_lossy().contains(marker));
+        assert!(!reached_pane, "the rejected command was sent to the pane");
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_releases_its_reservation() {
+        let guard = libtmux::test::TestServer::builder()
+            .start()
+            .await
+            .expect("tmux starts");
+        let session = guard
+            .server()
+            .new_session("job-capacity-failure")
+            .await
+            .expect("session starts");
+        let pane = session.panes().await.expect("panes list").remove(0);
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        let jobs = Jobs::with_limit(1);
+
+        let started = jobs.start(&pane, "true", false).await;
+
+        assert!(matches!(started, Err(StartError::Tmux(_))));
+        assert!(
+            jobs.reserve().is_ok(),
+            "a failed start retained its pending slot",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finished_lru_is_evicted_before_a_running_job() {
+        let jobs = Jobs::with_limit(3);
+        let now = Instant::now();
+        let entries = [
+            (
+                JobState::Running,
+                now.checked_sub(std::time::Duration::from_secs(3))
+                    .expect("the process has run for three seconds"),
+            ),
+            (
+                JobState::Finished,
+                now.checked_sub(std::time::Duration::from_secs(2))
+                    .expect("the process has run for two seconds"),
+            ),
+            (
+                JobState::Finished,
+                now.checked_sub(std::time::Duration::from_secs(1))
+                    .expect("the process has run for one second"),
+            ),
+        ];
+        let mut ids = Vec::new();
+        for (index, (state, last_read)) in entries.into_iter().enumerate() {
+            let reservation = jobs.reserve().expect("a slot is free");
+            ids.push(reservation.id().to_owned());
+            reservation.commit(job(index, state, last_read));
+        }
+
+        let next = jobs.reserve().expect("a finished slot makes room");
+
+        assert!(
+            jobs.running_in(&ids[0]).is_some(),
+            "the running job remains",
+        );
+        assert!(
+            jobs.running_in(&ids[1]).is_none(),
+            "the least recently read finished job is evicted",
+        );
+        assert!(
+            jobs.running_in(&ids[2]).is_some(),
+            "the newer finished job remains",
+        );
+        drop(next);
+    }
+
+    #[tokio::test]
+    async fn pending_reservations_cannot_over_admit_and_release_on_drop() {
+        let jobs = Jobs::with_limit(2);
+        let ready = std::sync::Barrier::new(5);
+        let attempted = std::sync::Barrier::new(5);
+        let release = std::sync::Barrier::new(5);
+
+        let admitted = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        ready.wait();
+                        let held = jobs.reserve();
+                        let admitted = held.is_ok();
+                        attempted.wait();
+                        release.wait();
+                        drop(held);
+                        admitted
+                    })
+                })
+                .collect();
+            ready.wait();
+            attempted.wait();
+            release.wait();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("thread joins"))
+                .filter(|admitted| *admitted)
+                .count()
+        });
+
+        assert_eq!(admitted, 2, "only the table's limit is admitted");
+        {
+            let cancelled = async {
+                let _held = jobs.reserve().expect("a slot is free");
+                std::future::pending::<()>().await;
+            };
+            tokio::pin!(cancelled);
+            tokio::select! {
+                biased;
+                () = &mut cancelled => panic!("the pending start completed"),
+                () = async {} => {}
+            }
+        }
+        assert!(
+            jobs.reserve().is_ok(),
+            "cancelling an unfinished reservation releases its slot",
+        );
     }
 }
