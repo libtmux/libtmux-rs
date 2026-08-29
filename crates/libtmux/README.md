@@ -115,9 +115,41 @@ and what a real one would have to survive.
 
 ## Waiting for something to happen
 
-There is no production waiting primitive yet -- `test::retry_until` is behind
-`test-support` -- so this is the loop you write, and these are the parts that
-are easy to get wrong.
+If the work can announce itself, do not poll. End it with
+`tmux wait-for -S <channel>` and wait on that channel:
+
+```rust
+use libtmux::ChannelWait;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = libtmux::test::TestServer::builder().start().await?;
+    let server = guard.server();
+
+    // Stands in for the pane running `make; tmux wait-for -S build-done`.
+    // Signalling first is safe: tmux keeps it for the next waiter.
+    server.signal_channel("build-done").await?;
+
+    match server.wait_for_channel("build-done", Duration::from_secs(60)).await? {
+        ChannelWait::Signalled => println!("the build ended"),
+        // Running out of time is an outcome, not an error, so this stays
+        // distinguishable from tmux being unreachable.
+        _ => println!("it is still going"),
+    }
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
+tmux keeps a signal nobody is waiting on, so the job finishing first does not
+lose the race, and nothing polls. `examples/orchestrate.rs` runs three jobs
+this way.
+
+For a pane that was *not* written to announce itself there is no production
+primitive yet -- `test::retry_until` is behind `test-support` -- so this is the
+loop you write, and these are the parts that are easy to get wrong.
 
 ```rust
 use std::time::{Duration, Instant};
