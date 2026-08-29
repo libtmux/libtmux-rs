@@ -419,6 +419,26 @@ workspace: 3.2a, 3.4, 3.5a, 3.6b, and 3.7b. The floor and the ceiling matter
 equally — 3.4 and 3.5a are the releases that wrap command output differently,
 which is why the format codec carries a second dialect.
 
+## If you know the Python libtmux
+
+This is a port of it, and the object model is the same one: a server holding
+sessions, windows linked into them, panes inside those. Code you have written
+against the Python library will read as familiar here. Four things differ, and
+they are the ones worth knowing before you start.
+
+| | Python `libtmux` | this crate |
+| --- | --- | --- |
+| Calling | synchronous throughout | `async` throughout; `blocking::Runtime` drives it from code that is not |
+| Pane text | `capture_pane` returns `list[str]` | `capture` returns `TmuxText`, which keeps bytes no `String` would hold |
+| Filtering | `QueryList` lives in `_internal` | `query` is public, and field handles are generated per type |
+| Transport | one tmux process per command | the same by default, plus control mode and command chaining |
+
+One thing is the same in a way you may not want: waiting. The Python library
+keeps `retry_until` in `libtmux/test/retry.py`, and this crate keeps it behind
+`test-support` for the same reason, so production code that waits on a pane
+writes that loop itself in both. `docs/design.md` records what a real one would
+have to survive.
+
 ## Documentation
 
 [API documentation](https://docs.rs/libtmux) covers the public surface. Two
