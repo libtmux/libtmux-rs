@@ -558,6 +558,163 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A pane must report the terminal tmux gave it.
+///
+/// Reads from the snapshot, so a field wired to the wrong name would return
+/// some other pane's string rather than fail.
+#[tokio::test]
+async fn a_pane_reports_its_own_terminal() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("ttys").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    let reported = pane.tty().as_str().expect("a tty path is text").to_owned();
+    let asked = server
+        .format(Some(&pane), "#{pane_tty}")
+        .await
+        .expect("tmux answers for the same pane");
+
+    assert_eq!(
+        reported,
+        asked.as_str().expect("a tty path is text"),
+        "the accessor and tmux name the same terminal"
+    );
+    assert!(reported.starts_with("/dev/"), "and it is a device path");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A window's activity and bell flags must each read their own field.
+///
+/// They differ by a word and both are `bool`, so a swap type-checks. Reading
+/// them on a fresh window cannot catch one: both are false there, and a swap
+/// between two equal values is invisible. So this drives activity high and
+/// leaves the bell low first, which was measured rather than assumed -- the
+/// first version of this test passed with `has_bell` wired to the activity
+/// field.
+#[tokio::test]
+async fn window_flags_each_read_their_own_field() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("flags").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a session has a window");
+
+    // Activity is only recorded for a window nobody is looking at, so the
+    // second window is what makes the first one eligible.
+    server
+        .set_global_window_option("monitor-activity", "on")
+        .await
+        .expect("activity is monitored");
+    session
+        .new_window(NewWindowOptions::new("elsewhere"))
+        .await
+        .expect("a second window takes the focus");
+
+    let panes = window.panes().await.expect("panes");
+    panes[0].send_keys("printf 'noise\n'").await.expect("keys");
+    panes[0].send_key_names(["Enter"]).await.expect("enter");
+
+    let mut window = window;
+    retry_until(Duration::from_secs(10), async || {
+        window.refresh().await.is_ok() && window.has_activity()
+    })
+    .await
+    .expect("the background window records activity");
+
+    assert!(
+        !window.has_bell(),
+        "nothing rang a bell, so the two flags differ and a swap would show"
+    );
+
+    for (reported, format) in [
+        (window.has_activity(), "#{window_activity_flag}"),
+        (window.has_bell(), "#{window_bell_flag}"),
+    ] {
+        let asked = server
+            .cmd(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(window.id().to_string())
+                    .arg(format),
+            )
+            .await
+            .expect("tmux answers");
+        let asked = asked.stdout_lossy().trim() == "1";
+        assert_eq!(reported, asked, "{format} agrees with the accessor");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Pasting a buffer must put its bytes into the pane.
+#[tokio::test]
+async fn a_buffer_pastes_into_a_pane() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("pasted").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    server
+        .set_buffer(Some("greeting"), "printf 'pasted-here\n'")
+        .await
+        .expect("the buffer is set");
+    pane.paste_buffer(Some("greeting"))
+        .await
+        .expect("the buffer pastes");
+    pane.send_key_names(["Enter"]).await.expect("enter");
+
+    retry_until(Duration::from_secs(10), async || {
+        pane.capture().await.is_ok_and(|lines| {
+            lines
+                .iter()
+                .any(|line| line.as_bytes().windows(11).any(|w| w == b"pasted-here"))
+        })
+    })
+    .await
+    .expect("what was pasted runs in the pane");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Searching a window's panes must find one that matches.
+///
+/// The lenient form returns an empty vector rather than an error, so a search
+/// that never matched and a search that failed look alike to a caller. This
+/// covers the case where it does match, which is the one that would be silent.
+#[cfg(feature = "query")]
+#[tokio::test]
+async fn searching_a_window_finds_the_pane_that_matches() {
+    use libtmux::query::Filterable as _;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("searched").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a session has a window");
+
+    let panes = window.panes().await.expect("panes");
+    let wanted = panes[0].id().to_string();
+
+    let fields = libtmux::Pane::filter_fields();
+    let found = window
+        .search_panes_or_empty(fields.pane_id.eq(wanted.as_str()))
+        .await;
+
+    assert_eq!(found.len(), 1, "the pane that matches is returned");
+    assert_eq!(found[0].id().to_string(), wanted);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn interactive_commands_need_a_client() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
