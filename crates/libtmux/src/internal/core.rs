@@ -449,6 +449,18 @@ impl Core {
     pub(crate) fn configuration(&self) -> &CoreConfiguration {
         &self.configuration
     }
+
+    pub(crate) fn require_same_server(
+        &self,
+        other: &ServerIdentity,
+        operation: &'static str,
+    ) -> Result<(), Error> {
+        if self.configuration.identity() == other {
+            Ok(())
+        } else {
+            Err(Error::server_mismatch(operation))
+        }
+    }
 }
 
 #[cfg(test)]

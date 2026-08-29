@@ -1420,8 +1420,11 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the swap.
+    /// Returns [`Error::ServerMismatch`] when the other pane belongs to another
+    /// server, or an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
+        self.core
+            .require_same_server(other.server_identity(), "swap-pane")?;
         listing::mutate(
             &self.core,
             "swap-pane",
@@ -1511,8 +1514,9 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the move, which includes joining a
-    /// pane to its own window.
+    /// Returns [`Error::ServerMismatch`] when the other pane belongs to another
+    /// server, or an error when tmux refuses the move, which includes joining
+    /// a pane to its own window.
     ///
     /// # Examples
     ///
@@ -1546,6 +1550,8 @@ impl Pane {
         beside: &Self,
         options: crate::JoinOptions,
     ) -> Result<Self, Error> {
+        self.core
+            .require_same_server(beside.server_identity(), "join-pane")?;
         let command = options.apply(
             Command::new("join-pane")
                 .arg("-d")

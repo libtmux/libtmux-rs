@@ -1393,8 +1393,11 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the swap.
+    /// Returns [`Error::ServerMismatch`] when the other window belongs to
+    /// another server, or an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
+        self.core
+            .require_same_server(other.server_identity(), "swap-window")?;
         if let Err(error) = listing::mutate(
             &self.core,
             "swap-window",
@@ -1436,8 +1439,11 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns an error when the destination is occupied or does not exist.
+    /// Returns [`Error::ServerMismatch`] when the destination session belongs
+    /// to another server, or an error when it is occupied or does not exist.
     pub async fn move_to(&mut self, session: &Session, index: i32) -> Result<&mut Self, Error> {
+        self.core
+            .require_same_server(session.server_identity(), "move-window")?;
         listing::mutate(
             &self.core,
             "move-window",
@@ -1523,8 +1529,9 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the link, which includes an index
-    /// that is already taken.
+    /// Returns [`Error::ServerMismatch`] when the destination session belongs
+    /// to another server, or an error when tmux refuses the link, which
+    /// includes an index that is already taken.
     ///
     /// # Examples
     ///
@@ -1549,6 +1556,8 @@ impl Window {
     /// # }
     /// ```
     pub async fn link_to(&self, session: &Session, index: Option<i32>) -> Result<(), Error> {
+        self.core
+            .require_same_server(session.server_identity(), "link-window")?;
         let target = index.map_or_else(
             || session.id().to_string(),
             |index| format!("{}:{index}", session.id()),

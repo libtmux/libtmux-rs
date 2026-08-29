@@ -575,6 +575,78 @@ async fn window_operations_move_and_resize() {
 }
 
 #[tokio::test]
+async fn handle_mutations_reject_another_server() {
+    use libtmux::{Error, ErrorKind, JoinOptions};
+
+    macro_rules! error_kind {
+        ($future:expr) => {
+            match $future.await {
+                Err(error @ Error::ServerMismatch { .. }) => error.kind(),
+                Err(error) => panic!("foreign handle returned {error:?}"),
+                Ok(_) => panic!("foreign handle was accepted"),
+            }
+        };
+    }
+
+    let left_guard = TestServer::builder().start().await.expect("tmux starts");
+    let right_guard = TestServer::builder().start().await.expect("tmux starts");
+    let left = left_guard.server();
+    let right = right_guard.server();
+    let left_session = left.new_session("left").await.expect("left session");
+    let right_session = right.new_session("right").await.expect("right session");
+    let mut left_window = left_session
+        .active_window()
+        .await
+        .expect("left window lookup")
+        .expect("left window");
+    let right_window = right_session
+        .active_window()
+        .await
+        .expect("right window lookup")
+        .expect("right window");
+    let mut left_pane = left_window.panes().await.expect("left panes").remove(0);
+    let right_pane = right_window.panes().await.expect("right panes").remove(0);
+
+    assert_eq!(left_session.id(), right_session.id());
+    assert_eq!(left_window.id(), right_window.id());
+    assert_eq!(left_pane.id(), right_pane.id());
+    let original_index = left_window.index();
+
+    let kinds = [
+        error_kind!(left_window.swap_with(&right_window)),
+        error_kind!(left_window.link_to(&right_session, Some(29))),
+        error_kind!(left_window.move_to(&right_session, 30)),
+        error_kind!(left_pane.swap_with(&right_pane)),
+        error_kind!(
+            left_pane
+                .clone()
+                .join_into(&right_pane, JoinOptions::new(SplitDirection::Below))
+        ),
+    ];
+
+    assert_eq!(kinds, [ErrorKind::InvalidInput; 5]);
+    assert_eq!(
+        left_session
+            .windows()
+            .await
+            .expect("left windows")
+            .first()
+            .expect("left window remains")
+            .index(),
+        original_index,
+    );
+
+    right_guard
+        .shutdown()
+        .await
+        .expect("right tmux fixture shuts down");
+    left_guard
+        .shutdown()
+        .await
+        .expect("left tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn a_session_environment_is_set_read_and_removed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();

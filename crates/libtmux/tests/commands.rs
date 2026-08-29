@@ -499,6 +499,75 @@ async fn a_client_reports_itself_while_it_is_attached() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn server_operations_reject_foreign_handles() {
+    use libtmux::control::ControlMode;
+    use libtmux::{Chooser, Error, ErrorKind};
+
+    macro_rules! error_kind {
+        ($future:expr) => {
+            match $future.await {
+                Err(error @ Error::ServerMismatch { .. }) => error.kind(),
+                Err(error) => panic!("foreign handle returned {error:?}"),
+                Ok(_) => panic!("foreign handle was accepted"),
+            }
+        };
+    }
+
+    let left_guard = TestServer::builder().start().await.expect("tmux starts");
+    let right_guard = TestServer::builder().start().await.expect("tmux starts");
+    let left = left_guard.server();
+    let right = right_guard.server();
+    let left_session = left.new_session("left").await.expect("left session");
+    let right_session = right.new_session("right").await.expect("right session");
+    let right_pane = right_session.panes().await.expect("right panes").remove(0);
+    let control = ControlMode::attach(right, right_session.id())
+        .await
+        .expect("control mode attaches");
+
+    retry_until(Duration::from_secs(10), async || {
+        right
+            .clients()
+            .await
+            .is_ok_and(|clients| !clients.is_empty())
+    })
+    .await
+    .expect("the foreign client is listed");
+    let foreign_client = right.clients().await.expect("right clients").remove(0);
+
+    let kinds = [
+        error_kind!(left.format(Some(&right_pane), "#{session_name}")),
+        error_kind!(left.display_popup(Some(&foreign_client), "true")),
+        error_kind!(left.display_menu(
+            Some(&foreign_client),
+            "menu",
+            [("Item".into(), "i".into(), "display-message item".into())],
+        )),
+        error_kind!(left.command_prompt(
+            Some(&foreign_client),
+            Some("question"),
+            "display-message answer",
+        )),
+        error_kind!(left.choose(Chooser::Tree, Some(&foreign_client))),
+        error_kind!(left.find_window(Some(&foreign_client), "needle")),
+        error_kind!(left.display_panes(Some(&foreign_client))),
+        error_kind!(foreign_client.switch_to(&left_session)),
+    ];
+
+    assert_eq!(kinds, [ErrorKind::InvalidInput; 8]);
+
+    let _ = control.shutdown().await;
+    right_guard
+        .shutdown()
+        .await
+        .expect("right tmux fixture shuts down");
+    left_guard
+        .shutdown()
+        .await
+        .expect("left tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn pane_modes_enter_and_leave() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

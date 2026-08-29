@@ -1095,6 +1095,7 @@ struct_field libtmux::Error::ServerGenerationChanged::expected
 struct_field libtmux::Error::ServerGenerationChanged::found
 struct_field libtmux::Error::ServerGone::command
 struct_field libtmux::Error::ServerGone::kind
+struct_field libtmux::Error::ServerMismatch::operation
 struct_field libtmux::Error::SessionExists::name
 struct_field libtmux::Error::Spawn::command
 struct_field libtmux::Error::Spawn::request_id
@@ -1321,6 +1322,7 @@ variant libtmux::Error::RuntimeNested
 variant libtmux::Error::RuntimeUnavailable
 variant libtmux::Error::ServerGenerationChanged
 variant libtmux::Error::ServerGone
+variant libtmux::Error::ServerMismatch
 variant libtmux::Error::SessionExists
 variant libtmux::Error::Spawn
 variant libtmux::Error::SupervisorLost

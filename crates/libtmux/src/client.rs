@@ -488,8 +488,11 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error when the session does not exist or tmux refuses.
+    /// Returns [`Error::ServerMismatch`] when the session belongs to another
+    /// server, or an error when the session does not exist or tmux refuses.
     pub async fn switch_to(&self, session: &crate::Session) -> Result<(), Error> {
+        self.core
+            .require_same_server(session.server_identity(), "switch-client")?;
         listing::mutate(
             &self.core,
             "switch-client",

@@ -1055,10 +1055,13 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux rejects the format or the pane is gone.
+    /// Returns [`Error::ServerMismatch`] when the pane belongs to another
+    /// server, or an error when tmux rejects the format or the pane is gone.
     pub async fn format(&self, pane: Option<&Pane>, format: &str) -> Result<TmuxText, Error> {
         let mut command = Command::new("display-message").arg("-p");
         if let Some(pane) = pane {
+            self.core
+                .require_same_server(pane.server_identity(), "display-message")?;
             command = command.arg("-t").arg(pane.id().to_string());
         }
 
@@ -1606,8 +1609,9 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists, when tmux refuses the
-    /// command, and when the dispatch timeout expires before it exits.
+    /// Returns [`Error::ServerMismatch`] when the client belongs to another
+    /// server, or an error when no suitable client exists, when tmux refuses
+    /// the command, and when the dispatch timeout expires before it exits.
     pub async fn display_popup(
         &self,
         client: Option<&Client>,
@@ -1615,6 +1619,8 @@ impl Server {
     ) -> Result<(), Error> {
         let mut popup = Command::new("display-popup").arg("-E");
         if let Some(client) = client {
+            self.core
+                .require_same_server(client.server_identity(), "display-popup")?;
             popup = popup
                 .arg("-t")
                 .arg(client.name().to_string_lossy().into_owned());
@@ -1634,8 +1640,9 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists, when tmux refuses an
-    /// item, and when the dispatch timeout expires before anyone chooses.
+    /// Returns [`Error::ServerMismatch`] when the client belongs to another
+    /// server, or an error when no suitable client exists, when tmux refuses
+    /// an item, and when the dispatch timeout expires before anyone chooses.
     pub async fn display_menu(
         &self,
         client: Option<&Client>,
@@ -1646,6 +1653,8 @@ impl Server {
             .arg("-T")
             .arg(OsString::from(title));
         if let Some(client) = client {
+            self.core
+                .require_same_server(client.server_identity(), "display-menu")?;
             menu = menu
                 .arg("-t")
                 .arg(client.name().to_string_lossy().into_owned());
@@ -1678,8 +1687,9 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists, when tmux refuses, and
-    /// when the dispatch timeout expires before the prompt is answered.
+    /// Returns [`Error::ServerMismatch`] when the client belongs to another
+    /// server, or an error when no suitable client exists, when tmux refuses,
+    /// and when the dispatch timeout expires before the prompt is answered.
     pub async fn command_prompt(
         &self,
         client: Option<&Client>,
@@ -1688,6 +1698,8 @@ impl Server {
     ) -> Result<(), Error> {
         let mut request = Command::new("command-prompt");
         if let Some(client) = client {
+            self.core
+                .require_same_server(client.server_identity(), "command-prompt")?;
             request = request
                 .arg("-t")
                 .arg(client.name().to_string_lossy().into_owned());
@@ -1713,12 +1725,15 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command. A missing client is not
-    /// one: this does not need one.
+    /// Returns [`Error::ServerMismatch`] when the client belongs to another
+    /// server, or an error when tmux refuses the command. A missing client is
+    /// not one: this does not need one.
     pub async fn choose(&self, chooser: Chooser, client: Option<&Client>) -> Result<(), Error> {
         let name = chooser.command();
         let mut request = Command::new(name);
         if let Some(client) = client {
+            self.core
+                .require_same_server(client.server_identity(), name)?;
             request = request
                 .arg("-t")
                 .arg(client.name().to_string_lossy().into_owned());
@@ -1736,11 +1751,14 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command. A missing client is not
-    /// one: this does not need one.
+    /// Returns [`Error::ServerMismatch`] when the client belongs to another
+    /// server, or an error when tmux refuses the command. A missing client is
+    /// not one: this does not need one.
     pub async fn find_window(&self, client: Option<&Client>, search: &str) -> Result<(), Error> {
         let mut request = Command::new("find-window");
         if let Some(client) = client {
+            self.core
+                .require_same_server(client.server_identity(), "find-window")?;
             request = request
                 .arg("-t")
                 .arg(client.name().to_string_lossy().into_owned());
@@ -1758,10 +1776,13 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when no suitable client exists or tmux refuses.
+    /// Returns [`Error::ServerMismatch`] when the client belongs to another
+    /// server, or an error when no suitable client exists or tmux refuses.
     pub async fn display_panes(&self, client: Option<&Client>) -> Result<(), Error> {
         let mut request = Command::new("display-panes");
         if let Some(client) = client {
+            self.core
+                .require_same_server(client.server_identity(), "display-panes")?;
             request = request
                 .arg("-t")
                 .arg(client.name().to_string_lossy().into_owned());

@@ -314,7 +314,7 @@ pub enum ErrorKind {
     Unreachable,
     /// The tmux that answered is older than this crate supports.
     UnsupportedVersion,
-    /// The caller passed something that cannot be sent to tmux.
+    /// The caller supplied inputs that cannot form a valid operation.
     InvalidInput,
     /// The process, connection, or executor carrying the command failed.
     Transport,
@@ -629,6 +629,14 @@ pub enum Error {
         request_id: u64,
         /// The validated input category.
         input: &'static str,
+    },
+
+    /// Handles passed to one operation belong to different tmux endpoints.
+    #[non_exhaustive]
+    #[error("{operation} requires handles from the same tmux server endpoint")]
+    ServerMismatch {
+        /// The operation that rejected the foreign handle.
+        operation: &'static str,
     },
 
     /// A plan has a dependency that cannot be resolved before dispatch.
@@ -1265,7 +1273,9 @@ impl Error {
             Self::UnsupportedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
-            Self::InvalidCommandInput { .. } => ErrorKind::InvalidInput,
+            Self::InvalidCommandInput { .. } | Self::ServerMismatch { .. } => {
+                ErrorKind::InvalidInput
+            }
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => ErrorKind::InvalidInput,
             Self::Spawn { .. }
@@ -1349,6 +1359,7 @@ impl Error {
             | Self::CapabilityDefective { .. }
             | Self::VersionProbeFailed { .. }
             | Self::InvalidCommandInput { .. }
+            | Self::ServerMismatch { .. }
             | Self::ExecutableNotFound { .. }
             | Self::ExecutorShutdown { .. }
             | Self::DuplicateRequest { .. }
@@ -1492,6 +1503,10 @@ impl Error {
 
     pub(crate) fn invalid_command_input(request_id: u64, input: &'static str) -> Self {
         Self::InvalidCommandInput { request_id, input }
+    }
+
+    pub(crate) const fn server_mismatch(operation: &'static str) -> Self {
+        Self::ServerMismatch { operation }
     }
 
     pub(crate) fn spawn(
@@ -1741,6 +1756,10 @@ impl fmt::Debug for Error {
                 .debug_struct("InvalidCommandInput")
                 .field("request_id", request_id)
                 .field("input", input)
+                .finish(),
+            Self::ServerMismatch { operation } => formatter
+                .debug_struct("ServerMismatch")
+                .field("operation", operation)
                 .finish(),
             #[cfg(feature = "plan")]
             Self::InvalidPlan { source } => formatter
