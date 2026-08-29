@@ -1292,7 +1292,16 @@ impl Pane {
         .await
     }
 
-    /// Leave copy mode or any other pane mode.
+    /// Leave copy mode, or any other mode the pane is in.
+    ///
+    /// A pane that is in no mode is left alone rather than refused, so this can
+    /// be called to reach a known state without asking first.
+    ///
+    /// This dispatches `copy-mode -q` rather than the cancel key, because the
+    /// key reaches a pane through the copy-mode key table and clock mode and
+    /// tree mode have none: sending it there is answered "not in a mode" while
+    /// the pane stays in one. `-q` is the only exit that covers every mode,
+    /// including the ones [`Self::clock_mode`] and `choose-tree` create.
     ///
     /// # Errors
     ///
@@ -1300,12 +1309,11 @@ impl Pane {
     pub async fn exit_mode(&self) -> Result<(), Error> {
         listing::mutate(
             &self.core,
-            "send-keys",
-            Command::new("send-keys")
+            "copy-mode",
+            Command::new("copy-mode")
+                .arg("-q")
                 .arg("-t")
-                .arg(self.id().to_string())
-                .arg("-X")
-                .arg("cancel"),
+                .arg(self.id().to_string()),
         )
         .await
     }
