@@ -131,6 +131,13 @@ pub enum ControlModeErrorKind {
     /// cannot be sent over it even though the same command would run fine as
     /// a subprocess.
     UnrepresentableCommand,
+    /// A subscription name was empty, or contained a colon.
+    ///
+    /// tmux splits the subscription argument on its first colon, so a name
+    /// carrying one names something other than what was asked for and takes
+    /// the rest of the request with it. Refused here rather than sent,
+    /// because tmux accepts the result and reports no error.
+    InvalidSubscriptionName,
 }
 
 /// What tmux says when it holds no session to resolve a target against.
@@ -1046,7 +1053,8 @@ impl Error {
             Self::ControlModeFrameTooLarge { .. } => ErrorKind::Decode,
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, .. } => match kind {
-                ControlModeErrorKind::UnrepresentableCommand => ErrorKind::InvalidInput,
+                ControlModeErrorKind::UnrepresentableCommand
+                | ControlModeErrorKind::InvalidSubscriptionName => ErrorKind::InvalidInput,
                 // A limit was reached and the command was not carried out,
                 // which is what `Refused` says. The connection is fine.
                 ControlModeErrorKind::Unread => ErrorKind::Refused,
@@ -1118,6 +1126,15 @@ impl Error {
     pub(crate) const fn control_mode_unread() -> Self {
         Self::ControlMode {
             kind: ControlModeErrorKind::Unread,
+            source: None,
+        }
+    }
+
+    /// A subscription name tmux would read as something else.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_invalid_subscription() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::InvalidSubscriptionName,
             source: None,
         }
     }

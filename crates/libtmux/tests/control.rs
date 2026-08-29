@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use libtmux::control::{ControlEvents, ControlMode, ControlSender, Event};
+use libtmux::control::{ControlEvents, ControlMode, ControlSender, Event, Subscription};
 use libtmux::test::TestServer;
 use libtmux::{Command, NewWindowOptions};
 use static_assertions::assert_impl_all;
@@ -1143,5 +1143,192 @@ async fn real_tmux_compat_muting_a_producing_pane_leaves_the_server_up() {
 
     drop(commands);
     reader.abort();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Wait for the next report from one subscription, ignoring everything else.
+///
+/// tmux coalesces reports to at most once a second, so a caller watching for
+/// one is waiting on that interval rather than on the change itself.
+async fn next_report(events: &mut ControlEvents, name: &str, within: Duration) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.next_event())
+            .await
+            .ok()??;
+        if let Event::SubscriptionChanged {
+            name: reported,
+            value,
+            ..
+        } = event
+            && reported.as_str().is_ok_and(|reported| reported == name)
+        {
+            return value.as_str().ok().map(str::to_owned);
+        }
+    }
+}
+
+/// A subscription must report the format it was given, under the name it was
+/// given, when the thing it names changes.
+///
+/// `Event::SubscriptionChanged` was parsed long before anything could cause
+/// one: a caller could receive the event and had no way to ask for it. This is
+/// the round trip that closes that.
+#[tokio::test]
+async fn a_subscription_reports_a_change_under_its_own_name() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("watched").await.expect("session");
+
+    let (commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .subscribe("title", &Subscription::Session, "#{session_name}")
+        .await
+        .expect("the subscription is accepted");
+
+    assert_eq!(
+        next_report(&mut events, "title", Duration::from_secs(15)).await,
+        Some("watched".to_owned()),
+        "the first report carries the value as it already is"
+    );
+
+    commands
+        .send(Command::new("rename-session").arg("renamed"))
+        .await
+        .expect("the session is renamed");
+
+    assert_eq!(
+        next_report(&mut events, "title", Duration::from_secs(15)).await,
+        Some("renamed".to_owned()),
+        "a change is reported under the same name"
+    );
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Removing a subscription must stop its reports.
+///
+/// tmux removes one when the name is given with no colon after it, which is
+/// why this cannot be spelled as a subscribe with an empty format: that
+/// replaces the subscription rather than removing it.
+#[tokio::test]
+async fn unsubscribing_stops_the_reports() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("watched").await.expect("session");
+
+    let (commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .subscribe("title", &Subscription::Session, "#{session_name}")
+        .await
+        .expect("the subscription is accepted");
+    assert!(
+        next_report(&mut events, "title", Duration::from_secs(15))
+            .await
+            .is_some(),
+        "the subscription reports before it is removed"
+    );
+
+    commands
+        .unsubscribe("title")
+        .await
+        .expect("the subscription is removed");
+    commands
+        .send(Command::new("rename-session").arg("renamed"))
+        .await
+        .expect("the session is renamed");
+
+    // Three times the interval tmux coalesces to, so a report that was merely
+    // slow would have arrived.
+    assert_eq!(
+        next_report(&mut events, "title", Duration::from_secs(3)).await,
+        None,
+        "nothing is reported once the subscription is gone"
+    );
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The format is the last field, so colons inside it belong to it.
+///
+/// tmux splits the argument twice and stops, which is what makes a conditional
+/// like `#{?a,b,c}` or a two-part format safe to subscribe to and a colon in
+/// the *name* unsafe.
+#[tokio::test]
+async fn a_subscription_format_may_contain_colons() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("colonised").await.expect("session");
+
+    let (commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .subscribe(
+            "pair",
+            &Subscription::Session,
+            "#{session_name}:#{session_windows}",
+        )
+        .await
+        .expect("the subscription is accepted");
+
+    let reported = next_report(&mut events, "pair", Duration::from_secs(15))
+        .await
+        .expect("the subscription reports");
+    assert_eq!(
+        reported, "colonised:1",
+        "both halves of the format arrive, colon and all"
+    );
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A name tmux would read as something else is refused before it is sent.
+///
+/// tmux accepts `a:b:#{x}` and reports under `a`, and accepts `a:b` as a
+/// removal of `a`. Both are silent, so the check has to happen here.
+#[tokio::test]
+async fn a_subscription_name_tmux_would_misread_is_refused() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("guarded").await.expect("session");
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    for name in ["with:colon", ""] {
+        let refused = commands
+            .subscribe(name, &Subscription::Session, "#{session_name}")
+            .await
+            .expect_err("a name tmux would misread is refused");
+        assert_eq!(refused.kind(), libtmux::ErrorKind::InvalidInput);
+
+        let refused = commands
+            .unsubscribe(name)
+            .await
+            .expect_err("removal refuses the same names");
+        assert_eq!(refused.kind(), libtmux::ErrorKind::InvalidInput);
+    }
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
