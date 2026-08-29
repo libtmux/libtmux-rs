@@ -173,12 +173,29 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
 }
 
 /// Set one hook to a tmux command.
+///
+/// A hook is an array option, and tmux empties the whole array before storing
+/// an unindexed write: setting `alert-bell` discards whatever `alert-bell[1]`
+/// and up were running. Naming slot 0 explicitly takes the other branch of
+/// `cmd_set_option_exec` and leaves its neighbours alone, which is what
+/// setting one hook means. `set_hooks` already writes every slot by index for
+/// the same reason.
+///
+/// A name that already claims index syntax is forwarded whole. Parsing it here
+/// to check would have to decide what `alert-bell[x]` means, and tmux is the
+/// one that gets to answer that.
 pub(crate) async fn set_hook(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
     command_text: impl Into<OsString>,
 ) -> Result<(), Error> {
+    let slot = if name.contains('[') {
+        OsString::from(name)
+    } else {
+        OsString::from(format!("{name}[0]"))
+    };
+
     run(
         core,
         "set-hook",
@@ -186,7 +203,7 @@ pub(crate) async fn set_hook(
         scope
             .apply(Command::new("set-hook"))
             .arg("--")
-            .arg(OsString::from(name))
+            .arg(slot)
             .sensitive_arg(command_text.into()),
     )
     .await

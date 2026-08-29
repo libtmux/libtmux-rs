@@ -1062,3 +1062,50 @@ async fn a_whole_hook_write_refuses_bytes_rather_than_substituting_them() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn setting_one_hook_leaves_the_other_slots_alone() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    for slot in [0_usize, 2, 5] {
+        server
+            .set_hook(
+                &format!("alert-bell[{slot}]"),
+                format!("display-message {slot}"),
+            )
+            .await
+            .expect("a slot is written");
+    }
+
+    // A hook is an array, and tmux empties the array for an unindexed write.
+    // Setting one hook used to discard every other slot the caller had
+    // registered, and report success for doing it.
+    server
+        .set_hook("alert-bell", "display-message replaced")
+        .await
+        .expect("the hook is set");
+
+    let hooks = server
+        .hook("alert-bell")
+        .await
+        .expect("the hook reads")
+        .expect("the hook is set");
+    assert_eq!(
+        hooks.get(2).map(|command| command.to_string_lossy()),
+        Some("display-message 2".into()),
+        "a slot nobody wrote to survives: {hooks:?}",
+    );
+    assert_eq!(
+        hooks.get(5).map(|command| command.to_string_lossy()),
+        Some("display-message 5".into()),
+        "and so does the last one: {hooks:?}",
+    );
+    assert_eq!(
+        hooks.get(0).map(|command| command.to_string_lossy()),
+        Some("display-message replaced".into()),
+        "while slot 0 is the one that changed: {hooks:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
