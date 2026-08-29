@@ -57,8 +57,13 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Discards {
             discarded: &mut discarded,
             command: &mut command,
         });
-        if discarded && let Ok(mut seen) = self.seen.lock() {
-            seen.push(command.unwrap_or_else(|| "unnamed".to_owned()));
+        // Written as two ifs rather than a let-chain: this crate's floor is
+        // 1.85 and let-chains landed in 1.88. `tmux-mcp` uses them because its
+        // own floor is 1.88.
+        if discarded {
+            if let Ok(mut seen) = self.seen.lock() {
+                seen.push(command.unwrap_or_else(|| "unnamed".to_owned()));
+            }
         }
     }
 }
