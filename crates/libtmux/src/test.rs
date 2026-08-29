@@ -113,8 +113,28 @@ fn parse_timeout_scale(value: Option<&str>) -> f64 {
         .map_or(1.0, |scale| scale.max(1.0))
 }
 
-/// A fixture deadline, widened by [`timeout_scale`].
-fn scaled(base: Duration) -> Duration {
+/// Widen a fixture deadline by `LIBTMUX_TEST_TIMEOUT_SCALE`.
+///
+/// [`retry_until`] and the fixture's own deadlines already carry this. Reach
+/// for it when a test states a deadline of its own -- waiting on something
+/// this crate does not own, say -- so that it stretches on a loaded machine
+/// like the ones around it rather than becoming the first to fire.
+///
+/// The scale never narrows a deadline: unset, unparseable, or below `1` all
+/// leave `base` as it is.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use libtmux::test::scaled;
+///
+/// // Unset, the scale is 1 and a deadline is its own length.
+/// assert!(scaled(Duration::from_secs(5)) >= Duration::from_secs(5));
+/// ```
+#[must_use]
+pub fn scaled(base: Duration) -> Duration {
     base.mul_f64(timeout_scale())
 }
 
@@ -937,6 +957,11 @@ pub async fn retry_until(
     within: Duration,
     mut condition: impl AsyncFnMut() -> bool,
 ) -> Result<(), RetryTimeout> {
+    // Widened like every other fixture deadline. This is the helper a fixture
+    // polls tmux through, so a machine running several times its cores in work
+    // reaches this deadline long before it reaches the ones around it, and the
+    // failure names the condition rather than the load that beat it.
+    let within = scaled(within);
     let deadline = Instant::now() + within;
     loop {
         if condition().await {

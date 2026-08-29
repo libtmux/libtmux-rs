@@ -1409,7 +1409,7 @@ async fn interactive_commands_need_a_client() {
 
 #[tokio::test]
 async fn retry_until_waits_for_tmux_rather_than_sleeping() {
-    use libtmux::test::{retry_until, unique_name};
+    use libtmux::test::{retry_until, scaled, unique_name};
     use std::time::Duration;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -1443,7 +1443,7 @@ async fn retry_until_waits_for_tmux_rather_than_sleeping() {
     let waited = retry_until(Duration::from_millis(50), async || false)
         .await
         .expect_err("a condition that never holds times out");
-    assert_eq!(waited.waited(), Duration::from_millis(50));
+    assert_eq!(waited.waited(), scaled(Duration::from_millis(50)));
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

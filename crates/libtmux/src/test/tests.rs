@@ -484,3 +484,20 @@ fn containment_failure_cannot_rearm_a_reaped_leader_inner() {
     fs::remove_file(config).expect("test removes the retained config");
     fs::remove_dir_all(directory).expect("test removes the retained root");
 }
+
+#[tokio::test]
+async fn a_retry_deadline_widens_with_the_load_scale() {
+    // The scale exists so a loaded machine does not fail a healthy fixture.
+    // `retry_until` is what a fixture polls tmux through, so a deadline that
+    // skipped the scale here would be the one every fixture hit first.
+    let base = Duration::from_millis(20);
+    let timeout = super::retry_until(base, || async { false })
+        .await
+        .expect_err("a condition that never holds times out");
+
+    assert_eq!(
+        timeout.waited,
+        scaled(base),
+        "the deadline, and what it reports, carry the scale",
+    );
+}
