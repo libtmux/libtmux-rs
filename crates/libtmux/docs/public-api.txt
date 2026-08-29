@@ -431,6 +431,7 @@ function libtmux::Pane::is_at_right
 function libtmux::Pane::is_at_top
 function libtmux::Pane::is_dead
 function libtmux::Pane::is_in_mode
+function libtmux::Pane::is_piped
 function libtmux::Pane::join_into
 function libtmux::Pane::kill
 function libtmux::Pane::option_names

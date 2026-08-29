@@ -271,6 +271,45 @@ impl Pane {
         *self.projection.pane().pane_dead()
     }
 
+    /// Report whether tmux is copying this pane's output to a command.
+    ///
+    /// [`Self::pipe`] toggles when given no command, so a caller who lost track
+    /// of whether it is on cannot ask by calling it again -- that would turn it
+    /// off, or start a second one. This says which state the pane is in.
+    ///
+    /// The value arrives with every pane listing already, so reading it costs
+    /// nothing beyond the listing a caller has done anyway.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("piped").await?;
+    /// let mut pane = session.panes().await?.remove(0);
+    ///
+    /// assert!(!pane.is_piped());
+    ///
+    /// pane.pipe(Some("cat >/dev/null")).await?;
+    /// pane.refresh().await?;
+    /// assert!(pane.is_piped());
+    ///
+    /// pane.pipe(None::<String>).await?;
+    /// pane.refresh().await?;
+    /// assert!(!pane.is_piped());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn is_piped(&self) -> bool {
+        *self.projection.pane().pane_pipe()
+    }
+
     /// Report whether the pane is in copy mode or another pane mode.
     ///
     /// tmux reports this as a count rather than a flag, so any nonzero value

@@ -534,26 +534,8 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
     let session = server.new_session("piped").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
 
-    let piping = |server: &libtmux::Server, pane: libtmux::PaneId| {
-        let server = server.clone();
-        async move {
-            server
-                .cmd(
-                    Command::new("display-message")
-                        .arg("-p")
-                        .arg("-t")
-                        .arg(pane.to_string())
-                        .arg("#{pane_pipe}"),
-                )
-                .await
-                .expect("tmux answers")
-                .stdout_lossy()
-                .trim()
-                .to_owned()
-        }
-    };
-
-    assert_eq!(piping(server, pane.id().clone()).await, "0", "nothing yet");
+    let mut pane = pane;
+    assert!(!pane.is_piped(), "nothing yet");
 
     let sink_dir = tempfile::Builder::new()
         .prefix("libtmux-pipe-")
@@ -564,7 +546,8 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
     pane.pipe(Some(format!("cat >{}", sink.display())))
         .await
         .expect("the pane pipes");
-    assert_eq!(piping(server, pane.id().clone()).await, "1", "now piping");
+    pane.refresh().await.expect("the pane still exists");
+    assert!(pane.is_piped(), "now piping");
 
     pane.send_keys("printf 'piped\n'").await.expect("keys");
     pane.send_key_names(["Enter"]).await.expect("enter");
@@ -575,11 +558,8 @@ async fn a_pane_pipes_until_it_is_told_to_stop() {
     .expect("what the pane printed reaches the pipe");
 
     pane.pipe(None::<String>).await.expect("the pipe stops");
-    assert_eq!(
-        piping(server, pane.id().clone()).await,
-        "0",
-        "the same call with no command stops it"
-    );
+    pane.refresh().await.expect("the pane still exists");
+    assert!(!pane.is_piped(), "the same call with no command stops it");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
