@@ -675,6 +675,18 @@ impl Pane {
     /// # }
     /// ```
     pub async fn capture_with(&self, options: CaptureOptions) -> Result<Vec<TmuxText>, Error> {
+        // `-T` arrived in 3.4; every other flag this lowers is present at the
+        // supported floor. Refusing here beats dispatching a flag tmux will
+        // reject with a usage error that names the whole command.
+        if options.trims_blank_cells() {
+            crate::Server::from_core(Arc::clone(&self.core))
+                .require(
+                    "capture-pane -T",
+                    crate::version::since::CAPTURE_TRIM_BLANK_CELLS,
+                )
+                .await?;
+        }
+
         let command = options.into_command(self.id().as_ref());
         let target = command.target().map(OsStr::to_os_string);
         let result = self.core.execute(command).await?;
@@ -1542,6 +1554,11 @@ impl fmt::Display for Pane {
 /// # }
 /// ```
 #[must_use = "options describe a capture but do not perform one"]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each field is one independent capture-pane flag, and tmux \
+              combines them freely; there is no state to factor out"
+)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct CaptureOptions {
     start: Option<CaptureBound>,
@@ -1549,6 +1566,9 @@ pub struct CaptureOptions {
     escape_sequences: bool,
     join_wrapped: bool,
     line_flags: bool,
+    trailing_spaces: bool,
+    trim_blank_cells: bool,
+    pending_escape: bool,
 }
 
 impl CaptureOptions {
@@ -1560,6 +1580,9 @@ impl CaptureOptions {
             escape_sequences: false,
             join_wrapped: false,
             line_flags: false,
+            trailing_spaces: false,
+            trim_blank_cells: false,
+            pending_escape: false,
         }
     }
 
@@ -1589,6 +1612,76 @@ impl CaptureOptions {
         self
     }
 
+    /// Keep the spaces tmux would otherwise strip from each line's end.
+    ///
+    /// `capture-pane` trims trailing spaces unless told not to, so a captured
+    /// line is normally shorter than the pane is wide and a caller comparing
+    /// against what a program printed sees the difference. This is tmux's
+    /// `-N`.
+    ///
+    /// [`Self::join_wrapped`] already keeps them, and additionally joins
+    /// lines the pane wrapped; this keeps them without joining anything.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::CaptureOptions;
+    ///
+    /// let exact = CaptureOptions::visible().trailing_spaces();
+    /// assert_ne!(exact, CaptureOptions::visible());
+    /// ```
+    #[must_use = "options describe a capture but do not perform one"]
+    pub const fn trailing_spaces(mut self) -> Self {
+        self.trailing_spaces = true;
+        self
+    }
+
+    /// Drop the positions at each line's end that hold no character at all.
+    ///
+    /// A pane's grid is rectangular, so a short line is padded with cells that
+    /// were never written. tmux includes them unless told not to; this is its
+    /// `-T`. Distinct from [`Self::trailing_spaces`], which is about spaces a
+    /// program actually printed -- one asks for the pane's shape, the other
+    /// for what was written into it.
+    ///
+    /// [`Self::join_wrapped`] implies this.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::CaptureOptions;
+    ///
+    /// let written = CaptureOptions::visible().trim_blank_cells();
+    /// assert_ne!(written, CaptureOptions::visible());
+    /// ```
+    #[must_use = "options describe a capture but do not perform one"]
+    pub const fn trim_blank_cells(mut self) -> Self {
+        self.trim_blank_cells = true;
+        self
+    }
+
+    /// Capture the escape sequence the pane has begun but not finished.
+    ///
+    /// tmux's `-P`, and narrower than it sounds: the answer is only the bytes
+    /// of an escape sequence that arrived incomplete, not output waiting to be
+    /// drawn. A pane in the middle of nothing answers with nothing. It
+    /// diagnoses a program that stopped mid-sequence; it is not a way to read
+    /// output early.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::CaptureOptions;
+    ///
+    /// let partial = CaptureOptions::visible().pending_escape();
+    /// assert_ne!(partial, CaptureOptions::visible());
+    /// ```
+    #[must_use = "options describe a capture but do not perform one"]
+    pub const fn pending_escape(mut self) -> Self {
+        self.pending_escape = true;
+        self
+    }
+
     /// Ask tmux for the per-line flags, which mark where prompts begin.
     ///
     /// Only [`Pane::capture_lines`] reads these; a plain capture would carry
@@ -1602,6 +1695,11 @@ impl CaptureOptions {
     pub const fn join_wrapped(mut self) -> Self {
         self.join_wrapped = true;
         self
+    }
+
+    /// Report whether these options ask tmux for `-T`.
+    pub(crate) const fn trims_blank_cells(self) -> bool {
+        self.trim_blank_cells
     }
 
     /// Lower these options into a `capture-pane` command for one pane.
@@ -1621,6 +1719,15 @@ impl CaptureOptions {
         }
         if self.join_wrapped {
             command = command.arg("-J");
+        }
+        if self.trailing_spaces {
+            command = command.arg("-N");
+        }
+        if self.trim_blank_cells {
+            command = command.arg("-T");
+        }
+        if self.pending_escape {
+            command = command.arg("-P");
         }
         command
     }

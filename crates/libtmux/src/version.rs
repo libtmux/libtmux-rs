@@ -625,6 +625,17 @@ pub mod since {
     /// which discards the queue on every supported release.
     pub const CONTROL_PANE_OFF: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 
+    /// `capture-pane -T`, and so [`crate::CaptureOptions::trim_blank_cells`].
+    ///
+    /// Added in 3.4 to stop at the last used cell instead of the pane's full
+    /// width. The option string is `ab:CeE:JNpPqS:t:` on 3.2a and gains `T`
+    /// by 3.5a; tmux's own CHANGES puts it in the 3.3a-to-3.4 section.
+    ///
+    /// `-N` and `-P` need no such gate: both are present at 3.2a, which is
+    /// [`crate::TmuxVersion::MIN_SUPPORTED`].
+    pub const CAPTURE_TRIM_BLANK_CELLS: ReleaseVersion =
+        ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
+
     /// `list-clients` leaving out a client that is stopped rather than gone,
     /// and so [`crate::Error::ClientSuspended`] being reachable at all.
     ///
