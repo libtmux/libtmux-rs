@@ -200,11 +200,11 @@ fmt:
 clippy:
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-# Check the crate builds with no features, and each feature alone
+# Check the crate builds with no features, and with every pair of them
 [group: 'lint']
 features:
     cargo check --locked --package libtmux --all-targets --no-default-features
-    cargo hack check --locked --workspace --each-feature --all-targets
+    cargo hack check --locked --workspace --feature-powerset --depth 2 --all-targets
 
 # Check dependency licences, advisories, and sources
 [group: 'lint']
