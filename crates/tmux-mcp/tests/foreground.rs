@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use libtmux::test::TestServer;
+use libtmux::test::{TestServer, scaled};
 use libtmux::{Pane, Server, Session};
 use tmux_mcp::TmuxTools;
 use tokio_util::sync::CancellationToken;
@@ -67,6 +67,9 @@ async fn uncertain_foreground_dispatch_names_the_owned_job() {
         .socket_path(guard.server().socket_path())
         .config_file(guard.server().config_file().expect("the fixture config"))
         .tmux_executable(guard.server().tmux_executable())
+        // Deliberately short and deliberately unscaled: this test wants the
+        // dispatch to run out of time, so the deadline is the subject rather
+        // than a bound on a healthy wait.
         .default_timeout(Duration::from_secs(2))
         .build()
         .expect("a short-deadline handle builds");
@@ -363,7 +366,7 @@ async fn forgetting_a_foreground_job_wakes_its_waiter() {
         .await
         .expect("the command gate is released");
 
-    let answer = tokio::time::timeout(Duration::from_secs(2), running)
+    let answer = tokio::time::timeout(scaled(Duration::from_secs(2)), running)
         .await
         .expect("forgetting the owner wakes the foreground waiter")
         .expect("the foreground task stays healthy");

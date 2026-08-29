@@ -6,7 +6,7 @@
 
 use std::time::Duration as StdDuration;
 
-use libtmux::test::TestServer;
+use libtmux::test::{TestServer, scaled};
 use libtmux::{NewSessionOptions as SessionOptions, PaneWait};
 use rmcp::ServiceExt as _;
 use rmcp::handler::server::wrapper::Parameters;
@@ -807,7 +807,7 @@ async fn a_readonly_plan_returns_typed_capture_and_failure_evidence() {
         .next()
         .expect("one pane");
     assert_eq!(
-        pane.wait_for_text("plan-evidence", StdDuration::from_secs(5))
+        pane.wait_for_text("plan-evidence", scaled(StdDuration::from_secs(5)))
             .await
             .expect("the pane can be captured"),
         PaneWait::Arrived,
