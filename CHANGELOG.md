@@ -18,6 +18,15 @@ full.
 
 ### Added
 
+- `Pane::wait_for_text` and `Pane::wait_for_quiet`, with `PaneWait` naming the
+  outcome. Waiting for a pane needed a loop the caller wrote, and
+  `test::retry_until` sits behind `test-support`, so the only production answer
+  was to poll by hand. Neither needs a feature. Each look reads the scrollback
+  with wrapped lines joined, so text that scrolled away is still found and a
+  line wider than the pane matches across its wrap. A pane whose process ends
+  answers `PaneWait::Dead` rather than running to the deadline, and running out
+  of time is `PaneWait::TimedOut` rather than an error.
+
 - `CaptureOptions::trailing_spaces`, `trim_blank_cells`, and
   `pending_escape`, covering `capture-pane`'s `-N`, `-T` and `-P`. Without
   `-N` tmux strips the spaces a program printed at a line's end, so no typed

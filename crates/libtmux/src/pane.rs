@@ -5,6 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
@@ -769,6 +770,158 @@ impl Pane {
             .collect())
     }
 
+    /// Wait until this pane's output contains `needle`.
+    ///
+    /// Polls rather than streams, so it needs no feature: a caller who
+    /// dispatches a command needs to know when it finished, and
+    /// [`Pane::send_keys`] without that is half an operation. A control-mode
+    /// subscription would answer sooner and is not available in a default
+    /// build.
+    ///
+    /// Each look reads the scrollback rather than the visible screen, and
+    /// joins lines tmux wrapped. Both matter for correctness rather than
+    /// completeness: text that scrolled off before the look would otherwise
+    /// be missed and reported as absent, and a line wider than the pane
+    /// arrives split, so a needle spanning the wrap point would never match.
+    ///
+    /// A pane whose process ends answers [`PaneWait::Dead`] rather than
+    /// running to the deadline, because waiting longer cannot change it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses a capture.
+    /// Running out of time is [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::PaneWait;
+    /// use std::time::Duration;
+    ///
+    /// # let guard = libtmux::test::TestServer::builder().start().await?;
+    /// # let session = guard.server().new_session("waiting").await?;
+    /// # let pane = session.panes().await?.remove(0);
+    /// pane.send_keys("printf 'ready\\n'").await?;
+    /// pane.send_key_names(["Enter"]).await?;
+    ///
+    /// let seen = pane.wait_for_text("ready", Duration::from_secs(10)).await?;
+    /// assert_eq!(seen, PaneWait::Arrived);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_for_text(
+        &self,
+        needle: impl AsRef<[u8]>,
+        within: Duration,
+    ) -> Result<PaneWait, Error> {
+        let needle = needle.as_ref();
+        self.wait_until(within, |text, _| contains(text, needle))
+            .await
+    }
+
+    /// Wait until this pane stops producing output for `quiet_for`.
+    ///
+    /// For work that prints nothing recognisable at its end. Quiet is measured
+    /// from the last change this saw, so it cannot be shorter than the polling
+    /// interval; a caller wanting a specific string should say so with
+    /// [`Pane::wait_for_text`], which answers as soon as it appears rather
+    /// than after a silence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses a capture.
+    /// Running out of time is [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::PaneWait;
+    /// use std::time::Duration;
+    ///
+    /// # let guard = libtmux::test::TestServer::builder().start().await?;
+    /// # let session = guard.server().new_session("settling").await?;
+    /// # let pane = session.panes().await?.remove(0);
+    /// let settled = pane
+    ///     .wait_for_quiet(Duration::from_millis(300), Duration::from_secs(10))
+    ///     .await?;
+    /// assert_eq!(settled, PaneWait::Arrived);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_for_quiet(
+        &self,
+        quiet_for: Duration,
+        within: Duration,
+    ) -> Result<PaneWait, Error> {
+        let mut last_change = tokio::time::Instant::now();
+        let mut previous: Option<Vec<u8>> = None;
+        self.wait_until(within, move |text, now| {
+            if previous.as_deref() == Some(text) {
+                return now.duration_since(last_change) >= quiet_for;
+            }
+            previous = Some(text.to_vec());
+            last_change = now;
+            false
+        })
+        .await
+    }
+
+    /// The shared loop: look, decide, sleep, repeat until the deadline.
+    async fn wait_until(
+        &self,
+        within: Duration,
+        mut settled: impl FnMut(&[u8], tokio::time::Instant) -> bool,
+    ) -> Result<PaneWait, Error> {
+        // Scrollback rather than the visible screen, and wrapped lines joined:
+        // output that scrolled away would read as absent, and a needle
+        // spanning a wrap point would never match.
+        let options = CaptureOptions::history().join_wrapped();
+        let deadline = tokio::time::Instant::now() + within;
+
+        loop {
+            let text = self
+                .capture_with(options)
+                .await?
+                .into_iter()
+                .flat_map(|line| {
+                    let mut bytes = line.as_bytes().to_vec();
+                    bytes.push(b'\n');
+                    bytes
+                })
+                .collect::<Vec<u8>>();
+
+            let now = tokio::time::Instant::now();
+            // Asked before the deadline is checked, so output already there
+            // when the wait began is an answer rather than a timeout.
+            if settled(&text, now) {
+                return Ok(PaneWait::Arrived);
+            }
+
+            // A pane whose process ended will not produce more, so holding it
+            // to the deadline reports the wrong thing slowly.
+            if self.refreshed().await.is_ok_and(|pane| pane.is_dead()) {
+                return Ok(PaneWait::Dead);
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(PaneWait::TimedOut);
+            }
+            tokio::time::sleep(POLL_INTERVAL.min(within)).await;
+        }
+    }
+
     /// Make this pane active in its window.
     ///
     /// # Errors
@@ -1521,6 +1674,53 @@ impl fmt::Display for Pane {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.id())
     }
+}
+
+/// How often a wait looks at the pane.
+///
+/// A poll costs one `capture-pane`, so this trades answer latency against
+/// commands per second. Chosen to keep a wait under ten dispatches a second
+/// while still answering inside the time a person notices.
+const POLL_INTERVAL: Duration = Duration::from_millis(120);
+
+/// Whether `haystack` holds `needle`, byte for byte.
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+/// What came of waiting for a pane to do something.
+///
+/// Running out of time is an outcome rather than an error, because a caller
+/// retries "it has not happened yet" and "tmux could not be reached"
+/// differently, and an error kind would make them look alike.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::PaneWait;
+///
+/// fn keep_waiting(outcome: PaneWait) -> bool {
+///     matches!(outcome, PaneWait::TimedOut)
+/// }
+///
+/// assert!(keep_waiting(PaneWait::TimedOut));
+/// assert!(!keep_waiting(PaneWait::Dead));
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum PaneWait {
+    /// What was waited for happened.
+    Arrived,
+    /// The pane's process ended before it happened. Waiting longer cannot
+    /// change the answer, which is why this is not a timeout.
+    Dead,
+    /// The time ran out with the pane still alive.
+    TimedOut,
 }
 
 /// How far back a capture reaches, and in what form.
