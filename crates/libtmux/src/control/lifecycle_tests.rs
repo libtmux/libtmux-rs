@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
-use super::ControlMode;
+use super::actor::EVENT_QUEUE;
+use super::{ControlMode, Event};
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
 use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId};
 
@@ -609,6 +610,53 @@ async fn opening_notifications_stop_at_the_receiver_bound() {
     );
 
     server.shutdown().await.expect("server shuts down");
+}
+
+#[tokio::test]
+async fn terminal_notifications_drain_after_exit_and_eof() {
+    for (terminal, expected_exits) in [("printf '%%exit done\\n'", 1), ("", 0)] {
+        let fixture = directory();
+        let executable = write_script(
+            fixture.path(),
+            &format!(
+                "{}\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\n{terminal}",
+                opening_success(),
+                EVENT_QUEUE + 1,
+            ),
+        );
+        let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+        let (commands, mut events) = attach(&server)
+            .await
+            .expect("control mode attaches")
+            .split();
+
+        tokio::time::timeout(TEST_TIMEOUT, async {
+            while !commands.is_closed() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the terminal condition closes command admission");
+
+        let mut sessions_changed = 0;
+        let mut exits = 0;
+        tokio::time::timeout(TEST_TIMEOUT, async {
+            while let Some(event) = events.next_event().await {
+                match event {
+                    Event::SessionsChanged => sessions_changed += 1,
+                    Event::Exit { .. } => exits += 1,
+                    other => panic!("unexpected terminal fixture event: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("every parsed event reaches the receiver");
+
+        assert_eq!(sessions_changed, EVENT_QUEUE + 1);
+        assert_eq!(exits, expected_exits);
+        events.shutdown().await.expect("connection shuts down");
+        server.shutdown().await.expect("server shuts down");
+    }
 }
 
 #[tokio::test]

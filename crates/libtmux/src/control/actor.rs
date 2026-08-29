@@ -16,7 +16,7 @@ use crate::limits::ControlLimits;
 const COMMAND_QUEUE: usize = 16;
 
 /// How many events may buffer before the connection stops reading tmux.
-const EVENT_QUEUE: usize = 256;
+pub(super) const EVENT_QUEUE: usize = 256;
 
 /// How many events may be held while a reply is outstanding.
 ///
@@ -384,13 +384,18 @@ impl Connection {
                 Step::Read(Err(error)) => return Err(error),
                 // tmux hung up, or the watcher asked to stop. Either ends the
                 // connection whatever the other half is doing.
-                Step::Read(Ok(None)) | Step::Unwatched { asked: true } => {
+                Step::Read(Ok(None)) => {
+                    self.drain_terminal_events().await;
+                    return Ok(());
+                }
+                Step::Unwatched { asked: true } => {
                     return Ok(());
                 }
                 Step::CoreStopped => return Err(self.child.shutdown_error()),
                 Step::TimedOut => return Err(Error::control_mode_timeout()),
                 Step::Read(Ok(Some(line))) => {
                     if !self.dispatch(line, &mut watching).await? {
+                        self.drain_terminal_events().await;
                         return Ok(());
                     }
                 }
@@ -553,6 +558,16 @@ impl Connection {
                 }
                 Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
                 None => return Err(Error::control_mode_closed()),
+            }
+        }
+    }
+
+    /// Close command admission and deliver every event parsed before tmux ended.
+    async fn drain_terminal_events(&mut self) {
+        self.commands.close();
+        while let Some(event) = self.pending.pop_front() {
+            if self.events.send(event).await.is_err() {
+                break;
             }
         }
     }
