@@ -1418,7 +1418,12 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command. Being the window's only
-    /// pane is not one of those: tmux accepts that and does nothing.
+    /// pane is not one of those, and neither is it a no-op: tmux relinks the
+    /// window rather than breaking a pane out of it, which moves the window to
+    /// a free index. The window and pane ids are unchanged, so a [`Window`]
+    /// held across this call keeps its identity and loses its index.
+    ///
+    /// [`Window`]: crate::Window
     ///
     /// # Examples
     ///
