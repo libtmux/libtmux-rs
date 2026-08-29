@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let session = server.new_session(unique_name("watched").as_str()).await?;
     let (commands, mut events) = ControlMode::attach(&server, session.id()).await?.split();
+    println!("one connection to {}", socket.display());
 
     // The watcher gets its own task. Sending and watching are separate
     // handles precisely so neither has to wait for the other, and a loop that
@@ -36,9 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut seen = Vec::new();
         while let Some(event) = events.next_event().await {
             match event {
-                Event::WindowAdded { window } => seen.push(format!("window {window} appeared")),
+                Event::WindowAdded { window } => {
+                    println!("  <- window {window} appeared");
+                    seen.push(window.to_string());
+                }
                 Event::WindowRenamed { window, name } => {
-                    seen.push(format!("window {window} is now {}", name.to_string_lossy()));
+                    println!("  <- window {window} is now {}", name.to_string_lossy());
+                    seen.push(window.to_string());
                 }
                 Event::Exit { .. } => break,
                 // tmux reports far more than this; an event nobody matched is
@@ -54,9 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Meanwhile, drive the server down the same connection. These spawn no
     // processes: they are lines on the socket the watcher is reading.
+    println!("  -> new-window   (a line on that connection, not a process)");
     commands
         .send(Command::new("new-window").arg("-d").arg("-n").arg("built"))
         .await?;
+    println!("  -> rename-window");
     commands
         .send(
             Command::new("rename-window")
@@ -67,9 +74,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await??;
-    for line in &seen {
-        println!("{line}");
-    }
+    println!(
+        "{} events arrived while those commands were being sent, on the same socket",
+        seen.len()
+    );
 
     drop(commands);
     events.shutdown().await?;

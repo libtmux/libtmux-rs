@@ -41,7 +41,7 @@ libtmux  | inspect  |                                               |    |      
 libtmux  | find     | query                                         | sh |               | in window
 libtmux  | scratch  | test-support                                  |    |               | hello from tmux
 libtmux  | sweep    | test-support                                  |    |               | fixture
-libtmux  | watch    | control-mode,test-support                     |    |               |
+libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket
 libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               |
 tmux-mcp | budget   |                                               |    |               |
 tmux-mcp | surface  |                                               |    |               |
