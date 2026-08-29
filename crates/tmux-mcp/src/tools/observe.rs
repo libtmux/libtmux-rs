@@ -148,9 +148,9 @@ impl TmuxTools {
                        and tell me if it worked\". Output is read from the pane's live stream, \
                        so nothing is missed and the shell prompt is not included. The command \
                        runs in a subshell, so cd and export do not persist. \
-                       Reaching the deadline stops the waiting, not the command: the pane is \
-                       still busy afterwards, and another run there reports no_shell until it \
-                       finishes. Send C-c with send_keys to stop it.",
+                       Reaching the deadline or cancelling this request stops the waiting, not \
+                       the command. The result includes a job id: inspect it with job_status or \
+                       stop it with cancel_job.",
         title = "Run Command In Pane",
         annotations(
             read_only_hint = false,
@@ -183,7 +183,7 @@ impl TmuxTools {
         let view = reporting(
             reporter,
             "still running",
-            exec::run_command(
+            self.jobs.run(
                 &target,
                 &command,
                 Self::budget(seconds),
@@ -192,7 +192,7 @@ impl TmuxTools {
             ),
         )
         .await
-        .map_err(|e| tmux_error(&e))?;
+        .map_err(start_error)?;
 
         Ok(Json(view))
     }
@@ -277,11 +277,11 @@ impl TmuxTools {
 
     /// List the background commands this server is holding.
     #[tool(
-        description = "List every job started with start_command, including starts whose \
-                       dispatch was not confirmed, newest first. A finished job is kept so \
-                       its answer can still be collected. The least recently read finished \
-                       job is forgotten when a new job needs its slot; an active job is \
-                       never forgotten.",
+        description = "List every command this server still owns, including start_command \
+                       jobs, run_command calls that stopped waiting, and starts whose dispatch \
+                       was not confirmed. A finished job is kept so its answer can still be \
+                       collected. The least recently read finished job is forgotten when a new \
+                       job needs its slot; an active job is never forgotten.",
         title = "List Background Commands",
         annotations(
             read_only_hint = true,

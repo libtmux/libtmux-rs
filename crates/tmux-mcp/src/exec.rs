@@ -5,6 +5,7 @@
 //! order it wrote it, including what has already scrolled away. Nothing here
 //! polls, and nothing here depends on tmux still holding a line in scrollback.
 
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -94,7 +95,7 @@ pub enum IdleOutcome {
 }
 
 /// What a command did.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 pub struct RunView {
     /// The pane the command ran in.
     pub pane: String,
@@ -112,6 +113,12 @@ pub struct RunView {
     pub bytes: usize,
     /// Whether the output was truncated from the front.
     pub truncated: bool,
+    /// The background job retaining this run after waiting stopped.
+    ///
+    /// Absent once the command has a terminal outcome. Pass this to
+    /// `job_status` or `cancel_job` instead of retrying the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
 }
 
 /// What a pane said while it was watched for a pattern.
@@ -210,72 +217,21 @@ impl Patterns {
     }
 }
 
-/// Run one command in a pane and report how it went.
-///
-/// The command is bracketed by two sentinels the pane's shell prints, so the
-/// output is exactly what the command wrote and the exit status is the
-/// command's own. The pane's shell has to cooperate for that, which is why
-/// this reports a pane that is not at a prompt rather than waiting on one.
-///
-/// # Errors
-///
-/// Returns an error when the pane cannot be watched or the keys cannot be
-/// sent.
-pub(crate) async fn run_command(
-    pane: &Pane,
-    command: &str,
-    timeout: Duration,
-    suppress_history: bool,
-    cancelled: &CancellationToken,
-) -> Result<RunView, Error> {
-    let mut run = start_run(pane, command, suppress_history).await?;
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut outcome = RunOutcome::Deadline;
-
-    loop {
-        let chunk = tokio::select! {
-            biased;
-            // Checked first so a request cancelled while output is already
-            // waiting still stops, rather than reading one more chunk.
-            () = cancelled.cancelled() => {
-                outcome = RunOutcome::Cancelled;
-                break;
-            }
-            chunk = tokio::time::timeout_at(deadline, run.output.next_chunk()) => chunk,
-        };
-        match chunk {
-            Ok(Some(chunk)) => {
-                if let Some(mut view) = run.scanner.push(&chunk) {
-                    view.pane = run.output.pane().to_string();
-                    // Shutting down is what distinguishes a connection that
-                    // broke from one that closed, so its failure is this
-                    // call's failure.
-                    run.output.shutdown().await?;
-                    return Ok(view);
-                }
-            }
-            Ok(None) => {
-                outcome = RunOutcome::PaneClosed;
-                break;
-            }
-            Err(_) => break,
-        }
-    }
-
-    let view = run.scanner.unfinished(outcome, run.pane.clone());
-    run.output.shutdown().await?;
-
-    Ok(view)
-}
-
 /// A pane stream and the sentinels for one command.
-///
-/// Held so a caller can decide how long to read for -- to a deadline, as
-/// `run_command` does, or until it ends, as a background job does.
 pub(crate) struct Run {
     output: libtmux::control::PaneOutput,
     scanner: Scanner,
     pane: String,
+}
+
+/// One immutable snapshot from a run's collector.
+pub(crate) struct RunProgress<'a> {
+    pub(crate) stream: &'a [u8],
+    pub(crate) body: Option<Range<usize>>,
+    pub(crate) body_dropped: u64,
+    pub(crate) body_checkpoint: &'a TextFilter,
+    pub(crate) bytes: usize,
+    pub(crate) truncated: bool,
 }
 
 /// A watched run whose pane has not been changed yet.
@@ -367,47 +323,16 @@ pub(crate) async fn prepare_run(
     })
 }
 
-/// Send a command to a pane, bracketed by the sentinels that delimit it.
-///
-/// Returns once the keys are away and the connection is open. Nothing has been
-/// read yet, so nothing has been missed: the stream was attached first.
-///
-/// # Errors
-///
-/// Returns an error when the pane cannot be watched or the keys cannot be
-/// sent.
-pub(crate) async fn start_run(
-    pane: &Pane,
-    command: &str,
-    suppress_history: bool,
-) -> Result<Run, Error> {
-    match prepare_run(pane, command, suppress_history)
-        .await?
-        .dispatch()
-        .await
-    {
-        RunDispatch::Confirmed(run) => Ok(run),
-        RunDispatch::NotDispatched(error) | RunDispatch::Unknown { error, .. } => Err(error),
-    }
-}
-
 impl Run {
     /// Read until the command ends or the pane closes, publishing as it goes.
     ///
     /// `publish` receives the command's output so far and how many bytes were
     /// dropped from the front of it, so a poller sees progress rather than
     /// only the answer.
-    pub(crate) async fn collect(
-        mut self,
-        mut publish: impl FnMut(&[u8], u64, &TextFilter),
-    ) -> RunView {
+    pub(crate) async fn collect(mut self, mut publish: impl FnMut(RunProgress<'_>)) -> RunView {
         while let Some(chunk) = self.output.next_chunk().await {
             let finished = self.scanner.push(&chunk);
-            publish(
-                self.scanner.body(),
-                self.scanner.body_dropped(),
-                self.scanner.body_checkpoint(),
-            );
+            publish(self.scanner.progress());
 
             if let Some(mut view) = finished {
                 view.pane = self.pane.clone();
@@ -590,26 +515,18 @@ impl Scanner {
         Some(view)
     }
 
-    /// The command's own output so far, between the sentinels.
-    ///
-    /// Empty until the opening sentinel arrives, which is what separates the
-    /// shell's echo of the typed line from what the command wrote.
-    fn body(&self) -> &[u8] {
-        let Some(from) = self.body_at else {
-            return &[];
-        };
-        let to = self.close_at.unwrap_or(self.collected.len());
-        self.collected.get(from..to).unwrap_or_default()
-    }
-
-    /// How many bytes of the command's output were dropped to bound memory.
-    const fn body_dropped(&self) -> u64 {
-        self.body_dropped
-    }
-
-    /// Filter state at the first byte returned by [`Self::body`].
-    const fn body_checkpoint(&self) -> &TextFilter {
-        &self.body_checkpoint
+    /// Borrow the state an owner needs to publish this run's progress.
+    fn progress(&self) -> RunProgress<'_> {
+        RunProgress {
+            stream: &self.collected,
+            body: self
+                .body_at
+                .map(|from| from..self.close_at.unwrap_or(self.collected.len())),
+            body_dropped: self.body_dropped,
+            body_checkpoint: &self.body_checkpoint,
+            bytes: self.bytes,
+            truncated: self.truncated,
+        }
     }
 
     /// Report a run that stopped without completing.
@@ -630,6 +547,7 @@ impl Scanner {
             output: readable(&self.collected),
             bytes: self.bytes,
             truncated: self.truncated,
+            job: None,
         }
     }
 }
@@ -666,6 +584,7 @@ fn finished(collected: &[u8], at: usize, opened: &[u8], closed: &[u8]) -> Option
         output: readable(body),
         bytes: 0,
         truncated: false,
+        job: None,
     })
 }
 
@@ -895,9 +814,14 @@ mod tests {
         stream.extend_from_slice(&body);
 
         assert!(scanner.push(&stream).is_none());
-        assert_eq!(scanner.body_dropped(), 4);
+        let progress = scanner.progress();
+        assert_eq!(progress.body_dropped, 4);
+        let retained = progress
+            .body
+            .and_then(|range| progress.stream.get(range))
+            .unwrap_or_default();
 
-        let text = readable_from(scanner.body_checkpoint(), scanner.body(), 0);
+        let text = readable_from(progress.body_checkpoint, retained, 0);
 
         assert!(text.starts_with("red"));
         assert_eq!(text.len(), OUTPUT_LIMIT - 1);

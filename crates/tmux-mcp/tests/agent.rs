@@ -1475,10 +1475,12 @@ async fn abandoning_a_wait_closes_the_connection_it_opened() {
 }
 
 #[tokio::test]
-async fn abandoning_a_run_closes_the_connection_it_opened() {
+async fn abandoning_a_run_keeps_one_owned_connection() {
     let (guard, tools, pane) = typing_fixture("work").await;
     let server = guard.server();
     let baseline = client_count(server).await;
+    let started = "abandoned-run-started";
+    let release = "abandoned-run-release";
 
     let running = {
         let tools = tools.clone();
@@ -1488,7 +1490,9 @@ async fn abandoning_a_run_closes_the_connection_it_opened() {
                 .run_command(
                     args(serde_json::json!({
                         "pane": pane,
-                        "command": "sleep 600",
+                        "command": format!(
+                            "tmux wait-for -S {started}; tmux wait-for {release}"
+                        ),
                         "seconds": 600
                     })),
                     CancellationToken::new(),
@@ -1499,6 +1503,14 @@ async fn abandoning_a_run_closes_the_connection_it_opened() {
     };
 
     assert_eq!(
+        server
+            .wait_for_channel(started, Duration::from_secs(5))
+            .await
+            .expect("the command gate can be read"),
+        libtmux::ChannelWait::Signalled,
+        "the command did not start",
+    );
+    assert_eq!(
         clients_settle(server, baseline + 1).await,
         baseline + 1,
         "the run holds a control-mode connection while it runs"
@@ -1507,9 +1519,30 @@ async fn abandoning_a_run_closes_the_connection_it_opened() {
     running.abort();
 
     assert_eq!(
+        clients_settle(server, baseline + 1).await,
+        baseline + 1,
+        "the owned reader must outlive its cancelled request"
+    );
+    let jobs = json(tools.list_jobs().await.expect("jobs list"));
+    let job = jobs["jobs"]
+        .as_array()
+        .expect("jobs is an array")
+        .first()
+        .and_then(|job| job["job"].as_str())
+        .expect("the reader has a discoverable owner")
+        .to_owned();
+    tools
+        .cancel_job(args(serde_json::json!({"job": job})))
+        .await
+        .expect("the owner can be cancelled");
+    server
+        .signal_channel(release)
+        .await
+        .expect("the command gate is released");
+    assert_eq!(
         clients_settle(server, baseline).await,
         baseline,
-        "a cancelled run must not leave its control-mode client attached"
+        "cancelling the owner closes its control-mode connection"
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

@@ -325,8 +325,8 @@ agent has to wait, look, or avoid breaking the terminal it is working in.
 **Running something.** `run_command` sends the command, waits for it to
 finish, and answers with its exit status and the output the command wrote.
 Reaching the deadline ends the waiting, not the command, so the answer says
-`deadline` and the pane is still busy — send `C-c` with `send_keys` and
-`keys: ["C-c"]` to stop it.
+`deadline` and includes a job id. Pass that id to `job_status` to keep
+following the same run, or to `cancel_job` to stop and forget it.
 
 **Running something slow.** `start_command` returns a job id immediately and
 collects the answer whether or not anyone is waiting, so a ten-minute build

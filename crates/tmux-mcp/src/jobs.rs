@@ -1,10 +1,8 @@
 //! Commands that outlive the call that started them.
 //!
-//! `run_command` blocks the caller's turn until the command finishes or the
-//! deadline runs out, which is the right shape for something that takes a
-//! second and the wrong one for a build. An agent that has to sit on a request
-//! for ten minutes cannot do anything else in the meantime, and a client that
-//! gives up first leaves the pane busy with no way to ask about it again.
+//! `run_command` waits on the same owned reader a background job uses. A
+//! deadline or withdrawn request stops that wait but leaves the job available
+//! to inspect or cancel.
 //!
 //! A job is the same sentinel-bracketed run, reading in a task of its own. The
 //! call that starts it returns an id, and the answer is collected whether or
@@ -12,6 +10,7 @@
 //! new, on the same cursor contract `capture_since` uses.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
@@ -158,12 +157,20 @@ pub struct JobProgress {
 struct Progress {
     state: JobState,
     exit_status: Option<i32>,
-    /// The command's output so far, as bytes the reader has kept.
-    output: Vec<u8>,
-    /// How many bytes were dropped off the front of `output`.
+    /// The retained pane stream, including the command's echoed input.
+    stream: Vec<u8>,
+    /// The command's own bytes within `stream`, once its shell answered.
+    body: Option<Range<usize>>,
+    /// How many bytes were dropped off the front of the command's output.
     dropped: u64,
-    /// Filter state immediately before `output[0]`.
+    /// Filter state immediately before the retained command output.
     checkpoint: TextFilter,
+    /// How many pane-stream bytes arrived before trimming.
+    bytes: usize,
+    /// Whether the pane stream was trimmed from the front.
+    truncated: bool,
+    /// The exact terminal view returned by the collector.
+    terminal: Option<RunView>,
 }
 
 impl Progress {
@@ -172,11 +179,21 @@ impl Progress {
     /// The scanner owns the bytes and may trim its own front, so this copies
     /// rather than sharing. `dropped` is how many of the command's bytes went
     /// with that trimming, which is what keeps a cursor meaningful.
-    fn replace(&mut self, body: &[u8], dropped: u64, checkpoint: &TextFilter) {
-        self.dropped = dropped;
-        self.checkpoint = checkpoint.clone();
-        self.output.clear();
-        self.output.extend_from_slice(body);
+    fn replace(&mut self, progress: exec::RunProgress<'_>) {
+        self.stream.clear();
+        self.stream.extend_from_slice(progress.stream);
+        self.body = progress.body;
+        self.dropped = progress.body_dropped;
+        self.checkpoint = progress.body_checkpoint.clone();
+        self.bytes = progress.bytes;
+        self.truncated = progress.truncated;
+    }
+
+    fn body(&self) -> &[u8] {
+        self.body
+            .as_ref()
+            .and_then(|range| self.stream.get(range.clone()))
+            .unwrap_or_default()
     }
 
     /// Read from `cursor`, saying whether anything before it was lost.
@@ -185,22 +202,53 @@ impl Progress {
     /// meaningful after trimming: what moves is where those bytes live, not
     /// what they are called.
     fn read_from(&self, cursor: u64) -> (&[u8], u64, bool) {
-        let end = self.dropped + self.output.len() as u64;
+        let output = self.body();
+        let end = self.dropped + output.len() as u64;
         if cursor < self.dropped {
-            return (&self.output, end, true);
+            return (output, end, true);
         }
-        let from = usize::try_from(cursor - self.dropped).unwrap_or(self.output.len());
-        (self.output.get(from..).unwrap_or_default(), end, false)
+        let from = usize::try_from(cursor - self.dropped).unwrap_or(output.len());
+        (output.get(from..).unwrap_or_default(), end, false)
     }
 
     fn text_from(&self, cursor: u64) -> (String, u64, bool) {
         let (bytes, end, truncated) = self.read_from(cursor);
-        let from = self.output.len() - bytes.len();
+        let output = self.body();
+        let from = output.len() - bytes.len();
         (
-            readable_from(&self.checkpoint, &self.output, from),
+            readable_from(&self.checkpoint, output, from),
             end,
             truncated,
         )
+    }
+
+    fn unfinished(&self, pane: String, outcome: RunOutcome) -> RunView {
+        let outcome = if outcome == RunOutcome::Deadline && self.body.is_none() {
+            RunOutcome::NoShell
+        } else {
+            outcome
+        };
+        RunView {
+            pane,
+            outcome,
+            exit_status: None,
+            output: exec::readable(&self.stream),
+            bytes: self.bytes,
+            truncated: self.truncated,
+            job: None,
+        }
+    }
+
+    /// Resolve a foreground observer after its wait ends.
+    fn foreground_view(
+        &self,
+        pane: String,
+        stopped: Option<RunOutcome>,
+    ) -> Option<(RunView, bool)> {
+        if let Some(terminal) = &self.terminal {
+            return Some((terminal.clone(), false));
+        }
+        stopped.map(|outcome| (self.unfinished(pane, outcome), true))
     }
 }
 
@@ -211,7 +259,7 @@ struct Job {
     command: String,
     started: Instant,
     progress: Arc<Mutex<Progress>>,
-    /// Fires when the reader reaches a terminal state.
+    /// Fires when the reader reaches a terminal state or loses its owner.
     finished: Arc<Notify>,
     reader: tokio::task::JoinHandle<()>,
     last_read: Instant,
@@ -223,6 +271,7 @@ impl Drop for Job {
         // reader finish the handoff rather than stranding a waiter.
         if hold(&self.progress).state.is_active() {
             self.reader.abort();
+            self.finished.notify_waiters();
         }
     }
 }
@@ -355,9 +404,13 @@ impl Jobs {
         let progress = Arc::new(Mutex::new(Progress {
             state: JobState::Starting,
             exit_status: None,
-            output: Vec::new(),
+            stream: Vec::new(),
+            body: None,
             dropped: 0,
             checkpoint: TextFilter::new(),
+            bytes: 0,
+            truncated: false,
+            terminal: None,
         }));
         let finished = Arc::new(Notify::new());
 
@@ -425,6 +478,55 @@ impl Jobs {
         }
     }
 
+    /// Run a command while keeping ownership if this caller stops waiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same startup errors as [`Self::start`].
+    pub(crate) async fn run(
+        &self,
+        pane: &Pane,
+        command: &str,
+        timeout: std::time::Duration,
+        suppress_history: bool,
+        cancelled: &tokio_util::sync::CancellationToken,
+    ) -> Result<RunView, StartError> {
+        let started = self.start(pane, command, suppress_history).await?;
+        let id = started.job;
+        let pane = started.pane;
+        let Some((finished, progress)) = self.awaitable(&id) else {
+            return Err(StartError::WorkerStopped);
+        };
+
+        let notified = finished.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.holds(&id) {
+            return Err(StartError::WorkerStopped);
+        }
+
+        let stopped = if hold(&progress).state.is_active() {
+            tokio::select! {
+                biased;
+                () = cancelled.cancelled() => Some(RunOutcome::Cancelled),
+                () = tokio::time::sleep(timeout) => Some(RunOutcome::Deadline),
+                () = notified.as_mut() => None,
+            }
+        } else {
+            None
+        };
+
+        let (mut view, retain) = hold(&progress)
+            .foreground_view(pane, stopped)
+            .ok_or(StartError::WorkerStopped)?;
+        if retain {
+            view.job = Some(id);
+        } else {
+            self.forget(&id);
+        }
+        Ok(view)
+    }
+
     /// Report what a job has written since `cursor`.
     ///
     /// Returns `None` when no such job is held.
@@ -464,19 +566,34 @@ impl Jobs {
     /// Returns as soon as the job is already over, so a caller that polls too
     /// late still gets an answer rather than waiting out the deadline.
     pub(crate) async fn wait(&self, id: &str, timeout: std::time::Duration) -> bool {
+        self.wait_with(id, timeout, || {}).await
+    }
+
+    async fn wait_with(
+        &self,
+        id: &str,
+        timeout: std::time::Duration,
+        ready: impl FnOnce(),
+    ) -> bool {
         let Some((finished, progress)) = self.awaitable(id) else {
             return false;
         };
 
-        // Registered before the state is checked. Subscribing afterwards would
-        // miss a job that finished in between and then wait for a
-        // notification that has already been sent.
         let notified = finished.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.holds(id) {
+            return false;
+        }
+
         if !hold(&progress).state.is_active() {
             return true;
         }
 
-        tokio::time::timeout(timeout, notified).await.is_ok()
+        ready();
+        tokio::time::timeout(timeout, notified.as_mut())
+            .await
+            .is_ok()
     }
 
     /// Describe every job this server holds, newest first.
@@ -551,17 +668,14 @@ async fn drive(
         }
     };
 
-    let view = run
-        .collect(|body, dropped, checkpoint| {
-            hold(&progress).replace(body, dropped, checkpoint);
-        })
-        .await;
+    let view = run.collect(|update| hold(&progress).replace(update)).await;
 
     {
         let mut held = hold(&progress);
         let (state, exit_status) = ended(&view);
         held.state = state;
         held.exit_status = exit_status;
+        held.terminal = Some(view);
     }
     finished.notify_waiters();
 }
@@ -587,9 +701,13 @@ mod tests {
         let progress = Arc::new(Mutex::new(Progress {
             state,
             exit_status: None,
-            output: Vec::new(),
+            stream: Vec::new(),
+            body: None,
             dropped: 0,
             checkpoint: TextFilter::new(),
+            bytes: 0,
+            truncated: false,
+            terminal: None,
         }));
         Job {
             pane: format!("%{index}"),
@@ -646,9 +764,13 @@ mod tests {
         Progress {
             state: JobState::Running,
             exit_status: None,
-            output: output.to_vec(),
+            stream: output.to_vec(),
+            body: Some(0..output.len()),
             dropped,
             checkpoint: TextFilter::new(),
+            bytes: output.len(),
+            truncated: dropped > 0,
+            terminal: None,
         }
     }
 
@@ -688,16 +810,48 @@ mod tests {
         let mut checkpoint = TextFilter::new();
         checkpoint.advance(b"\x1b[31");
         let mut held = progress(b"", 0);
-        held.replace(b"mred", 4, &checkpoint);
+        held.replace(exec::RunProgress {
+            stream: b"mred",
+            body: Some(0..4),
+            body_dropped: 4,
+            body_checkpoint: &checkpoint,
+            bytes: 8,
+            truncated: true,
+        });
         let cursor = 0;
 
         let (text, _, truncated) = held.text_from(cursor);
         assert_eq!(text, "red");
         assert!(truncated);
 
-        held.output.extend_from_slice(b"!");
+        held.stream.extend_from_slice(b"!");
+        held.body.as_mut().expect("the body is known").end += 1;
 
         assert_eq!(held.text_from(cursor).0, "red!");
+    }
+
+    #[test]
+    fn a_terminal_result_wins_a_simultaneous_foreground_stop() {
+        let mut held = progress(b"finished\r\n", 0);
+        held.state = JobState::Finished;
+        held.exit_status = Some(0);
+        held.terminal = Some(RunView {
+            pane: "%0".to_owned(),
+            outcome: RunOutcome::Completed,
+            exit_status: Some(0),
+            output: "finished\n".to_owned(),
+            bytes: 10,
+            truncated: false,
+            job: None,
+        });
+
+        let (view, retain) = held
+            .foreground_view("%0".to_owned(), Some(RunOutcome::Cancelled))
+            .expect("the terminal result is available");
+
+        assert_eq!(view.outcome, RunOutcome::Completed);
+        assert_eq!(view.exit_status, Some(0));
+        assert!(!retain, "terminal work needs no recovery job");
     }
 
     #[tokio::test]
@@ -1026,6 +1180,41 @@ mod tests {
         drop(next);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forgetting_a_job_wakes_a_registered_status_waiter() {
+        let jobs = Arc::new(Jobs::with_limit(1));
+        let id = "job-wait-race".to_owned();
+        let now = Instant::now();
+        hold(&jobs.inner)
+            .slots
+            .insert(id.clone(), JobSlot::Ready(job(0, JobState::Running, now)));
+        let ready = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let waiting = tokio::spawn({
+            let jobs = Arc::clone(&jobs);
+            let id = id.clone();
+            let ready = Arc::clone(&ready);
+            let release = Arc::clone(&release);
+            async move {
+                jobs.wait_with(&id, std::time::Duration::from_secs(20), || {
+                    ready.wait();
+                    release.wait();
+                })
+                .await
+            }
+        });
+
+        ready.wait();
+        assert!(jobs.forget(&id), "the active owner is removed");
+        release.wait();
+
+        let woke = tokio::time::timeout(std::time::Duration::from_secs(2), waiting)
+            .await
+            .expect("forgetting the owner wakes the registered waiter")
+            .expect("the wait task stays healthy");
+        assert!(woke, "the owner-drop notification reached the waiter");
+    }
+
     #[tokio::test]
     async fn dropping_a_finished_job_does_not_abort_its_reader() {
         let (release, released) = oneshot::channel::<()>();
@@ -1043,9 +1232,13 @@ mod tests {
             progress: Arc::new(Mutex::new(Progress {
                 state: JobState::Finished,
                 exit_status: Some(0),
-                output: Vec::new(),
+                stream: Vec::new(),
+                body: Some(0..0),
                 dropped: 0,
                 checkpoint: TextFilter::new(),
+                bytes: 0,
+                truncated: false,
+                terminal: None,
             })),
             finished: Arc::new(Notify::new()),
             reader,
