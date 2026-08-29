@@ -213,9 +213,18 @@ tick. It watches a format rather than the pane's text, so it suits "how many
 windows are there now" better than "did this line appear":
 
 ```rust
+# // `control` is behind `control-mode`, so the example is compiled only when
+# // that feature is on. Without the guard this block fails to build under any
+# // configuration lacking it, and `just doctest` runs `--all-features`, so
+# // nothing would say so.
+# #[cfg(not(feature = "control-mode"))]
+# fn main() {}
+# #[cfg(feature = "control-mode")]
 use libtmux::control::{ControlMode, Event, Subscription};
+# #[cfg(feature = "control-mode")]
 use libtmux::test::TestServer;
 
+# #[cfg(feature = "control-mode")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
