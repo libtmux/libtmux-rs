@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use libtmux::test::{TestServer, retry_until};
-use libtmux::{Command, NewWindowOptions, SplitDirection, SplitOptions};
+use libtmux::{ChannelWait, Command, NewWindowOptions, SplitDirection, SplitOptions};
 
 #[tokio::test]
 async fn buffers_hold_exact_bytes_and_report_absence() {
@@ -272,11 +272,68 @@ async fn wait_for_channels_lock_and_release() {
         .await
         .expect("channel is unlocked");
 
-    // Signalling a channel nobody waits on is accepted and does nothing.
+    // Signalling a channel nobody waits on is accepted, and tmux keeps it:
+    // the next wait spends the latch rather than blocking.
     server
         .signal_channel("gate")
         .await
         .expect("channel is signalled");
+    assert_eq!(
+        server
+            .wait_for_channel("gate", Duration::from_secs(5))
+            .await
+            .expect("waiting is not an error"),
+        ChannelWait::Signalled,
+        "a signal with nobody waiting is kept, not dropped",
+    );
+    // One-shot: the latch is spent, so the next wait runs out of time. That is
+    // an outcome, not an error, which is the distinction the return type
+    // exists to carry.
+    assert_eq!(
+        server
+            .wait_for_channel("gate", Duration::from_millis(300))
+            .await
+            .expect("running out of time is not an error"),
+        ChannelWait::TimedOut,
+        "the latch releases one wait, not every later one",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Waiting blocks until something signals, rather than returning at once.
+///
+/// The latch makes the easy case indistinguishable from a broken one: a wait
+/// that returned immediately would satisfy a test that only checks the
+/// outcome. So this signals from elsewhere, after a delay, and requires that
+/// the wait actually spanned it.
+#[tokio::test]
+async fn a_wait_blocks_until_something_signals_the_channel() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let signaller = server.clone();
+    let signalling = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        signaller
+            .signal_channel("ready")
+            .await
+            .expect("channel is signalled");
+    });
+
+    let started = std::time::Instant::now();
+    let outcome = server
+        .wait_for_channel("ready", Duration::from_secs(10))
+        .await
+        .expect("waiting is not an error");
+    let waited = started.elapsed();
+
+    signalling.await.expect("the signalling task finishes");
+    assert_eq!(outcome, ChannelWait::Signalled);
+    assert!(
+        waited >= Duration::from_millis(300),
+        "the wait returned in {waited:?}, so it did not wait for the signal",
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

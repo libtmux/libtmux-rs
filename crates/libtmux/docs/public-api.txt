@@ -248,6 +248,7 @@ constant libtmux::since::MIRRORED_LAYOUTS
 constant libtmux::since::PROMPT_HISTORY
 constant libtmux::since::SERVER_ACCESS
 enum libtmux::AccessMode
+enum libtmux::ChannelWait
 enum libtmux::Chooser
 enum libtmux::ControlModeErrorKind
 enum libtmux::EnvironmentEntry
@@ -562,6 +563,7 @@ function libtmux::Server::unset_array_option
 function libtmux::Server::unset_environment
 function libtmux::Server::unset_hook
 function libtmux::Server::unset_option
+function libtmux::Server::wait_for_channel
 function libtmux::Server::window_by_id
 function libtmux::Server::windows
 function libtmux::Server::windows_or_empty
@@ -1150,6 +1152,8 @@ trait libtmux::query::QueryIteratorExt
 type_alias libtmux::IndexedHooks
 variant libtmux::AccessMode::ReadOnly
 variant libtmux::AccessMode::Write
+variant libtmux::ChannelWait::Signalled
+variant libtmux::ChannelWait::TimedOut
 variant libtmux::Chooser::Buffer
 variant libtmux::Chooser::Client
 variant libtmux::Chooser::Customize

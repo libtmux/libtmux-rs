@@ -16,6 +16,17 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `Server::wait_for_channel`, the blocking half of `wait-for`.
+  `Server::signal_channel` had no counterpart, so waiting meant dropping to
+  `Server::cmd`, which `tmux-mcp` did. Nothing polls: tmux releases the wait
+  when the channel is signalled. Running out of time returns
+  `ChannelWait::TimedOut` rather than an error, so "nothing signalled it"
+  stays distinct from "tmux could not be reached". A signal with nobody
+  waiting is kept and spends itself on the next wait, so a command that
+  finishes before its watcher starts does not lose the race.
+
 ### Fixed
 
 - `libtmux::test::TestServer` now takes its tmux from `LIBTMUX_TEST_TMUX`
