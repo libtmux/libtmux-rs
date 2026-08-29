@@ -302,6 +302,10 @@ impl Window {
         self.core.configuration().identity()
     }
 
+    fn link_target(&self) -> String {
+        format!("{}:{}", self.session_id(), self.id())
+    }
+
     /// List this window's panes, in tmux's own order.
     ///
     /// This is the lenient form; use [`Window::panes`] when the reason for
@@ -649,7 +653,12 @@ impl Window {
     /// Returns [`Error::ObjectGone`] when this session no longer links the
     /// window, or a listing error when tmux could not be read.
     pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
-        let session = self.session_id().to_string();
+        let session = self.session_id().clone();
+        self.refresh_in(&session).await
+    }
+
+    async fn refresh_in(&mut self, session: &SessionId) -> Result<&mut Self, Error> {
+        let session = session.to_string();
         let projection = listing::windows(&self.core, listing::Scope::Target(&session), None)
             .await?
             .into_iter()
@@ -1393,8 +1402,8 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerMismatch`] when the other window belongs to
-    /// another server, or an error when tmux refuses the swap.
+    /// Returns [`Error::ServerMismatch`] when `other` belongs to another
+    /// server, or an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
         self.core
             .require_same_server(other.server_identity(), "swap-window")?;
@@ -1403,7 +1412,7 @@ impl Window {
             "swap-window",
             Command::new("swap-window")
                 .arg("-s")
-                .arg(self.id().to_string())
+                .arg(self.link_target())
                 .arg("-t")
                 // `session:id`, not `session:index`: the session half says
                 // which of the target's links to swap, and the id half cannot
@@ -1439,8 +1448,8 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerMismatch`] when the destination session belongs
-    /// to another server, or an error when it is occupied or does not exist.
+    /// Returns [`Error::ServerMismatch`] when `session` belongs to another
+    /// server, or an error when the destination is occupied or absent.
     pub async fn move_to(&mut self, session: &Session, index: i32) -> Result<&mut Self, Error> {
         self.core
             .require_same_server(session.server_identity(), "move-window")?;
@@ -1449,13 +1458,13 @@ impl Window {
             "move-window",
             Command::new("move-window")
                 .arg("-s")
-                .arg(self.id().to_string())
+                .arg(self.link_target())
                 .arg("-t")
                 .arg(format!("{}:{index}", session.id())),
         )
         .await?;
 
-        self.refresh()
+        self.refresh_in(session.id())
             .await
             .map_err(|error| error.after_effect("move-window"))?;
         Ok(self)
@@ -1529,9 +1538,9 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::ServerMismatch`] when the destination session belongs
-    /// to another server, or an error when tmux refuses the link, which
-    /// includes an index that is already taken.
+    /// Returns [`Error::ServerMismatch`] when `session` belongs to another
+    /// server, or an error when tmux refuses the link, including an occupied
+    /// index.
     ///
     /// # Examples
     ///
@@ -1568,7 +1577,7 @@ impl Window {
             "link-window",
             Command::new("link-window")
                 .arg("-s")
-                .arg(self.id().to_string())
+                .arg(self.link_target())
                 .arg("-t")
                 .arg(target),
         )

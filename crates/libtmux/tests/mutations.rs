@@ -558,14 +558,38 @@ async fn window_operations_move_and_resize() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server.new_session("moving").await.expect("session");
+    let destination = server
+        .new_session("moved-into")
+        .await
+        .expect("destination session");
 
     let mut window = session
         .new_window(NewWindowOptions::new("mover").command("sleep 300"))
         .await
         .expect("window is created");
 
-    window.move_to(&session, 20).await.expect("window is moved");
+    window
+        .move_to(&destination, 20)
+        .await
+        .expect("window is moved");
     assert_eq!(window.index(), 20);
+    assert_eq!(window.session_id(), destination.id());
+    assert!(
+        !session
+            .windows()
+            .await
+            .expect("source windows")
+            .iter()
+            .any(|candidate| candidate.id() == window.id()),
+    );
+    assert!(
+        destination
+            .windows()
+            .await
+            .expect("destination windows")
+            .iter()
+            .any(|candidate| candidate.id() == window.id()),
+    );
 
     window.resize(100, 30).await.expect("window is resized");
     assert_eq!(window.width(), 100);
@@ -748,6 +772,42 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
         b"renamed",
     );
 
+    let destination = server
+        .new_session("linking-destination")
+        .await
+        .expect("destination session");
+    let selected = server
+        .cmd(
+            libtmux::Command::new("select-window")
+                .arg("-t")
+                .arg(format!("{}:{}", target.id(), window.id())),
+        )
+        .await
+        .expect("target link is selected");
+    assert!(selected.success());
+
+    window
+        .move_to(&destination, 9)
+        .await
+        .expect("the source link moves");
+    assert!(
+        !source
+            .windows()
+            .await
+            .expect("source windows")
+            .iter()
+            .any(|other| other.id() == window.id()),
+    );
+    assert!(
+        target
+            .windows()
+            .await
+            .expect("target windows")
+            .iter()
+            .any(|other| other.id() == window.id()),
+        "the other link remains",
+    );
+
     // Unlinking removes one winlink, and the window survives in the other.
     linked.unlink().await.expect("the link is removed");
     assert!(
@@ -759,7 +819,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
             .any(|other| other.id() == window.id()),
     );
     assert!(
-        source
+        destination
             .windows()
             .await
             .expect("windows")
