@@ -401,8 +401,8 @@ impl TmuxTools {
                        cursor, starts watching and returns a cursor; later calls pass it back \
                        and receive only what is new. Use this to follow a pane over several \
                        turns without re-reading the whole screen. The answer says missed=true \
-                       if output was dropped, which only happens when a pane outruns the \
-                       buffer.",
+                       if output was dropped because the pane outran the buffer or its live \
+                       tail was evicted.",
         title = "Read New Pane Output",
         annotations(
             read_only_hint = true,

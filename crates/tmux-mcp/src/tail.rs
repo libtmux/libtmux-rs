@@ -9,10 +9,11 @@
 //!
 //! So the bytes are kept here instead. A tail attaches once and holds a ring
 //! of what the pane wrote; a cursor names an offset in that ring. Output is
-//! missed only when the ring itself overflows, which is a thing this crate can
-//! see and say.
+//! missed when the ring overflows or its tail was evicted. Both losses are
+//! visible and reported.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
@@ -204,7 +205,7 @@ impl Drop for Tail {
 #[derive(Debug, Default)]
 pub(crate) struct Tails {
     inner: Mutex<HashMap<String, Tail>>,
-    epochs: Mutex<HashMap<String, u64>>,
+    next_epoch: AtomicU64,
 }
 
 impl Tails {
@@ -258,7 +259,7 @@ impl Tails {
 
         // Attaching is the slow part, and it must not happen under a lock.
         let mut output = pane.stream_output().await?;
-        let epoch = self.next_epoch(id);
+        let epoch = self.next_epoch();
         let ring = Arc::new(Mutex::new(Ring {
             bytes: Vec::new(),
             start: 0,
@@ -314,12 +315,11 @@ impl Tails {
         Some((Arc::clone(&tail.ring), tail.epoch))
     }
 
-    /// The next epoch for a pane, so a reopened tail is distinguishable.
-    fn next_epoch(&self, id: &str) -> u64 {
-        let mut epochs = hold(&self.epochs);
-        let epoch = epochs.entry(id.to_owned()).or_insert(0);
-        *epoch += 1;
-        *epoch
+    /// The next process-local tail epoch.
+    fn next_epoch(&self) -> u64 {
+        self.next_epoch
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
     }
 }
 
@@ -436,6 +436,14 @@ mod tests {
             (ring.end(), true),
             "an offset from a previous tail names a place in a buffer that is gone"
         );
+    }
+
+    #[test]
+    fn tail_epochs_are_process_wide() {
+        let tails = Tails::new();
+
+        assert_eq!(tails.next_epoch(), 1);
+        assert_eq!(tails.next_epoch(), 2);
     }
 
     #[test]
