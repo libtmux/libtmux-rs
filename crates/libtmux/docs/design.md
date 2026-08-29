@@ -1347,6 +1347,22 @@ machine and failed six tests on a macOS runner.
 The general rule: a test's deadline should bound the thing it is *not*
 testing, by enough that it never becomes the thing it measures.
 
+The rule was written and the deadlines it was about stayed constants. Five
+seconds bounds a tmux that starts with a core to spare; on a machine running
+several times its cores in work it bounds nothing, and the fixture suite fails
+in a set that moves between runs while every member passes alone. That shape
+is the signature -- a defect fails the same way every time -- and reading it
+takes repetition rather than a result: a run that fails four tests and then
+four different ones is saying something a single red run cannot.
+
+`LIBTMUX_TEST_TIMEOUT_SCALE` multiplies every fixture deadline, read once so
+two tests in a run cannot measure against different clocks, and never below
+`1` because nothing here wants a fixture to fail sooner. Unset, the deadlines
+are unchanged, so an idle machine behaves exactly as before. It moves a
+ceiling rather than fixing a wait, and a test that synchronises by sleeping
+still races -- it is the knob for a loaded machine, not a substitute for
+waiting on the right thing.
+
 ### An idle fixture process must idle the right way
 
 The process fixtures held a process open with `while :; do :; done`. Nineteen

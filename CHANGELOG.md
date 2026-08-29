@@ -55,6 +55,13 @@ full.
 
 ### Added
 
+- `LIBTMUX_TEST_TIMEOUT_SCALE` multiplies every fixture deadline in
+  `libtmux::test`. The fixture's five seconds bound a tmux that starts with a
+  core to spare; on a machine running several times its cores in work they stop
+  bounding startup and start deciding results, and the fixture suite fails in a
+  set that moves between runs while every member passes alone. Read once, never
+  below `1`, and unset it changes nothing.
+
 - `Pane::wait_for_text` and `Pane::wait_for_quiet`, with `PaneWait` naming the
   outcome. Waiting for a pane needed a loop the caller wrote, and
   `test::retry_until` sits behind `test-support`, so the only production answer

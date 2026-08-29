@@ -76,6 +76,21 @@ Every test runs against whatever `tmux` resolves to, unless
 $ LIBTMUX_TEST_TMUX=/path/to/tmux-3.5a just test
 ```
 
+Fixture deadlines bound a tmux that starts with a core to spare. On a machine
+running several times its cores in work -- a shared runner, or a laptop with
+another suite on it -- five seconds stops bounding startup and starts deciding
+results, and tests that wait on a fixture fail in a set that moves between
+runs. `LIBTMUX_TEST_TIMEOUT_SCALE` widens every fixture deadline by a factor,
+read once and never below `1`:
+
+```console
+$ LIBTMUX_TEST_TIMEOUT_SCALE=4 just test
+```
+
+Unset, deadlines are what they always were. It is not a fix for a test that
+waits on the wrong thing: it moves the ceiling, so a hung fixture takes that
+much longer to say so.
+
 Prefer that over prepending to `PATH`. `TestServer` used to read only `PATH`,
 so the variable steered the format-compatibility tests and nothing else, and a
 run pinned that way passed against whichever tmux `PATH` held. A pass about
