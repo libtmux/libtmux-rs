@@ -506,7 +506,13 @@ const READING: &[&str] = &[
 ];
 
 /// The tools that destroy work.
-const DESTRUCTIVE: &[&str] = &["kill_pane", "kill_window", "kill_session", "kill_server"];
+const DESTRUCTIVE: &[&str] = &[
+    "kill_pane",
+    "kill_window",
+    "kill_session",
+    "kill_server",
+    "run_plan",
+];
 
 /// The tools that put the caller's own payload into a live terminal.
 const OPEN_WORLD: &[&str] = &[
@@ -516,6 +522,7 @@ const OPEN_WORLD: &[&str] = &[
     "pipe_pane",
     "respawn_pane",
     "paste_text",
+    "run_plan",
 ];
 
 #[tokio::test]

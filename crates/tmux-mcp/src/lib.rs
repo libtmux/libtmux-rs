@@ -96,7 +96,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use libtmux::plan::{Outcome as PlanOutcome, Plan, Planner, Safety as PlanSafety};
+use libtmux::plan::{
+    Attribution as PlanAttribution, Op as PlanOp, OperationValue as CoreOperationValue,
+    Outcome as PlanOutcome, PaneTarget, Plan, Planner, Safety as PlanSafety, WindowTarget,
+};
 use libtmux::query::{FilterExpr, QueryIteratorExt as _};
 use libtmux::{
     CaptureOptions, Command, NewSessionOptions, PaneSize, ResizeDirection, Server, SplitDirection,
@@ -176,6 +179,9 @@ fn lossy_optional(value: Option<&TmuxText>) -> Option<String> {
 /// belongs here rather than in the caller's hands.
 const WATCH_BYTES: usize = 64 * 1024;
 
+/// The shared text budget for all evidence in one plan response.
+const PLAN_EVIDENCE_BYTES: usize = 64 * 1024;
+
 /// What the server tells a client before its first call.
 ///
 /// Composed from named pieces so that adding one is a decision rather than a
@@ -253,7 +259,7 @@ pub enum Safety {
     /// decision an operator made rather than one they inherited.
     #[default]
     Mutating,
-    /// Everything, including the four tools that destroy work.
+    /// Everything, including plans that destroy work.
     Destructive,
 }
 
@@ -308,6 +314,15 @@ impl Safety {
             Self::Destructive => true,
         }
     }
+
+    /// Describe the most dangerous plan this tier can admit.
+    fn annotate_plan(self, tool: &mut rmcp::model::Tool) {
+        let hints = tool.annotations.get_or_insert_default();
+        hints.read_only_hint = Some(matches!(self, Self::ReadOnly));
+        hints.destructive_hint = Some(matches!(self, Self::Destructive));
+        hints.idempotent_hint = Some(matches!(self, Self::ReadOnly));
+        hints.open_world_hint = Some(!matches!(self, Self::ReadOnly));
+    }
 }
 
 impl Safety {
@@ -361,6 +376,9 @@ impl Builder {
     #[must_use]
     pub fn build(self) -> TmuxTools {
         let mut router = TmuxTools::tool_router();
+        if let Some(route) = router.map.get_mut("run_plan") {
+            self.safety.annotate_plan(&mut route.attr);
+        }
         // Taken from the router's own advertisement, so the tier reads exactly
         // what a client would.
         let withheld: Vec<String> = router
@@ -998,25 +1016,244 @@ pub struct RunPlanArgs {
 /// What running a plan produced.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct PlanRun {
-    /// One outcome per operation, in the order the plan records them.
-    pub outcomes: Vec<PlanStepOutcome>,
+    /// One report per operation, in the order the plan records them.
+    pub operations: Vec<PlanOperationReport>,
+    /// One report per refused invocation.
+    pub failures: Vec<PlanFailure>,
     /// How many tmux invocations it cost.
     pub dispatches: usize,
     /// Whether every operation is known to have succeeded.
     pub complete: bool,
 }
 
-/// One operation's outcome.
+/// One operation's outcome and typed answer.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct PlanStepOutcome {
-    /// The tmux command the operation ran.
-    pub command: String,
+pub struct PlanOperationReport {
+    /// The operation's zero-based index in the plan.
+    pub index: usize,
+    /// The tmux command the operation runs.
+    pub kind: String,
     /// `complete`, `failed`, `skipped`, or `unknown`.
     ///
     /// `unknown` means the operation shared a tmux invocation with a failure
     /// and nothing distinguishes them. Re-run with `grouping: "sequential"`
     /// to find out which one failed.
     pub outcome: String,
+    /// `per_command` or `merged`, or `null` when nothing was dispatched.
+    pub attribution: Option<String>,
+    /// The operation's typed answer, or `null` when it produced none.
+    pub value: Option<PlanValue>,
+}
+
+/// One refused invocation, kept separate from operation return values.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct PlanFailure {
+    /// The operation indices that shared the refused invocation.
+    pub operations: Vec<usize>,
+    /// `per_command` or `merged`.
+    pub attribution: String,
+    /// The stable failure category.
+    pub kind: PlanFailureKind,
+    /// Bounded stderr, unless the invocation carried sensitive input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<PlanEvidence>,
+    /// How many stderr bytes tmux returned.
+    pub stderr_bytes: usize,
+    /// Whether stderr was withheld because an argument was sensitive.
+    pub stderr_withheld: bool,
+}
+
+/// A payload-free plan failure category.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanFailureKind {
+    /// A referenced tmux object disappeared.
+    ObjectGone,
+    /// tmux rejected the invocation.
+    Refused,
+    /// No tmux server answered.
+    ServerGone,
+    /// The invocation timed out.
+    Timeout,
+    /// tmux could not be reached or started.
+    Unreachable,
+    /// The tmux release lacks a required capability.
+    UnsupportedVersion,
+    /// The invocation contained invalid input.
+    InvalidInput,
+    /// The transport failed.
+    Transport,
+    /// tmux output could not be decoded.
+    Decode,
+    /// A newer libtmux failure category this server does not yet name.
+    Other,
+}
+
+impl From<libtmux::ErrorKind> for PlanFailureKind {
+    fn from(kind: libtmux::ErrorKind) -> Self {
+        match kind {
+            libtmux::ErrorKind::ObjectGone => Self::ObjectGone,
+            libtmux::ErrorKind::Refused => Self::Refused,
+            libtmux::ErrorKind::ServerGone => Self::ServerGone,
+            libtmux::ErrorKind::Timeout => Self::Timeout,
+            libtmux::ErrorKind::Unreachable => Self::Unreachable,
+            libtmux::ErrorKind::UnsupportedVersion => Self::UnsupportedVersion,
+            libtmux::ErrorKind::InvalidInput => Self::InvalidInput,
+            libtmux::ErrorKind::Transport => Self::Transport,
+            libtmux::ErrorKind::Decode => Self::Decode,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Bounded tmux output carried by a plan response.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct PlanEvidence {
+    /// The retained tail, with invalid UTF-8 replaced.
+    pub text: String,
+    /// How many source bytes tmux returned.
+    pub bytes: usize,
+    /// How many UTF-8 bytes the rendered text occupies.
+    pub rendered_bytes: usize,
+    /// Whether invalid UTF-8 required replacement characters.
+    pub lossy: bool,
+    /// Whether older bytes or expanded replacement text were omitted.
+    pub truncated: bool,
+}
+
+/// A JSON-safe projection of one operation's typed value.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlanValue {
+    /// tmux accepted an operation with no other answer.
+    Acknowledged,
+    /// A session and the first window and pane it created.
+    CreatedSession {
+        /// The created session ID.
+        session: String,
+        /// The first window ID.
+        window: String,
+        /// The first pane ID.
+        pane: String,
+    },
+    /// A window and its first pane.
+    CreatedWindow {
+        /// The created window ID.
+        window: String,
+        /// The first pane ID.
+        pane: String,
+    },
+    /// A pane created by splitting another pane.
+    CreatedPane {
+        /// The created pane ID.
+        pane: String,
+    },
+    /// Pane bytes rendered for JSON.
+    CapturedPane {
+        /// The bounded pane contents.
+        output: PlanEvidence,
+    },
+}
+
+/// Divide the response budget fairly between every returned text stream.
+fn plan_evidence_limit(streams: usize) -> usize {
+    PLAN_EVIDENCE_BYTES.checked_div(streams).unwrap_or(0)
+}
+
+/// Keep the newest part of tmux output within one stream's rendered budget.
+fn plan_evidence(bytes: &[u8], limit: usize) -> PlanEvidence {
+    let raw_truncated = bytes.len() > limit;
+    let retained = if raw_truncated {
+        &bytes[bytes.len() - limit..]
+    } else {
+        bytes
+    };
+    let lossy = std::str::from_utf8(retained).is_err();
+    let rendered = String::from_utf8_lossy(retained);
+    let mut start = rendered.len().saturating_sub(limit);
+    while !rendered.is_char_boundary(start) {
+        start += 1;
+    }
+    let text = rendered[start..].to_owned();
+    PlanEvidence {
+        rendered_bytes: text.len(),
+        text,
+        bytes: bytes.len(),
+        lossy,
+        truncated: raw_truncated || start > 0,
+    }
+}
+
+fn project_plan_value(value: &CoreOperationValue, evidence_limit: usize) -> Option<PlanValue> {
+    match value {
+        CoreOperationValue::Acknowledged => Some(PlanValue::Acknowledged),
+        CoreOperationValue::CreatedSession {
+            session,
+            window,
+            pane,
+        } => Some(PlanValue::CreatedSession {
+            session: session.to_string(),
+            window: window.to_string(),
+            pane: pane.to_string(),
+        }),
+        CoreOperationValue::CreatedWindow { window, pane } => Some(PlanValue::CreatedWindow {
+            window: window.to_string(),
+            pane: pane.to_string(),
+        }),
+        CoreOperationValue::CreatedPane { pane } => Some(PlanValue::CreatedPane {
+            pane: pane.to_string(),
+        }),
+        CoreOperationValue::CapturedPane(text) => Some(PlanValue::CapturedPane {
+            output: plan_evidence(text.as_bytes(), evidence_limit),
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod plan_projection_tests {
+    use super::*;
+
+    #[test]
+    fn capture_projection_reports_loss_and_truncation() {
+        let mut bytes = vec![b'x'; PLAN_EVIDENCE_BYTES + 1];
+        bytes[PLAN_EVIDENCE_BYTES] = 0xff;
+        let value = libtmux::plan::OperationValue::CapturedPane(TmuxText::from(bytes));
+
+        let Some(PlanValue::CapturedPane { output }) =
+            project_plan_value(&value, PLAN_EVIDENCE_BYTES)
+        else {
+            panic!("a pane capture projects as pane text");
+        };
+
+        assert_eq!(output.bytes, PLAN_EVIDENCE_BYTES + 1);
+        assert!(output.rendered_bytes <= PLAN_EVIDENCE_BYTES);
+        assert!(output.lossy);
+        assert!(output.truncated);
+    }
+
+    #[test]
+    fn plan_evidence_retains_a_bounded_tail() {
+        let mut bytes = vec![b'a'; PLAN_EVIDENCE_BYTES + 4];
+        bytes[PLAN_EVIDENCE_BYTES..].copy_from_slice(b"tail");
+
+        let evidence = plan_evidence(&bytes, PLAN_EVIDENCE_BYTES);
+
+        assert_eq!(evidence.bytes, PLAN_EVIDENCE_BYTES + 4);
+        assert!(evidence.truncated);
+        assert_eq!(evidence.rendered_bytes, PLAN_EVIDENCE_BYTES);
+        assert!(evidence.text.ends_with("tail"));
+    }
+
+    #[test]
+    fn plan_evidence_shares_one_response_budget() {
+        let limit = plan_evidence_limit(3);
+        let evidence = plan_evidence(&vec![0xff; PLAN_EVIDENCE_BYTES], limit);
+
+        assert!(evidence.rendered_bytes * 3 <= PLAN_EVIDENCE_BYTES);
+        assert!(evidence.lossy);
+        assert!(evidence.truncated);
+    }
 }
 
 /// Arguments for renaming an object.
@@ -1708,6 +1945,37 @@ impl TmuxTools {
         Ok(())
     }
 
+    /// Refuse a plan that would destroy the pane carrying this conversation.
+    async fn protect_plan_caller(&self, plan: &Plan) -> Result<(), ErrorData> {
+        let Some(own) = self.own_pane().await.map(ToOwned::to_owned) else {
+            return Ok(());
+        };
+
+        for op in plan.steps() {
+            match op {
+                PlanOp::KillPane(op) => {
+                    if let PaneTarget::Id(id) = op.target()
+                        && id.as_ref() == own
+                    {
+                        return Err(Self::self_harm("pane", &own));
+                    }
+                }
+                PlanOp::KillWindow(op) => {
+                    let WindowTarget::Id(id) = op.target() else {
+                        continue;
+                    };
+                    let window = self.find_window(id.as_ref()).await?;
+                    let panes = window.panes().await.map_err(|error| tmux_error(&error))?;
+                    if panes.iter().any(|pane| pane.id().to_string() == own) {
+                        return Err(Self::self_harm("window", &own));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Run several tmux operations described as one plan.
     ///
     /// A plan is data, so an agent describes the whole build in one call
@@ -1723,11 +1991,7 @@ impl TmuxTools {
         title = "Run Plan",
         annotations(
             read_only_hint = false,
-            // The tool destroys nothing; a plan handed to it might, and that
-            // is checked per operation before anything runs. Annotating the
-            // tool destructive instead would withhold it from the mutating
-            // tier entirely, which would refuse harmless plans and make the
-            // per-operation check pointless.
+            // Builder::build rewrites these hints to the configured tier.
             destructive_hint = false,
             idempotent_hint = false,
             open_world_hint = false
@@ -1736,6 +2000,7 @@ impl TmuxTools {
     pub async fn run_plan(
         &self,
         Parameters(RunPlanArgs { plan, grouping }): Parameters<RunPlanArgs>,
+        asking: Asking,
     ) -> Result<Json<PlanRun>, ErrorData> {
         let plan: Plan = serde_json::from_value(plan).map_err(|error| {
             ErrorData::invalid_params(format!("the plan could not be read: {error}"), None)
@@ -1757,28 +2022,98 @@ impl TmuxTools {
         // before anything runs: refusing halfway would leave the tmux server
         // in a state the caller did not ask for and cannot see.
         self.admit_plan(&plan)?;
+        self.protect_plan_caller(&plan).await?;
+        let destructive = plan
+            .steps()
+            .iter()
+            .filter(|op| op.safety() == PlanSafety::Destructive)
+            .count();
+        if destructive > 0 {
+            let noun = if destructive == 1 {
+                "operation"
+            } else {
+                "operations"
+            };
+            self.permitted(
+                &asking,
+                &format!("a plan containing {destructive} destructive {noun}"),
+            )
+            .await?;
+        }
 
         let result = plan
             .run(&self.server, planner)
             .await
             .map_err(|e| tmux_error(&e))?;
 
+        let capture_streams = result
+            .operations()
+            .iter()
+            .filter(|report| matches!(report.value(), Some(CoreOperationValue::CapturedPane(_))))
+            .count();
+        let failure_streams = result
+            .steps()
+            .iter()
+            .filter(|step| {
+                step.outcomes().iter().any(|outcome| !outcome.is_complete())
+                    && !step.has_sensitive_input()
+                    && !step.stderr().is_empty()
+            })
+            .count();
+        let evidence_limit = plan_evidence_limit(capture_streams + failure_streams);
+
+        let failures = result
+            .steps()
+            .iter()
+            .filter(|step| step.outcomes().iter().any(|outcome| !outcome.is_complete()))
+            .map(|step| {
+                let withheld = step.has_sensitive_input() && !step.stderr().is_empty();
+                let kind = step
+                    .refusal()
+                    .map_or(PlanFailureKind::Refused, |error| error.kind().into());
+                PlanFailure {
+                    operations: step.step().indices().to_vec(),
+                    attribution: match step.attribution() {
+                        PlanAttribution::PerCommand => "per_command",
+                        PlanAttribution::Merged => "merged",
+                    }
+                    .to_owned(),
+                    kind,
+                    stderr: (!withheld && !step.stderr().is_empty())
+                        .then(|| plan_evidence(step.stderr(), evidence_limit)),
+                    stderr_bytes: step.stderr().len(),
+                    stderr_withheld: withheld,
+                }
+            })
+            .collect();
+
         Ok(Json(PlanRun {
-            outcomes: plan
-                .steps()
+            operations: result
+                .operations()
                 .iter()
-                .zip(result.outcomes())
-                .map(|(op, outcome)| PlanStepOutcome {
-                    command: op.name().to_owned(),
-                    outcome: match outcome {
+                .map(|report| PlanOperationReport {
+                    index: report.index(),
+                    kind: report.kind().name().to_owned(),
+                    outcome: match report.outcome() {
                         PlanOutcome::Complete => "complete",
                         PlanOutcome::Failed => "failed",
                         PlanOutcome::Skipped => "skipped",
                         PlanOutcome::Unknown => "unknown",
                     }
                     .to_owned(),
+                    attribution: report
+                        .attribution()
+                        .map(|attribution| match attribution {
+                            PlanAttribution::PerCommand => "per_command",
+                            PlanAttribution::Merged => "merged",
+                        })
+                        .map(str::to_owned),
+                    value: report
+                        .value()
+                        .and_then(|value| project_plan_value(value, evidence_limit)),
                 })
                 .collect(),
+            failures,
             dispatches: result.dispatches(),
             complete: result.is_complete(),
         }))
@@ -4120,7 +4455,7 @@ impl ServerHandler for TmuxTools {
                  destroy work are not offered."
             }
             Safety::Destructive => {
-                " tier — every tool is offered, including the four that destroy work."
+                " tier — every tool is offered, including plans that destroy work."
             }
         });
         instructions

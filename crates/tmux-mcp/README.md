@@ -247,9 +247,11 @@ if its client does not support resources.
 
 ## Safety
 
-The four tools that destroy work are **not offered by default**. This server
-can end every session on a machine, so reaching that far should be a decision
-you made rather than one you inherited.
+The four dedicated tools that destroy work are **not offered by default**.
+This server can end every session on a machine, so reaching that far should be
+a decision you made rather than one you inherited. `run_plan` keeps one name
+at every tier, advertises that tier's ceiling, and checks every operation
+before it runs any of them.
 
 ```console
 $ tmux-mcp --safety destructive
@@ -259,8 +261,8 @@ Three tiers, also settable with `TMUX_MCP_SAFETY`:
 
 | Tier | Offers |
 |---|---|
-| `readonly` | The 24 tools that change nothing |
-| `mutating` | The default: everything except the four that destroy work |
+| `readonly` | Read-only tools and plans |
+| `mutating` | Default; destructive tools and plan operations are refused |
 | `destructive` | Everything |
 
 Tools above the tier are not advertised at all, because an agent cannot choose
@@ -275,11 +277,11 @@ loop for each irreversible act:
 $ tmux-mcp --safety destructive --confirm
 ```
 
-Every destructive call then asks the client to put the question to you, and
-proceeds only on a yes. It fails closed: a client that cannot ask gets a
-refusal rather than a destroyed session, because the alternative is the
-unattended destruction the setting exists to prevent. `TMUX_MCP_CONFIRM=1`
-does the same.
+Every destructive call, including a destructive plan, then asks the client to
+put the question to you, and proceeds only on a yes. It fails closed: a client
+that cannot ask gets a refusal rather than a destroyed session, because the
+alternative is the unattended destruction the setting exists to prevent.
+`TMUX_MCP_CONFIRM=1` does the same.
 
 Separately, when tmux started the server it knows which pane it is in. Pane
 listings mark that pane `caller: "self"`, and the tools that would destroy it
