@@ -9,26 +9,12 @@ use std::time::Duration;
 
 use libtmux::test::TestServer;
 use libtmux::{Pane, Server, Session};
-use rmcp::handler::server::wrapper::Parameters;
-use serde_json::Value;
-use tmux_mcp::{Safety, TmuxTools};
+use tmux_mcp::TmuxTools;
 use tokio_util::sync::CancellationToken;
 
-fn args<T: serde::de::DeserializeOwned>(value: Value) -> Parameters<T> {
-    Parameters(serde_json::from_value(value).expect("arguments deserialize"))
-}
+mod support;
 
-fn json<T: serde::Serialize>(answer: rmcp::handler::server::wrapper::Json<T>) -> Value {
-    serde_json::to_value(answer.0).expect("a tool answer serialises")
-}
-
-fn tools(server: &Server) -> TmuxTools {
-    TmuxTools::builder(server.clone())
-        .caller(None)
-        .safety(Safety::default())
-        .confirm(false)
-        .build()
-}
+use support::{args, bare_tools, json};
 
 async fn wait_for_prompt(pane: &Pane) {
     for _ in 0..600 {
@@ -53,7 +39,7 @@ async fn fixture(name: &str) -> (TestServer, Session, Pane, TmuxTools) {
         .expect("session starts");
     let pane = session.panes().await.expect("panes list").remove(0);
     wait_for_prompt(&pane).await;
-    let tools = tools(guard.server());
+    let tools = bare_tools(guard.server());
     (guard, session, pane, tools)
 }
 
@@ -98,7 +84,7 @@ async fn uncertain_foreground_dispatch_names_the_owned_job() {
         .default_timeout(Duration::from_secs(2))
         .build()
         .expect("a short-deadline handle builds");
-    let tools = tools(&short);
+    let tools = bare_tools(&short);
     drop(original_tools);
     let sent = "foreground-unknown-sent";
     let release = "foreground-unknown-release";

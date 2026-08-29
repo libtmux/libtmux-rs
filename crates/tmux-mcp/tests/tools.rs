@@ -15,38 +15,9 @@ use rmcp::serve_server;
 use serde_json::Value;
 use tmux_mcp::{Safety, TmuxTools};
 
-/// Tools whose answers come from their arguments rather than from whoever ran
-/// the suite.
-///
-/// `TmuxTools::new` reads `TMUX`, `TMUX_PANE`, and the safety and confirm
-/// variables. A `TMUX_PANE` with no `TMUX` is an identity with a pane and no
-/// socket, and `CallerIdentity::may_be_on` answers yes to every case it cannot
-/// resolve, so the server refuses to destroy the fixture the test just made.
-/// Every value here is the one the environment falls back to when unset.
-fn bare_tools(server: &libtmux::Server) -> TmuxTools {
-    TmuxTools::builder(server.clone())
-        .caller(None)
-        .confirm(false)
-        .build()
-}
+mod support;
 
-/// The rows of a listing answer.
-///
-/// A listing is wrapped in a named object -- `{"panes": [...]}` -- because the
-/// protocol says structured content is an object. The single array inside is
-/// what these tests are after.
-/// Render a tool's typed answer the way a client receives it.
-fn json<T: serde::Serialize>(answer: rmcp::handler::server::wrapper::Json<T>) -> Value {
-    serde_json::to_value(answer.0).expect("a tool answer serialises")
-}
-
-/// The id a tool that made or destroyed one object answers with.
-fn id<T: serde::Serialize>(answer: rmcp::handler::server::wrapper::Json<T>) -> String {
-    json(answer)["id"]
-        .as_str()
-        .expect("the answer carries an id")
-        .to_owned()
-}
+use support::{bare_tools, id, json};
 
 /// What a `capture_pane` answer is showing.
 fn text<T: serde::Serialize>(answer: rmcp::handler::server::wrapper::Json<T>) -> String {

@@ -27,6 +27,10 @@ use rmcp::{RoleClient, ServiceExt as _, serve_server};
 use serde_json::{Value, json};
 use tmux_mcp::{CallerIdentity, Safety, TmuxTools};
 
+mod support;
+
+use support::prompt_ready;
+
 /// A client and server talking over an in-memory duplex.
 struct Wire {
     client: RunningService<RoleClient, ()>,
@@ -224,30 +228,6 @@ async fn daemon_fate(guard: &mut TestServer) -> DaemonState {
     })
     .await;
     guard.daemon_state()
-}
-
-/// Wait until a pane's shell has drawn a prompt.
-async fn prompt_ready(server: &Server, pane: &str) {
-    for _ in 0..600 {
-        let reading = server
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("-t")
-                    .arg(pane)
-                    .arg("#{cursor_x},#{cursor_y}"),
-            )
-            .await
-            .expect("tmux reports the cursor")
-            .stdout_lossy()
-            .trim()
-            .to_owned();
-        if !reading.is_empty() && reading != "0,0" {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("the pane never drew a prompt");
 }
 
 #[tokio::test]

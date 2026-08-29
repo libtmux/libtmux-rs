@@ -12,31 +12,13 @@ use std::time::Duration;
 use libtmux::test::TestServer;
 use libtmux::{Command, Server};
 use rmcp::ServerHandler as _;
-use rmcp::handler::server::wrapper::Parameters;
 use serde_json::Value;
 use tmux_mcp::{CallerIdentity, Safety, TmuxTools};
 use tokio_util::sync::CancellationToken;
 
-/// Build tool arguments from JSON, as the protocol delivers them.
-fn args<T: serde::de::DeserializeOwned>(value: Value) -> Parameters<T> {
-    Parameters(serde_json::from_value(value).expect("arguments deserialize"))
-}
+mod support;
 
-/// Render a tool's typed answer the way a client receives it.
-///
-/// The tools return values now, not strings, so these read the same JSON a
-/// client sees in `structuredContent` rather than parsing prose.
-fn json<T: serde::Serialize>(answer: rmcp::handler::server::wrapper::Json<T>) -> Value {
-    serde_json::to_value(answer.0).expect("a tool answer serialises")
-}
-
-/// The id a tool that made or destroyed one object answers with.
-fn id<T: serde::Serialize>(answer: rmcp::handler::server::wrapper::Json<T>) -> String {
-    json(answer)["id"]
-        .as_str()
-        .expect("the answer carries an id")
-        .to_owned()
-}
+use support::{args, bare_tools, id, json, prompt_ready};
 
 /// The socket path tmux itself reports, which is what identities compare.
 async fn socket_of(server: &Server) -> String {
@@ -73,27 +55,6 @@ async fn identity_for(server: &Server, pane: &str) -> CallerIdentity {
         .expect("both values are present")
 }
 
-/// A server holding one session, with the tools pointed at it.
-/// Tools whose answers come from their arguments rather than from whoever ran
-/// the suite.
-///
-/// `TmuxTools::new` reads `TMUX`, `TMUX_PANE`, and the safety and confirm
-/// variables, so a test built on it asserts the developer's environment as
-/// much as the code. Inside a tmux pane the caller is a real identity rather
-/// than none, and the pane id will not be the fixture's, so a test expecting
-/// "no caller" saw "some other pane" and failed. CI is not inside tmux, which
-/// is why nothing caught it.
-///
-/// Every value here is the one the environment falls back to when unset, so
-/// this changes nothing about what the tests assert.
-fn bare_tools(server: &Server) -> TmuxTools {
-    TmuxTools::builder(server.clone())
-        .caller(None)
-        .safety(Safety::default())
-        .confirm(false)
-        .build()
-}
-
 async fn fixture(name: &str) -> (TestServer, TmuxTools) {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = bare_tools(guard.server());
@@ -113,51 +74,6 @@ async fn panes(tools: &TmuxTools) -> Vec<Value> {
         .as_array()
         .expect("a listing wraps an array")
         .clone()
-}
-
-/// Wait until a pane's shell has drawn a prompt.
-///
-/// tmux hands back a pane the moment it forks, long before the shell in it can
-/// read. Keys sent before then are swallowed, so every test that types waits
-/// for the cursor to leave the origin first.
-async fn prompt_ready(server: &Server, pane: &str) {
-    let mut last = String::new();
-    for _ in 0..600 {
-        let reading = server
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("-t")
-                    .arg(pane)
-                    .arg("#{cursor_x},#{cursor_y}"),
-            )
-            .await
-            .expect("tmux reports the cursor")
-            .stdout_lossy()
-            .trim()
-            .to_owned();
-        if !reading.is_empty() && reading != "0,0" {
-            return;
-        }
-        last = reading;
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    // A bare cursor reading cannot distinguish a shell that is slow from one
-    // that died or never ran, which is the difference worth knowing here.
-    let state = server
-        .cmd(
-            Command::new("display-message")
-                .arg("-p")
-                .arg("-t")
-                .arg(pane)
-                .arg("running=#{pane_current_command} dead=#{pane_dead}"),
-        )
-        .await
-        .expect("tmux reports the pane")
-        .stdout_lossy()
-        .trim()
-        .to_owned();
-    panic!("the pane never drew a prompt; cursor stayed at {last:?}, {state}");
 }
 
 /// A fixture whose single pane is ready to be typed at.
