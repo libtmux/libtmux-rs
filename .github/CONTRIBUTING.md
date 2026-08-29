@@ -69,6 +69,21 @@ usually asking for a design change. `libtmux::test::TestServer`, behind the
 `test-support` feature, gives each test an isolated socket and deterministic
 cleanup. Tests are functions, not methods on a struct.
 
+Every test runs against whatever `tmux` resolves to, unless
+`LIBTMUX_TEST_TMUX` names one:
+
+```console
+$ LIBTMUX_TEST_TMUX=/path/to/tmux-3.5a just test
+```
+
+Prefer that over prepending to `PATH`. `TestServer` used to read only `PATH`,
+so the variable steered the format-compatibility tests and nothing else, and a
+run pinned that way passed against whichever tmux `PATH` held. A pass about
+the wrong binary reports nothing and looks exactly like a pass about the right
+one. `just compat` builds each pinned release and runs the whole suite against
+it, so a test that depends on behaviour a release does not have needs a
+`libtmux::since::*` gate rather than an assumption about the machine.
+
 Doctests are a separate target and are part of the gate:
 
 ```console
