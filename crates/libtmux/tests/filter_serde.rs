@@ -943,9 +943,22 @@ mod serde_contract {
         envelope(&serde_json::json!({"op": "and", "args": expressions}))
     }
 
-    fn membership(value_count: usize) -> Value {
+    fn membership_predicate(value_count: usize) -> Value {
         let values = vec![Value::String("x".to_owned()); value_count];
-        envelope(&serde_json::json!({"op": "in", "field": "name", "value": values}))
+        serde_json::json!({"op": "in", "field": "name", "value": values})
+    }
+
+    fn membership(value_count: usize) -> Value {
+        envelope(&membership_predicate(value_count))
+    }
+
+    fn memberships(value_counts: &[usize]) -> Value {
+        let expressions = value_counts
+            .iter()
+            .copied()
+            .map(membership_predicate)
+            .collect::<Vec<_>>();
+        envelope(&serde_json::json!({"op": "and", "args": expressions}))
     }
 
     fn decode_value(value: &Value) -> Result<FilterExpr<Record>, serde_json::Error> {
@@ -993,6 +1006,8 @@ mod serde_contract {
     fn wire_decoder_enforces_membership_value_budget() -> TestResult {
         decode_value(&membership(4_096))?;
         assert_value_limit(&membership(4_097))?;
+        decode_value(&memberships(&[2_048, 2_048]))?;
+        assert_value_limit(&memberships(&[2_048, 2_049]))?;
         Ok(())
     }
 

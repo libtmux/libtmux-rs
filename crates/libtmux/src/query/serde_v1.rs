@@ -34,11 +34,15 @@ fn complexity_limit<E: de::Error>() -> E {
 
 struct DecodeBudget {
     nodes: usize,
+    values: usize,
 }
 
 impl DecodeBudget {
     const fn new() -> Self {
-        Self { nodes: 0 }
+        Self {
+            nodes: 0,
+            values: 0,
+        }
     }
 
     fn enter_expression<E: de::Error>(&mut self, depth: usize) -> Result<(), E> {
@@ -46,6 +50,14 @@ impl DecodeBudget {
             return Err(complexity_limit());
         }
         self.nodes += 1;
+        Ok(())
+    }
+
+    fn retain_value<E: de::Error>(&mut self) -> Result<(), E> {
+        if self.values >= MAX_SET_VALUES {
+            return Err(complexity_limit());
+        }
+        self.values += 1;
         Ok(())
     }
 }
@@ -283,9 +295,15 @@ impl<'de> Deserialize<'de> for WireElement {
     }
 }
 
-struct WireValueVisitor;
+struct WireValueSeed<'a> {
+    budget: &'a mut DecodeBudget,
+}
 
-impl<'de> Visitor<'de> for WireValueVisitor {
+struct WireValueVisitor<'a> {
+    budget: &'a mut DecodeBudget,
+}
+
+impl<'de> Visitor<'de> for WireValueVisitor<'_> {
     type Value = WireValue;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -341,12 +359,8 @@ impl<'de> Visitor<'de> for WireValueVisitor {
         let mut booleans = Vec::new();
         let mut family = None;
         let mut invalid = false;
-        let mut items = 0;
         while let Some(element) = sequence.next_element::<WireElement>()? {
-            if items >= MAX_SET_VALUES {
-                return Err(complexity_limit());
-            }
-            items += 1;
+            self.budget.retain_value()?;
             match element {
                 WireElement::String(value) => {
                     if family == Some(false) {
@@ -381,9 +395,13 @@ impl<'de> Visitor<'de> for WireValueVisitor {
     }
 }
 
-impl<'de> Deserialize<'de> for WireValue {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(WireValueVisitor)
+impl<'de> DeserializeSeed<'de> for WireValueSeed<'_> {
+    type Value = WireValue;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+        deserializer.deserialize_any(WireValueVisitor {
+            budget: self.budget,
+        })
     }
 }
 
@@ -432,7 +450,9 @@ impl RawNode {
         };
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
-                "op" if node.op.is_none() => node.op = Some(map.next_value()?),
+                "op" if node.op.is_none() => {
+                    node.op = Some(map.next_value_seed(WireValueSeed { budget })?);
+                }
                 "args" if node.args.is_none() => {
                     node.args = Some(map.next_value_seed(RawArgsSeed {
                         budget,
@@ -445,10 +465,14 @@ impl RawNode {
                         depth: depth + 1,
                     })?));
                 }
-                "field" if node.field.is_none() => node.field = Some(map.next_value()?),
-                "value" if node.value.is_none() => node.value = Some(map.next_value()?),
+                "field" if node.field.is_none() => {
+                    node.field = Some(map.next_value_seed(WireValueSeed { budget })?);
+                }
+                "value" if node.value.is_none() => {
+                    node.value = Some(map.next_value_seed(WireValueSeed { budget })?);
+                }
                 "quantifier" if node.quantifier.is_none() => {
-                    node.quantifier = Some(map.next_value()?);
+                    node.quantifier = Some(map.next_value_seed(WireValueSeed { budget })?);
                 }
                 _ => {
                     return Err(invalid_structure());
@@ -899,7 +923,11 @@ impl<'de, T: Filterable> Visitor<'de> for EnvelopeVisitor<T> {
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
                 "version" if raw.version.is_none() => raw.version = Some(map.next_value()?),
-                "target" if raw.target.is_none() => raw.target = Some(map.next_value()?),
+                "target" if raw.target.is_none() => {
+                    raw.target = Some(map.next_value_seed(WireValueSeed {
+                        budget: &mut self.budget,
+                    })?);
+                }
                 "expr" if raw.expression.is_none() => {
                     raw.expression = Some(map.next_value_seed(RawExpressionSeed {
                         budget: &mut self.budget,
