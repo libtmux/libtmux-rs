@@ -94,6 +94,7 @@ mod jobs;
 mod model;
 mod policy;
 mod prompts;
+mod retained;
 mod schema;
 mod tail;
 mod text;

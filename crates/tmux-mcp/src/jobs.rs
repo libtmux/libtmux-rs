@@ -20,8 +20,9 @@ use libtmux::{Error, Pane};
 use serde::Serialize;
 use tokio::sync::{Notify, oneshot};
 
-use crate::exec::{self, RetainedBytes, RunOutcome, RunView};
+use crate::exec::{self, RunOutcome, RunView};
 use crate::identity::{InstanceId, InstanceIdentity};
+use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
 
 /// Take a lock, treating a poisoned one as held rather than as fatal.
