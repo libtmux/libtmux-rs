@@ -49,7 +49,7 @@
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -1047,6 +1047,10 @@ const EVENT_QUEUE: usize = 256;
 /// duration. A ceiling turns that into a pause rather than a memory leak.
 const HELD_WHILE_AWAITING: usize = EVENT_QUEUE * 8;
 
+const NARROW_IDLE: u8 = 0;
+const NARROW_RUNNING: u8 = 1;
+const NARROW_DIRTY: u8 = 2;
+
 /// What one pane writes, as it writes it.
 ///
 /// Built by [`crate::Pane::stream_output`]. This is a [`Stream`] of the bytes
@@ -1069,11 +1073,10 @@ pub struct PaneOutput {
     /// appears after the attach arrives unmuted; the event loop below repairs
     /// that when an event says the set of panes may have grown.
     sender: ControlSender,
-    /// Whether a re-narrow is already in flight.
+    /// Whether re-narrowing is idle, running, or needs another pass.
     ///
-    /// Each one costs a `list-panes` round trip, and a burst of splits reports
-    /// an event apiece.
-    narrowing: Arc<AtomicBool>,
+    /// Each pass costs a `list-panes` round trip, so a burst coalesces.
+    narrowing: Arc<AtomicU8>,
 }
 
 impl PaneOutput {
@@ -1082,7 +1085,7 @@ impl PaneOutput {
             pane,
             events,
             sender,
-            narrowing: Arc::new(AtomicBool::new(false)),
+            narrowing: Arc::new(AtomicU8::new(NARROW_IDLE)),
         }
     }
 
@@ -1093,7 +1096,14 @@ impl PaneOutput {
     /// A failure leaves the caller its own pane alongside noise, so it does
     /// not end the stream.
     fn narrow(&self) {
-        if self.narrowing.swap(true, Ordering::AcqRel) {
+        let transition =
+            self.narrowing
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
+                    NARROW_IDLE => Some(NARROW_RUNNING),
+                    NARROW_RUNNING => Some(NARROW_DIRTY),
+                    _ => None,
+                });
+        if !matches!(transition, Ok(NARROW_IDLE)) {
             return;
         }
 
@@ -1101,8 +1111,21 @@ impl PaneOutput {
         let pane = self.pane.clone();
         let narrowing = Arc::clone(&self.narrowing);
         tokio::spawn(async move {
-            let _ = sender.watch_only(&[pane]).await;
-            narrowing.store(false, Ordering::Release);
+            loop {
+                let _ = sender.watch_only(std::slice::from_ref(&pane)).await;
+                match narrowing.compare_exchange(
+                    NARROW_RUNNING,
+                    NARROW_IDLE,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(state) => {
+                        debug_assert_eq!(state, NARROW_DIRTY);
+                        narrowing.store(NARROW_RUNNING, Ordering::Release);
+                    }
+                }
+            }
         });
     }
 
@@ -2218,11 +2241,11 @@ mod tests {
 
     use std::time::Duration;
 
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::{mpsc, oneshot, watch};
 
     use super::{
-        BlockResult, ControlSender, Event, HELD_WHILE_AWAITING, Line, ReplySlot, ReplySlots,
-        Request, admit_request, decode_watched_pane_id, unescape_output,
+        BlockResult, ControlEvents, ControlSender, Event, HELD_WHILE_AWAITING, Line, PaneOutput,
+        ReplySlot, ReplySlots, Request, admit_request, decode_watched_pane_id, unescape_output,
     };
     use crate::{
         Command, ControlModeErrorKind, Error, ErrorKind, PaneId, SessionId, TmuxText, WindowId,
@@ -2377,6 +2400,43 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Refused);
         assert!(!matches!(error, Error::AfterEffect { .. }));
         assert!(requests.try_recv().is_err(), "no mute was dispatched");
+    }
+
+    #[tokio::test]
+    async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
+        let (commands, mut requests) = mpsc::channel(4);
+        let sender = sender(commands, Duration::from_secs(5));
+        let (_events, received) = mpsc::channel(1);
+        let (stop, _stopped) = watch::channel(());
+        let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+        let output = PaneOutput::new(
+            "%1".parse().expect("a pane id"),
+            ControlEvents {
+                events: received,
+                stop,
+                connection,
+            },
+            sender,
+        );
+
+        output.narrow();
+        let first = requests.recv().await.expect("the first list-panes request");
+        assert!(first.line.starts_with("list-panes "));
+        output.narrow();
+        first
+            .result
+            .send(Err(Error::control_mode_closed()))
+            .expect("the first pass is still waiting");
+
+        let second = tokio::time::timeout(Duration::from_secs(1), requests.recv())
+            .await
+            .expect("the dirty state starts another pass")
+            .expect("the sender remains open");
+        assert!(second.line.starts_with("list-panes "));
+        second
+            .result
+            .send(Ok(reply(2)))
+            .expect("the second pass is still waiting");
     }
 
     #[tokio::test]
