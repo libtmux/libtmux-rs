@@ -276,6 +276,13 @@ fn generated_schema_uses_the_same_fields_types_and_relations() {
             "expr": {"op": "eq", "field": "active", "value": true},
         },
     })));
+    for signed in ["0", "-5", "5"] {
+        assert!(
+            validator.is_valid(&json!({"version": 1, "target": "work_item", "expr":
+                {"op": "eq", "field": "score", "value": signed}})),
+            "schema rejected {signed}"
+        );
+    }
     for malformed in [
         json!({"version": 1, "target": "work_item", "expr":
             {"op": "contains", "field": "done", "value": "yes"}}),
@@ -285,6 +292,8 @@ fn generated_schema_uses_the_same_fields_types_and_relations() {
             "op": "relation", "field": "owner", "quantifier": "any",
             "expr": {"op": "eq", "field": "active", "value": true},
         }}),
+        json!({"version": 1, "target": "work_item", "expr":
+            {"op": "eq", "field": "score", "value": "-0"}}),
     ] {
         assert!(
             !validator.is_valid(&malformed),

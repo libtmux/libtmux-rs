@@ -129,7 +129,7 @@ mod json {
 
     use super::{FilterExpr, FilterSchema, FilterSchemaDescriptor, FilterValueSchema};
 
-    const INTEGER_PATTERN: &str = "^-?(0|[1-9][0-9]*)$";
+    const INTEGER_PATTERN: &str = "^(0|-?[1-9][0-9]*)$";
     const UNSIGNED_PATTERN: &str = "^(0|[1-9][0-9]*)$";
 
     impl<T: FilterSchema> JsonSchema for FilterExpr<T> {
