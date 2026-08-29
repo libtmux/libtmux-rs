@@ -45,7 +45,7 @@ libtmux  | watch    | control-mode,test-support                     |    |      
 libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
 tmux-mcp | budget   |                                               |    |               | of it output schemas
 tmux-mcp | surface  |                                               |    |               | answers with:
-tmux-mcp | readonly |                                               |    | mcp_handshake |
+tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
 "
 
 rows() {
@@ -182,6 +182,10 @@ while IFS='|' read -r crate name features args driver expect; do
         : > "$out"
         if "$driver" "$out" | cargo run "${opts[@]}" -- $args > "$out"; then
             printf 'answered %s bytes and shut down cleanly\n' "$(wc -c < "$out" | tr -d ' ')"
+            if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
+                printf 'did not print %s\n' "$expect" >&2
+                failures+=("$crate/$name")
+            fi
         else
             failures+=("$crate/$name")
             sed -n '1,5p' "$out" >&2
