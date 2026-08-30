@@ -21,6 +21,8 @@ use crate::Command;
 /// ```
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NewSession {
     #[cfg_attr(
         feature = "serde",
@@ -29,6 +31,7 @@ pub struct NewSession {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     name: OsString,
     #[cfg_attr(
         feature = "serde",
@@ -37,6 +40,10 @@ pub struct NewSession {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     start_directory: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -44,6 +51,10 @@ pub struct NewSession {
             serialize_with = "crate::plan::wire::optional_argument",
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
     )]
     window_name: Option<OsString>,
 }
@@ -60,6 +71,9 @@ impl NewSession {
     }
 
     /// Start the session's first window in this directory.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     #[must_use]
     pub fn start_directory(mut self, directory: impl Into<OsString>) -> Self {
         self.start_directory = Some(directory.into());

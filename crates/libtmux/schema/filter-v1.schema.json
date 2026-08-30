@@ -57,7 +57,8 @@
           "items": {
             "$ref": "#/$defs/expression"
           },
-          "minItems": 2
+          "minItems": 2,
+          "maxItems": 4096
         }
       },
       "required": ["op", "args"],
@@ -74,7 +75,8 @@
           "items": {
             "$ref": "#/$defs/expression"
           },
-          "minItems": 2
+          "minItems": 2,
+          "maxItems": 4096
         }
       },
       "required": ["op", "args"],
@@ -155,13 +157,15 @@
               "type": "array",
               "items": {
                 "type": "boolean"
-              }
+              },
+              "maxItems": 4096
             },
             {
               "type": "array",
               "items": {
                 "type": "string"
-              }
+              },
+              "maxItems": 4096
             }
           ]
         }

@@ -461,10 +461,15 @@ Generated field handles make invalid operations fail to compile on downstream
 data through the current public API:
 
 ```rust
+# // The derive is behind `derive`, which is not a default feature.
+# #[cfg(not(feature = "derive"))]
+# fn main() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
+# #[cfg(feature = "derive")]
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 
 #[derive(libtmux::Filterable)]
-#[filterable(target = "task")]
+#[filterable(target = "task", crate = "::libtmux")]
 struct Task {
     name: String,
     done: bool,
@@ -474,6 +479,9 @@ let tasks = vec![Task { name: "build".into(), done: false }];
 let fields = Task::filter_fields();
 let expression = fields.name.starts_with("build").and(fields.done.eq(false));
 let task = tasks.iter().matching(&expression).exactly_one()?;
+# let _ = task;
+# Ok(())
+# }
 ```
 
 String, boolean, integer, enum, to-one, and to-many handles expose only their
@@ -492,6 +500,11 @@ booleans are JSON booleans, text and enum values are strings, and every
 fixed-width integer is a canonical base-10 string. This avoids TypeScript
 number precision loss. `isize` and `usize` are excluded because their range is
 target-dependent.
+
+Wire decoding stops at 64 expression levels, 4,096 expression nodes, or 4,096
+membership values. The limits bound recursive validation and retained input
+independently of the deserializer. The schema states the array limits; its
+recursive grammar cannot express one budget shared across the whole tree.
 
 `lt`, `lte`, `gt`, and `gte` take one bound rather than a set, and appear in
 the schema beside the text operators because an integer rides as text. Which
@@ -588,12 +601,21 @@ derive. Each keeps the owned handle's fields under a named field -- `session`
 and `window` -- and puts the relation beside it, so a session's own fields and
 a question about its contents compose in one expression:
 
-```rust
+```no_run
+# fn expression() {
+use libtmux::query::Filterable as _;
+use libtmux::{SessionTree, WindowTree};
+
 let sessions = SessionTree::filter_fields();
 let windows = WindowTree::filter_fields();
 
-sessions.session.session_name.starts_with("build")
-    .and(sessions.windows.any(windows.window.window_name.eq("editor")))
+let expression = sessions
+    .session
+    .session_name
+    .starts_with("build")
+    .and(sessions.windows.any(windows.window.window_name.eq("editor")));
+# let _ = expression;
+# }
 ```
 
 Matching delegates: a predicate naming the relation resolves against the
@@ -617,36 +639,49 @@ operations remain methods with ordinary arguments. Operations with several
 optional clauses accept a consuming `#[must_use]` options builder through
 `impl Into<Options>`.
 
-```rust
+```no_run
+# async fn walk() -> Result<(), Box<dyn std::error::Error>> {
+use libtmux::Server;
+
 let server = Server::new()?;
 let session = server.new_session("work").await?;
 let window = session.new_window("editor").await?;
-let pane = window
-    .active_pane()
-    .await?
-    .ok_or(Error::MissingRelation(Relation::ActivePane))?;
+let Some(pane) = window.active_pane().await? else {
+    return Ok(());
+};
 pane.send_keys("cargo test").await?;
+# Ok(())
+# }
 ```
 
 The same method accepts configured options without adding a second operation:
 
-```rust
+```no_run
+# async fn build(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+use libtmux::NewSessionOptions;
+
 let options = NewSessionOptions::new("work")
     .window_name("editor")
     .start_directory("workspace");
 let session = server.new_session(options).await?;
+# let _ = session;
+# Ok(())
+# }
 ```
 
 Options and hooks are exposed as inherent methods on each applicable handle,
 not extension traits users must import. Private macros may remove repetitive
 wrapper code while keeping generated public methods documented and tested.
 
-Python context-manager cleanup maps to explicit async scoped operations:
-`with_server`, `Server::with_session`, `Session::with_window`, and
-`Window::with_pane`. Each accepts an async closure, waits for cleanup after
-either success or error, and delegates cancellation cleanup to the same
-independently owned supervisor used by command execution. Ordinary cloneable
-handles do not perform async side effects in `Drop`.
+Python context-manager cleanup maps to `Server::with_session`,
+`Session::with_window`, and `Window::with_pane`. Each accepts an async closure
+and waits for cleanup after success or error. An owned task completes creation,
+arms cleanup before handing the object to the caller, and keeps cleanup running
+after cancellation. Cleanup needs the Tokio runtime to remain active; ordinary
+cloneable handles remain non-destructive.
+
+If tmux creates an object but the command fails before yielding a decodable
+handle, the scope has no identity to target and cannot compensate for it.
 
 ### Errors and collapsed collections
 
@@ -668,9 +703,13 @@ filter values.
 List-shaped object access offers both shapes, and the short name is the loud one. What follows describes the collapsing
 contract:
 
-```rust
-let sessions = server.sessions_or_empty().await;
-let sessions = server.sessions().await?;
+```no_run
+# async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+let lenient = server.sessions_or_empty().await;
+let loud = server.sessions().await?;
+# let _ = (lenient, loud);
+# Ok(())
+# }
 ```
 
 The first returns an empty `Vec` when the underlying tmux list operation fails
@@ -725,7 +764,16 @@ What the earlier framing was right about is kept:
 
 - events are handed over with backpressure, never dropped -- a consumer that
   stops reading stops the connection reading from tmux, which is the
-  backpressure tmux already applies to a slow client;
+  backpressure tmux already applies to a slow client. That pause is available
+  only while nothing is waiting for a reply. A reply arrives on the connection
+  the events arrive on, so pausing with one outstanding would be waiting for
+  something this end had stopped listening for, and it deadlocked: measured
+  identically on 3.2a through 3.7c, with no error and `is_closed` reporting
+  false. While a reply is outstanding the connection keeps reading and holds
+  a fixed maximum of what the consumer has not taken. At that ceiling it
+  refuses live replies but retains their correlation slots; an absolute reply
+  deadline bounds the write through the complete block. Pausing resumes the
+  moment no live reply remains;
 - the connection lives while either handle is in use and ends when both are
   gone, so a caller who only watches and a caller who only sends are both
   ordinary;
@@ -974,6 +1022,45 @@ ask for everything. What that means depends on the request: a server-wide
 listing has nothing to list, while a listing or mutation under a target could
 not resolve it. The scope, and the request's own `-t`, are what tell them
 apart.
+
+How much a miss proves depends on what tmux echoes back, and the echo is
+self-describing. tmux returns the part of the target it could not resolve, so
+an identity comes back carrying its sigil and a coordinate comes back without
+the session it belonged to:
+
+| sent | echoed | what it establishes |
+| --- | --- | --- |
+| `-t home:@99` | `can't find window: @99` | no window `@99` is reachable |
+| `-t home:9` | `can't find window: 9` | `home` holds nothing at index 9 |
+| `-t home:nosuch` | `can't find window: nosuch` | `home` holds no window of that name |
+| `-t nosuch` | `can't find session: nosuch` | no session of that name |
+
+A coordinate is scoped to one session and is not unique on the server, so its
+absence never establishes that an object died. Reading one as an identity
+reported index 3 as window `@3` -- a different object, often a live one -- and
+`Error::is_object_gone` answered `true`, which is the single predicate a caller
+consults before discarding a handle. Those misses are `Error::LinkGone`, which
+answers `false`. A session is the exception, because `-t` takes a session's
+name and tmux keeps those unique, so a bare word there is still an identity.
+
+The sigil does not settle everything. `unlink-window -t home:@3` answers
+`can't find window: @3` whether `@3` is dead or merely linked into some other
+session, so the two produce the same string and no reading of it can separate
+them. `Window::unlink` and `Window::swap_with` buy that distinction with a
+lookup, on the failure path only and only where the answer changes what a
+caller should do. They ask the server rather than refreshing the handle: a
+window refreshes within its own session, and a window whose link to that
+session is gone is the case being told apart, so refreshing would answer the
+question with its own premise.
+
+`real_tmux_compat_a_coordinate_miss_is_not_an_object_miss` pins both halves
+against whichever tmux the lane runs, for the same reason the wording test
+exists, and has passed on every one: 3.2a, 3.4, 3.5a, 3.6b and 3.7b. The split
+needs no version gate, and 3.2a -- the oldest supported, and the release most
+likely to answer differently -- echoes exactly as the current one does. If a future release echoed the whole target, or dropped the sigil, the
+unrecognized form classifies as `LinkGone` -- the reading that does not license
+discarding a live handle -- so the cost of being wrong is a distinction rather
+than a destroyed handle.
 
 Listing accessors come in pairs, and the split is load-bearing here. The
 `*_or_empty` form returns an empty `Vec` for any failure, which suits a status
@@ -1270,6 +1357,22 @@ machine and failed six tests on a macOS runner.
 The general rule: a test's deadline should bound the thing it is *not*
 testing, by enough that it never becomes the thing it measures.
 
+The rule was written and the deadlines it was about stayed constants. Five
+seconds bounds a tmux that starts with a core to spare; on a machine running
+several times its cores in work it bounds nothing, and the fixture suite fails
+in a set that moves between runs while every member passes alone. That shape
+is the signature -- a defect fails the same way every time -- and reading it
+takes repetition rather than a result: a run that fails four tests and then
+four different ones is saying something a single red run cannot.
+
+`LIBTMUX_TEST_TIMEOUT_SCALE` multiplies every fixture deadline, read once so
+two tests in a run cannot measure against different clocks, and never below
+`1` because nothing here wants a fixture to fail sooner. Unset, the deadlines
+are unchanged, so an idle machine behaves exactly as before. It moves a
+ceiling rather than fixing a wait, and a test that synchronises by sleeping
+still races -- it is the knob for a loaded machine, not a substitute for
+waiting on the right thing.
+
 ### An idle fixture process must idle the right way
 
 The process fixtures held a process open with `while :; do :; done`. Nineteen
@@ -1335,6 +1438,78 @@ session reports the same one, and one client changing it changes it for all of
 them. The pane follows from the window, because tmux keeps no per-client
 focus.
 
+### `list-clients` collapses three ways of being absent
+
+A client that is suspended, one that is locked, one that is dying and one that
+has already gone all look the same from `list-clients`: absent. `sort.c`'s
+`sort_get_clients` skips any client carrying `CLIENT_UNATTACHEDFLAGS`, and
+`tmux.h` defines that as `CLIENT_DEAD|CLIENT_SUSPENDED|CLIENT_EXIT`. So the
+listing answers "not attached right now", and the crate was reading it as "not
+there any more".
+
+The two are a different instruction to a caller. `Error::is_object_gone` is
+what decides whether to discard a handle, and a suspended client is listed
+again the moment its process continues -- `SIGCONT` for a suspended one, the
+`lock-command` exiting for a locked one. Locking is the larger half: it sets
+the same flag through `server_lock_client`, so `Client::lock`, `Session::lock`
+and `Server::lock_all` all reach it, and `lock-after-time` reaches it with
+nobody asking.
+
+tmux does publish the difference; it is just not in the listing.
+`server_client_get_flags` puts `suspended` in `#{client_flags}`, and
+`display-message` carries `CMD_CLIENT_CANFAIL`, so a target it cannot resolve
+expands every format empty and exits zero rather than erroring. A client that
+is merely stopped still resolves and names itself. `Client::refresh` asks only
+on the miss path, and only tmux's own answer counts: a name that comes back
+matching, carrying that flag, is `Error::ClientSuspended`; every other shape,
+including a probe that fails outright, stays `Error::ObjectGone`. The probe can
+turn a suspended client into something other than gone, never a gone client
+into a live one.
+
+Both mechanisms date to 3.2a, which is `MIN_SUPPORTED`, so this needs no
+version gate. The filter does not: 3.2a and 3.5a screen `list-clients` on
+`c->session == NULL` alone, and `server_client_suspend` never clears the
+session, so a suspended client stays listed on those releases and the miss path
+is never taken. Read from their sources rather than measured. The two answers
+differ and neither is false -- which is the argument for keying on the flag
+rather than on the absence.
+
+### `display-message` answers about a pane you did not ask for
+
+`display-message` is the obvious way to ask tmux what a target resolves to, and
+it is not an oracle. Its entry declares two separate permissions to fail, and
+only one of them is the one above:
+
+```text
+.target = { 't', CMD_FIND_PANE, CMD_FIND_CANFAIL },
+.flags  = ...|CMD_CLIENT_CANFAIL,
+```
+
+`CMD_CLIENT_CANFAIL` governs `-c`: a client that does not resolve expands every
+format empty, which is what makes the suspended-client probe work.
+`CMD_FIND_CANFAIL` governs `-t` and does something else entirely. An
+unresolvable `-t` leaves the target unresolved, so the formats expand against
+the client's current pane and the command still exits zero:
+
+```text
+current window: @2
+-t home:@99    -> @2
+-t home:9      -> @2
+-t home:nosuch -> @2
+-t home:%99    -> @2    a pane id in a window target, still @2
+```
+
+Nothing separates "resolved to this" from "resolved to nothing, so here is
+where you happen to be standing". A test that asks `display-message` whether a
+rendering reaches the right window therefore passes whenever the right window
+is also the current one -- which a fixture that just built it guarantees. That
+is a probe that cannot fail, and one shipped here in the first version of
+`a_rendered_window_target_survives_a_renumber`.
+
+A command whose target is not `CMD_FIND_CANFAIL` refuses instead, which is the
+answer a probe wants. `select-window` is the cheap one, and it leaves the
+current window alone when it fails. Measured on tmux 3.7c.
+
 ### A socket path does not identify a tmux server
 
 `ServerIdentity` is a normalized socket path, and object equality includes it,
@@ -1399,9 +1574,11 @@ pane -- turned its own concurrency into process, descriptor, and memory
 pressure, and tmux serializes on the far side regardless, so the extra clients
 bought queueing rather than throughput. `DispatchLimits` is a semaphore
 acquired before the request is registered, so a refusal costs nothing.
+The command deadline starts before that wait. An explicit admission timeout
+may shorten it, but cannot extend it.
 
 `Error::Overloaded` is deliberately distinct from `Error::Timeout`: overload
-means the dispatch never started, so retrying is safe, where a timeout means
+means the work never started, so retrying is safe, where a timeout means
 tmux may have run the command already.
 
 Both are measured rather than asserted. The admission test times twelve
@@ -1434,6 +1611,12 @@ reconnect. The frame reason now reaches the pending requests instead.
 
 The budgets are large -- 8 MiB for a line, 64 MiB for a block -- because they
 exist to stop unbounded growth, not to police ordinary output.
+
+Connections need a separate count as well. `ControlClientLimits` bounds the
+persistent clients owned by one server, independently of `DispatchLimits`.
+Combining the two would let a handful of long-lived watchers starve every
+short command. Admission lasts until the control process is cleaned up, and a
+full lane returns `Error::Overloaded` before another process starts.
 
 ### Which tmux releases the lanes build
 
@@ -1541,10 +1724,11 @@ between releases. `cargo-semver-checks` could not provide one -- it skips every
 lint on a prerelease-to-prerelease step and then reports success -- and human
 review does not reliably notice a method that quietly changed shape.
 
-`crates/libtmux/docs/public-api.txt` records every public item, one per line,
-generated from rustdoc's JSON by `scripts/public-api.py`. `just api`
-regenerates it and `just api-check` fails when the tree and the record
-disagree, naming what moved.
+`crates/libtmux/docs/public-api.txt` records every public item with its
+callable or data signature, plus each non-blanket trait implementation.
+`scripts/public-api.py` generates one record per line from rustdoc's JSON.
+`just api` regenerates it and `just api-check` fails when the tree and the
+record disagree, naming what moved.
 
 It is deliberately not a semver oracle. It says a change happened, and leaves
 whether that change is allowed to the person reading the diff -- which is the
@@ -1555,6 +1739,17 @@ needs is the nightly the fuzz targets already require. Methods, fields, and
 variants have no standalone path in that JSON, so they are attributed to the
 type that owns them: an unqualified `sessions` would say nothing about which
 handle it belongs to, and a move between types would not show at all.
+
+That attribution reached one level, and an enum's variants sit one level
+further down. A struct-like variant's fields are items in their own right and
+nothing mapped them to the variant holding them, so `Error::LinkGone` recorded
+its fields as `kind` and `index` -- bare names that seven other variants of the
+same enum also spell. The record carried 42 such lines. Removing both of
+`LinkGone`'s fields and adding one produced a diff of one inserted line,
+because something else still spelled `kind` and `index`: the gate whose whole
+purpose is saying that a change happened could not see the change described
+two sections above. Variant fields are attributed like everything else now,
+which named 121 of them and left no bare field records.
 
 ### The MCP server bounds the tmux side, not just its own answers
 
@@ -1587,8 +1782,15 @@ nothing to copy, which is why the measure is per type rather than per item:
 `Pane::id` inherits the example on `Pane`, and counting accessors separately
 would drown the signal in items nobody needs an example for.
 
-`just example-coverage` reports it. The number is 24 of 67 and is expected to
-keep moving, which is the point of having it.
+`just example-coverage` reports it, and `example-coverage-check` fails when a
+crate-root type has none. The count belongs to that command rather than to
+this page, which cannot be re-read when the number moves.
+
+What "runnable" means here changed after this was written. A counted example
+was one rustdoc would compile, which is not the same as one that runs: eleven
+of them wrapped their body in a hidden function nobody called. `just
+doctests-run` closes that, so the coverage number and the guarantee behind it
+now agree.
 
 Writing them was worth more than the count suggests. Three doctests failed on
 first run and each was a belief this crate held wrongly: `split` is detached by
@@ -1597,3 +1799,114 @@ new session does not copy the server environment; and `status` is not a flag,
 because tmux accepts `on`, `off`, and `2` through `5` for it. That last one is
 the argument for generating the option schema from tmux's own table rather
 than inferring a type from the value, and the example now says so.
+
+### Waiting was missing from the production surface
+
+One kind of waiting is now offered, and it is worth naming so the gap below is
+not read as wider than it is. `Server::wait_for_channel` is the blocking half
+of `wait-for`, which `signal_channel` had for a long time without it: the
+missing side was deferred in that method's own documentation until a wait
+running out of time could be told from tmux failing to reply, and that is what
+`ChannelWait` now carries. tmux latches a signal nobody is waiting on -- one
+signal releases every waiter present, and the latch then releases one later
+wait -- so signalling before the wait starts is safe, measured on 3.7c. That
+removed the `Server::cmd(wait-for)` workaround from `tmux-mcp`.
+
+It answers a narrower question than the section it sits in. `wait-for` is a
+rendezvous between commands: something has to signal it, so it serves "tell me
+when this is done" only for work written to announce itself. Watching a pane
+that was not is the case below, and a different mechanism answers it.
+
+`Pane::wait_for_text` and `Pane::wait_for_quiet` now answer the pane case, on
+the polling path this section argued for: no feature, because a caller who
+dispatches a command needs to know when it finished and a doorbell needs
+`control-mode`. Each look reads the scrollback with wrapped lines joined,
+which is what the two constrained failures demanded -- text that scrolled off
+before the look reads as absent, and a line wider than the pane arrives split,
+so a needle spanning the wrap never matches. A dead pane ends the wait rather
+than holding it to the deadline, and running out of time is
+`PaneWait::TimedOut` rather than an error.
+
+Both numbers that would justify a doorbell have now been taken, and neither
+argues for one.
+
+Latency is a capture round-trip rather than a fraction of the poll interval,
+because the loop looks before it sleeps: twelve waits for a marker printed into
+a pane answered in 12ms at the fastest, 22ms median, 31ms at the slowest,
+measured from dispatching the key that produces the text. A doorbell removes
+the round trip, not an interval, so it is worth tens of milliseconds rather
+than the hundreds the interval suggests.
+
+A flood is where the two paths diverge, and not in the doorbell's favour.
+`seq 1 200000` into a pane, waiting for the last line: 460ms, found, nothing
+lost. Polling costs one capture per interval whatever the pane is doing, so a
+flood does not reach it. A doorbell rings per notification, which is where the
+Swift port's coalescing comes from -- machinery this path does not need
+because it does not have the problem.
+
+So the doorbell stays unbuilt, and this is the reason rather than the absence
+of one. It buys tens of milliseconds and brings a failure mode the floor does
+not have.
+
+What follows is why, and it is kept because the constraints it records are the
+ones the implementation had to meet.
+
+`libtmux::test::retry_until` was the only waiting primitive this crate
+exposed, and `test` sits behind `test-support`, which the manifest calls out as
+belonging "to a dev-dependency, not to a build of the library". A caller who
+needed to wait for anything a pane did wrote that loop themselves. It was a
+missing category rather than a missing convenience, and it was inherited rather
+than dropped in the port: the Python library keeps `retry_until` in
+`libtmux/test/retry.py` for the same reason, and of the seven ports only the
+Swift one shipped a pane wait a production caller could reach.
+
+What filled the gap downstream is the measure of it. `tmux-mcp` reconstructs
+run-and-report in `exec.rs`: sentinels bracketing the command, a scanner
+reassembling output around them, and separate waits for text and for quiet.
+AGENTS.md says a workaround there is a finding here, and this is the largest
+one.
+
+A rebuilt version is not merely incomplete. Thirty-five lines against the
+public API run a command and report its exit status correctly, and then
+`seq 1 100` returns status 0 with no output: the opening sentinel scrolled off
+the visible screen before the closing one arrived, so the body came back empty
+while the status still parsed. A three-hundred-character line arrives as four,
+wrapped at the pane's width. Both failures report success, which is the
+direction that costs a consumer the most.
+
+So a candidate is constrained before it is designed. It must not report success
+while losing output, and it must survive a line wider than the pane. Those two
+together are what force scrollback capture, `OutputLimits`, and
+width-independent reassembly instead of a screen read.
+
+One decision is settled by precedent rather than by measurement: a wait that
+runs out of time is an outcome, not an error. `RetryTimeout` already says so,
+and a caller who cannot separate "it never happened" from "the connection
+broke" has to guess which of them is worth retrying.
+
+The substrate is not settled, and the question is narrower than it first looks.
+The Swift port does not choose between streaming and polling. It subscribes to
+`%output` as a doorbell and captures for the content, because a notification
+carries escape sequences and can split a word across two of them. Around that
+sit a primed first capture, so output produced while the connection opens is
+not lost; a `#{pane_dead}` subscription, so a dead pane ends the wait instead
+of holding it to the deadline; and coalescing, because an unbatched burst is
+one notification per character.
+
+Two of the four questions that shape are measured. The machinery exists on
+every release the lanes build: `%output` and `%subscription-changed` both
+arrive on 3.2a, 3.4, 3.5a, 3.6b, 3.7 and 3.7c, with no errors anywhere, so the
+oldest supported release is not the constraint it might have been -- the
+`#{pane_dead}` half needs `refresh-client -B`, which landed in 3.2.
+
+The feature cost is the constraint instead, and it settles more than it looks
+like it does. A doorbell needs `control-mode`; a capture poll needs only the
+base API, and `default = ["query"]`. So a doorbell-only wait would be absent
+from a default build -- the capability existing, but not for you, decided by a
+flag its signature never mentions. This manifest says a feature is for "API
+surface a caller who only dispatches commands never needs", and a caller who
+dispatches a command does need to know when it finished: `send_keys` without
+that is half of one. Waiting therefore fails the test for being opt-in, which
+makes the polling path the floor and the doorbell an optimisation above it
+rather than an alternative to it. What remains to measure is what the doorbell
+saves, and what a flood does to a wait that rings on every byte.

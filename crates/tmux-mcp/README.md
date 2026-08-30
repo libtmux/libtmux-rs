@@ -202,12 +202,14 @@ stdio server with command `tmux-mcp`.
 
 Any client that runs a stdio MCP server takes the same two pieces: the command
 `tmux-mcp`, and no arguments. Add `--safety destructive` to the arguments if
-you want the tools that destroy work; see below.
+you want the dedicated kill tools and destructive plan operations; see below.
 
 ## What it offers
 
-Forty-eight tools. Each says what it does to the server, so a client can
-decide what to run unattended and what to put in front of you.
+Forty-eight tools. Each publishes MCP hints for its direct operation, so a
+client can distinguish reads, additive changes, and potentially destructive
+effects. The hints describe effects; they do not decide which surface tier
+offers a route.
 
 | | Tools |
 |---|---|
@@ -215,14 +217,17 @@ decide what to run unattended and what to put in front of you.
 | **Read a pane** | `capture_pane`, `snapshot_pane`, `capture_since`, `watch_pane`, `search_panes` |
 | **Find** | `find_panes`, `find_sessions` |
 | **Run and wait** | `run_command`, `send_keys`, `wait_for_text`, `wait_for_idle`, `wait_for_channel`, `signal_channel` |
-| **Run in the background** | `start_command`, `job_status`, `list_jobs`, `cancel_job` |
+| **Run in the background** | `start_command`, `job_status`, `list_jobs`, `forget_job` |
 | **Arrange** | `create_session`, `new_window`, `split_pane`, `select_pane`, `select_window`, `resize_pane`, `rename`, `select_layout`, `respawn_pane` |
 | **Move text** | `paste_text`, `pipe_pane`, `clear_pane` |
 | **Configure** | `show_option`, `set_option`, `show_environment`, `set_environment`, `show_hooks` |
+| **Batch** | `run_plan` |
 | **Destroy** | `kill_pane`, `kill_window`, `kill_session`, `kill_server` |
 
-And three prompts — `run_and_wait`, `interrupt_gracefully`, `diagnose_pane` —
-for the combinations that are easy to get wrong.
+The mutating and destructive tiers also offer three prompts — `run_and_wait`,
+`interrupt_gracefully`, and `diagnose_pane` — for combinations that are easy
+to get wrong. Read-only offers `diagnose_pane` alone. Each prompt names only
+tools its tier offers.
 
 ## Resources
 
@@ -232,7 +237,7 @@ rather than something you ask an agent to go and fetch.
 
 | URI | Holds |
 |---|---|
-| `tmux://server` | Which tmux this is attached to, and the pane it runs in |
+| `tmux://server` | The selected tmux server and inherited caller context |
 | `tmux://sessions` | Every session |
 | `tmux://windows` | Every window, across sessions |
 | `tmux://panes` | Every pane, across sessions |
@@ -245,11 +250,14 @@ rather than something you ask an agent to go and fetch.
 Everything above is also reachable through a tool, so an agent loses nothing
 if its client does not support resources.
 
-## Safety
+## Surface tiers
 
-The four tools that destroy work are **not offered by default**. This server
-can end every session on a machine, so reaching that far should be a decision
-you made rather than one you inherited.
+`--safety` filters the tools advertised to a client. It is not a sandbox or an
+authorization boundary.
+
+The four dedicated kill tools are **not offered by default**. `run_plan` keeps
+one name at every tier, advertises that tier's ceiling, and checks every
+operation before it runs any of them.
 
 ```console
 $ tmux-mcp --safety destructive
@@ -259,33 +267,48 @@ Three tiers, also settable with `TMUX_MCP_SAFETY`:
 
 | Tier | Offers |
 |---|---|
-| `readonly` | The 24 tools that change nothing |
-| `mutating` | The default: everything except the four that destroy work |
+| `readonly` | Read-only routes; plans accept read-only operations |
+| `mutating` | Default; dedicated kill tools and destructive plan operations are refused |
 | `destructive` | Everything |
 
-Tools above the tier are not advertised at all, because an agent cannot choose
-what it cannot see.
+Tools above the tier are not advertised. This reduces the available choices;
+it does not constrain the effects of tools that remain. `run_command` and
+`start_command` run shell commands in a pane, `send_keys` can type and submit
+one, and `expand_format` can start a shell command through literal or recursive
+format expansion. A caller can use those paths to kill work without calling a dedicated kill
+tool. Treat the `mutating` and `destructive` tiers as shell-equivalent access.
+Use an isolated tmux server and operating-system permissions when effects need
+an authority boundary.
+
+The live-stream tools (`watch_pane`, `wait_for_text`, `wait_for_idle`, and
+`capture_since`) attach a tmux client without updating the session environment.
+That changes the session's attached-client state, and `capture_since` retains
+its client, so the `readonly` tier withholds them. Configured `client-attached`
+hooks remain an indirect tmux effect, as do configured `after-*` hooks on
+ordinary read commands.
 
 ### Asking first
 
-A tier is decided once, at launch. `--confirm` instead puts a person in the
-loop for each irreversible act:
+A tier is decided once, at launch. `--confirm` asks before dedicated kill tools
+and destructive plan operations:
 
 ```console
 $ tmux-mcp --safety destructive --confirm
 ```
 
-Every destructive call then asks the client to put the question to you, and
-proceeds only on a yes. It fails closed: a client that cannot ask gets a
-refusal rather than a destroyed session, because the alternative is the
-unattended destruction the setting exists to prevent. `TMUX_MCP_CONFIRM=1`
-does the same.
+Those calls proceed only on a yes. They fail closed when the client cannot
+ask. Confirmation does not inspect command text or keys passed to open-ended
+tools, so indirect destructive effects do not ask. `TMUX_MCP_CONFIRM=1` does
+the same. `--confirm` and `--no-confirm` override that environment setting.
+Invalid safety values narrow the surface to `readonly`; invalid confirmation
+values enable the gate.
 
-Separately, when tmux started the server it knows which pane it is in. Pane
-listings mark that pane `caller: "self"`, and the tools that would destroy it
-refuse — so an agent cannot end the conversation it is having. That comparison
-weighs the socket as well as the pane id, because `%1` names a different pane
-on every tmux server.
+When launched from tmux, the process inherits a pane ID and socket. Pane
+listings mark that pane `caller: "self"` only when the socket matches the
+selected server. Dedicated kill tools and destructive plan operations refuse
+confirmed or conservatively matched caller context. Open-ended command and
+terminal tools do not carry that guard. The comparison weighs the socket as
+well as the pane id, because `%1` names a different pane on every tmux server.
 
 ## Choosing a server
 
@@ -323,8 +346,10 @@ agent has to wait, look, or avoid breaking the terminal it is working in.
 **Running something.** `run_command` sends the command, waits for it to
 finish, and answers with its exit status and the output the command wrote.
 Reaching the deadline ends the waiting, not the command, so the answer says
-`deadline` and the pane is still busy — send `C-c` with `send_keys` and
-`keys: ["C-c"]` to stop it.
+`deadline` and includes a job id. Pass that id to `job_status` to keep
+following the same run, or to `forget_job` to stop collecting and forget its
+retained output. It leaves pane activity alone; use `send_keys` with
+`keys: ["C-c"]` to interrupt whatever that pane is running.
 
 **Running something slow.** `start_command` returns a job id immediately and
 collects the answer whether or not anyone is waiting, so a ten-minute build
@@ -354,7 +379,8 @@ call instead of capturing every pane to find the one that is doing something.
 **Asking tmux something no tool covers.** `expand_format` evaluates any tmux
 format, so a field with no tool of its own — `#{pane_unseen_changes}`,
 `#{window_activity_flag}`, `#{client_termname}` — is one call away rather than
-unreachable.
+unreachable. Literal command formats and recursively expanded values can start
+shell commands, so this tool is not offered by the `readonly` tier.
 
 **Asking about layout.** `find_panes` takes a filter expression over a pane's
 own tmux format fields, so "the bottom-right pane" is one call:
@@ -385,8 +411,11 @@ decides what to do next without reading prose:
 
 `stale` means the target is gone and a fresh listing would say something
 different — the answer is to look again, not to retry. `retryable` means the
-same call could succeed on its own. A pane that closed and a tmux that is not
-running both fail, and only one of them is worth waiting on.
+same call is safe to repeat unchanged and may succeed after the condition
+clears. A pane that closed and a tmux that is not running both fail, and only
+one of them is worth waiting on. `partial_effect` means tmux accepted part of
+a multi-step call before a later step failed; inspect the current state before
+choosing another action.
 
 ## Using it from Rust
 
@@ -402,7 +431,7 @@ $ cargo run --example readonly
 $ cargo run --example surface
 ```
 
-`readonly` serves a read-only server; `surface` prints what each tier offers
+`readonly` serves the read-only routes; `surface` prints what each tier offers
 and what each tool answers with, without starting one.
 
 ```console

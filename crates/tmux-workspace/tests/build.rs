@@ -134,6 +134,11 @@ windows:
     start_directory: {nested}
     panes:
       - sleep 300
+  - window_name: pane-overridden
+    start_directory: {root}
+    panes:
+      - start_directory: {nested}
+        shell_command: sleep 300
 ",
         root = root.path().display(),
         nested = nested.display(),
@@ -149,7 +154,11 @@ windows:
     let canonical_root = root.path().canonicalize().expect("canonical root");
     let canonical_nested = nested.canonicalize().expect("canonical nested");
 
-    for (window, expected) in windows.iter().zip([canonical_root, canonical_nested]) {
+    for (window, expected) in
+        windows
+            .iter()
+            .zip([canonical_root, canonical_nested.clone(), canonical_nested])
+    {
         let panes = window.panes().await.expect("panes list");
         assert_eq!(
             text_optional(panes[0].current_path()),
@@ -179,6 +188,80 @@ async fn building_over_an_existing_session_is_refused() {
     assert!(
         matches!(error, BuildError::SessionExists { .. }),
         "building into an existing session would interleave windows, got {error:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn failed_lookup_after_a_completed_build_is_a_partial_effect() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    server
+        .set_hook("after-new-session", "kill-server")
+        .await
+        .expect("hook is installed");
+
+    let workspace = Workspace::from_yaml("session_name: committed").expect("configuration parses");
+    let error = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect_err("the completed build cannot be looked up");
+
+    let BuildError::Tmux(error) = error else {
+        panic!("lookup failure must remain a libtmux error");
+    };
+    assert_eq!(error.kind(), libtmux::ErrorKind::PartialEffect);
+
+    let libtmux::Error::AfterEffect {
+        operation, source, ..
+    } = error
+    else {
+        panic!("the post-build lookup must identify its committed boundary");
+    };
+    assert_eq!(operation, "workspace-build");
+    assert_eq!(source.kind(), libtmux::ErrorKind::ServerGone);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn refusal_after_session_creation_is_a_partial_effect() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let workspace = Workspace::from_yaml(
+        "
+session_name: committed-refusal
+options:
+  option-that-tmux-does-not-have: on
+",
+    )
+    .expect("configuration parses");
+
+    let error = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect_err("the option is refused after the session is created");
+
+    let BuildError::Tmux(error) = error else {
+        panic!("a refusal after creation must remain a libtmux error");
+    };
+    assert_eq!(error.kind(), libtmux::ErrorKind::PartialEffect);
+    assert!(matches!(
+        error,
+        libtmux::Error::AfterEffect {
+            operation: "workspace-build",
+            source,
+            ..
+        } if source.kind() == libtmux::ErrorKind::Refused
+    ));
+    assert!(
+        server
+            .session("committed-refusal")
+            .await
+            .expect("the server remains queryable")
+            .is_some(),
+        "the failed build left the session it created",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -242,7 +325,7 @@ windows:
 }
 
 #[tokio::test]
-async fn a_pane_starts_with_the_environment_the_file_gives_it() {
+async fn panes_start_with_the_environment_the_file_gives_them() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
@@ -252,10 +335,16 @@ session_name: environed
 windows:
   - window_name: main
     panes:
-      - shell_command: sleep 300
+      - environment:
+          PANE_MARKER: first-pane
+        shell_command: echo first:$PANE_MARKER:$WINDOW_MARKER; sleep 300
       - environment:
           PANE_MARKER: second-pane
-        shell_command: printenv PANE_MARKER; sleep 300
+        shell_command: echo second:$PANE_MARKER:$WINDOW_MARKER; sleep 300
+      - shell_command: echo third:$PANE_MARKER:$WINDOW_MARKER; sleep 300
+    environment:
+      PANE_MARKER: window
+      WINDOW_MARKER: inherited
 ",
     )
     .expect("the workspace parses");
@@ -267,21 +356,32 @@ windows:
 
     let window = session.windows().await.expect("windows").remove(0);
     let panes = window.panes().await.expect("panes");
-    assert_eq!(panes.len(), 2);
+    assert_eq!(panes.len(), 3);
 
     // The pane prints the variable it was started with, so this reads what
     // tmux actually put in the process rather than what was asked for. The
     // search is for the value rather than a whole line, because the pane also
     // echoes a prompt and the command that was typed.
-    let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
-        panes[1].capture().await.is_ok_and(|lines| {
-            lines
-                .iter()
-                .any(|line| line.to_string_lossy().contains("second-pane"))
+    for marker in [
+        "first:first-pane:inherited",
+        "second:second-pane:inherited",
+        "third:window:inherited",
+    ] {
+        let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+            for pane in &panes {
+                if pane.capture().await.is_ok_and(|lines| {
+                    lines
+                        .iter()
+                        .any(|line| line.to_string_lossy().contains(marker))
+                }) {
+                    return true;
+                }
+            }
+            false
         })
-    })
-    .await;
-    assert!(printed.is_ok(), "the pane's own environment reached it");
+        .await;
+        assert!(printed.is_ok(), "{marker} reached its pane");
+    }
 
     assert!(
         session
@@ -447,6 +547,13 @@ windows:
     let builder = WorkspaceBuilder::new(guard.server());
     let plan = builder.plan(&workspace);
 
+    let mut without_configured_panes = workspace.clone();
+    without_configured_panes.windows[0].panes.clear();
+    assert!(
+        builder.plan(&without_configured_panes).len() < plan.len(),
+        "a public window with no pane configuration still lowers",
+    );
+
     // Every object a later step addresses is a forward reference, so the whole
     // file lowers without asking tmux for a single id first.
     assert!(
@@ -498,6 +605,7 @@ fn a_present_but_invalid_value_is_refused_rather_than_defaulted() {
             "session_name: s\nwindows:\n  - layout: [not, a, string]\n",
             "windows[0].layout",
         ),
+        ("session_name: s\nwindows:\n  - scalar\n", "windows[0]"),
     ] {
         let error = Workspace::from_yaml(source).expect_err("the value is refused");
         let message = error.to_string();
@@ -511,6 +619,30 @@ fn a_present_but_invalid_value_is_refused_rather_than_defaulted() {
     let workspace = Workspace::from_yaml("session_name: s\nwindows:\n  - window_name: w\n")
         .expect("an absent value defaults");
     assert!(!workspace.windows[0].focus);
+}
+
+#[test]
+fn rendered_scalars_round_trip_control_and_line_separator_characters() {
+    let mut workspace =
+        Workspace::from_yaml("session_name: seed\n").expect("the seed workspace parses");
+    let controls = (0_u8..=31)
+        .chain(127..=159)
+        .map(char::from)
+        .chain(['\u{2028}', '\u{2029}'])
+        .collect::<String>();
+    workspace.session_name = format!("before{controls}after");
+
+    let rendered = workspace.to_yaml();
+    let reparsed = Workspace::from_yaml(&rendered).expect("the rendered YAML parses");
+
+    assert_eq!(reparsed, workspace);
+    assert!(
+        !rendered.chars().any(|character| {
+            character != '\n'
+                && (character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+        }),
+        "rendered scalars escape control characters",
+    );
 }
 
 /// The two directions have to meet: a session built from a file, frozen back
@@ -586,4 +718,81 @@ windows:
     assert_eq!(counts, vec![2, 1], "the rebuilt session has the same shape");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_name_from_the_file_cannot_run_a_command() {
+    // tmux expands a name as a format before storing it, so `#(command)` runs
+    // a shell. A workspace file is not this program's own text: whoever wrote
+    // it would otherwise choose what runs.
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let marker = directory.path().join("marker");
+    let workspace = Workspace::from_yaml(&format!(
+        "
+session_name: \"#(touch {0})\"
+windows:
+  - window_name: \"#(touch {0})\"
+    panes:
+      - sleep 300
+",
+        marker.display()
+    ))
+    .expect("configuration parses");
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    assert!(!marker.exists(), "a name from the file ran a command");
+
+    // The name survives as the text it was, rather than being dropped.
+    let windows = session.windows().await.expect("windows");
+    assert_eq!(
+        text(windows[0].name()),
+        format!("#(touch {})", marker.display()),
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_start_directory_from_the_file_cannot_run_a_command() {
+    // tmux expands the `-c` start directory as a format too, not only a name,
+    // so a workspace file could choose what ran through the one field that
+    // looks least like text tmux would interpret.
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let marker = directory.path().join("marker");
+    let real = directory.path().join("work");
+    std::fs::create_dir(&real).expect("a directory to start in");
+
+    let workspace = Workspace::from_yaml(&format!(
+        "
+session_name: dirs
+start_directory: \"#(touch {0}){1}\"
+windows:
+  - window_name: one
+    panes:
+      - sleep 300
+",
+        marker.display(),
+        real.display(),
+    ))
+    .expect("configuration parses");
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    assert!(
+        !marker.exists(),
+        "a start directory from the file ran a command",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+    drop(session);
 }

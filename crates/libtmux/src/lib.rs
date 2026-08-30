@@ -31,8 +31,7 @@
 //! if let Some(session) = server.session("work").await? {
 //!     if let Some(window) = session.window("editor").await? {
 //!         if let Some(pane) = window.active_pane().await? {
-//!             pane.send_keys("cargo test").await?;
-//!             pane.send_key_names(["Enter"]).await?;
+//!             pane.send_line("cargo test").await?;
 //!         }
 //!     }
 //! }
@@ -40,14 +39,14 @@
 //! # }
 //! ```
 //!
-//! Listings come in pairs. The plain form returns an empty `Vec` when the
-//! underlying tmux command fails, which suits a status line; the `try_` form
-//! keeps the reason, which suits anything that must not guess:
+//! Listings come in pairs. The `_or_empty` form returns an empty `Vec` when
+//! the underlying tmux command fails, which suits a status line; the plain
+//! form keeps the reason, which suits anything that must not guess:
 //!
 //! ```no_run
 //! # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! let quiet = server.sessions_or_empty().await;          // empty on failure
-//! let loud = server.sessions().await?;      // Err on failure
+//! let quiet = server.sessions_or_empty().await; // empty on failure
+//! let loud = server.sessions().await?;          // Err on failure
 //! # let _ = (quiet, loud);
 //! # Ok(())
 //! # }
@@ -55,9 +54,10 @@
 //!
 //! ## Building something and cleaning up
 //!
-//! Scoped operations kill what they create, whether the body succeeded or
-//! failed. `Drop` is deliberately not destructive, so nothing disappears
-//! because a handle went out of scope.
+//! Once polled, a scoped operation owns creation and cleanup. Cancellation can
+//! let an in-flight creation finish, but an object whose creation yields a
+//! handle is killed while the Tokio runtime remains active. Ordinary handle
+//! `Drop` is deliberately non-destructive.
 //!
 //! ```no_run
 //! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::Error> {
@@ -73,8 +73,9 @@
 //! ```
 //!
 //! Setup and teardown failures convert into the operation's own error type,
-//! so there is one `?` rather than two. If both the operation and the cleanup
-//! fail, the operation's error is returned: that is the work you were doing.
+//! so there is one `?` rather than two. Once creation succeeds, a cleanup
+//! failure is returned as an after-effect; it owns the replay guidance even
+//! when the operation also failed.
 //!
 //! ## Options carry types
 //!
@@ -93,11 +94,46 @@
 //! # }
 //! ```
 //!
+//! ## A name reaches tmux as a format
+//!
+//! tmux expands a name through its format machinery before it checks it, so
+//! `#{session_id}` in a name becomes the id and `#(command)` runs `command` in
+//! a shell and becomes its output. That holds for `new_session`,
+//! `Session::rename`, `Window::rename`, and every other name tmux takes from
+//! a command. tmux is consistent here: whoever can run `tmux new-session` can
+//! already run commands, so a name given on a command line is trusted by
+//! construction.
+//!
+//! A library moves that boundary. tmux's caller is a person at a shell; this
+//! crate's caller is a program, and the name it passes may have come from an
+//! argument, a request field, or a configuration file. Passing untrusted text
+//! as a name gives whoever wrote it a shell, so escape `#` as `##` before it
+//! reaches tmux, or refuse the name.
+//!
+//! Expansion is not the only way the name you asked for is not the name you
+//! get. tmux releases through 3.6b rewrite `:` and `.` in a session name to
+//! `_`, because a target is split on those, and they do it silently: 3.7
+//! refuses such a name outright, and 3.7a keeps it. So `new_session("a:b")`
+//! succeeds on every supported release except 3.7 and hands back a session
+//! called `a_b` on most of them. The handle reports what tmux stored, so
+//! [`Session::name`] is always the truth; the request is what may differ from
+//! it. Compare the two when the name has to round-trip.
+//!
 //! ## Examples
 //!
-//! Runnable programs live in `examples/`: `inspect` reports what a server is
-//! running, `find` selects panes with a typed expression, and `scratch`
-//! builds a throwaway session on its own socket and cleans it up.
+//! Runnable programs live in `examples/`. `inspect` reports what a server is
+//! running and `find` selects panes with a typed expression, both of which
+//! only read. `scratch` builds a throwaway session on its own socket and
+//! cleans it up, which is the shortest complete tour: a window, a split, keys
+//! sent, output waited for rather than slept on, and a scope that kills the
+//! session whether the body succeeded or not. `watch` reacts to what a server
+//! does over one control-mode connection while driving it down the same one.
+//! `matrix` runs one workload five ways, so the cost of each execution mode is
+//! visible side by side. `sweep` reaps servers that abandoned fixtures left
+//! behind, which is maintenance rather than orchestration.
+//!
+//! `just examples` runs every one of them against a server it owns and fails
+//! if any leaves a socket behind.
 //!
 //! ## Filtering the hierarchy
 //!
@@ -266,15 +302,15 @@ pub use error::{
 pub use formats::TmuxText;
 pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[cfg(feature = "control-mode")]
-pub use limits::ControlLimits;
+pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};
 pub use options::{
     OptionKind, OptionSchema, OptionScope, OptionValue, names as option_names, option_schema,
 };
-pub use pane::{CaptureOptions, CapturedLine, Pane};
+pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 pub use server::{
-    AccessMode, AccessRule, Chooser, NewSessionOptions, PromptKind, Server, ServerBuilder,
-    SessionTree, WindowTree,
+    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, PromptKind, Server,
+    ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};
@@ -284,12 +320,28 @@ pub use snapshot::PaneProgressState;
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{
     PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName, SessionNameError,
-    SessionTarget, WindowId, WindowTarget,
+    SessionTarget, WindowId, WindowTarget, escape_format,
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, since};
 pub use window::{
-    PaneDirection, PaneSize, ResizeDirection, Rotation, SplitDirection, SplitOptions, Window,
+    JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Rotation,
+    SplitDirection, SplitOptions, Window,
 };
+
+/// The design notes, compiled.
+///
+/// `design.md` explains why this crate is shaped as it is, and its Rust blocks
+/// had drifted out of the crate they describe: one named an `Error` variant
+/// nobody wrote. Compiling them is what keeps a rationale honest about the
+/// thing it is rationalising.
+///
+/// Every block in that file is one, an indented block included: rustdoc reads
+/// indentation as a fence and a fence with no language as Rust. A block
+/// quoting tmux source or terminal output needs a `text` tag, or the gate
+/// reports the crate as one that does not compile.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/design.md")]
+pub struct DesignNotes;
 
 /// Derive a stable typed filter schema for a named struct.
 ///

@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use libtmux::control::{ControlEvents, ControlMode, ControlSender, Event};
+use libtmux::control::{ControlEvents, ControlMode, ControlSender, Event, Subscription};
 use libtmux::test::TestServer;
 use libtmux::{Command, NewWindowOptions};
 use static_assertions::assert_impl_all;
@@ -803,6 +803,204 @@ async fn a_block_carrying_pane_ids_keeps_them_as_output() {
 /// The command's reply arrives behind whatever output tmux has queued, so a
 /// connection that stops reading once its event buffer fills can never finish
 /// the very call that would quieten it.
+/// A reply must not wait on the caller draining events.
+///
+/// The reply to a command arrives on the connection the events arrive on, so
+/// a connection that stops reading because nobody is taking its events has
+/// stopped reading the reply too. Nothing times out and `is_closed` stays
+/// false, so a caller cannot tell a stalled connection from a quiet server.
+#[tokio::test]
+async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("unread").await.expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    // Enough to fill the queue many times over and no more. The queue holds
+    // 256, so what matters is exceeding it, not the size of the backlog left
+    // for teardown to kill: a larger flood buys nothing here and costs every
+    // test sharing the machine.
+    window
+        .split(SplitOptions::new(SplitDirection::Below).command("seq 1 20000"))
+        .await
+        .expect("pane is created");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // `events` is held and never polled, which is what a caller awaiting a
+    // reply does for as long as the await lasts.
+    // Either answer is fine and the point is that one arrives. A caller who
+    // will not read has asked for something the connection cannot always give
+    // -- a reply travels the way the events do -- so past what it can hold it
+    // says so rather than waiting to be rescued by the caller who is waiting
+    // for it. What it must never do is neither.
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        commands.send(Command::new("list-windows")),
+    )
+    .await
+    .expect("an answer arrives rather than a wait that never ends");
+
+    match outcome {
+        Ok(answered) => assert!(answered.succeeded()),
+        Err(refused) => assert_eq!(
+            refused.kind(),
+            libtmux::ErrorKind::Refused,
+            "the connection says why rather than stalling: {refused:?}",
+        ),
+    }
+    assert!(
+        !commands.is_closed(),
+        "the connection is not closed either way"
+    );
+
+    // Bounded, because everything else here is. An unbounded teardown turns a
+    // regression into a run that never ends, and a test that hangs its own
+    // suite reports nothing at all.
+    drop(commands);
+    tokio::time::timeout(Duration::from_secs(30), events.shutdown())
+        .await
+        .expect("the connection shuts down rather than hanging the suite")
+        .expect("control mode shuts down");
+    tokio::time::timeout(Duration::from_secs(30), guard.shutdown())
+        .await
+        .expect("the fixture shuts down rather than hanging the suite")
+        .expect("tmux fixture shuts down");
+}
+
+/// The same, with no pane output at all.
+///
+/// This is what says the stall is not about volume. Every one of these
+/// commands raises notifications of its own, so a caller who subscribes to
+/// nothing and floods nothing still fills the queue with the consequences of
+/// its own work, and the connection it filled is the one carrying its replies.
+#[tokio::test]
+async fn replies_arrive_when_a_caller_only_ever_sends() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("sending").await.expect("session");
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    // Far past the event queue, which is where this used to stop.
+    for index in 0..200 {
+        let created = tokio::time::timeout(
+            Duration::from_secs(10),
+            commands.send(Command::new("new-window").arg("-d")),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("command {index} was answered"))
+        .expect("the command is answered");
+        assert!(created.succeeded(), "command {index} succeeded");
+    }
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A slow reader of one pane's output must not be given gaps.
+///
+/// `Pane::stream_output` documents itself as the bytes that pane produced, in
+/// order. Today the connection parking on a full event queue is what makes
+/// that true: the reader stops, tmux stops writing, and nothing is lost. Any
+/// change that keeps the reader moving under backpressure threatens it, and a
+/// gap here is invisible without a counted sequence to check against.
+#[tokio::test]
+async fn a_slow_reader_of_one_pane_is_given_every_byte() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    const LAST: u32 = 50_000;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("counted").await.expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    // The pane waits before it counts and stays alive after, so the stream is
+    // attached for the whole sequence: a pane that has already finished has
+    // nothing left to send, and one that exits takes its window with it.
+    let counted = window
+        .split(
+            SplitOptions::new(SplitDirection::Below)
+                .command(format!("sh -c 'sleep 2; seq 1 {LAST}; sleep 60'")),
+        )
+        .await
+        .expect("pane is created");
+
+    let mut output = counted.stream_output().await.expect("the pane streams");
+
+    // Reading slower than the pane writes is the whole condition: a reader
+    // that keeps up never fills the queue and never exercises the policy.
+    let mut received = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    while tokio::time::Instant::now() < deadline {
+        let Ok(chunk) = tokio::time::timeout(Duration::from_secs(5), output.next_chunk()).await
+        else {
+            break;
+        };
+        let Some(chunk) = chunk else { break };
+        received.extend_from_slice(&chunk);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        if received_reaches(&received, LAST) {
+            break;
+        }
+    }
+
+    // tmux wraps pane output at the pane width, so the bytes carry the
+    // sequence with line endings the terminal chose rather than the ones
+    // `seq` wrote. Checking that every number appears in order tolerates that
+    // without tolerating a missing number.
+    let text = String::from_utf8_lossy(&received);
+    let mut expected = 1u32;
+    for number in text
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+    {
+        if number.parse::<u32>() == Ok(expected) {
+            expected += 1;
+        }
+    }
+    assert_eq!(
+        expected - 1,
+        LAST,
+        "the stream skipped from {} onward; {} bytes arrived",
+        expected,
+        received.len(),
+    );
+
+    output.shutdown().await.expect("the connection shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Whether the counted sequence has been seen through to its last number.
+fn received_reaches(received: &[u8], last: u32) -> bool {
+    let text = String::from_utf8_lossy(received);
+    text.split(|c: char| !c.is_ascii_digit())
+        .any(|piece| piece.parse::<u32>() == Ok(last))
+}
+
 #[tokio::test]
 async fn a_stream_opens_on_a_server_that_is_already_flooding() {
     use libtmux::control::PaneOutput;
@@ -945,5 +1143,287 @@ async fn real_tmux_compat_muting_a_producing_pane_leaves_the_server_up() {
 
     drop(commands);
     reader.abort();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Wait for the next report from one subscription, ignoring everything else.
+///
+/// tmux coalesces reports to at most once a second, so a caller watching for
+/// one is waiting on that interval rather than on the change itself.
+async fn next_report(events: &mut ControlEvents, name: &str, within: Duration) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let event = tokio::time::timeout_at(deadline, events.next_event())
+            .await
+            .ok()??;
+        // Two ifs rather than a let-chain: this crate's floor is 1.85, and
+        // let-chains landed in 1.88.
+        if let Event::SubscriptionChanged {
+            name: reported,
+            value,
+            ..
+        } = event
+        {
+            if reported.as_str().is_ok_and(|reported| reported == name) {
+                return value.as_str().ok().map(str::to_owned);
+            }
+        }
+    }
+}
+
+/// A subscription must report the format it was given, under the name it was
+/// given, when the thing it names changes.
+///
+/// `Event::SubscriptionChanged` was parsed long before anything could cause
+/// one: a caller could receive the event and had no way to ask for it. This is
+/// the round trip that closes that.
+#[tokio::test]
+async fn a_subscription_reports_a_change_under_its_own_name() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("watched").await.expect("session");
+
+    let (commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .subscribe("title", &Subscription::Session, "#{session_name}")
+        .await
+        .expect("the subscription is accepted");
+
+    assert_eq!(
+        next_report(&mut events, "title", Duration::from_secs(15)).await,
+        Some("watched".to_owned()),
+        "the first report carries the value as it already is"
+    );
+
+    commands
+        .send(Command::new("rename-session").arg("renamed"))
+        .await
+        .expect("the session is renamed");
+
+    assert_eq!(
+        next_report(&mut events, "title", Duration::from_secs(15)).await,
+        Some("renamed".to_owned()),
+        "a change is reported under the same name"
+    );
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Removing a subscription must stop its reports.
+///
+/// tmux removes one when the name is given with no colon after it, which is
+/// why this cannot be spelled as a subscribe with an empty format: that
+/// replaces the subscription rather than removing it.
+#[tokio::test]
+async fn unsubscribing_stops_the_reports() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("watched").await.expect("session");
+
+    let (commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .subscribe("title", &Subscription::Session, "#{session_name}")
+        .await
+        .expect("the subscription is accepted");
+    assert!(
+        next_report(&mut events, "title", Duration::from_secs(15))
+            .await
+            .is_some(),
+        "the subscription reports before it is removed"
+    );
+
+    commands
+        .unsubscribe("title")
+        .await
+        .expect("the subscription is removed");
+    commands
+        .send(Command::new("rename-session").arg("renamed"))
+        .await
+        .expect("the session is renamed");
+
+    // Three times the interval tmux coalesces to, so a report that was merely
+    // slow would have arrived.
+    assert_eq!(
+        next_report(&mut events, "title", Duration::from_secs(3)).await,
+        None,
+        "nothing is reported once the subscription is gone"
+    );
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The format is the last field, so colons inside it belong to it.
+///
+/// tmux splits the argument twice and stops, which is what makes a conditional
+/// like `#{?a,b,c}` or a two-part format safe to subscribe to and a colon in
+/// the *name* unsafe.
+#[tokio::test]
+async fn a_subscription_format_may_contain_colons() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("colonised").await.expect("session");
+
+    let (commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .subscribe(
+            "pair",
+            &Subscription::Session,
+            "#{session_name}:#{session_windows}",
+        )
+        .await
+        .expect("the subscription is accepted");
+
+    let reported = next_report(&mut events, "pair", Duration::from_secs(15))
+        .await
+        .expect("the subscription reports");
+    assert_eq!(
+        reported, "colonised:1",
+        "both halves of the format arrive, colon and all"
+    );
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A name tmux would read as something else is refused before it is sent.
+///
+/// tmux accepts `a:b:#{x}` and reports under `a`, and accepts `a:b` as a
+/// removal of `a`. Both are silent, so the check has to happen here.
+#[tokio::test]
+async fn a_subscription_name_tmux_would_misread_is_refused() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("guarded").await.expect("session");
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    for name in ["with:colon", ""] {
+        let refused = commands
+            .subscribe(name, &Subscription::Session, "#{session_name}")
+            .await
+            .expect_err("a name tmux would misread is refused");
+        assert_eq!(refused.kind(), libtmux::ErrorKind::InvalidInput);
+
+        let refused = commands
+            .unsubscribe(name)
+            .await
+            .expect_err("removal refuses the same names");
+        assert_eq!(refused.kind(), libtmux::ErrorKind::InvalidInput);
+    }
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The pause threshold and the resume that answers it must both dispatch.
+///
+/// `pause_after` asks tmux to pause a pane rather than disconnect a client
+/// that falls behind, and `resume_pane` is what restarts one it paused --
+/// which is a different thing from `unmute_pane`, that being the counterpart
+/// to a mute the caller asked for.
+///
+/// What is covered here is that both are built and accepted. Driving a real
+/// pause means falling far enough behind for tmux to notice, which is a
+/// wall-clock race, and a test that sometimes does not pause would report a
+/// broken resume as a passing one.
+#[tokio::test]
+async fn the_pause_threshold_and_its_resume_are_accepted() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("paused").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands
+        .pause_after(Duration::from_secs(1))
+        .await
+        .expect("the pause threshold is accepted");
+
+    // A pane tmux never paused is not an error to resume: the flag says what
+    // the stream should do from here, not what it was doing.
+    commands
+        .resume_pane(pane.id())
+        .await
+        .expect("resuming is accepted");
+
+    drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_pane_is_watched_wherever_it_now_lives() {
+    use libtmux::{JoinOptions, SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let origin = server.new_session("origin").await.expect("session");
+    let destination = server.new_session("destination").await.expect("session");
+
+    let origin_window = origin
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+    let writer = origin_window
+        .split(
+            SplitOptions::new(SplitDirection::Below)
+                .command(r"while true; do printf 'moved '; sleep 0.1; done"),
+        )
+        .await
+        .expect("pane is created");
+
+    let landing = destination
+        .panes()
+        .await
+        .expect("panes")
+        .into_iter()
+        .next()
+        .expect("one pane");
+
+    // The handle kept here still names `origin`, which outlives the move.
+    // tmux reports a pane only to a client attached to a session linking its
+    // window, so attaching through the stale session is silence, not an error.
+    let stale = writer.clone();
+    writer
+        .join_into(&landing, JoinOptions::new(SplitDirection::Below))
+        .await
+        .expect("the pane moves between sessions");
+
+    let mut output = stale.stream_output().await.expect("the pane streams");
+    let chunk = tokio::time::timeout(Duration::from_secs(10), output.next_chunk())
+        .await
+        .expect("a relocated pane still reports its output")
+        .expect("the pane is still open");
+    assert!(!chunk.is_empty(), "the relocated pane wrote something");
+
+    output.shutdown().await.expect("the stream shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

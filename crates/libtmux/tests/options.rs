@@ -397,8 +397,11 @@ async fn a_hook_set_on_a_window_is_read_back_by_name() {
         .expect("active window")
         .expect("a session has a window");
 
+    // A pane hook, because those are the hooks tmux keeps at window scope.
+    // `alert-bell` is a session hook, and setting it here would land on the
+    // session while this test read it back through the window and agreed.
     window
-        .set_hook("alert-bell", "display-message window")
+        .set_hook("pane-died", "display-message window")
         .await
         .expect("window hook");
 
@@ -409,7 +412,7 @@ async fn a_hook_set_on_a_window_is_read_back_by_name() {
     // is why `Window` and `Pane` offer `hook` and no listing: a listing there
     // could answer nothing but empty, which reads as "none set".
     let read = window
-        .hook("alert-bell")
+        .hook("pane-died")
         .await
         .expect("read")
         .expect("the window holds what was set on it");
@@ -634,6 +637,85 @@ async fn writing_a_whole_hook_replaces_or_merges_as_asked() {
 }
 
 #[tokio::test]
+async fn a_later_bulk_hook_refusal_reports_the_hook_already_written() {
+    use libtmux::{Error, ErrorKind, IndexedHooks, ReplaceMode, TmuxText};
+    use std::collections::BTreeMap;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut entries = BTreeMap::new();
+    entries.insert(0, TmuxText::from("display-message first"));
+    entries.insert(1, TmuxText::from("no-such-tmux-command"));
+
+    let error = server
+        .set_hooks(
+            "alert-bell",
+            &IndexedHooks::from(entries),
+            ReplaceMode::Merge,
+        )
+        .await
+        .expect_err("tmux refuses the second hook command");
+
+    let hooks = server
+        .hook("alert-bell")
+        .await
+        .expect("the partly written hook can be read")
+        .expect("the first hook remains set");
+    assert_eq!(
+        hooks.get(0).map(TmuxText::as_bytes),
+        Some(b"display-message first".as_slice()),
+    );
+    assert!(hooks.get(1).is_none(), "the refused hook was not stored");
+
+    assert_eq!(error.kind(), ErrorKind::PartialEffect);
+    assert!(matches!(
+        error,
+        Error::AfterEffect {
+            operation: "set-hooks",
+            source,
+            ..
+        } if source.kind() == ErrorKind::Refused
+    ));
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_first_bulk_hook_refusal_has_no_partial_effect() {
+    use libtmux::{ErrorKind, IndexedHooks, ReplaceMode, TmuxText};
+    use std::collections::BTreeMap;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut entries = BTreeMap::new();
+    entries.insert(0, TmuxText::from("no-such-tmux-command"));
+    entries.insert(1, TmuxText::from("display-message never-written"));
+
+    let error = server
+        .set_hooks(
+            "alert-bell",
+            &IndexedHooks::from(entries),
+            ReplaceMode::Merge,
+        )
+        .await
+        .expect_err("tmux refuses the first hook command");
+
+    assert_eq!(error.kind(), ErrorKind::Refused);
+    assert!(
+        server
+            .hook("alert-bell")
+            .await
+            .expect("the hook can be read")
+            .is_none(),
+        "the member after the refusal never ran",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn tmux_refusing_an_option_says_which_of_three_things_went_wrong() {
     use libtmux::OptionErrorKind;
 
@@ -672,6 +754,45 @@ async fn tmux_refusing_an_option_says_which_of_three_things_went_wrong() {
         .set_global_option("status-left-length", "30")
         .await
         .expect("a valid option and value");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn rejected_sensitive_values_are_absent_from_errors() {
+    use libtmux::{Error, OptionErrorKind};
+
+    const SECRET: &str = "libtmux-sentinel-sensitive-value";
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    for name in ["mouse", "status-keys"] {
+        let error = server
+            .set_global_option(name, SECRET)
+            .await
+            .expect_err("tmux refuses the value");
+        assert!(
+            matches!(
+                &error,
+                Error::OptionRejected {
+                    kind: OptionErrorKind::BadValue,
+                    detail,
+                } if detail == name
+            ),
+            "the error names the option and classifies its value: {error:?}",
+        );
+        assert!(!error.to_string().contains(SECRET), "{error}");
+        assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
+    }
+
+    let error = server
+        .set_hook("after-new-window", SECRET)
+        .await
+        .expect_err("tmux refuses an unknown hook command");
+    assert!(error.to_string().contains("set-hook"), "{error}");
+    assert!(!error.to_string().contains(SECRET), "{error}");
+    assert!(!format!("{error:?}").contains(SECRET), "{error:?}");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -852,6 +973,272 @@ async fn an_array_option_keeps_the_gaps_tmux_leaves() {
         bytes(after.get(30).cloned()),
         b"thirty=display -p 30 extra",
         "the entry below it did not move",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_name_shaped_like_a_flag_is_refused_not_obeyed() {
+    // tmux reads a leading `-` as a flag wherever it appears, so an option
+    // name a caller did not write could act on a different option. `-u` is
+    // the sharp one: it unsets.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("flags").await.expect("session");
+
+    session
+        .set_option("@kept", "original")
+        .await
+        .expect("a plain user option is set");
+
+    session
+        .set_option("-u", "@kept")
+        .await
+        .expect_err("a name that is a flag is refused");
+
+    assert_eq!(
+        bytes(session.get_option("@kept").await.expect("the option reads")),
+        b"original".to_vec(),
+        "the option a flag name pointed at survived",
+    );
+
+    // A variable may legitimately be named anything, so the guard does not
+    // refuse this one; what it stops is `-u` being read as the flag that
+    // removes a different variable.
+    session
+        .set_environment("KEPT", "original")
+        .await
+        .expect("a plain variable is set");
+    session
+        .set_environment("-u", "KEPT")
+        .await
+        .expect("a variable named like a flag is a variable");
+
+    let kept = session
+        .environment("KEPT")
+        .await
+        .expect("the variable reads");
+    assert!(
+        matches!(&kept, Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"original"),
+        "the variable a flag name pointed at survived, got {kept:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_whole_hook_write_refuses_bytes_rather_than_substituting_them() {
+    use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
+    use std::collections::BTreeMap;
+
+    // A hook value is a tmux command, and tmux refuses one carrying a byte it
+    // cannot read. Passing the bytes through a `String` first replaced that
+    // byte with U+FFFD, which tmux then accepted: the caller was told the
+    // write succeeded and tmux held a command they had not written.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut command = b"set-environment -g MARK \"a".to_vec();
+    command.push(0xff);
+    command.extend_from_slice(b"b\"");
+
+    let mut entries = BTreeMap::new();
+    entries.insert(0, TmuxText::from(command));
+    server
+        .set_hooks(
+            "alert-bell",
+            &IndexedHooks::from(entries),
+            ReplaceMode::Replace,
+        )
+        .await
+        .expect_err("tmux refuses a command it cannot read");
+
+    assert!(
+        server
+            .hook("alert-bell")
+            .await
+            .expect("the hook reads")
+            .is_none_or(|hook| hook.get(0).is_none()),
+        "nothing was stored under a substituted value",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn setting_one_hook_leaves_the_other_slots_alone() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    for slot in [0_usize, 2, 5] {
+        server
+            .set_hook(
+                &format!("alert-bell[{slot}]"),
+                format!("display-message {slot}"),
+            )
+            .await
+            .expect("a slot is written");
+    }
+
+    // A hook is an array, and tmux empties the array for an unindexed write.
+    // Setting one hook used to discard every other slot the caller had
+    // registered, and report success for doing it.
+    server
+        .set_hook("alert-bell", "display-message replaced")
+        .await
+        .expect("the hook is set");
+
+    let hooks = server
+        .hook("alert-bell")
+        .await
+        .expect("the hook reads")
+        .expect("the hook is set");
+    assert_eq!(
+        hooks.get(2).map(|command| command.to_string_lossy()),
+        Some("display-message 2".into()),
+        "a slot nobody wrote to survives: {hooks:?}",
+    );
+    assert_eq!(
+        hooks.get(5).map(|command| command.to_string_lossy()),
+        Some("display-message 5".into()),
+        "and so does the last one: {hooks:?}",
+    );
+    assert_eq!(
+        hooks.get(0).map(|command| command.to_string_lossy()),
+        Some("display-message replaced".into()),
+        "while slot 0 is the one that changed: {hooks:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn the_schema_agrees_with_where_tmux_accepts_a_write() {
+    use libtmux::{OptionScope, option_schema};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("scoped").await.expect("a session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    // A pane hook is a window option too, and tmux has said so since 3.2a. The
+    // schema called it pane-only, so anything consulting it to choose a scope
+    // was told this write would not land.
+    let schema = option_schema("pane-died").expect("a documented hook");
+    assert!(schema.accepts(OptionScope::Window), "{:?}", schema.scopes());
+
+    window
+        .set_hook("pane-died", "display-message gone")
+        .await
+        .expect("tmux accepts a pane hook at window scope");
+    assert!(
+        window
+            .hook("pane-died")
+            .await
+            .expect("the hook reads")
+            .is_some(),
+        "and reads it back there",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_write_tmux_would_place_elsewhere_is_refused() {
+    use libtmux::{ErrorKind, OptionScope};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("scoped").await.expect("a session");
+    let pane = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session has a window")
+        .active_pane()
+        .await
+        .expect("active pane")
+        .expect("a window has a pane");
+
+    // tmux keeps `mouse` per session and picks that table from the name, so it
+    // would carry this out for the whole session and exit 0. Reading it back
+    // through the same pane resolves the same way and agrees, which is why
+    // this has to be refused before it is sent rather than checked after.
+    let error = pane
+        .set_option("mouse", "on")
+        .await
+        .expect_err("a session option is not the pane's to set");
+    assert_eq!(error.kind(), ErrorKind::InvalidInput);
+    assert!(
+        matches!(
+            error,
+            libtmux::Error::OptionScopeMismatch {
+                requested: OptionScope::Pane,
+                ..
+            }
+        ),
+        "the error names the scope that was asked for: {error:?}",
+    );
+
+    // The control: tmux keeps this one at window and pane both, so the same
+    // handle writes it, and a guard that refused here would be refusing what
+    // tmux accepts.
+    pane.set_option("remain-on-exit", "on")
+        .await
+        .expect("a pane option is the pane's to set");
+
+    // A user option has no entry in tmux's table and tmux honours the flags
+    // literally for one, so nothing is guessed about where it belongs.
+    pane.set_option("@mine", "value")
+        .await
+        .expect("a user option is written wherever it was aimed");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_name_tmux_would_resolve_is_guarded_like_the_one_it_resolves_to() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("scoped").await.expect("a session");
+    let pane = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session has a window")
+        .active_pane()
+        .await
+        .expect("active pane")
+        .expect("a window has a pane");
+
+    // tmux takes an unambiguous prefix for the option itself, so this is a
+    // write to the session's `mouse` however little of the name was typed.
+    // Matching on the text alone let it through and the write landed.
+    pane.set_option("mous", "on")
+        .await
+        .expect_err("a prefix reaches the option it names");
+
+    // The same for a spelling tmux maps before it looks anything up.
+    pane.set_option("display-panes-color", "red")
+        .await
+        .expect_err("an alias reaches the option it maps to");
+
+    // An ambiguous prefix belongs to tmux: it names the input in its own
+    // answer, which is more use than a guess made here.
+    let ambiguous = pane
+        .set_option("pane-b", "on")
+        .await
+        .expect_err("tmux refuses an ambiguous name");
+    assert!(
+        !matches!(ambiguous, libtmux::Error::OptionScopeMismatch { .. }),
+        "and it is tmux's refusal, not this crate's: {ambiguous:?}",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

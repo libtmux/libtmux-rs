@@ -5,6 +5,16 @@ allow-expect-in-tests = true
 allow-unwrap-in-tests = true
 allow-panic-in-tests = true
 
+# A library returns errors; it does not end the caller's process. The workspace
+# lints deny `panic`, `unwrap`, and `expect`, but those cover unwinding only:
+# these two end the process outright and no lint reaches them. `plan.rs` allows
+# `abort` at the one site where losing producer-identity uniqueness would be
+# worse than stopping.
+disallowed-methods = [
+    { path = "std::process::abort", reason = "end the caller's process" },
+    { path = "std::process::exit", reason = "end the caller's process" },
+]
+
 # Holding a tokio guard across an await point deadlocks the moment two tasks
 # reach it. Nothing here does today; this keeps it that way.
 await-holding-invalid-types = [

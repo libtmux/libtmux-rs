@@ -18,6 +18,10 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use libtmux::test::TestServer;
 use serde_json::{Value, json};
 
+mod support;
+
+use support::prompt_ready;
+
 /// The binary under test, as cargo built it for this run.
 const BIN: &str = env!("CARGO_BIN_EXE_tmux-mcp");
 
@@ -36,16 +40,24 @@ impl Process {
     /// from inside tmux, and a caller identity inherited from the developer's
     /// terminal would make the guard's behaviour depend on who ran the tests.
     fn start(args: &[&str]) -> Self {
-        let mut child = Command::new(BIN)
+        Self::start_with_environment(args, &[])
+    }
+
+    fn start_with_environment(args: &[&str], environment: &[(&str, &str)]) -> Self {
+        let mut command = Command::new(BIN);
+        command
             .args(args)
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
             .env_remove("TMUX_MCP_SAFETY")
+            .env_remove("TMUX_MCP_CONFIRM")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the binary runs");
+            .stderr(Stdio::piped());
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        let mut child = command.spawn().expect("the binary runs");
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
         let mut process = Self {
@@ -168,6 +180,55 @@ fn the_binary_serves_the_socket_it_was_pointed_at() {
     runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
 }
 
+#[test]
+fn a_job_handle_from_a_previous_process_is_stale() {
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let pane = runtime.block_on(async {
+        let session = guard
+            .server()
+            .new_session("job-identity")
+            .await
+            .expect("a session is created");
+        let pane = session.panes().await.expect("panes list").remove(0);
+        prompt_ready(guard.server(), pane.id().as_ref()).await;
+        pane.id().to_string()
+    });
+    let socket = guard
+        .socket_path()
+        .to_str()
+        .expect("a utf-8 socket path")
+        .to_owned();
+
+    let mut first = Process::start(&["--socket", &socket]);
+    let answer = first.call(
+        "start_command",
+        &json!({"pane": pane, "command": "printf first"}),
+    );
+    let old_job = answer["result"]["structuredContent"]["job"]
+        .as_str()
+        .unwrap_or_else(|| panic!("start_command answered with {answer}"))
+        .to_owned();
+    first.finish();
+
+    let mut second = Process::start(&["--socket", &socket]);
+    let answer = second.call(
+        "start_command",
+        &json!({"pane": pane, "command": "printf second"}),
+    );
+    let new_job = answer["result"]["structuredContent"]["job"]
+        .as_str()
+        .unwrap_or_else(|| panic!("start_command answered with {answer}"));
+    let stale = second.call("job_status", &json!({"job": old_job}));
+
+    assert_ne!(old_job, new_job, "separate processes reused a job handle");
+    assert_eq!(stale["error"]["data"]["kind"], "object_gone", "{stale}");
+
+    second.finish();
+    runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
+}
+
 /// The tool names a process launched with these arguments advertises.
 fn offered(args: &[&str]) -> Vec<String> {
     let mut process = Process::start(args);
@@ -223,6 +284,72 @@ fn the_tier_reaches_the_running_process() {
 }
 
 #[test]
+fn invalid_environment_policy_fails_closed() {
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let socket = guard
+        .socket_path()
+        .to_str()
+        .expect("a utf-8 path")
+        .to_owned();
+
+    let mut safety =
+        Process::start_with_environment(&["--socket", &socket], &[("TMUX_MCP_SAFETY", "readonl")]);
+    let listed = safety.request("tools/list", &json!({}));
+    let names = listed["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list answered with {listed}"));
+    assert!(
+        names.iter().all(|tool| tool["name"] != "send_keys"),
+        "an invalid tier narrows to the readonly surface: {names:?}",
+    );
+    safety.finish();
+
+    let mut confirm =
+        Process::start_with_environment(&["--socket", &socket], &[("TMUX_MCP_CONFIRM", "ture")]);
+    let initialized = confirm.handshake();
+    let instructions = initialized["result"]["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("initialize answered with {initialized}"));
+    assert!(
+        instructions.contains("CONFIRMATION"),
+        "an invalid confirmation value leaves the gate enabled: {instructions}",
+    );
+    confirm.finish();
+
+    runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
+}
+
+#[test]
+fn command_line_can_disable_environment_confirmation() {
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let socket = guard
+        .socket_path()
+        .to_str()
+        .expect("a utf-8 path")
+        .to_owned();
+
+    let mut process = Process::start_with_environment(
+        &["--socket", &socket, "--no-confirm"],
+        &[("TMUX_MCP_CONFIRM", "1")],
+    );
+    let initialized = process.handshake();
+    let instructions = initialized["result"]["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("initialize answered with {initialized}"));
+    assert!(
+        !instructions.contains("CONFIRMATION"),
+        "the explicit CLI setting wins over the environment: {instructions}",
+    );
+    process.finish();
+
+    runtime.block_on(async { guard.shutdown().await.expect("tmux fixture shuts down") });
+}
+
+#[test]
 fn a_failure_from_a_real_process_carries_its_classification() {
     let runtime = tokio::runtime::Runtime::new().expect("a runtime starts");
     let guard =
@@ -257,12 +384,20 @@ fn the_instructions_reach_a_client_that_only_ever_initialises() {
 
     // An agent reads these once, before it has called anything, so they are
     // the only thing steering the first call it makes.
-    let mut process = Process::start(&["--socket", &socket]);
+    let mut process = Process::start(&["--socket", &socket, "--confirm"]);
     let answer = process.handshake();
     let instructions = answer["result"]["instructions"]
         .as_str()
         .unwrap_or_else(|| panic!("initialize answered with {answer}"));
-    for expected in ["TRIGGERS", "NAMES ARE NOT CONTENTS", "WAIT, DO NOT POLL"] {
+    for expected in [
+        "TRIGGERS",
+        "NAMES ARE NOT CONTENTS",
+        "WAIT, DO NOT POLL",
+        "SURFACE IS NOT A SANDBOX",
+        "Commands run or typed through open-ended tools do not",
+        "repeating the same call unchanged is safe",
+        "partial_effect",
+    ] {
         assert!(
             instructions.contains(expected),
             "the instructions still steer with {expected}",
@@ -460,7 +595,7 @@ fn tailing_many_panes_stays_within_its_connection_budget() {
         );
     }
 
-    // Twelve panes tailed, and the registry keeps eight.
+    // Ten panes requested, and the registry keeps eight.
     let held = control_clients(&socket);
     assert!(
         held <= 8,

@@ -2,14 +2,15 @@
 //!
 //! tmux sets `TMUX` and `TMUX_PANE` in every process it starts, so an MCP
 //! server launched from a pane can say which pane that is. Two things are
-//! built on that: pane listings say which pane is the caller's own, and the
-//! tools that destroy things refuse to destroy it.
+//! built on that: pane listings say which pane is the caller's own, and direct
+//! kill tools and destructive plan operations refuse it.
 //!
 //! A pane id is only unique within one tmux server. `%1` on the socket this
 //! process was started from and `%1` on the socket it was asked about are
 //! different panes, so every comparison here weighs the socket as well.
 
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -38,10 +39,20 @@ pub enum Relation {
 /// pane id. Both are read tolerantly: tmux writes them, but a shell between
 /// tmux and this process may not have passed both along, and a partial
 /// identity is still worth having.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct CallerIdentity {
     socket: Option<PathBuf>,
     pane_id: Option<String>,
+}
+
+impl fmt::Debug for CallerIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CallerIdentity")
+            .field("socket", &self.socket.as_ref().map(|_| "<redacted>"))
+            .field("pane_id", &self.pane_id)
+            .finish()
+    }
 }
 
 impl CallerIdentity {
@@ -232,6 +243,29 @@ mod tests {
 
         assert_eq!(caller.socket(), Some(Path::new("/tmp/tmux-1000/default")));
         assert_eq!(caller.pane_id(), Some("%3"));
+    }
+
+    #[test]
+    fn debug_surfaces_redact_the_socket_path() {
+        let path = "/tmp/libtmux-rs-test/caller-debug.sock";
+        let caller = identity(&format!("{path},48188,10"), "%3");
+        let builder = crate::TmuxTools::builder(
+            libtmux::Server::builder()
+                .socket_path("/tmp/libtmux-rs-test/caller-target.sock")
+                .build()
+                .expect("an inert server builds"),
+        )
+        .caller(Some(caller.clone()));
+        let surfaces = [
+            format!("{caller:?}"),
+            format!("{builder:?}"),
+            format!("{:?}", builder.build()),
+        ];
+
+        for surface in surfaces {
+            assert!(surface.contains("CallerIdentity"), "{surface}");
+            assert!(!surface.contains(path), "{surface}");
+        }
     }
 
     #[test]

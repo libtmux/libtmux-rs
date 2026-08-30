@@ -152,8 +152,17 @@ async fn a_full_server_says_so_instead_of_waiting_forever() {
         matches!(&error, libtmux::Error::Overloaded { in_flight, .. } if *in_flight == 1),
         "got {error:?}",
     );
+    assert!(
+        error.is_transient(),
+        "capacity becomes available without replacing the server handle",
+    );
 
     holder.await.expect("the holder joins").expect("it ran");
+    let retried = server
+        .cmd(Command::new("display-message").arg("-p").arg("hello"))
+        .await
+        .expect("the same call is admitted once capacity clears");
+    assert!(retried.success());
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -199,5 +208,54 @@ async fn a_control_mode_frame_past_its_budget_ends_the_connection() {
         }
     }
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn persistent_clients_have_their_own_admission_limit() {
+    use libtmux::ControlClientLimits;
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder()
+        .control_client_limits(
+            ControlClientLimits::default()
+                .max_clients(1)
+                .acquire_timeout(Some(Duration::from_millis(50))),
+        )
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("persistent-admission")
+        .await
+        .expect("session");
+    let first = ControlMode::attach(server, session.id())
+        .await
+        .expect("the first persistent client is admitted");
+
+    let command = server
+        .cmd(Command::new("display-message").arg("-p").arg("short-lived"))
+        .await
+        .expect("persistent clients do not consume dispatch capacity");
+    assert_eq!(command.stdout_lossy().trim_end(), "short-lived");
+
+    let error = ControlMode::attach(server, session.id())
+        .await
+        .expect_err("the persistent-client lane is full");
+    assert!(
+        matches!(error, libtmux::Error::Overloaded { .. }),
+        "{error:?}"
+    );
+
+    first.shutdown().await.expect("the first client shuts down");
+    let replacement = ControlMode::attach(server, session.id())
+        .await
+        .expect("released persistent capacity is reusable");
+    replacement
+        .shutdown()
+        .await
+        .expect("replacement shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

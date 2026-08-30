@@ -7,6 +7,9 @@ use std::time::Duration;
 use crate::CommandSummary;
 use crate::version::{ReleaseVersion, TmuxVersion};
 
+mod classification;
+mod refusal;
+
 /// The category of an invalid [`crate::ServerBuilder`] configuration.
 ///
 /// Rejected path and environment bytes are never retained by this value.
@@ -84,8 +87,9 @@ pub enum ServerConfigurationErrorKind {
 use libtmux::{ControlModeErrorKind, Error};
 
 // `Closed` means the far side ended, often just the session going away. The
-// rest mean the connection never worked. The variant is `#[non_exhaustive]`,
-// so a caller matches it rather than building one.
+// other variants distinguish setup failures, deadline expiry, and refusals.
+// The enum is `#[non_exhaustive]`, so a caller matches it rather than building
+// one.
 fn session_ended(failure: &Error) -> bool {
     matches!(
         failure,
@@ -105,7 +109,7 @@ assert!(!session_ended(&unrelated));
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ControlModeErrorKind {
-    /// The tmux client could not be started, or its pipes failed.
+    /// The live control connection could not read from or write to its pipes.
     Transport,
     /// tmux started without giving the crate the pipes it asked for.
     ///
@@ -113,17 +117,56 @@ pub enum ControlModeErrorKind {
     /// set up as requested.
     MissingPipes,
     /// The connection closed before the command was answered.
+    ///
+    /// This connection cannot reopen; attach another one to continue.
     Closed,
+    /// A command's deadline elapsed before it was committed for writing.
+    ///
+    /// Nothing was written, this timeout does not close the connection, and
+    /// retrying the same command is safe once the delay clears.
+    DispatchTimedOut,
+    /// The attach opening or a committed command exceeded its deadline.
+    ///
+    /// A command's deadline starts before queue admission and runs until tmux
+    /// closes its response block. Once the connection commits the command for
+    /// writing, tmux may execute it. The connection ends rather than reuse a
+    /// possibly partial line, so this does not prove a mutation is safe to retry.
+    TimedOut,
+    /// The caller stopped reading events, so the connection could not reach
+    /// this command's reply.
+    ///
+    /// A reply arrives on the connection the events arrive on. The connection
+    /// holds what a caller has not taken and keeps reading while a reply is
+    /// outstanding, but not without limit, and past that limit it stops rather
+    /// than growing. The events remain held and the connection carries on once
+    /// they are taken.
+    ///
+    /// A new request can be refused before it is written, but an already-live
+    /// request gets the same error after crossing the write boundary. This
+    /// kind therefore does not prove that a mutation is safe to replay. Drain
+    /// the events before sending more work, or watch from a task of its own so
+    /// the two never contend.
+    Unread,
     /// The command contains an argument no control-mode line can carry.
     ///
     /// Control mode is a text protocol, so an argument that is not UTF-8
     /// cannot be sent over it even though the same command would run fine as
     /// a subprocess.
     UnrepresentableCommand,
+    /// A subscription name was empty, or contained a colon.
+    ///
+    /// tmux splits the subscription argument on its first colon, so a name
+    /// carrying one names something other than what was asked for and takes
+    /// the rest of the request with it. Refused here rather than sent,
+    /// because tmux accepts the result and reports no error.
+    InvalidSubscriptionName,
 }
 
 /// What tmux says when it holds no session to resolve a target against.
 pub(crate) const NO_CURRENT_TARGET: &str = "no current target";
+
+pub(crate) const SENSITIVE_OUTPUT_WITHHELD: &str =
+    "tmux output withheld because the request contained sensitive input";
 
 /// What tmux says when a move has nowhere to go.
 ///
@@ -203,7 +246,6 @@ pub enum OptionErrorKind {
 /// let absent = Error::ServerGone {
 ///     command: "list-sessions",
 ///     kind: ServerGoneKind::NotRunning,
-///     stderr: "no server running on /tmp/libtmux-rs-dev/absent".to_owned(),
 /// };
 /// assert_eq!(advise(&absent), "start one");
 /// ```
@@ -221,14 +263,26 @@ pub enum ServerGoneKind {
     Stopped,
 }
 
+impl fmt::Display for ServerGoneKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotRunning => "nothing is listening",
+            Self::Unreachable => "the endpoint is unreachable",
+            Self::Lost => "the connection was lost",
+            Self::Stopped => "the server stopped",
+        })
+    }
+}
+
 /// What tmux says when it has no client to act on.
 pub(crate) const NO_CURRENT_CLIENT: &str = "no current client";
 
-/// What a failure means for the caller.
+/// A coarse failure category for reporting and routing.
 ///
-/// [`Error`] carries the detail; this carries the decision. Each variant is a
-/// different thing to do about it, which is why there are fewer of these than
-/// there are error variants.
+/// [`Error`] carries the recovery detail. One category can contain failures
+/// with different retry scopes: overload and a bad argument are both refused,
+/// while executor shutdown and a failed child pipe are both transport errors.
+/// Use [`Error::is_transient`] before repeating a call unchanged.
 ///
 /// New kinds may be added, so match with a `_` arm.
 ///
@@ -237,33 +291,35 @@ pub(crate) const NO_CURRENT_CLIENT: &str = "no current client";
 /// ```
 /// use libtmux::ErrorKind;
 ///
-/// fn retryable(kind: ErrorKind) -> bool {
-///     matches!(kind, ErrorKind::Timeout | ErrorKind::Transport)
+/// fn target_is_stale(kind: ErrorKind) -> bool {
+///     matches!(kind, ErrorKind::ObjectGone)
 /// }
 ///
-/// assert!(retryable(ErrorKind::Transport));
-/// assert!(!retryable(ErrorKind::ObjectGone));
+/// assert!(target_is_stale(ErrorKind::ObjectGone));
+/// assert!(!target_is_stale(ErrorKind::InvalidInput));
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
+    /// tmux accepted an effectful step before a later part of the operation
+    /// failed.
+    PartialEffect,
     /// The object is not on the server. Look it up again, or create it.
     ObjectGone,
-    /// tmux ran the command and refused it. The arguments were wrong.
+    /// The operation was refused before or by tmux.
     Refused,
     /// No tmux server answered. Start one, or name the socket that has it.
     ServerGone,
-    /// The command did not finish in time. Retry, or allow longer.
+    /// The operation did not finish in time.
     Timeout,
     /// tmux could not be run at all: not installed, or not where the server
     /// was told to look. Nothing about the request will change this.
     Unreachable,
     /// The tmux that answered is older than this crate supports.
     UnsupportedVersion,
-    /// The caller passed something that cannot be sent to tmux.
+    /// The caller supplied inputs that cannot form a valid operation.
     InvalidInput,
-    /// The process or connection carrying the command failed. Usually the
-    /// environment rather than the request, so retrying may work.
+    /// The process, connection, or executor carrying the command failed.
     Transport,
     /// tmux answered in a shape the crate could not read. Worth reporting.
     Decode,
@@ -361,6 +417,22 @@ impl std::error::Error for IdParseError {}
 #[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// tmux accepted an effectful step before a later part of the operation
+    /// failed.
+    ///
+    /// Repeating the whole operation may repeat the accepted effect. Inspect
+    /// `source` to diagnose the later failure, but do not use its retryability
+    /// as evidence that the whole operation is safe to replay.
+    #[non_exhaustive]
+    #[error("tmux accepted an effect in {operation} before a later step failed: {source}")]
+    AfterEffect {
+        /// A fixed operation name, without targets or argument values.
+        operation: &'static str,
+        /// The failure that followed the accepted effect.
+        #[source]
+        source: Box<Error>,
+    },
+
     /// A server builder value was invalid.
     #[non_exhaustive]
     #[error("invalid server configuration ({kind:?})")]
@@ -396,8 +468,31 @@ pub enum Error {
     OptionRejected {
         /// Which of the three answers tmux gave.
         kind: OptionErrorKind,
-        /// The name tmux could not resolve, or the value it would not take.
+        /// The option name tmux could not resolve or whose value it rejected.
         detail: String,
+    },
+
+    /// The handle's scope is not one tmux keeps this option in.
+    ///
+    /// Raised instead of sending the write, because tmux would not refuse it.
+    /// tmux resolves an option by name rather than by the flags it was sent
+    /// with, so `mouse` through a pane handle becomes the whole session's
+    /// `mouse` and reports success. Reading it back through the same handle
+    /// resolves the same way and agrees, so nothing downstream notices.
+    ///
+    /// [`crate::OptionSchema::accepts`] answers ahead of the call, for a
+    /// caller choosing a handle rather than reacting to a refusal.
+    #[error(
+        "tmux keeps {option} in {declared:?}, so writing it through a \
+         {requested:?} handle would land there instead"
+    )]
+    OptionScopeMismatch {
+        /// The option that was asked for.
+        option: String,
+        /// The scope the handle implies.
+        requested: crate::OptionScope,
+        /// Every scope tmux will actually store the option at.
+        declared: &'static [crate::OptionScope],
     },
 
     /// tmux answered a format query with a value this crate cannot read.
@@ -447,21 +542,22 @@ pub enum Error {
         limit: usize,
     },
 
-    /// The server is already running as much work as it admits.
+    /// The server is already running as much work of this kind as it admits.
     ///
-    /// The dispatch never started, so retrying it is safe: nothing was sent
+    /// The work never started, so retrying it is safe: nothing was sent
     /// to tmux and no state changed. Distinct from
     /// [`Self::Timeout`](Self::Timeout), which means the work may have run.
     #[non_exhaustive]
     #[error(
-        "{command} was not admitted: {in_flight} dispatches already running (request {request_id})"
+        "work was not admitted: {in_flight} already running is this kind's limit, \
+         and nothing was sent, so retrying is safe (request {request_id}, {command})"
     )]
     Overloaded {
         /// Core-scoped dispatch-request identity.
         request_id: u64,
         /// Sanitized command context.
         command: CommandSummary,
-        /// How many dispatches the server admits at once.
+        /// How many operations of this kind the server admits at once.
         in_flight: usize,
     },
 
@@ -561,6 +657,30 @@ pub enum Error {
         input: &'static str,
     },
 
+    /// Handles passed to one operation belong to different tmux endpoints.
+    ///
+    /// An endpoint here is a socket path, which is what separates two servers
+    /// running at once. It does not separate a server from the one that
+    /// replaced it on the same socket: that daemon reissues ids from the
+    /// start, so a handle held across the restart names something live and is
+    /// not refused. [`crate::Server::require_generation`] is what tells those two
+    /// apart, and it costs the round trip this check does not spend.
+    #[non_exhaustive]
+    #[error("{operation} requires handles from the same tmux server endpoint")]
+    ServerMismatch {
+        /// The operation that rejected the foreign handle.
+        operation: &'static str,
+    },
+
+    /// A plan has a dependency that cannot be resolved before dispatch.
+    #[cfg(feature = "plan")]
+    #[error("invalid plan: {source}")]
+    InvalidPlan {
+        /// The payload-free dependency failure.
+        #[source]
+        source: crate::plan::PlanValidationError,
+    },
+
     /// The configured tmux executable was not found.
     #[non_exhaustive]
     #[error("tmux executable was not found for request {request_id} ({command})")]
@@ -627,6 +747,9 @@ pub enum Error {
     },
 
     /// The executor has stopped accepting requests.
+    ///
+    /// Shutdown is permanent for every handle sharing this Core. Build another
+    /// [`crate::Server`] to issue more requests.
     #[non_exhaustive]
     #[error("tmux executor is shut down for request {request_id} ({command})")]
     ExecutorShutdown {
@@ -662,6 +785,11 @@ pub enum Error {
     /// This is distinct from a connection failure: tmux answered, and the
     /// object was not among the results. It has been closed or killed since
     /// the handle was created.
+    ///
+    /// For a client, absence from a listing has one other cause that is not
+    /// this: a stopped client is left out of the same listing and comes back.
+    /// That is [`Self::ClientSuspended`], reported separately so that
+    /// [`Self::is_object_gone`] keeps meaning "stop using this handle".
     #[non_exhaustive]
     #[error("tmux no longer has {kind} {id}")]
     ObjectGone {
@@ -669,6 +797,57 @@ pub enum Error {
         kind: ObjectKind,
         /// The tmux identity that is no longer present.
         id: String,
+    },
+
+    /// A target found nothing, which does not prove the object is gone.
+    ///
+    /// Distinct from [`Self::ObjectGone`], and the distinction decides whether
+    /// a caller may discard a handle: the object may be perfectly alive,
+    /// linked into another session or sitting at another index. What is known
+    /// is only that this target resolved to nothing.
+    ///
+    /// tmux answers a missing target by echoing it back, and the echo settles
+    /// which of the two happened for some target forms and not others. A
+    /// coordinate -- an index, or a window name, written `session:index` --
+    /// is scoped to one session and is not unique on the server, so its
+    /// absence is always this error and never the other. An identity carries
+    /// its kind's sigil (`@` a window, `%` a pane) and echoes identically
+    /// whether the object died or merely lives under another session's link,
+    /// so telling those apart costs a lookup and belongs to the caller that
+    /// can afford one.
+    ///
+    /// [`Self::is_object_gone`] answers `false`: a handle whose object is
+    /// still running must not be dropped on this evidence.
+    #[non_exhaustive]
+    #[error("tmux has no {kind} at {target}")]
+    LinkGone {
+        /// The kind of object the target named.
+        kind: ObjectKind,
+        /// The target that found nothing, spelled as it was sent.
+        target: String,
+    },
+
+    /// A client is stopped rather than gone, so listings leave it out.
+    ///
+    /// Distinct from [`Self::ObjectGone`], and the distinction decides whether
+    /// to drop the handle: a suspended client is still on the server and is
+    /// listed again once it resumes, so the same handle keeps working.
+    /// [`Self::ObjectGone`] means it will not.
+    ///
+    /// tmux omits a suspended client from `list-clients` while still resolving
+    /// it as a command target, which is what makes the two tellable apart. The
+    /// listing filters the dead, the exiting and the suspended together, so
+    /// absence from it does not say which of the three happened.
+    ///
+    /// Both [`crate::Client::suspend`] and locking a client arrive here,
+    /// because tmux marks them with one flag. A client resumes when its
+    /// process continues -- the suspended one on `SIGCONT`, the locked one
+    /// when its `lock-command` exits.
+    #[non_exhaustive]
+    #[error("client {name} is suspended, not gone")]
+    ClientSuspended {
+        /// The client's tmux name, which is the path of its terminal.
+        name: String,
     },
 
     /// A control-mode connection failed.
@@ -704,15 +883,14 @@ pub enum Error {
     ///
     /// tmux exits 1 for this and for a command it refused, and separates them
     /// only in stderr, so this is read from the message rather than the
-    /// status. [`ServerGoneKind`] says which way it was missing.
-    #[error("tmux found no server for {command}: {stderr}")]
+    /// status. [`ServerGoneKind`] says which way it was missing; the raw
+    /// stderr remains available only through [`crate::Server::cmd`].
+    #[error("tmux found no server for {command}: {kind}")]
     ServerGone {
         /// The tmux command that found no server.
         command: &'static str,
         /// Which way the server was not there.
         kind: ServerGoneKind,
-        /// What tmux wrote to stderr.
-        stderr: String,
     },
 
     /// tmux rejected a command that the crate requires to succeed.
@@ -727,7 +905,8 @@ pub enum Error {
         command: &'static str,
         /// The process exit code, when it exited normally.
         exit_code: Option<i32>,
-        /// The message tmux printed, which explains the refusal.
+        /// The message tmux printed, or a fixed explanation when retaining it
+        /// could disclose sensitive input.
         stderr: String,
     },
 
@@ -849,212 +1028,6 @@ impl fmt::Display for ListingDecodeError {
 impl std::error::Error for ListingDecodeError {}
 
 impl Error {
-    /// Classify a refused tmux command, recognizing a target that has gone.
-    ///
-    /// tmux reports a missing target as `can't find <kind>: <target>` and
-    /// exits 1, the same status it uses for an argument it did not like, so
-    /// the message is the only thing that separates them. It is not
-    /// localized -- tmux has no message catalogue -- and the wording has been
-    /// stable across every supported release.
-    ///
-    /// Anything that does not match stays a refusal, so a future rewording
-    /// costs the distinction rather than correctness.
-    /// `target` is the request's own `-t`, when it had one. tmux reports a
-    /// server holding no sessions as `no current target` even for a target it
-    /// was given, so the request is what recovers the name.
-    pub(crate) fn refused(
-        command: &'static str,
-        exit_code: Option<i32>,
-        stderr: String,
-        target: Option<&std::ffi::OsStr>,
-    ) -> Self {
-        // The wording is tmux's own and is identical on every supported
-        // release. None of these say the request was wrong, so they are read
-        // before anything that does.
-        const GONE: [(&str, ServerGoneKind); 4] = [
-            ("no server running on", ServerGoneKind::NotRunning),
-            ("error connecting to", ServerGoneKind::Unreachable),
-            // Before the shorter one, which it starts with and does not mean.
-            ("server exited unexpectedly", ServerGoneKind::Lost),
-            ("server exited", ServerGoneKind::Stopped),
-        ];
-
-        const MISSING: [(&str, ObjectKind); 4] = [
-            ("can't find session:", ObjectKind::Session),
-            ("can't find window:", ObjectKind::Window),
-            ("can't find pane:", ObjectKind::Pane),
-            ("can't find client:", ObjectKind::Client),
-        ];
-
-        // tmux spells "no such option name" two ways. `set-option` and
-        // `show-options` resolve the name with `options_match` first, which
-        // says "invalid option"; the "unknown option" in `options_scope_from_name`
-        // sits behind that call and so is unreachable from the CLI on every
-        // supported release. Both mean the same thing, so both map to the same
-        // kind rather than leaving a hole if tmux ever reorders the two.
-        const OPTION: [(&str, OptionErrorKind); 5] = [
-            ("invalid option:", OptionErrorKind::Unknown),
-            ("unknown option:", OptionErrorKind::Unknown),
-            ("ambiguous option:", OptionErrorKind::Ambiguous),
-            ("bad value:", OptionErrorKind::BadValue),
-            ("value is invalid:", OptionErrorKind::BadValue),
-        ];
-
-        for (prefix, kind) in GONE {
-            if stderr.trim_end().starts_with(prefix) {
-                return Self::ServerGone {
-                    command,
-                    kind,
-                    stderr,
-                };
-            }
-        }
-
-        for (prefix, kind) in OPTION {
-            if let Some(detail) = stderr.trim_end().strip_prefix(prefix) {
-                return Self::OptionRejected {
-                    kind,
-                    detail: detail.trim().to_owned(),
-                };
-            }
-        }
-
-        if let Some(name) = stderr.trim_end().strip_prefix("duplicate session:") {
-            return Self::SessionExists {
-                name: name.trim().to_owned(),
-            };
-        }
-
-        if let Some(target) = target.filter(|_| stderr.trim_end() == NO_CURRENT_TARGET) {
-            return Self::object_gone(&target.to_string_lossy());
-        }
-
-        for (prefix, kind) in MISSING {
-            if let Some(id) = stderr.trim_end().strip_prefix(prefix) {
-                return Self::ObjectGone {
-                    kind,
-                    id: id.trim().to_owned(),
-                };
-            }
-        }
-
-        Self::CommandFailed {
-            command,
-            exit_code,
-            stderr,
-        }
-    }
-
-    /// Report a tmux target that could not be resolved.
-    ///
-    /// The kind comes from the sigil, which is how tmux names its objects.
-    /// A target that is a name rather than an ID is reported as a session,
-    /// because a name is what `-t` accepts for one.
-    fn object_gone(target: &str) -> Self {
-        Self::ObjectGone {
-            kind: match target.as_bytes().first() {
-                Some(b'@') => ObjectKind::Window,
-                Some(b'%') => ObjectKind::Pane,
-                _ => ObjectKind::Session,
-            },
-            id: target.to_owned(),
-        }
-    }
-
-    /// Return what this failure means for the caller.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-    /// use libtmux::ErrorKind;
-    ///
-    /// // The shape this exists for: use it if it is there, make it if not.
-    /// let session = match server.session("work").await? {
-    ///     Some(session) => session,
-    ///     None => server.new_session("work").await?,
-    /// };
-    ///
-    /// // And when an operation races something else removing it. The handle
-    /// // is cloned because killing consumes one, which is how the crate
-    /// // stops you from using a window you just destroyed.
-    /// let window = session.new_window("doomed").await?;
-    /// let mut stale = window.clone();
-    /// window.kill().await?;
-    ///
-    /// let error = stale.rename("gone").await.expect_err("the window was killed");
-    /// assert_eq!(error.kind(), ErrorKind::ObjectGone);
-    /// assert!(error.is_object_gone());
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn kind(&self) -> ErrorKind {
-        match self {
-            // A replaced daemon reissues ids from the start, so every handle
-            // captured from the previous one names something that is not
-            // there. That is the same decision as a missing object, and the
-            // same branch a caller already writes for one.
-            Self::ObjectGone { .. } | Self::ServerGenerationChanged { .. } => ErrorKind::ObjectGone,
-            Self::ServerGone { .. } => ErrorKind::ServerGone,
-            Self::CommandFailed { .. }
-            | Self::OutputLimitExceeded { .. }
-            | Self::Overloaded { .. }
-            | Self::SessionExists { .. }
-            | Self::OptionRejected { .. } => ErrorKind::Refused,
-            Self::Timeout { .. } => ErrorKind::Timeout,
-            Self::ExecutableNotFound { .. }
-            | Self::InvalidServerConfiguration { .. }
-            | Self::RuntimeUnavailable { .. } => ErrorKind::Unreachable,
-            // The call is wrong, not the environment: the same future awaited
-            // directly would work.
-            Self::RuntimeNested => ErrorKind::InvalidInput,
-            Self::UnsupportedTmuxVersion { .. }
-            | Self::UnsupportedCapability { .. }
-            | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
-            Self::InvalidCommandInput { .. } => ErrorKind::InvalidInput,
-            Self::Spawn { .. }
-            | Self::ReadOutput { .. }
-            | Self::WaitChild { .. }
-            | Self::VersionProbeFailed { .. }
-            | Self::ExecutorShutdown { .. }
-            | Self::DuplicateRequest { .. }
-            | Self::SupervisorLost { .. } => ErrorKind::Transport,
-            Self::InvalidVersionOutput { .. }
-            | Self::DecodeListing { .. }
-            | Self::UnreadableFormatValue { .. } => ErrorKind::Decode,
-            #[cfg(feature = "control-mode")]
-            Self::ControlModeFrameTooLarge { .. } => ErrorKind::Decode,
-            #[cfg(feature = "control-mode")]
-            Self::ControlMode { kind, .. } => match kind {
-                ControlModeErrorKind::UnrepresentableCommand => ErrorKind::InvalidInput,
-                ControlModeErrorKind::Transport
-                | ControlModeErrorKind::MissingPipes
-                | ControlModeErrorKind::Closed => ErrorKind::Transport,
-            },
-        }
-    }
-
-    /// Report whether tmux no longer has the object the call named.
-    ///
-    /// The most common branch a caller writes, and the one that is easy to
-    /// get wrong: an object disappearing is an ordinary race, not a failure
-    /// of the request.
-    #[must_use]
-    pub fn is_object_gone(&self) -> bool {
-        self.kind() == ErrorKind::ObjectGone
-    }
-
-    /// Report whether making the same call again could succeed.
-    ///
-    /// True for a timeout and for a transport failure, which are usually the
-    /// machine rather than the request. False for anything tmux answered,
-    /// which will be answered the same way again.
-    #[must_use]
-    pub fn is_transient(&self) -> bool {
-        matches!(self.kind(), ErrorKind::Timeout | ErrorKind::Transport)
-    }
-
     #[cfg(feature = "control-mode")]
     pub(crate) const fn control_mode(source: io::Error) -> Self {
         Self::ControlMode {
@@ -1091,11 +1064,47 @@ impl Error {
         Self::ControlModeFrameTooLarge { frame, limit }
     }
 
+    /// Nobody took the events, so the reply could not be reached.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_unread() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::Unread,
+            source: None,
+        }
+    }
+
+    /// A subscription name tmux would read as something else.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_invalid_subscription() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::InvalidSubscriptionName,
+            source: None,
+        }
+    }
+
     /// The connection closed before the command was answered.
     #[cfg(feature = "control-mode")]
     pub(crate) const fn control_mode_closed() -> Self {
         Self::ControlMode {
             kind: ControlModeErrorKind::Closed,
+            source: None,
+        }
+    }
+
+    /// The command deadline elapsed before the connection committed a write.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_dispatch_timeout() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::DispatchTimedOut,
+            source: None,
+        }
+    }
+
+    /// The connection did not attach or resolve a command in time.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_timeout() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::TimedOut,
             source: None,
         }
     }
@@ -1133,6 +1142,10 @@ impl Error {
 
     pub(crate) fn invalid_command_input(request_id: u64, input: &'static str) -> Self {
         Self::InvalidCommandInput { request_id, input }
+    }
+
+    pub(crate) const fn server_mismatch(operation: &'static str) -> Self {
+        Self::ServerMismatch { operation }
     }
 
     pub(crate) fn spawn(
@@ -1278,6 +1291,21 @@ impl fmt::Debug for Error {
     )]
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AfterEffect { operation, source } => formatter
+                .debug_struct("AfterEffect")
+                .field("operation", operation)
+                .field("source", source)
+                .finish(),
+            Self::OptionScopeMismatch {
+                option,
+                requested,
+                declared,
+            } => formatter
+                .debug_struct("OptionScopeMismatch")
+                .field("option", option)
+                .field("requested", requested)
+                .field("declared", declared)
+                .finish(),
             Self::RuntimeNested => formatter.debug_struct("RuntimeNested").finish(),
             Self::InvalidServerConfiguration { kind } => formatter
                 .debug_struct("InvalidServerConfiguration")
@@ -1378,6 +1406,15 @@ impl fmt::Debug for Error {
                 .field("request_id", request_id)
                 .field("input", input)
                 .finish(),
+            Self::ServerMismatch { operation } => formatter
+                .debug_struct("ServerMismatch")
+                .field("operation", operation)
+                .finish(),
+            #[cfg(feature = "plan")]
+            Self::InvalidPlan { source } => formatter
+                .debug_struct("InvalidPlan")
+                .field("source", source)
+                .finish(),
             Self::ExecutableNotFound {
                 request_id,
                 command,
@@ -1454,11 +1491,20 @@ impl fmt::Debug for Error {
                 .field("request_id", request_id)
                 .field("command", command)
                 .finish(),
+            Self::LinkGone { kind, target } => formatter
+                .debug_struct("LinkGone")
+                .field("kind", kind)
+                .field("target", target)
+                .finish(),
+            Self::ClientSuspended { name } => formatter
+                .debug_struct("ClientSuspended")
+                .field("name", name)
+                .finish(),
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, source } => formatter
                 .debug_struct("ControlMode")
                 .field("kind", kind)
-                .field("kind", &source.as_ref().map(io::Error::kind))
+                .field("source_kind", &source.as_ref().map(io::Error::kind))
                 .finish(),
             Self::RuntimeUnavailable { source } => formatter
                 .debug_struct("RuntimeUnavailable")
@@ -1479,15 +1525,10 @@ impl fmt::Debug for Error {
                 .field("kind", kind)
                 .field("id", id)
                 .finish(),
-            Self::ServerGone {
-                command,
-                kind,
-                stderr,
-            } => formatter
+            Self::ServerGone { command, kind } => formatter
                 .debug_struct("ServerGone")
                 .field("command", command)
                 .field("kind", kind)
-                .field("stderr", stderr)
                 .finish(),
             Self::DecodeListing {
                 list_command,
@@ -1502,255 +1543,7 @@ impl fmt::Debug for Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Error, ErrorKind, ServerGoneKind};
-
-    /// The three server-gone wordings a live fixture cannot produce on demand.
-    ///
-    /// Only "no server running" is reachable from a test, because the other
-    /// three need the server to die between the client connecting and the
-    /// command finishing. They are read from tmux's `client.c`, so they are
-    /// asserted against the classifier rather than against tmux.
-    #[test]
-    fn a_server_that_is_not_there_is_not_a_refusal() {
-        for (stderr, expected) in [
-            (
-                "no server running on /tmp/libtmux-rs-dev/absent",
-                ServerGoneKind::NotRunning,
-            ),
-            (
-                "error connecting to /tmp/libtmux-rs-dev/absent (Connection refused)",
-                ServerGoneKind::Unreachable,
-            ),
-            ("server exited unexpectedly", ServerGoneKind::Lost),
-            ("server exited", ServerGoneKind::Stopped),
-        ] {
-            let error = Error::refused("list-sessions", Some(1), stderr.to_owned(), None);
-            assert_eq!(error.kind(), ErrorKind::ServerGone, "{stderr}");
-            assert!(
-                matches!(&error, Error::ServerGone { kind, .. } if *kind == expected),
-                "{stderr} should be {expected:?}, got {error:?}",
-            );
-            assert!(!error.is_object_gone(), "{stderr}");
-        }
-    }
-
-    /// The order the two server-exit wordings are read in is load-bearing.
-    ///
-    /// A lost server says `server exited unexpectedly`, which starts with the
-    /// `server exited` of one that shut down and does not mean it.
-    #[test]
-    fn a_lost_server_is_not_read_as_one_that_stopped() {
-        let error = Error::refused(
-            "new-session",
-            Some(1),
-            "server exited unexpectedly".to_owned(),
-            None,
-        );
-        assert!(
-            matches!(&error, Error::ServerGone { kind, .. } if *kind == ServerGoneKind::Lost),
-            "{error:?}",
-        );
-    }
-
-    /// A refusal that says nothing about the server stays a refusal, so the
-    /// classification is not simply calling everything gone.
-    #[test]
-    fn a_refusal_that_names_no_server_stays_a_refusal() {
-        let error = Error::refused(
-            "delete-buffer",
-            Some(1),
-            "no buffer never-existed".to_owned(),
-            None,
-        );
-        assert_eq!(error.kind(), ErrorKind::Refused, "{error:?}");
-    }
-}
+mod tests;
 
 #[cfg(test)]
-mod compat_tests {
-
-    /// Pin the tmux wording that says how an option was refused.
-    ///
-    /// The three answers need three different fixes, and tmux distinguishes
-    /// them only in stderr: every one of these exits 1. It also spells a
-    /// rejected value two ways, "bad value" for a flag and "value is invalid"
-    /// for a number, which is why the kind exists rather than the text.
-    #[cfg(feature = "test-support")]
-    #[tokio::test]
-    async fn real_tmux_compat_error_option_refusal_wording_is_recognized() {
-        use crate::test::TestServer;
-        use crate::{Error, ErrorKind, OptionErrorKind};
-
-        let guard = TestServer::builder().start().await.expect("tmux starts");
-        let server = guard.server();
-
-        for (name, value, expected) in [
-            ("no-such-option", "x", OptionErrorKind::Unknown),
-            // A prefix of `status-left`, `status-left-length`, and
-            // `status-left-style` on every supported release, so tmux will not
-            // choose. A release that left only one of them would turn this
-            // answer into a different kind, which is the point of pinning it.
-            ("status-l", "x", OptionErrorKind::Ambiguous),
-            ("mouse", "notabool", OptionErrorKind::BadValue),
-            (
-                "status-left-length",
-                "notanumber",
-                OptionErrorKind::BadValue,
-            ),
-        ] {
-            let error = server
-                .set_global_option(name, value)
-                .await
-                .expect_err("tmux refuses it");
-            assert!(
-                matches!(&error, Error::OptionRejected { kind, .. } if *kind == expected),
-                "{name}={value} should be {expected:?}, got {error:?}",
-            );
-            assert_eq!(error.kind(), ErrorKind::Refused);
-            assert!(!error.is_object_gone(), "a refusal is not a missing object");
-        }
-
-        guard.shutdown().await.expect("tmux fixture shuts down");
-    }
-
-    /// Pin the tmux wording that separates a missing target from a refusal.
-    ///
-    /// `Error::refused` reads tmux's stderr because tmux exits 1 for both, so
-    /// this asserts against the tmux the lane is running rather than against
-    /// the source this was written from. Every compatibility lane runs it, so
-    /// a release that rewords these is a failure here rather than a silently
-    /// wrong `is_object_gone` in the field.
-    #[cfg(feature = "test-support")]
-    #[tokio::test]
-    async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
-        use crate::ErrorKind;
-        use crate::test::TestServer;
-
-        let guard = TestServer::builder().start().await.expect("tmux starts");
-        let server = guard.server();
-        let session = server.new_session("compat-missing").await.expect("session");
-
-        // One live session, so tmux can resolve a current target and reports
-        // the specific object it could not find.
-        for (label, error) in [
-            (
-                "window",
-                server
-                    .window_by_id(&"@4242".parse().expect("a window id"))
-                    .await
-                    .map(|found| assert!(found.is_none(), "the window does not exist"))
-                    .err(),
-            ),
-            (
-                "pane",
-                server
-                    .pane_by_id(&"%4242".parse().expect("a pane id"))
-                    .await
-                    .map(|found| assert!(found.is_none(), "the pane does not exist"))
-                    .err(),
-            ),
-        ] {
-            assert!(error.is_none(), "a lookup reports absence, not {label}");
-        }
-
-        // A mutation against a target tmux does not have is where the wording
-        // matters: it is the only signal separating this from a bad argument.
-        let mut window = session.windows().await.expect("windows").remove(0);
-        let doomed = session
-            .new_window(crate::NewWindowOptions::new("doomed").command("sleep 300"))
-            .await
-            .expect("window");
-        let mut stale = doomed.clone();
-        doomed.kill().await.expect("the window is killed");
-
-        let error = stale.rename("gone").await.expect_err("the window is gone");
-        assert_eq!(
-            error.kind(),
-            ErrorKind::ObjectGone,
-            "tmux 'can't find window' is recognized: {error}",
-        );
-
-        // And a refusal that is not a missing target stays a refusal, so the
-        // classification is not simply calling everything gone.
-        let refused = server
-            .delete_buffer("never-existed")
-            .await
-            .expect_err("tmux has no such buffer");
-        assert_eq!(refused.kind(), ErrorKind::Refused, "{refused}");
-
-        // With no session left, tmux cannot resolve a current target and says
-        // so instead, for the same request. Both wordings mean gone.
-        window
-            .rename("last")
-            .await
-            .expect("the window still exists");
-        session.kill().await.expect("the session is killed");
-
-        let error = stale
-            .rename("still gone")
-            .await
-            .expect_err("the window is gone");
-        assert_eq!(
-            error.kind(),
-            ErrorKind::ObjectGone,
-            "tmux 'no current target' is recognized: {error}",
-        );
-
-        guard.shutdown().await.expect("tmux fixture shuts down");
-    }
-
-    /// Pin the tmux wording that says the server, not the request, is the
-    /// problem.
-    ///
-    /// tmux exits 1 for a command it refused and for a command that found no
-    /// server, and separates them only in stderr. Reading the second as the
-    /// first tells a caller to fix arguments that were never the trouble.
-    #[cfg(feature = "test-support")]
-    #[tokio::test]
-    async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
-        use std::time::Duration;
-
-        use crate::test::{TestServer, retry_until};
-        use crate::{Command, ErrorKind, ServerGoneKind};
-
-        let mut guard = TestServer::builder().start().await.expect("tmux starts");
-        guard.session("compat-gone").await.expect("session");
-
-        guard
-            .server()
-            .cmd(Command::new("kill-server"))
-            .await
-            .expect("the server is killed");
-
-        // tmux stops answering on the socket before the kernel has a status
-        // for the process behind it, so this waits for the daemon rather than
-        // for a duration.
-        retry_until(Duration::from_secs(5), async || {
-            !guard.daemon_state().is_running()
-        })
-        .await
-        .expect("the daemon exits");
-
-        let error = guard
-            .server()
-            .sessions()
-            .await
-            .expect_err("there is no server to list");
-        assert_eq!(
-            error.kind(),
-            ErrorKind::ServerGone,
-            "tmux 'no server running' is recognized: {error}",
-        );
-        assert!(
-            matches!(&error, crate::Error::ServerGone { kind, .. } if *kind == ServerGoneKind::NotRunning),
-            "the absence is named: {error:?}",
-        );
-        assert!(
-            !error.is_object_gone(),
-            "an absent server is not a missing object: {error}",
-        );
-
-        guard.shutdown().await.expect("tmux fixture shuts down");
-    }
-}
+mod compat_tests;

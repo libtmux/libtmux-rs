@@ -37,10 +37,41 @@ where
 
 /// A command argument on the wire: text where it can be, bytes where it cannot.
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
-enum Argument {
+pub(super) enum Argument {
     Text(String),
     Bytes(Vec<u8>),
+}
+
+#[cfg(feature = "schema")]
+fn id_schema(generator: &mut schemars::SchemaGenerator, sigil: &str) -> schemars::Schema {
+    use schemars::JsonSchema as _;
+
+    const U32: &str = concat!(
+        "0*(?:[0-9]{1,9}|[0-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|",
+        "429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|",
+        "429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|",
+        "429496729[0-5])"
+    );
+    let mut schema = String::json_schema(generator);
+    schema.insert("pattern".into(), format!("^{sigil}{U32}$").into());
+    schema
+}
+
+#[cfg(feature = "schema")]
+pub(super) fn session_id_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    id_schema(generator, r"\$")
+}
+
+#[cfg(feature = "schema")]
+pub(super) fn window_id_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    id_schema(generator, "@")
+}
+
+#[cfg(feature = "schema")]
+pub(super) fn pane_id_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    id_schema(generator, "%")
 }
 
 /// Serialize one argument.

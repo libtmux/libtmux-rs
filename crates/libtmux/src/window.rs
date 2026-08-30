@@ -1,7 +1,5 @@
 //! Window handles and their snapshot getters.
 
-use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -9,17 +7,20 @@ use std::sync::Arc;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
-use crate::internal::listing::{self, Pushdown as _};
-use crate::internal::options;
+use crate::internal::listing;
+use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
-use crate::query::Filterable;
+use crate::query::{FilterSchema, Filterable};
 use crate::session::Session;
 use crate::snapshot::WindowProjection;
 #[cfg(feature = "query")]
 use crate::snapshot::{WindowFields, WindowInfo};
 use crate::target::{ServerIdentity, SessionId, WindowId};
-use crate::{Command, CommandResult, Error, IndexedHooks, ObjectKind, OptionValue, ReplaceMode};
+use crate::{Command, CommandResult, Error, ObjectKind};
+
+mod navigation;
+mod settings;
 
 /// Which way to move focus among a window's panes.
 ///
@@ -136,7 +137,11 @@ impl Window {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::Window;
     ///
     /// let session = server.new_session("locating-window").await?;
@@ -146,6 +151,9 @@ impl Window {
     /// let found = Window::from_env_value(server, Some(pane.id().as_ref())).await?;
     ///
     /// assert_eq!(found.expect("the window exists").id(), pane.window_id());
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -294,315 +302,8 @@ impl Window {
         self.core.configuration().identity()
     }
 
-    /// List this window's panes, in tmux's own order.
-    ///
-    /// This is the lenient form; use [`Window::panes`] when the reason for
-    /// an empty result matters.
-    pub async fn panes_or_empty(&self) -> Vec<Pane> {
-        self.panes().await.unwrap_or_default()
-    }
-
-    /// List this window's panes, preserving any failure.
-    ///
-    /// Panes are addressed by window id rather than by session and index, so
-    /// this returns the same panes through every link to the window.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the list command cannot run, or when its output
-    /// cannot be decoded into snapshots.
-    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
-        let target = self.id().to_string();
-        let projections = listing::panes(&self.core, listing::Scope::Target(&target), None).await?;
-
-        Ok(projections
-            .into_iter()
-            .map(|projection| Pane::new(Arc::clone(&self.core), projection))
-            .collect())
-    }
-
-    /// The panes under this window that a matcher accepts.
-    ///
-    /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::search_panes`] when the difference matters.
-    ///
-    /// Filtering happens here rather than in tmux. A [`crate::query::FilterExpr`]
-    /// is built to stay compilable to a tmux `-f` predicate, so pushing one
-    /// down later would change what this costs and not what it answers.
-    #[cfg(feature = "query")]
-    #[must_use]
-    pub async fn search_panes_or_empty<M: crate::query::Matcher<Pane>>(
-        &self,
-        matcher: M,
-    ) -> Vec<Pane> {
-        self.search_panes(matcher).await.unwrap_or_default()
-    }
-
-    /// The panes under this window that a matcher accepts, reporting why
-    /// if the listing fails.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// use libtmux::query::Filterable as _;
-    ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("searched").await?;
-    /// let window = session.active_window().await?.expect("a window");
-    ///
-    /// let fields = libtmux::Pane::filter_fields();
-    /// let found = window.search_panes(&fields.pane_active.eq(true)).await?;
-    /// assert_eq!(found.len(), 1);
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[cfg(feature = "query")]
-    pub async fn search_panes<M: crate::query::Matcher<Pane>>(
-        &self,
-        matcher: M,
-    ) -> Result<Vec<Pane>, Error> {
-        use crate::query::QueryIteratorExt as _;
-
-        let all = self.panes().await?;
-        Ok(all.iter().matching(matcher).cloned().collect())
-    }
-
-    /// Return the window's active pane.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the pane listing fails. A window always has an
-    /// active pane, so `Ok(None)` means the window disappeared between the
-    /// snapshot and this call.
-    pub async fn active_pane(&self) -> Result<Option<Pane>, Error> {
-        Ok(self.panes().await?.into_iter().find(Pane::is_active))
-    }
-
-    /// Move focus one pane in this direction, and report where it landed.
-    ///
-    /// tmux wraps: asking to go up from the topmost pane lands on the bottom
-    /// one, and a window holding a single pane stays where it is. Neither is
-    /// a failure, and tmux reports neither, so this returns the pane rather
-    /// than absence. A caller that wants to know whether it moved compares
-    /// the returned ID with the one it started from.
-    ///
-    /// Direction follows the layout, not the pane index: "up" means the pane
-    /// drawn above this one.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the move.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// use libtmux::{PaneDirection, SplitDirection};
-    ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("directions").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
-    ///
-    /// // Splitting leaves focus where it was, so the top pane is still active.
-    /// let lower = window.split(SplitDirection::Below).await?;
-    ///
-    /// let moved = window.focus_direction(PaneDirection::Below).await?;
-    /// assert_eq!(moved.id(), lower.id(), "focus moved down to the new pane");
-    ///
-    /// // Down again from the bottom wraps rather than failing.
-    /// let wrapped = window.focus_direction(PaneDirection::Below).await?;
-    /// assert_ne!(wrapped.id(), lower.id(), "the edge wraps back to the top");
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn focus_direction(&self, direction: PaneDirection) -> Result<Pane, Error> {
-        let target = self.id().to_string();
-        listing::mutate(
-            &self.core,
-            "select-pane",
-            Command::new("select-pane")
-                .arg(direction.flag())
-                .arg("-t")
-                .arg(&target),
-        )
-        .await?;
-
-        self.active_pane().await?.ok_or(Error::ObjectGone {
-            kind: ObjectKind::Window,
-            id: target,
-        })
-    }
-
-    /// Move to the pane that was active before this one, and return it.
-    ///
-    /// `None` when nothing else has been active yet, which a window holding
-    /// one pane never has. That is an ordinary state rather than a failure,
-    /// so it is reported as absence; an error means tmux could not be reached
-    /// or refused the move for some other reason.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the move.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// use libtmux::{SplitDirection, SplitOptions};
-    ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("panes").await?;
-    /// let mut window = session.active_window().await?.expect("a window");
-    ///
-    /// // One pane, so there is nowhere to go back to and nothing broke.
-    /// assert!(window.last_pane().await?.is_none());
-    ///
-    /// window.split(SplitOptions::new(SplitDirection::Below).select()).await?;
-    /// assert!(window.last_pane().await?.is_some());
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn last_pane(&self) -> Result<Option<Pane>, Error> {
-        let target = self.id().to_string();
-        let result = self
-            .core
-            .execute(Command::new("last-pane").arg("-t").arg(&target))
-            .await?;
-        if !result.success() {
-            let stderr = result.stderr_lossy();
-            if crate::error::NO_SUCH_NEIGHBOUR.contains(&stderr.trim_end()) {
-                return Ok(None);
-            }
-            return Err(Error::refused(
-                "last-pane",
-                result.exit_code(),
-                stderr.into_owned(),
-                Some(OsStr::new(&target)),
-            ));
-        }
-
-        self.active_pane().await
-    }
-
-    /// The sessions this window is linked into, in the order tmux lists them.
-    ///
-    /// A window can be linked into several sessions at once, and every one of
-    /// them holds the same window rather than a copy. This reports the
-    /// sessions reaching it, including the one this handle was found through.
-    ///
-    /// The sessions are read from tmux's winlink rows rather than from
-    /// `#{window_linked_sessions_list}`, which is a comma-separated list of
-    /// *names* and so cannot be taken apart: a session named `has,comma`
-    /// makes the list `a,has,comma`, which reads exactly like three sessions.
-    ///
-    /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::linked_sessions`] when the difference matters.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    /// let first = server.new_session("first").await?;
-    /// let second = server.new_session("second").await?;
-    /// let window = first.active_window().await?.expect("a window");
-    ///
-    /// assert_eq!(window.linked_sessions_or_empty().await.len(), 1);
-    ///
-    /// window.link_to(&second, None).await?;
-    /// let linked = window.linked_sessions_or_empty().await;
-    /// assert_eq!(linked.len(), 2, "the same window, reached two ways");
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn linked_sessions_or_empty(&self) -> Vec<Session> {
-        self.linked_sessions().await.unwrap_or_default()
-    }
-
-    /// The sessions this window is linked into, reporting why if it cannot.
-    ///
-    /// The loud form of [`Self::linked_sessions_or_empty`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses a listing.
-    pub async fn linked_sessions(&self) -> Result<Vec<Session>, Error> {
-        // The window id is a sigil and digits, so tmux matches it server-side
-        // and returns only the winlink rows that reach this window.
-        let links = listing::windows(
-            &self.core,
-            listing::Scope::Server,
-            Some(&self.id().predicate("window_id")),
-        )
-        .await?;
-
-        let mut sessions = Vec::with_capacity(links.len());
-        let mut seen = HashSet::with_capacity(links.len());
-        for link in &links {
-            let session = link.link().identity().session_id();
-            if !seen.insert(session.number()) {
-                continue;
-            }
-            let infos =
-                listing::sessions(&self.core, Some(&session.predicate("session_id"))).await?;
-            // A session that goes away between the two listings is dropped
-            // rather than reported half-formed.
-            sessions.extend(
-                infos
-                    .into_iter()
-                    .next()
-                    .map(|info| Session::new(Arc::clone(&self.core), info)),
-            );
-        }
-
-        Ok(sessions)
-    }
-    /// Return the session this window was reached through.
-    ///
-    /// This re-reads tmux rather than the snapshot, so a session renamed or
-    /// removed since discovery is reported as it is now. `Ok(None)` means the
-    /// session no longer exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the session listing fails.
-    pub async fn session(&self) -> Result<Option<Session>, Error> {
-        let infos = listing::sessions(&self.core, None).await?;
-
-        Ok(infos
-            .into_iter()
-            .find(|info| info.session_id() == self.session_id())
-            .map(|info| Session::new(Arc::clone(&self.core), info)))
+    fn link_target(&self) -> String {
+        format!("{}:{}", self.session_id(), self.id())
     }
 
     /// Replace this handle's snapshot with the window's current state.
@@ -615,7 +316,12 @@ impl Window {
     /// Returns [`Error::ObjectGone`] when this session no longer links the
     /// window, or a listing error when tmux could not be read.
     pub async fn refresh(&mut self) -> Result<&mut Self, Error> {
-        let session = self.session_id().to_string();
+        let session = self.session_id().clone();
+        self.refresh_in(&session).await
+    }
+
+    async fn refresh_in(&mut self, session: &SessionId) -> Result<&mut Self, Error> {
+        let session = session.to_string();
         let projection = listing::windows(&self.core, listing::Scope::Target(&session), None)
             .await?
             .into_iter()
@@ -665,6 +371,9 @@ impl Window {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the name.
+    /// tmux expands the name as a format before it checks it, so `#(command)`
+    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
+    /// before passing text a caller supplied.
     pub async fn rename(&mut self, name: impl Into<OsString>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
@@ -676,48 +385,175 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("rename-window"))?;
         Ok(self)
     }
 
     /// Make this window active in the session it was reached through.
     ///
+    /// Targeted by id rather than by index. An index is a slot, not an
+    /// identity: anything that renumbers windows -- breaking a lone pane out
+    /// of one moves it to a free index -- leaves a handle's cached index
+    /// pointing at whatever occupies that slot now, which is a different live
+    /// window rather than nothing. tmux answers such a target without
+    /// complaint, so an index-scoped select would switch to the wrong window
+    /// and report success.
+    ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the command.
+    /// Returns an error when tmux refuses the command, and
+    /// [`Error::ObjectGone`] when the window is no longer on the server.
     pub async fn select(&mut self) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "select-window",
-            Command::new("select-window").arg("-t").arg(format!(
-                "{}:{}",
-                self.session_id(),
-                self.index()
-            )),
+            Command::new("select-window")
+                .arg("-t")
+                .arg(self.id().to_string()),
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-window"))?;
         Ok(self)
     }
 
     /// Set the window's pane layout.
     ///
+    /// Takes a [`Layout`] tmux knows by name, or a layout string tmux itself
+    /// produced through [`LayoutSpec::Saved`]. A `&str`, `String`, or
+    /// `OsString` is read as a saved layout, so a caller who already had one
+    /// keeps working.
+    ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the layout name or specification.
-    pub async fn select_layout(&mut self, layout: impl Into<OsString>) -> Result<&mut Self, Error> {
+    /// Returns an error when tmux refuses the layout, and
+    /// [`crate::ErrorKind::UnsupportedVersion`] when a named layout needs a
+    /// newer tmux than this endpoint runs. See [`Layout::minimum_release`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::Layout;
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("arranged").await?;
+    /// let mut window = session.active_window().await?.expect("a window");
+    ///
+    /// window.select_layout(Layout::Tiled).await?;
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn select_layout(
+        &mut self,
+        layout: impl Into<LayoutSpec>,
+    ) -> Result<&mut Self, Error> {
+        let layout = layout.into();
+        let argument = match &layout {
+            LayoutSpec::Named(named) => {
+                crate::Server::from_core(Arc::clone(&self.core))
+                    .require(named.as_str(), named.minimum_release())
+                    .await?;
+                OsString::from(named.as_str())
+            }
+            LayoutSpec::Saved(saved) => saved.clone(),
+        };
+
         listing::mutate(
             &self.core,
             "select-layout",
             Command::new("select-layout")
                 .arg("-t")
                 .arg(self.id().to_string())
-                .arg(layout.into()),
+                .arg(argument),
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-layout"))?;
+        Ok(self)
+    }
+
+    /// Restart the window's command in place.
+    ///
+    /// Passing `None` reruns whatever the window started with. Every pane in
+    /// the window is replaced by the one the command runs in, which is what
+    /// makes this different from respawning a pane: [`crate::Pane::respawn`]
+    /// restarts one pane and leaves its neighbours alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a pane is still running and `kill` is not set.
+    pub async fn respawn(
+        &mut self,
+        command: Option<impl Into<OsString>>,
+        kill: bool,
+    ) -> Result<&mut Self, Error> {
+        let mut respawn = Command::new("respawn-window")
+            .arg("-t")
+            .arg(self.id().to_string());
+        if kill {
+            respawn = respawn.arg("-k");
+        }
+        if let Some(command) = command {
+            respawn = respawn.arg(command.into());
+        }
+
+        listing::mutate(&self.core, "respawn-window", respawn).await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("respawn-window"))?;
+        Ok(self)
+    }
+
+    /// Move to the next named layout, and return the window.
+    ///
+    /// tmux steps through its own list rather than taking a name, so this is a
+    /// flag on `select-layout` and not something [`Window::select_layout`]
+    /// could express.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn next_layout(&mut self) -> Result<&mut Self, Error> {
+        self.step_layout("-n").await
+    }
+
+    /// Move to the previous named layout, and return the window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn previous_layout(&mut self) -> Result<&mut Self, Error> {
+        self.step_layout("-p").await
+    }
+
+    /// Step through tmux's layout list in one direction.
+    async fn step_layout(&mut self, flag: &'static str) -> Result<&mut Self, Error> {
+        listing::mutate(
+            &self.core,
+            "select-layout",
+            Command::new("select-layout")
+                .arg(flag)
+                .arg("-t")
+                .arg(self.id().to_string()),
+        )
+        .await?;
+
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("select-layout"))?;
         Ok(self)
     }
 
@@ -797,223 +633,25 @@ impl Window {
     /// Returns an error when tmux refuses the command, which includes
     /// unlinking a window that only one session holds.
     pub async fn unlink(self) -> Result<(), Error> {
-        listing::mutate(
+        // `session:id` rather than `session:index`. A link is what this
+        // removes, so the session half is needed; the window half is an
+        // identity, and a cached index stops being one the moment anything
+        // renumbers the session.
+        let Err(error) = listing::mutate(
             &self.core,
             "unlink-window",
             Command::new("unlink-window").arg("-t").arg(format!(
                 "{}:{}",
                 self.session_id(),
-                self.index()
+                self.id()
             )),
         )
         .await
-    }
+        else {
+            return Ok(());
+        };
 
-    /// Read one option's exact stored value.
-    ///
-    /// A user option, whose name begins with `@`, exists only while it is
-    /// set, so an unset one reports `None`. A built-in option always exists,
-    /// so an unset one also reports `None`. An unrecognized built-in name is
-    /// an error.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        let target = self.id().to_string();
-        options::get(&self.core, options::Scope::Window(&target), name).await
-    }
-
-    /// List the option names set at this window's scope.
-    ///
-    /// Values are not included: tmux renders them for display with three
-    /// different quoting styles, so re-parsing them would be guesswork. Read
-    /// each value with [`Self::get_option`], which returns exact bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the listing.
-    pub async fn option_names(&self) -> Result<Vec<String>, Error> {
-        let target = self.id().to_string();
-        options::names(&self.core, options::Scope::Window(&target)).await
-    }
-
-    /// Read every option set at this window, decoded by its declared kind.
-    ///
-    /// Costs one tmux command per option, because each value is read as the
-    /// bytes tmux stored rather than the form it lists them in. Use
-    /// [`Self::option_names`] when only the names are wanted, and
-    /// [`Self::typed_option`] for one value.
-    ///
-    /// An array option keeps the indexed name tmux lists it under, so
-    /// `command-alias[0]` and `command-alias[1]` are separate entries.
-    ///
-    /// Reports what is set *at this scope*, not what the object resolves to.
-    /// A session that has set nothing of its own answers empty even though
-    /// every option still has an effective value it inherits.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    /// An empty map means nothing is set, never that the listing failed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("opts").await?;
-    /// let window = session.new_window("w").await?;
-    ///
-    /// window.set_option("main-pane-width", "99").await?;
-    /// let options = window.options().await?;
-    /// assert!(options.contains_key("main-pane-width"));
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
-        let target = self.id().to_string();
-        options::typed_all(&self.core, options::Scope::Window(&target)).await
-    }
-
-    /// Set one option.
-    ///
-    /// The value is marked sensitive, so it never reaches `Debug`, an error,
-    /// or a tracing span.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or value.
-    pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
-        let target = self.id().to_string();
-        options::set(
-            &self.core,
-            options::Scope::Window(&target),
-            name,
-            value,
-            false,
-        )
-        .await
-    }
-
-    /// Append to one option rather than replacing it.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or value.
-    pub async fn append_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
-        let target = self.id().to_string();
-        options::set(
-            &self.core,
-            options::Scope::Window(&target),
-            name,
-            value,
-            true,
-        )
-        .await
-    }
-
-    /// Remove one option, restoring whatever it inherits.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name.
-    pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
-        let target = self.id().to_string();
-        options::unset(&self.core, options::Scope::Window(&target), name).await
-    }
-
-    /// Set one hook to a tmux command.
-    ///
-    /// Hooks live in the same option tables, so a hook is an array option and
-    /// [`Self::get_option`] reads it under an indexed name such as
-    /// `after-new-window[0]`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the hook name or command.
-    pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
-        let target = self.id().to_string();
-        options::set_hook(&self.core, options::Scope::Window(&target), name, command).await
-    }
-
-    /// Remove one hook.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the hook name.
-    pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
-        let target = self.id().to_string();
-        options::unset_hook(&self.core, options::Scope::Window(&target), name).await
-    }
-
-    /// Write a whole hook at once.
-    ///
-    /// [`ReplaceMode::Replace`] clears the hook first, so only what is
-    /// written remains; [`ReplaceMode::Merge`] leaves entries at indices the
-    /// write does not name.
-    ///
-    /// Sent as one tmux invocation rather than one per index. That costs one
-    /// process instead of several, but it is not atomic: tmux applies a
-    /// shared invocation in order and stops at the first refusal, so a
-    /// rejected entry leaves the ones before it written.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or any command.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// use std::collections::BTreeMap;
-    /// use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
-    ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
-    /// let window = session.active_window().await?.expect("a window");
-    ///
-    /// let mut entries = BTreeMap::new();
-    /// entries.insert(0, TmuxText::from(b"display-message first".to_vec()));
-    /// entries.insert(3, TmuxText::from(b"display-message fourth".to_vec()));
-    ///
-    /// window
-    ///     .set_hooks("alert-bell", &IndexedHooks::from(entries), ReplaceMode::Replace)
-    ///     .await?;
-    ///
-    /// let written = window.hook("alert-bell").await?.expect("the hook is set");
-    /// assert_eq!(written.len(), 2);
-    /// assert!(written.get(1).is_none(), "the gap is kept");
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn set_hooks(
-        &self,
-        name: &str,
-        hooks: &IndexedHooks,
-        replace: ReplaceMode,
-    ) -> Result<(), Error> {
-        let target = self.id().to_string();
-        options::set_hooks(
-            &self.core,
-            options::Scope::Window(&target),
-            name,
-            hooks,
-            replace,
-        )
-        .await
+        Err(link_or_object_gone(&self.core, error, &[(self.session_id(), self.id())]).await)
     }
 
     /// Run a raw tmux command against this window.
@@ -1060,10 +698,9 @@ impl Window {
 
     /// Expand a tmux format string in this window's context.
     ///
-    /// The reading half of tmux's `display-message`, separated from the
-    /// showing half ([`Self::display`]) because they answer different
-    /// questions: one returns text to the caller, the other puts text in
-    /// front of a person.
+    /// This returns `display-message` output instead of showing it in front of
+    /// a person with [`Self::display`]. See [`crate::Server::format`] for the
+    /// shell boundary around command and recursive formats.
     ///
     /// # Errors
     ///
@@ -1097,10 +734,9 @@ impl Window {
             )
             .await?;
         if !result.success() {
-            return Err(Error::refused(
+            return Err(Error::from_refused_result(
                 "display-message",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
+                &result,
                 Some(OsStr::new(&self.id().to_string())),
             ));
         }
@@ -1118,6 +754,8 @@ impl Window {
     /// The showing half of tmux's `display-message`. Nothing is returned
     /// because nothing is read: use [`Self::format`] to get text back.
     /// Succeeds when nobody is watching, having shown it to nobody.
+    /// Like [`Self::format`], this interprets the message as a tmux format;
+    /// command and recursive formats can run shell commands.
     ///
     /// # Errors
     ///
@@ -1130,70 +768,34 @@ impl Window {
             return Ok(());
         }
 
-        Err(Error::refused(
+        Err(Error::from_refused_result(
             "display-message",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             Some(OsStr::new(&self.id().to_string())),
         ))
     }
 
-    /// Read one hook's commands, or `None` when it holds nothing.
-    ///
-    /// There is deliberately no listing counterpart at this scope. tmux does
-    /// not enumerate hooks set on a window or a pane: `show-hooks` reports
-    /// nothing for them, and `show-options` omits them while still listing
-    /// ordinary options. A listing here could only ever answer empty, which
-    /// would read as "no hooks" rather than "tmux will not say". Reading one
-    /// by name works, so that is what is offered; [`crate::Server::hooks`] and
-    /// [`crate::Session::hooks`] list the scopes tmux does enumerate.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let session = guard.server().new_session("hooked").await?;
-    /// let window = session.new_window("w").await?;
-    ///
-    /// assert!(window.hook("alert-bell").await?.is_none());
-    /// window.set_hook("alert-bell", "display-message rang").await?;
-    /// assert!(window.hook("alert-bell").await?.is_some());
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
-        let target = self.id().to_string();
-        options::hook(&self.core, options::Scope::Window(&target), name).await
-    }
-
     /// Create a pane, run an operation with it, then kill it.
     ///
-    /// The pane is killed whether the operation succeeded or failed, so a
-    /// short-lived task does not leave one behind. A panic still skips
-    /// cleanup: `Drop` on these handles is deliberately not destructive.
+    /// Once this future is polled, the scope owns creation and cleanup.
+    /// Cancellation or unwinding can let an in-flight creation finish, but a
+    /// pane whose creation yields a handle is killed while the Tokio runtime
+    /// remains active. Ordinary handle `Drop` remains non-destructive.
     ///
     /// Setup and teardown failures convert into the operation's own error
     /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and the cleanup fail, the operation's error is
-    /// returned, because that is the work the caller was doing; the discarded
-    /// cleanup failure is recorded through `tracing` when that feature is on.
+    /// both the operation and cleanup fail, the cleanup error is returned as
+    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
+    /// creation; the operation error is discarded. When the operation fails
+    /// and cleanup succeeds, its generic error is returned unchanged: the
+    /// scope cannot certify replay safety for arbitrary callback work.
+    /// A canceled caller cannot receive a cleanup error, so tracing is its
+    /// only report.
     ///
     /// # Errors
     ///
     /// Returns the operation's error, or a converted [`Error`] when the
-    /// pane could not be created, or could not be killed after the
-    /// operation succeeded.
+    /// pane could not be created or could not be killed after creation.
     pub async fn with_pane<T, E>(
         &self,
         options: impl Into<SplitOptions>,
@@ -1202,37 +804,56 @@ impl Window {
     where
         E: From<Error>,
     {
-        let created = self.split(options).await?;
-        let outcome = operation(&created).await;
-
-        match (outcome, created.kill().await) {
-            (outcome, Ok(())) => outcome,
-            (Ok(_), Err(error)) => Err(error.into()),
-            (Err(outcome), Err(cleanup)) => {
-                listing::trace_discarded_cleanup(&cleanup);
-                Err(outcome)
-            }
-        }
+        let window = self.clone();
+        let options = options.into();
+        scoped::run(
+            "with-pane",
+            async move { window.split(options).await },
+            Pane::kill,
+            operation,
+        )
+        .await
     }
 
     /// Swap this window's position with another.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the swap.
+    /// Returns [`Error::ServerMismatch`] when `other` belongs to another
+    /// server, or an error when tmux refuses the swap.
     pub async fn swap_with(&mut self, other: &Self) -> Result<&mut Self, Error> {
-        listing::mutate(
+        self.core
+            .require_same_server(other.server_identity(), "swap-window")?;
+        if let Err(error) = listing::mutate(
             &self.core,
             "swap-window",
             Command::new("swap-window")
                 .arg("-s")
-                .arg(self.id().to_string())
+                .arg(self.link_target())
                 .arg("-t")
-                .arg(format!("{}:{}", other.session_id(), other.index())),
+                // `session:id`, not `session:index`: the session half says
+                // which of the target's links to swap, and the id half cannot
+                // go stale under a renumber the way a cached index does.
+                .arg(format!("{}:{}", other.session_id(), other.id())),
         )
-        .await?;
+        .await
+        {
+            // Either half can be the one tmux could not resolve, and a window
+            // still linked elsewhere is not a window that is gone.
+            return Err(link_or_object_gone(
+                &self.core,
+                error,
+                &[
+                    (self.session_id(), self.id()),
+                    (other.session_id(), other.id()),
+                ],
+            )
+            .await);
+        }
 
-        self.refresh().await?;
+        self.refresh_in(other.session_id())
+            .await
+            .map_err(|error| error.after_effect("swap-window"))?;
         Ok(self)
     }
 
@@ -1244,20 +865,25 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns an error when the destination is occupied or does not exist.
+    /// Returns [`Error::ServerMismatch`] when `session` belongs to another
+    /// server, or an error when the destination is occupied or absent.
     pub async fn move_to(&mut self, session: &Session, index: i32) -> Result<&mut Self, Error> {
+        self.core
+            .require_same_server(session.server_identity(), "move-window")?;
         listing::mutate(
             &self.core,
             "move-window",
             Command::new("move-window")
                 .arg("-s")
-                .arg(self.id().to_string())
+                .arg(self.link_target())
                 .arg("-t")
                 .arg(format!("{}:{index}", session.id())),
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh_in(session.id())
+            .await
+            .map_err(|error| error.after_effect("move-window"))?;
         Ok(self)
     }
 
@@ -1278,7 +904,11 @@ impl Window {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// use libtmux::ResizeDirection;
     ///
     /// let session = server.new_session("resized-window").await?;
@@ -1287,6 +917,9 @@ impl Window {
     /// window.resize(80, 24).await?;
     /// window.resize_by(ResizeDirection::Down, 4).await?;
     /// assert_eq!(window.height(), 28);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1306,7 +939,9 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("resize-window"))?;
         Ok(self)
     }
 
@@ -1320,13 +955,18 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the link, which includes an index
-    /// that is already taken.
+    /// Returns [`Error::ServerMismatch`] when `session` belongs to another
+    /// server, or an error when tmux refuses the link, including an occupied
+    /// index.
     ///
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// let source = server.new_session("linking-from").await?;
     /// let target = server.new_session("linking-to").await?;
     /// let window = source.windows().await?.remove(0);
@@ -1335,10 +975,15 @@ impl Window {
     ///
     /// let linked = target.windows().await?;
     /// assert!(linked.iter().any(|other| other.id() == window.id()));
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn link_to(&self, session: &Session, index: Option<i32>) -> Result<(), Error> {
+        self.core
+            .require_same_server(session.server_identity(), "link-window")?;
         let target = index.map_or_else(
             || session.id().to_string(),
             |index| format!("{}:{index}", session.id()),
@@ -1349,7 +994,7 @@ impl Window {
             "link-window",
             Command::new("link-window")
                 .arg("-s")
-                .arg(self.id().to_string())
+                .arg(self.link_target())
                 .arg("-t")
                 .arg(target),
         )
@@ -1369,12 +1014,19 @@ impl Window {
     /// # Examples
     ///
     /// ```
-    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// # let guard = libtmux::test::TestServer::new().await?;
+    /// # let server = guard.server();
     /// let session = server.new_session("sized").await?;
     /// let mut window = session.windows().await?.remove(0);
     ///
     /// window.resize(100, 40).await?;
     /// assert_eq!((window.width(), window.height()), (100, 40));
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1392,46 +1044,10 @@ impl Window {
         )
         .await?;
 
-        self.refresh().await?;
+        self.refresh()
+            .await
+            .map_err(|error| error.after_effect("resize-window"))?;
         Ok(self)
-    }
-
-    /// Read one option, decoded according to what tmux declares about it.
-    ///
-    /// A flag comes back as [`OptionValue::Flag`] and a number as
-    /// [`OptionValue::Number`], so a caller does not decide for itself that
-    /// `on` means one. Everything else, including user options, stays text.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
-        let target = self.id().to_string();
-        Ok(
-            options::get(&self.core, options::Scope::Window(&target), name)
-                .await?
-                .map(|value| OptionValue::decode(name, value)),
-        )
-    }
-
-    /// Find this window's pane at the given index.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the pane listing fails.
-    pub async fn pane_at(&self, index: u32) -> Result<Option<Pane>, Error> {
-        let target = self.id().to_string();
-        let projections = listing::panes(
-            &self.core,
-            listing::Scope::Target(&target),
-            Some(&index.predicate("pane_index")),
-        )
-        .await?;
-
-        Ok(projections
-            .into_iter()
-            .next()
-            .map(|projection| Pane::new(Arc::clone(&self.core), projection)))
     }
 }
 
@@ -1496,6 +1112,13 @@ impl Filterable for Window {
     }
 }
 
+#[cfg(feature = "query")]
+impl FilterSchema for Window {
+    fn __filter_schema() -> crate::query::__private::FilterSchemaDescriptor {
+        <WindowInfo as FilterSchema>::__filter_schema()
+    }
+}
+
 /// Where a split puts the new pane, relative to the one being divided.
 ///
 /// tmux spells these `-v`, `-v -b`, `-h`, and `-h -b`, where "horizontal"
@@ -1544,6 +1167,179 @@ impl Rotation {
     }
 }
 
+/// One of the pane arrangements tmux knows by name.
+///
+/// tmux has exactly these, so a layout that does not exist is a compile error
+/// rather than a refusal at the far end of a round trip. A saved layout
+/// string is a different thing and goes through [`LayoutSpec::Saved`].
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::Layout;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("arranged").await?;
+/// let mut window = session.active_window().await?.expect("a window");
+///
+/// window.select_layout(Layout::EvenHorizontal).await?;
+/// assert_eq!(Layout::EvenHorizontal.as_str(), "even-horizontal");
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum Layout {
+    /// Panes side by side, each the full height.
+    EvenHorizontal,
+    /// Panes stacked, each the full width.
+    EvenVertical,
+    /// One large pane above a row of the rest.
+    MainHorizontal,
+    /// The arrangement of [`Layout::MainHorizontal`] with the large pane
+    /// below the row rather than above it.
+    MainHorizontalMirrored,
+    /// One large pane beside a column of the rest.
+    MainVertical,
+    /// The arrangement of [`Layout::MainVertical`] with the large pane on
+    /// the right rather than the left.
+    MainVerticalMirrored,
+    /// Panes in as even a grid as their count allows.
+    Tiled,
+}
+
+impl Layout {
+    /// The name tmux knows this layout by.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EvenHorizontal => "even-horizontal",
+            Self::EvenVertical => "even-vertical",
+            Self::MainHorizontal => "main-horizontal",
+            Self::MainHorizontalMirrored => "main-horizontal-mirrored",
+            Self::MainVertical => "main-vertical",
+            Self::MainVerticalMirrored => "main-vertical-mirrored",
+            Self::Tiled => "tiled",
+        }
+    }
+
+    /// The first tmux release that arranges panes this way.
+    ///
+    /// The mirrored pair arrived in 3.5; the rest predate everything this
+    /// crate supports.
+    #[must_use]
+    pub const fn minimum_release(self) -> crate::ReleaseVersion {
+        match self {
+            Self::MainHorizontalMirrored | Self::MainVerticalMirrored => {
+                crate::version::since::MIRRORED_LAYOUTS
+            }
+            _ => crate::TmuxVersion::MIN_SUPPORTED,
+        }
+    }
+}
+
+impl fmt::Display for Layout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// What to arrange a window's panes as.
+///
+/// A [`Layout`] names an arrangement tmux computes. A saved string is one
+/// tmux already computed: [`Window::layout`] reports one, and handing it back
+/// restores that exact arrangement including the pane sizes, which a named
+/// layout cannot express.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::Layout;
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("restored").await?;
+/// let mut window = session.active_window().await?.expect("a window");
+///
+/// // Keep what tmux reports, rearrange, then put it back exactly.
+/// let before = window.layout().to_owned();
+/// window.select_layout(Layout::EvenVertical).await?;
+/// window.select_layout(&before).await?;
+/// assert_eq!(window.layout().as_bytes(), before.as_bytes());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LayoutSpec {
+    /// An arrangement tmux knows by name.
+    Named(Layout),
+    /// A layout string tmux produced, restoring pane sizes exactly.
+    Saved(OsString),
+}
+
+impl From<Layout> for LayoutSpec {
+    fn from(layout: Layout) -> Self {
+        Self::Named(layout)
+    }
+}
+
+impl From<OsString> for LayoutSpec {
+    fn from(saved: OsString) -> Self {
+        Self::Saved(saved)
+    }
+}
+
+impl From<String> for LayoutSpec {
+    fn from(saved: String) -> Self {
+        Self::Saved(saved.into())
+    }
+}
+
+impl From<&str> for LayoutSpec {
+    fn from(saved: &str) -> Self {
+        Self::Saved(saved.into())
+    }
+}
+
+impl From<&OsStr> for LayoutSpec {
+    fn from(saved: &OsStr) -> Self {
+        Self::Saved(saved.to_owned())
+    }
+}
+
+impl From<&TmuxText> for LayoutSpec {
+    /// Take a layout straight from [`Window::layout`].
+    ///
+    /// tmux writes a layout as printable ASCII, and this keeps the bytes
+    /// rather than the lossy text either way, so a layout that round-trips
+    /// through a handle is the one tmux produced.
+    fn from(saved: &TmuxText) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+
+            Self::Saved(OsString::from_vec(saved.as_bytes().to_vec()))
+        }
+        #[cfg(not(unix))]
+        {
+            Self::Saved(OsString::from(saved.to_string_lossy().into_owned()))
+        }
+    }
+}
+
 /// Where a split puts the pane it makes.
 ///
 /// # Examples
@@ -1583,13 +1379,97 @@ pub enum SplitDirection {
 
 impl SplitDirection {
     /// Return the tmux flags that produce this position.
-    const fn flags(self) -> (&'static str, bool) {
+    pub(crate) const fn flags(self) -> (&'static str, bool) {
         match self {
             Self::Above => ("-v", true),
             Self::Below => ("-v", false),
             Self::Left => ("-h", true),
             Self::Right => ("-h", false),
         }
+    }
+}
+
+/// Where a pane lands when it is moved into another window.
+///
+/// [`Pane::break_out`] takes a pane out into a window of its own and this puts
+/// one back, so between them a pane can be moved anywhere. tmux spawns nothing
+/// here, which is why this carries none of the command, directory, or
+/// environment a [`SplitOptions`] does: the pane already exists and keeps
+/// everything running in it.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+/// # runtime.block_on(async {
+/// use libtmux::{JoinOptions, SplitDirection};
+///
+/// let guard = libtmux::test::TestServer::new().await?;
+/// let session = guard.server().new_session("moving").await?;
+/// let window = session.active_window().await?.expect("a window");
+/// let second = session.new_window("elsewhere").await?;
+/// let stranded = second.panes().await?.remove(0);
+///
+/// // Put a pane from the other window beside this one.
+/// let here = window.panes().await?.remove(0);
+/// let moved = stranded
+///     .join_into(&here, JoinOptions::new(SplitDirection::Below))
+///     .await?;
+/// assert_eq!(moved.window_id(), window.id());
+///
+/// guard.shutdown().await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # })?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JoinOptions {
+    direction: SplitDirection,
+    size: Option<PaneSize>,
+    full: bool,
+}
+
+impl JoinOptions {
+    /// Land the pane in one direction from the pane it joins.
+    #[must_use]
+    pub const fn new(direction: SplitDirection) -> Self {
+        Self {
+            direction,
+            size: None,
+            full: false,
+        }
+    }
+
+    /// Ask for a size rather than letting tmux halve the space.
+    #[must_use]
+    pub const fn size(mut self, size: PaneSize) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// Span the window rather than only the pane being joined.
+    #[must_use]
+    pub const fn full(mut self) -> Self {
+        self.full = true;
+        self
+    }
+
+    /// Add this placement to a `join-pane` command.
+    pub(crate) fn apply(self, command: Command) -> Command {
+        let (axis, before) = self.direction.flags();
+        let mut command = command.arg(axis);
+        if before {
+            command = command.arg("-b");
+        }
+        if self.full {
+            command = command.arg("-f");
+        }
+        if let Some(size) = self.size {
+            command = command.arg("-l").arg(size.to_string());
+        }
+        command
     }
 }
 
@@ -1721,7 +1601,7 @@ impl ResizeDirection {
 /// # }
 /// ```
 #[must_use = "options describe a split but do not perform one"]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SplitOptions {
     direction: SplitDirection,
     start_directory: Option<std::path::PathBuf>,
@@ -1731,6 +1611,22 @@ pub struct SplitOptions {
     full: bool,
     zoom: bool,
     select: bool,
+}
+
+impl fmt::Debug for SplitOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SplitOptions")
+            .field("direction", &self.direction)
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("size", &self.size)
+            .field("environment_count", &self.environment.len())
+            .field("full", &self.full)
+            .field("zoom", &self.zoom)
+            .field("select", &self.select)
+            .finish()
+    }
 }
 
 impl SplitOptions {
@@ -1749,6 +1645,9 @@ impl SplitOptions {
     }
 
     /// Set the new pane's working directory.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     pub fn start_directory(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
         self.start_directory = Some(directory.into());
         self
@@ -1825,10 +1724,10 @@ impl SplitOptions {
             command = command.arg("-c").arg(directory.into_os_string());
         }
         for (name, value) in self.environment {
-            command = command.arg("-e").arg(assignment(&name, &value));
+            command = command.arg("-e").sensitive_arg(assignment(&name, &value));
         }
         if let Some(shell_command) = self.command {
-            command = command.arg(shell_command);
+            command = command.sensitive_arg(shell_command);
         }
         command
     }
@@ -1854,12 +1753,87 @@ pub(crate) fn assignment(name: &OsStr, value: &OsStr) -> OsString {
     OsString::from_vec(bytes)
 }
 
-/// Renders `session:index`, the form tmux targets a window by.
+/// Renders `session:id`, the form tmux targets one of a window's links by.
 ///
-/// The id alone would be ambiguous about which link is meant, and this is
-/// the spelling that can be pasted into a tmux command.
+/// The id alone would be ambiguous about which link is meant, and this is the
+/// spelling that can be pasted into a tmux command. It names the window by
+/// identity rather than by index: an index is a place within a session, and
+/// the window sitting at one changes whenever anything renumbers or unlinks,
+/// so a rendered coordinate goes stale in a handle that has not refreshed and
+/// reaches a different window rather than nothing.
 impl fmt::Display for Window {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}:{}", self.session_id(), self.index())
+        write!(formatter, "{}:{}", self.session_id(), self.id())
+    }
+}
+
+/// Tell a missing link from a missing window, on the failure path only.
+///
+/// A link-scoped command targets `session:@id`: a window linked into three
+/// sessions has one id and three links, so the session half says which link to
+/// act on, while the window half stays an identity because a cached index
+/// stops being one the moment anything renumbers the session.
+///
+/// tmux echoes such a target back unresolved whether the window died or is
+/// merely linked somewhere else -- the two are the same string -- so the
+/// classifier cannot separate them and reports the stronger fact. This buys
+/// the weaker one for a lookup, and only when the answer changes what a caller
+/// should do with the handle.
+///
+/// Asked of the server rather than of a handle. A window refreshes within its
+/// own session, and a window whose link to that session is gone is exactly the
+/// case being told apart -- so refreshing would report it missing and answer
+/// the question with its own premise.
+/// `links` are the `session:id` targets the command sent, so the one tmux
+/// named is the one to ask about: a command carrying both a source and a
+/// destination fails on whichever it could not resolve, and probing the other
+/// would answer about a window that was never in question.
+async fn link_or_object_gone(
+    core: &Arc<Core>,
+    error: Error,
+    links: &[(&SessionId, &WindowId)],
+) -> Error {
+    let Error::ObjectGone {
+        kind: ObjectKind::Window,
+        ref id,
+    } = error
+    else {
+        return error;
+    };
+
+    let Some(&(session, window)) = links.iter().find(|(_, window)| window.to_string() == *id)
+    else {
+        return error;
+    };
+
+    let alive = crate::Server::from_core(Arc::clone(core))
+        .window_by_id(window)
+        .await
+        .is_ok_and(|found| found.is_some());
+
+    if alive {
+        return Error::LinkGone {
+            kind: ObjectKind::Window,
+            target: format!("{session}:{window}"),
+        };
+    }
+    error
+}
+
+#[cfg(test)]
+mod split_option_tests {
+    use super::{SplitDirection, SplitOptions};
+
+    #[test]
+    fn split_options_redact_process_inputs() {
+        let secret = "sentinel-split-process";
+        let options = SplitOptions::new(SplitDirection::Below)
+            .environment("TOKEN", secret)
+            .command(secret);
+        assert!(!format!("{options:?}").contains(secret));
+
+        let summary = options.into_command("@1", "#{pane_id}").summary();
+        assert_eq!(summary.sensitive_argument_count(), 2);
+        assert!(!summary.to_string().contains(secret));
     }
 }

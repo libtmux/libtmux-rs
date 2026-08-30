@@ -50,6 +50,7 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{Command, PaneId, SessionId, WindowId};
 
@@ -64,7 +65,7 @@ pub use ops::{
     SelectPane, SelectWindow, SendKeys, SetEnvironment, SetOption, SplitWindow,
 };
 pub use planner::{Planner, Step, StepReason};
-pub use run::{Attribution, Outcome, PlanResult, StepOutcome};
+pub use run::{Attribution, OperationReport, OperationValue, Outcome, PlanResult, StepOutcome};
 
 /// What an operation does to tmux state.
 ///
@@ -103,6 +104,7 @@ impl Effects {
 /// The tmux object an operation addresses or makes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Scope {
     /// A tmux session.
     Session,
@@ -112,15 +114,165 @@ pub enum Scope {
     Pane,
 }
 
-/// How much damage an operation can do, for callers that gate on it.
+/// Why a plan dependency is invalid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum PlanValidationErrorKind {
+    /// The referenced source index is outside the plan.
+    SourceMissing,
+    /// The source is the same step or a later one.
+    SourceNotEarlier,
+    /// The source does not produce the referenced output.
+    SourceOutputMissing,
+    /// The source output is a different tmux object kind.
+    SourceScopeMismatch,
+    /// The slot came from a different recorded producer.
+    SourceProvenanceMismatch,
+}
+
+/// An invalid dependency between two plan steps.
+///
+/// No tmux command is dispatched when validation fails.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlanValidationError {
+    step: usize,
+    source_step: usize,
+    kind: PlanValidationErrorKind,
+    expected_scope: Scope,
+    source_scope: Option<Scope>,
+}
+
+impl PlanValidationError {
+    const fn new(
+        step: usize,
+        source_step: usize,
+        kind: PlanValidationErrorKind,
+        expected_scope: Scope,
+        source_scope: Option<Scope>,
+    ) -> Self {
+        Self {
+            step,
+            source_step,
+            kind,
+            expected_scope,
+            source_scope,
+        }
+    }
+
+    /// The step carrying the invalid target.
+    #[must_use]
+    pub const fn step(&self) -> usize {
+        self.step
+    }
+
+    /// The step the invalid target references.
+    #[must_use]
+    pub const fn source_step(&self) -> usize {
+        self.source_step
+    }
+
+    /// The validation failure category.
+    #[must_use]
+    pub const fn kind(&self) -> PlanValidationErrorKind {
+        self.kind
+    }
+
+    /// The tmux object kind the target requires.
+    #[must_use]
+    pub const fn expected_scope(&self) -> Scope {
+        self.expected_scope
+    }
+
+    /// The source output's object kind, when that output exists.
+    #[must_use]
+    pub const fn source_scope(&self) -> Option<Scope> {
+        self.source_scope
+    }
+}
+
+impl fmt::Display for PlanValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "plan step {} has an invalid dependency on step {}: ",
+            self.step, self.source_step
+        )?;
+        match self.kind {
+            PlanValidationErrorKind::SourceMissing => formatter.write_str("the source is absent"),
+            PlanValidationErrorKind::SourceNotEarlier => {
+                formatter.write_str("the source is not earlier")
+            }
+            PlanValidationErrorKind::SourceOutputMissing => write!(
+                formatter,
+                "the source does not produce the requested {:?} output",
+                self.expected_scope
+            ),
+            PlanValidationErrorKind::SourceScopeMismatch => write!(
+                formatter,
+                "the source output is {:?}, not {:?}",
+                self.source_scope, self.expected_scope
+            ),
+            PlanValidationErrorKind::SourceProvenanceMismatch => {
+                formatter.write_str("the referenced output belongs to another plan")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PlanValidationError {}
+
+#[derive(Clone, Copy)]
+pub(in crate::plan) struct SlotUse {
+    pub(in crate::plan) source_step: usize,
+    pub(in crate::plan) part: Part,
+    expected_scope: Scope,
+    producer: ProducerIdentity,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::plan) struct ProducerIdentity(u64);
+
+static NEXT_PRODUCER_ID: AtomicU64 = AtomicU64::new(1);
+
+impl ProducerIdentity {
+    const fn unbound() -> Self {
+        Self(0)
+    }
+
+    fn fresh() -> Self {
+        let Ok(id) = NEXT_PRODUCER_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        else {
+            // Reuse would let a slot bind to another plan's step, which is the
+            // wrong tmux object rather than a failed one. Zero cannot stand in:
+            // it is the unbound identity a deserialized slot carries until it
+            // is rebound.
+            #[allow(clippy::disallowed_methods)]
+            std::process::abort();
+        };
+        Self(id)
+    }
+
+    const fn matches(self, other: Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+/// How an operation directly affects tmux objects.
+///
+/// This is not confinement: operations can launch commands or send terminal
+/// input whose indirect effects are unrestricted.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Safety {
-    /// Reads state and changes nothing.
+    /// Its direct tmux action reads state and changes nothing.
     ReadOnly,
-    /// Changes state reversibly.
+    /// Its direct tmux action changes state without removing a tmux object.
+    ///
+    /// It need not be reversible and may launch a command or send terminal
+    /// input.
     Mutating,
-    /// Removes an object.
+    /// Its direct tmux action removes a tmux object.
     Destructive,
 }
 
@@ -144,9 +296,14 @@ pub enum Safety {
 /// ```
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(bound = ""))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(bound = ""))]
 pub struct Slot<T> {
     index: usize,
     part: Part,
+    #[cfg_attr(feature = "serde", serde(skip, default = "ProducerIdentity::unbound"))]
+    producer: ProducerIdentity,
     #[cfg_attr(feature = "serde", serde(skip))]
     scope: PhantomData<fn() -> T>,
 }
@@ -158,6 +315,7 @@ pub struct Slot<T> {
 /// trip.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub(crate) enum Part {
     /// The object the operation is named for.
     Created,
@@ -168,10 +326,11 @@ pub(crate) enum Part {
 }
 
 impl<T> Slot<T> {
-    pub(crate) const fn new(index: usize, part: Part) -> Self {
+    const fn new(index: usize, part: Part, producer: ProducerIdentity) -> Self {
         Self {
             index,
             part,
+            producer,
             scope: PhantomData,
         }
     }
@@ -184,7 +343,7 @@ impl<T> Slot<T> {
 }
 
 // Derived impls would demand `T: Clone` and friends, which is wrong: a slot is
-// an index and a tag, and the tag is never held.
+// an index and tags, and the type tag is never held.
 impl<T> Clone for Slot<T> {
     fn clone(&self) -> Self {
         *self
@@ -199,13 +358,15 @@ impl<T> fmt::Debug for Slot<T> {
             .debug_struct("Slot")
             .field("step", &self.index)
             .field("part", &self.part)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl<T> PartialEq for Slot<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.part == other.part
+        self.index == other.index
+            && self.part == other.part
+            && self.producer.matches(other.producer)
     }
 }
 
@@ -230,13 +391,13 @@ impl Slot<SessionSlot> {
     /// The first window tmux made with this session.
     #[must_use]
     pub const fn window(self) -> Slot<WindowSlot> {
-        Slot::new(self.index, Part::FirstWindow)
+        Slot::new(self.index, Part::FirstWindow, self.producer)
     }
 
     /// The first pane of this session's first window.
     #[must_use]
     pub const fn pane(self) -> Slot<PaneSlot> {
-        Slot::new(self.index, Part::FirstPane)
+        Slot::new(self.index, Part::FirstPane, self.producer)
     }
 }
 
@@ -244,13 +405,15 @@ impl Slot<WindowSlot> {
     /// The first pane tmux made with this window.
     #[must_use]
     pub const fn pane(self) -> Slot<PaneSlot> {
-        Slot::new(self.index, Part::FirstPane)
+        Slot::new(self.index, Part::FirstPane, self.producer)
     }
 }
 
 /// A `-t` target naming a pane, resolved when the plan runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum PaneTarget {
     /// A pane that already exists.
     Id(
@@ -258,6 +421,7 @@ pub enum PaneTarget {
             feature = "serde",
             serde(serialize_with = "wire::id", deserialize_with = "wire::parse_id")
         )]
+        #[cfg_attr(feature = "schema", schemars(schema_with = "wire::pane_id_schema"))]
         PaneId,
     ),
     /// The pane an earlier step creates.
@@ -267,6 +431,8 @@ pub enum PaneTarget {
 /// A `-t` target naming a window, resolved when the plan runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WindowTarget {
     /// A window that already exists.
     Id(
@@ -274,6 +440,7 @@ pub enum WindowTarget {
             feature = "serde",
             serde(serialize_with = "wire::id", deserialize_with = "wire::parse_id")
         )]
+        #[cfg_attr(feature = "schema", schemars(schema_with = "wire::window_id_schema"))]
         WindowId,
     ),
     /// The window an earlier step creates.
@@ -283,6 +450,8 @@ pub enum WindowTarget {
 /// A `-t` target naming a session, resolved when the plan runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SessionTarget {
     /// A session that already exists.
     Id(
@@ -290,6 +459,7 @@ pub enum SessionTarget {
             feature = "serde",
             serde(serialize_with = "wire::id", deserialize_with = "wire::parse_id")
         )]
+        #[cfg_attr(feature = "schema", schemars(schema_with = "wire::session_id_schema"))]
         SessionId,
     ),
     /// The session an earlier step creates.
@@ -297,7 +467,7 @@ pub enum SessionTarget {
 }
 
 macro_rules! target_conversions {
-    ($target:ty, $id:ty, $marker:ty) => {
+    ($target:ty, $id:ty, $marker:ty, $scope:expr) => {
         impl From<$id> for $target {
             fn from(id: $id) -> Self {
                 Self::Id(id)
@@ -311,10 +481,24 @@ macro_rules! target_conversions {
         }
 
         impl $target {
-            pub(crate) const fn slot(&self) -> Option<(usize, Part)> {
+            pub(in crate::plan) fn slot(&self) -> Option<SlotUse> {
                 match self {
                     Self::Id(_) => None,
-                    Self::Slot(slot) => Some((slot.index, slot.part)),
+                    Self::Slot(slot) => Some(SlotUse {
+                        source_step: slot.index,
+                        part: slot.part,
+                        expected_scope: $scope,
+                        producer: slot.producer,
+                    }),
+                }
+            }
+
+            #[cfg(feature = "serde")]
+            pub(in crate::plan) fn rebind(&mut self, producers: &[Option<ProducerIdentity>]) {
+                if let Self::Slot(slot) = self {
+                    if let Some(Some(producer)) = producers.get(slot.index) {
+                        slot.producer = *producer;
+                    }
                 }
             }
 
@@ -332,9 +516,9 @@ macro_rules! target_conversions {
     };
 }
 
-target_conversions!(PaneTarget, PaneId, PaneSlot);
-target_conversions!(WindowTarget, WindowId, WindowSlot);
-target_conversions!(SessionTarget, SessionId, SessionSlot);
+target_conversions!(PaneTarget, PaneId, PaneSlot, Scope::Pane);
+target_conversions!(WindowTarget, WindowId, WindowSlot, Scope::Window);
+target_conversions!(SessionTarget, SessionId, SessionSlot, Scope::Session);
 
 /// An operation that can be recorded in a [`Plan`].
 ///
@@ -349,7 +533,7 @@ pub trait Operation: Into<Op> {
     /// What the operation does to tmux state.
     const EFFECTS: Effects;
 
-    /// How much damage it can do.
+    /// How the operation directly affects tmux objects.
     const SAFETY: Safety;
 
     /// The lowest tmux release that accepts it, when it is not universal.
@@ -378,115 +562,169 @@ pub trait Chainable: Operation {}
 /// Turns a recorded step index into whatever [`Plan::add`] returns for it.
 pub trait FromStep {
     /// Build the handle for the operation recorded at `index`.
-    fn from_step(index: usize) -> Self;
+    fn from_step(index: usize, plan: &Plan) -> Self;
 }
 
 impl FromStep for () {
-    fn from_step(_: usize) {}
+    fn from_step(_: usize, _: &Plan) {}
 }
 
 impl<T> FromStep for Slot<T> {
-    fn from_step(index: usize) -> Self {
-        Self::new(index, Part::Created)
+    fn from_step(index: usize, plan: &Plan) -> Self {
+        let producer = plan.producers[index].unwrap_or_else(ProducerIdentity::unbound);
+        Self::new(index, Part::Created, producer)
     }
 }
 
-/// One recorded operation.
-///
-/// A plan holds these rather than boxed trait objects: the set of commands is
-/// closed, so an enum keeps a plan allocation-free per step, `Clone`, and
-/// inspectable without downcasting.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Op {
+macro_rules! operation_set {
+    ($( $(#[$meta:meta])* $variant:ident($operation:ty) => $name:literal ),+ $(,)?) => {
+        /// One recorded operation.
+        ///
+        /// A plan holds these rather than boxed trait objects: the set of commands is
+        /// closed, so an enum keeps a plan allocation-free per step, `Clone`, and
+        /// inspectable without downcasting.
+        #[derive(Clone, Debug)]
+        #[non_exhaustive]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+        pub enum Op {
+            $(
+                $(#[$meta])*
+                $variant($operation),
+            )+
+        }
+
+        /// Which operation a result describes, without retaining its arguments.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[non_exhaustive]
+        pub enum OperationKind {
+            $(
+                $(#[$meta])*
+                $variant,
+            )+
+        }
+
+        impl OperationKind {
+            /// Every kind, in the order the plan grammar declares them.
+            ///
+            /// A consumer projecting this set into a schema reads it from here
+            /// rather than restating it, which is what keeps the two from
+            /// drifting as operations are added.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// The tmux subcommand this operation runs.
+            #[must_use]
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            /// How this operation directly affects tmux objects.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// use libtmux::plan::{OperationKind, Safety};
+            ///
+            /// assert_eq!(OperationKind::CapturePane.safety(), Safety::ReadOnly);
+            /// assert_eq!(OperationKind::KillPane.safety(), Safety::Destructive);
+            /// ```
+            #[must_use]
+            pub const fn safety(self) -> Safety {
+                match self {
+                    $(Self::$variant => <$operation as Operation>::SAFETY,)+
+                }
+            }
+
+            /// Find an operation kind by its externally tagged serde name.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// use libtmux::plan::OperationKind;
+            ///
+            /// assert_eq!(
+            ///     OperationKind::from_wire_name("CapturePane"),
+            ///     Some(OperationKind::CapturePane),
+            /// );
+            /// assert_eq!(OperationKind::from_wire_name("Unknown"), None);
+            /// ```
+            #[cfg(feature = "serde")]
+            #[must_use]
+            pub fn from_wire_name(name: &str) -> Option<Self> {
+                match name {
+                    $(stringify!($variant) => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            const fn effects(self) -> Effects {
+                match self {
+                    $(Self::$variant => <$operation as Operation>::EFFECTS,)+
+                }
+            }
+        }
+
+        impl Op {
+            /// Which operation this is, without exposing its arguments.
+            #[must_use]
+            pub const fn kind(&self) -> OperationKind {
+                match self {
+                    $(Self::$variant(_) => OperationKind::$variant,)+
+                }
+            }
+
+            /// What this operation does to tmux state.
+            #[must_use]
+            pub const fn effects(&self) -> Effects {
+                self.kind().effects()
+            }
+
+            /// How this operation directly affects tmux objects.
+            #[must_use]
+            pub const fn safety(&self) -> Safety {
+                self.kind().safety()
+            }
+        }
+    };
+}
+
+operation_set! {
     /// Create a session.
-    NewSession(NewSession),
+    NewSession(NewSession) => "new-session",
     /// Create a window.
-    NewWindow(NewWindow),
+    NewWindow(NewWindow) => "new-window",
     /// Split a window into a new pane.
-    SplitWindow(SplitWindow),
+    SplitWindow(SplitWindow) => "split-window",
     /// Send text or keys to a pane.
-    SendKeys(SendKeys),
+    SendKeys(SendKeys) => "send-keys",
     /// Make a pane active.
-    SelectPane(SelectPane),
+    SelectPane(SelectPane) => "select-pane",
     /// Make a window active.
-    SelectWindow(SelectWindow),
+    SelectWindow(SelectWindow) => "select-window",
     /// Rename a window.
-    RenameWindow(RenameWindow),
+    RenameWindow(RenameWindow) => "rename-window",
     /// Set a tmux option.
-    SetOption(SetOption),
+    SetOption(SetOption) => "set-option",
     /// Set a variable in a session's environment.
-    SetEnvironment(SetEnvironment),
+    SetEnvironment(SetEnvironment) => "set-environment",
     /// Rearrange a window's panes.
-    SelectLayout(SelectLayout),
+    SelectLayout(SelectLayout) => "select-layout",
     /// Capture a pane's contents.
-    CapturePane(CapturePane),
+    CapturePane(CapturePane) => "capture-pane",
     /// Destroy a pane.
-    KillPane(KillPane),
+    KillPane(KillPane) => "kill-pane",
     /// Destroy a window.
-    KillWindow(KillWindow),
+    KillWindow(KillWindow) => "kill-window",
 }
 
 impl Op {
-    /// What this operation does to tmux state.
-    #[must_use]
-    pub const fn effects(&self) -> Effects {
-        match self {
-            Self::NewSession(_) => NewSession::EFFECTS,
-            Self::NewWindow(_) => NewWindow::EFFECTS,
-            Self::SplitWindow(_) => SplitWindow::EFFECTS,
-            Self::SendKeys(_) => SendKeys::EFFECTS,
-            Self::SelectPane(_) => SelectPane::EFFECTS,
-            Self::SelectWindow(_) => SelectWindow::EFFECTS,
-            Self::RenameWindow(_) => RenameWindow::EFFECTS,
-            Self::SetOption(_) => SetOption::EFFECTS,
-            Self::SetEnvironment(_) => SetEnvironment::EFFECTS,
-            Self::SelectLayout(_) => SelectLayout::EFFECTS,
-            Self::CapturePane(_) => CapturePane::EFFECTS,
-            Self::KillPane(_) => KillPane::EFFECTS,
-            Self::KillWindow(_) => KillWindow::EFFECTS,
-        }
-    }
-
-    /// How much damage this operation can do.
-    #[must_use]
-    pub const fn safety(&self) -> Safety {
-        match self {
-            Self::NewSession(_) => NewSession::SAFETY,
-            Self::NewWindow(_) => NewWindow::SAFETY,
-            Self::SplitWindow(_) => SplitWindow::SAFETY,
-            Self::SendKeys(_) => SendKeys::SAFETY,
-            Self::SelectPane(_) => SelectPane::SAFETY,
-            Self::SelectWindow(_) => SelectWindow::SAFETY,
-            Self::RenameWindow(_) => RenameWindow::SAFETY,
-            Self::SetOption(_) => SetOption::SAFETY,
-            Self::SetEnvironment(_) => SetEnvironment::SAFETY,
-            Self::SelectLayout(_) => SelectLayout::SAFETY,
-            Self::CapturePane(_) => CapturePane::SAFETY,
-            Self::KillPane(_) => KillPane::SAFETY,
-            Self::KillWindow(_) => KillWindow::SAFETY,
-        }
-    }
-
     /// The tmux subcommand this operation runs.
     #[must_use]
     pub const fn name(&self) -> &'static str {
-        match self {
-            Self::NewSession(_) => "new-session",
-            Self::NewWindow(_) => "new-window",
-            Self::SplitWindow(_) => "split-window",
-            Self::SendKeys(_) => "send-keys",
-            Self::SelectPane(_) => "select-pane",
-            Self::SelectWindow(_) => "select-window",
-            Self::RenameWindow(_) => "rename-window",
-            Self::SetOption(_) => "set-option",
-            Self::SetEnvironment(_) => "set-environment",
-            Self::SelectLayout(_) => "select-layout",
-            Self::CapturePane(_) => "capture-pane",
-            Self::KillPane(_) => "kill-pane",
-            Self::KillWindow(_) => "kill-window",
-        }
+        self.kind().name()
     }
 
     /// Whether this operation may share a tmux invocation with its neighbours.
@@ -517,7 +755,7 @@ impl Op {
     }
 
     /// The targets this operation resolves before it can render.
-    pub(crate) fn slots(&self) -> [Option<(usize, Part)>; 2] {
+    fn slots(&self) -> [Option<SlotUse>; 2] {
         match self {
             Self::NewSession(_) => [None, None],
             Self::NewWindow(op) => [op.target.slot(), None],
@@ -532,6 +770,43 @@ impl Op {
             Self::CapturePane(op) => [op.target.slot(), None],
             Self::KillPane(op) => [op.target.slot(), None],
             Self::KillWindow(op) => [op.target.slot(), None],
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    fn rebind_slots(&mut self, producers: &[Option<ProducerIdentity>]) {
+        match self {
+            Self::NewSession(_) => {}
+            Self::NewWindow(op) => op.target.rebind(producers),
+            Self::SplitWindow(op) => op.target.rebind(producers),
+            Self::SendKeys(op) => op.target.rebind(producers),
+            Self::SelectPane(op) => op.target.rebind(producers),
+            Self::SelectWindow(op) => op.target.rebind(producers),
+            Self::RenameWindow(op) => op.target.rebind(producers),
+            Self::SetOption(op) => op.rebind_slots(producers),
+            Self::SetEnvironment(op) => op.target.rebind(producers),
+            Self::SelectLayout(op) => op.target.rebind(producers),
+            Self::CapturePane(op) => op.target.rebind(producers),
+            Self::KillPane(op) => op.target.rebind(producers),
+            Self::KillWindow(op) => op.target.rebind(producers),
+        }
+    }
+
+    fn output_scope(&self, part: Part) -> Option<Scope> {
+        let created = self.effects().creates?;
+        match (part, created) {
+            (Part::Created, scope) => Some(scope),
+            (Part::FirstWindow, Scope::Session) => Some(Scope::Window),
+            (Part::FirstPane, Scope::Session | Scope::Window) => Some(Scope::Pane),
+            _ => None,
+        }
+    }
+
+    /// Where a step tells tmux to keep an option, for the steps that write one.
+    pub(crate) fn declared_option_scope(&self) -> Option<(&std::ffi::OsStr, crate::OptionScope)> {
+        match self {
+            Self::SetOption(op) => op.declared_scope(),
+            _ => None,
         }
     }
 
@@ -580,20 +855,33 @@ impl Op {
 /// assert!(rendered[0].as_ref().is_some_and(|c| c.summary().to_string().contains("send-keys")));
 /// # Ok::<(), libtmux::IdParseError>(())
 /// ```
-#[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(with = "Vec<Op>"))]
 // A plan is its steps, so it reads as a list rather than an object wrapping
 // one. That is the shape a plan written by hand wants.
-#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Plan {
     steps: Vec<Op>,
+    producers: Vec<Option<ProducerIdentity>>,
+}
+
+impl fmt::Debug for Plan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Plan")
+            .field("steps", &self.steps)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Plan {
     /// Start an empty plan.
     #[must_use]
     pub const fn new() -> Self {
-        Self { steps: Vec::new() }
+        Self {
+            steps: Vec::new(),
+            producers: Vec::new(),
+        }
     }
 
     /// Record one operation and return a handle to what it creates.
@@ -612,7 +900,9 @@ impl Plan {
     pub fn add<O: Operation>(&mut self, operation: O) -> O::Creates {
         let index = self.steps.len();
         self.steps.push(operation.into());
-        O::Creates::from_step(index)
+        self.producers
+            .push(O::EFFECTS.creates.map(|_| ProducerIdentity::fresh()));
+        O::Creates::from_step(index, self)
     }
 
     /// Record an operation that is allowed to share a tmux invocation.
@@ -654,6 +944,71 @@ impl Plan {
         self.steps.is_empty()
     }
 
+    /// Check every slot before a run can change tmux state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a slot names an absent or non-earlier step, or
+    /// when that step does not produce the required tmux object.
+    pub fn validate(&self) -> Result<(), PlanValidationError> {
+        for (step, operation) in self.steps.iter().enumerate() {
+            for slot_use in operation.slots().into_iter().flatten() {
+                let Some(source) = self.steps.get(slot_use.source_step) else {
+                    return Err(PlanValidationError::new(
+                        step,
+                        slot_use.source_step,
+                        PlanValidationErrorKind::SourceMissing,
+                        slot_use.expected_scope,
+                        None,
+                    ));
+                };
+                if slot_use.source_step >= step {
+                    return Err(PlanValidationError::new(
+                        step,
+                        slot_use.source_step,
+                        PlanValidationErrorKind::SourceNotEarlier,
+                        slot_use.expected_scope,
+                        source.output_scope(slot_use.part),
+                    ));
+                }
+
+                let Some(source_scope) = source.output_scope(slot_use.part) else {
+                    return Err(PlanValidationError::new(
+                        step,
+                        slot_use.source_step,
+                        PlanValidationErrorKind::SourceOutputMissing,
+                        slot_use.expected_scope,
+                        None,
+                    ));
+                };
+                if source_scope != slot_use.expected_scope {
+                    return Err(PlanValidationError::new(
+                        step,
+                        slot_use.source_step,
+                        PlanValidationErrorKind::SourceScopeMismatch,
+                        slot_use.expected_scope,
+                        Some(source_scope),
+                    ));
+                }
+                let provenance_matches = self
+                    .producers
+                    .get(slot_use.source_step)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|producer| producer.matches(slot_use.producer));
+                if !provenance_matches {
+                    return Err(PlanValidationError::new(
+                        step,
+                        slot_use.source_step,
+                        PlanValidationErrorKind::SourceProvenanceMismatch,
+                        slot_use.expected_scope,
+                        Some(source_scope),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Render every operation without running any of them.
     ///
     /// An operation whose target is an object no earlier step has created yet
@@ -664,5 +1019,43 @@ impl Plan {
             .iter()
             .map(|op| op.render(&|_, _| None, ()))
             .collect()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Plan {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error as _;
+
+        self.validate().map_err(S::Error::custom)?;
+        serde::Serialize::serialize(&self.steps, serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Plan {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+
+        let plan = Self {
+            steps: Vec::<Op>::deserialize(deserializer)?,
+            producers: Vec::new(),
+        };
+        let mut plan = plan;
+        plan.producers = plan
+            .steps
+            .iter()
+            .map(|operation| {
+                operation
+                    .effects()
+                    .creates
+                    .map(|_| ProducerIdentity::fresh())
+            })
+            .collect();
+        for operation in &mut plan.steps {
+            operation.rebind_slots(&plan.producers);
+        }
+        plan.validate().map_err(D::Error::custom)?;
+        Ok(plan)
     }
 }

@@ -123,6 +123,7 @@ run_lane() {
     local tag="$1"
     local expected_commit="$2"
     local expected_version="$3"
+    local source_contract="${4:-}"
     local source_root="$build_root/tmux-$tag-source"
     local install_prefix="$build_root/tmux-$tag-install"
     local tmux_binary="$install_prefix/bin/tmux"
@@ -155,6 +156,10 @@ run_lane() {
     if [[ "$checkout_commit" != "$expected_commit" ]]; then
         printf 'tmux %s checkout commit does not match\n' "$tag" >&2
         return 1
+    fi
+
+    if [[ "$source_contract" == "format-catalog" ]]; then
+        python3 scripts/format-coverage.py --check-source "$source_root"
     fi
 
     (
@@ -267,3 +272,4 @@ run_lane \
     "3.7b" \
     "e802909de06012a4df6209d55e86487c56223163" \
     "tmux 3.7b" \
+    "format-catalog" \

@@ -11,13 +11,16 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use libtmux::plan::{
-    Attribution, CapturePane, KillPane, NewSession, NewWindow, Outcome, Plan, Planner, SelectPane,
-    SendKeys, SetOption, SplitWindow, StepReason,
+    Attribution, CapturePane, KillPane, KillWindow, NewSession, NewWindow, OperationKind,
+    OperationReport, OperationValue, Outcome, PaneTarget, Plan, PlanResult,
+    PlanValidationErrorKind, Planner, SelectPane, SelectWindow, SendKeys, SetEnvironment,
+    SetOption, SplitWindow, StepReason, WindowTarget,
 };
 use libtmux::test::TestServer;
-use libtmux::{Command, PaneId, Server, WindowId};
+use libtmux::{Command, NewSessionOptions, PaneId, PaneWait, Server, WindowId};
 
 /// A plan that builds a session and types into the pane it makes.
 fn build_plan(name: &str) -> Plan {
@@ -124,9 +127,160 @@ fn a_plan_renders_what_it_can_before_it_runs() {
     );
 }
 
+#[test]
+fn sensitive_plan_arguments_are_absent_from_diagnostics() {
+    let secret = "sentinel-plan-secret";
+    let session: libtmux::SessionId = "$1".parse().expect("a session id");
+    let window: WindowId = "@1".parse().expect("a window id");
+    let pane: PaneId = "%1".parse().expect("a pane id");
+
+    let mut plan = Plan::new();
+    plan.add(
+        NewWindow::new(session.clone())
+            .environment("TOKEN", secret)
+            .command(secret),
+    );
+    plan.add(
+        SplitWindow::new(window.clone())
+            .environment("TOKEN", secret)
+            .command(secret),
+    );
+    plan.add(SendKeys::new(pane).text(secret));
+    plan.add(SetOption::window(window, "status-left", secret));
+    plan.add(SetEnvironment::new(session, "TOKEN", secret));
+
+    let mut diagnostics = vec![format!("{plan:?}")];
+    diagnostics.extend(
+        plan.steps()
+            .iter()
+            .map(|operation| format!("{operation:?}")),
+    );
+    diagnostics.extend(
+        plan.preview()
+            .into_iter()
+            .flatten()
+            .map(|command| format!("{:?}", command.summary())),
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.contains(secret)),
+        "a plan diagnostic exposed a sensitive argument: {diagnostics:#?}",
+    );
+
+    let sensitive_arguments: usize = plan
+        .preview()
+        .into_iter()
+        .flatten()
+        .map(|command| command.summary().sensitive_argument_count())
+        .sum();
+    assert_eq!(sensitive_arguments, 7);
+}
+
+#[test]
+fn plan_validation_rejects_a_dependency_that_is_not_earlier() {
+    let mut other = Plan::new();
+    other.add(NewSession::new("other-first"));
+    let future_session = other.add(NewSession::new("other-second"));
+
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("first"));
+    plan.add(NewWindow::new(future_session));
+
+    let failure = plan
+        .validate()
+        .expect_err("step one cannot depend on itself");
+    assert_eq!(failure.step(), 1);
+    assert_eq!(failure.source_step(), 1);
+    assert_eq!(failure.kind(), PlanValidationErrorKind::SourceNotEarlier);
+}
+
+#[test]
+fn plan_validation_rejects_a_slot_owned_by_another_plan() {
+    let mut other = Plan::new();
+    let foreign_session = other.add(NewSession::new("same"));
+
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("same"));
+    plan.add(NewWindow::new(foreign_session));
+
+    let failure = plan
+        .validate()
+        .expect_err("a foreign slot must not alias a compatible local producer");
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SourceProvenanceMismatch,
+    );
+    assert!(!failure.to_string().contains("same"));
+    #[cfg(feature = "serde")]
+    assert!(
+        serde_json::to_value(plan).is_err(),
+        "an invalid plan must not become valid on the wire",
+    );
+}
+
+#[test]
+fn cloned_plans_share_existing_but_not_divergent_producers() {
+    let mut base = Plan::new();
+    let session = base.add(NewSession::new("cloned"));
+    let mut left = base.clone();
+    let mut right = base.clone();
+
+    let left_window = left.add(NewWindow::new(session).name("same"));
+    right.add(NewWindow::new(session).name("same"));
+    right.add(SelectWindow::new(left_window));
+
+    left.validate().expect("the original producer was cloned");
+    let failure = right
+        .validate()
+        .expect_err("divergent producers must not share identity");
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SourceProvenanceMismatch,
+    );
+}
+
+#[test]
+fn destructive_targets_are_inspectable_without_serialization() {
+    let pane: PaneId = "%7".parse().expect("a pane id");
+    let window: WindowId = "@8".parse().expect("a window id");
+
+    assert_eq!(KillPane::new(pane.clone()).target(), &PaneTarget::Id(pane));
+    assert_eq!(
+        KillWindow::new(window.clone()).target(),
+        &WindowTarget::Id(window),
+    );
+}
+
 /// How many panes the server holds, as tmux counts them.
 async fn pane_count(server: &Server) -> usize {
     server.panes().await.expect("panes list").len()
+}
+
+#[tokio::test]
+async fn an_invalid_plan_refuses_before_its_first_mutation() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut other = Plan::new();
+    other.add(NewSession::new("other-first"));
+    let future_session = other.add(NewSession::new("other-second"));
+
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("must-not-exist"));
+    plan.add(NewWindow::new(future_session));
+
+    let failure = plan
+        .run(server, Planner::Sequential)
+        .await
+        .expect_err("the plan is invalid");
+    assert!(
+        server.sessions_or_empty().await.is_empty(),
+        "validation happened after a mutation",
+    );
+    assert_eq!(failure.kind(), libtmux::ErrorKind::InvalidInput);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
 #[tokio::test]
@@ -147,7 +301,7 @@ async fn every_planner_leaves_the_same_tmux_state_for_a_different_price() {
         assert!(
             result.is_complete(),
             "{planner:?} completed every operation: {:?}",
-            result.outcomes(),
+            result.operations(),
         );
         costs.push((planner, result.dispatches()));
         shapes.push(pane_count(server).await);
@@ -177,7 +331,7 @@ async fn a_slot_addresses_an_object_the_plan_has_not_made_yet() {
     plan.add(SetOption::window(window, "synchronize-panes", "on"));
 
     let result = plan.run(server, Planner::Sequential).await.expect("runs");
-    assert!(result.is_complete(), "{:?}", result.outcomes());
+    assert!(result.is_complete(), "{:?}", result.operations());
 
     // The ids came back from the commands that made them, so no listing was
     // needed to address the window from the session.
@@ -198,6 +352,125 @@ async fn a_slot_addresses_an_object_the_plan_has_not_made_yet() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+fn expected_attributions(planner: Planner) -> [Option<Attribution>; 4] {
+    match planner {
+        Planner::Sequential => [Some(Attribution::PerCommand); 4],
+        Planner::Folding => [
+            Some(Attribution::PerCommand),
+            Some(Attribution::Merged),
+            Some(Attribution::Merged),
+            Some(Attribution::PerCommand),
+        ],
+        Planner::Marked => [
+            Some(Attribution::Merged),
+            Some(Attribution::Merged),
+            Some(Attribution::Merged),
+            Some(Attribution::PerCommand),
+        ],
+        _ => panic!("the test needs an attribution matrix for {planner:?}"),
+    }
+}
+
+fn assert_operation_reports(result: &PlanResult, planner: Planner, marker: &str) {
+    let reports = result.operations();
+    assert_eq!(reports.len(), 4);
+    for (index, report) in reports.iter().enumerate() {
+        assert_eq!(report.index(), index);
+        assert_eq!(report.outcome(), Outcome::Complete);
+    }
+    assert_eq!(
+        reports
+            .iter()
+            .map(OperationReport::kind)
+            .collect::<Vec<_>>(),
+        [
+            OperationKind::NewWindow,
+            OperationKind::SendKeys,
+            OperationKind::SelectPane,
+            OperationKind::CapturePane,
+        ],
+    );
+    assert_eq!(
+        reports
+            .iter()
+            .map(OperationReport::attribution)
+            .collect::<Vec<_>>(),
+        expected_attributions(planner),
+    );
+
+    let Some(OperationValue::CreatedWindow {
+        window: created_window,
+        pane,
+    }) = reports[0].value()
+    else {
+        panic!("the creating operation carries typed bindings: {reports:?}");
+    };
+    assert_eq!(
+        result.created(0).and_then(|id| id.to_str()),
+        Some(created_window.as_ref()),
+    );
+    assert!(pane.as_ref().starts_with('%'));
+    assert!(matches!(
+        reports[1].value(),
+        Some(OperationValue::Acknowledged)
+    ));
+    assert!(matches!(
+        reports[2].value(),
+        Some(OperationValue::Acknowledged)
+    ));
+    let Some(OperationValue::CapturedPane(text)) = reports[3].value() else {
+        panic!("the capture operation carries pane bytes: {reports:?}");
+    };
+    assert!(
+        text.as_bytes()
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes()),
+        "the captured bytes stay on operation 3",
+    );
+}
+
+#[tokio::test]
+async fn operation_reports_keep_typed_values_aligned_across_planners() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let marker = "operation-report";
+    let session = guard
+        .session(
+            NewSessionOptions::new("report-parent")
+                .command(format!("printf '{marker}\\n'; exec sleep 60")),
+        )
+        .await
+        .expect("the source pane is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    assert_eq!(
+        pane.wait_for_text(marker, Duration::from_secs(5))
+            .await
+            .expect("capture waits"),
+        PaneWait::Arrived,
+    );
+
+    for (case, planner) in [Planner::Sequential, Planner::Folding, Planner::Marked]
+        .into_iter()
+        .enumerate()
+    {
+        let mut plan = Plan::new();
+        let window = plan.add(
+            NewWindow::new(session.id().clone())
+                .name(format!("report-window-{case}"))
+                .command("sleep 60")
+                .focus(),
+        );
+        plan.add(SendKeys::new(window.pane()).text("ignored"));
+        plan.add(SelectPane::new(window.pane()));
+        plan.add(CapturePane::new(pane.id().clone()));
+
+        let result = plan.run(server, planner).await.expect("the plan runs");
+        assert_operation_reports(&result, planner, marker);
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -212,9 +485,9 @@ async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     plan.add(SendKeys::new(absent.clone()).text("never").enter());
 
     let sequential = plan.run(server, Planner::Sequential).await.expect("runs");
-    assert_eq!(sequential.outcomes()[0], Outcome::Complete);
-    assert_eq!(sequential.outcomes()[1], Outcome::Failed);
-    assert_eq!(sequential.outcomes()[2], Outcome::Skipped);
+    assert_eq!(sequential.operations()[0].outcome(), Outcome::Complete);
+    assert_eq!(sequential.operations()[1].outcome(), Outcome::Failed);
+    assert_eq!(sequential.operations()[2].outcome(), Outcome::Skipped);
     assert_eq!(sequential.steps()[1].attribution(), Attribution::PerCommand,);
 
     // Folded, the same two operations share one exit status. tmux reports the
@@ -230,12 +503,89 @@ async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     assert_eq!(folded.steps().len(), 1, "the two shared an invocation");
     assert_eq!(folded.steps()[0].attribution(), Attribution::Merged);
     assert_eq!(
-        folded.outcomes(),
-        [Outcome::Unknown, Outcome::Unknown],
+        folded
+            .operations()
+            .iter()
+            .map(OperationReport::outcome)
+            .collect::<Vec<_>>(),
+        vec![Outcome::Unknown, Outcome::Unknown],
         "a merged failure names no member, and unknown is not success",
     );
     assert!(!folded.is_complete());
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("control-plan-refusal")
+        .await
+        .expect("session is created");
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let absent: PaneId = "%999999".parse().expect("a pane id");
+    let mut missing = Plan::new();
+    missing.add(KillPane::new(absent));
+    let missing = missing
+        .run_over_control_mode(&commands)
+        .await
+        .expect("tmux refusals remain plan result data");
+    let step = &missing.steps()[0];
+    assert!(step.stdout().is_empty(), "an error block is not stdout");
+    assert!(
+        String::from_utf8_lossy(step.stderr()).contains("can't find pane: %999999"),
+        "the error block keeps tmux's diagnostic: {step:?}",
+    );
+    assert!(
+        matches!(
+            step.refusal(),
+            Some(libtmux::Error::ObjectGone {
+                kind: libtmux::ObjectKind::Pane,
+                ref id,
+                ..
+            }) if id == "%999999"
+        ),
+        "the preserved diagnostic remains classifiable",
+    );
+
+    let window = session
+        .windows()
+        .await
+        .expect("windows are listed")
+        .remove(0);
+    let secret = "sentinel-sensitive-control-value";
+    let mut sensitive = Plan::new();
+    sensitive.add(SetOption::window(
+        window.id().clone(),
+        "synchronize-panes",
+        secret,
+    ));
+    let sensitive = sensitive
+        .run_over_control_mode(&commands)
+        .await
+        .expect("tmux refusals remain plan result data");
+    let step = &sensitive.steps()[0];
+    assert!(step.has_sensitive_input());
+    assert!(
+        String::from_utf8_lossy(step.stderr()).contains(secret),
+        "the raw error stream remains inspectable",
+    );
+    let refusal = step.refusal().expect("the operation was refused");
+    assert!(matches!(refusal, libtmux::Error::CommandFailed { .. }));
+    for diagnostic in [format!("{refusal:?} {refusal}"), format!("{sensitive:?}")] {
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
+
+    events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -276,4 +626,100 @@ fn a_plan_survives_a_round_trip_through_json() {
         Planner::Marked.steps(&restored).len(),
         Planner::Marked.steps(&plan).len(),
     );
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn deserialization_rejects_a_slot_with_the_wrong_scope() {
+    let session: libtmux::SessionId = "$1".parse().expect("a session id");
+    let mut plan = Plan::new();
+    plan.add(NewWindow::new(session.clone()));
+    plan.add(NewWindow::new(session));
+
+    let mut wire = serde_json::to_value(plan).expect("the plan serializes");
+    wire[1]["NewWindow"]["target"] = serde_json::json!({
+        "Slot": {"index": 0, "part": "Created"}
+    });
+
+    let failure = serde_json::from_value::<Plan>(wire).expect_err("window is not a session");
+    assert!(failure.to_string().contains("not Session"), "{failure}");
+}
+
+#[tokio::test]
+async fn a_creation_the_run_can_name_is_not_reported_as_unproven() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("named"));
+    // The split's id comes back on stdout. Killing the pane clears tmux's
+    // marked register, so the send that follows fails and the whole folded
+    // invocation reports one status for three operations.
+    let pane = plan.add(SplitWindow::new(session.window()).focus());
+    plan.add(KillPane::new(pane));
+    plan.add(SendKeys::new(pane).text("unreachable").enter());
+
+    let result = plan
+        .run(server, Planner::Marked)
+        .await
+        .expect("the run reports rather than refusing");
+
+    let created = result
+        .operations()
+        .iter()
+        .find(|report| report.kind() == OperationKind::SplitWindow)
+        .expect("the split is reported");
+
+    // `Outcome::Unknown` means the absence of evidence. tmux prints a pane id
+    // only once it has made the pane, so naming it is evidence.
+    assert!(
+        created.value().is_some(),
+        "the run named the pane it created",
+    );
+    assert_eq!(
+        created.outcome(),
+        Outcome::Complete,
+        "a creation the run can name is not unproven",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_plan_will_not_write_an_option_where_tmux_keeps_another() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("scoped"));
+    let window = plan.add(NewWindow::new(session));
+    // `mouse` is a session option. A plan renders its own commands, so this
+    // reached tmux without the check the direct path makes, and the whole
+    // plan reported success for a change that landed on the session.
+    plan.add(SetOption::window(window, "mouse", "on"));
+
+    let error = plan
+        .run(server, Planner::Sequential)
+        .await
+        .map(|_| ())
+        .expect_err("the plan names a scope tmux would not use");
+    assert!(
+        matches!(
+            error,
+            libtmux::Error::OptionScopeMismatch {
+                requested: libtmux::OptionScope::Window,
+                ..
+            }
+        ),
+        "and says so before anything ran: {error:?}",
+    );
+
+    // Nothing was dispatched, so the session the first step would have made
+    // is not there either.
+    assert!(
+        server.sessions().await.expect("sessions").is_empty(),
+        "validation happens before the first command",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }

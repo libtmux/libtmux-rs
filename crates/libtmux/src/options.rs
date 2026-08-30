@@ -51,16 +51,17 @@ pub enum OptionKind {
 /// # Examples
 ///
 /// ```
-/// use libtmux::{OptionSchema, OptionScope, option_schema};
+/// use libtmux::{OptionScope, option_schema};
 ///
-/// // The scope says which handle can set an option, which is not guessable from
-/// // the name: `mouse` is per-session, and `exit-empty` is server-wide.
-/// assert_eq!(option_schema("mouse").map(OptionSchema::scope), Some(OptionScope::Session));
-/// assert_eq!(option_schema("exit-empty").map(OptionSchema::scope), Some(OptionScope::Server));
-/// assert_eq!(
-///     option_schema("automatic-rename").map(OptionSchema::scope),
-///     Some(OptionScope::Window),
-/// );
+/// // The scope says which handle can set an option, which is not guessable
+/// // from the name: `mouse` is per-session, and `exit-empty` is server-wide.
+/// assert!(option_schema("mouse").is_some_and(|o| o.accepts(OptionScope::Session)));
+/// assert!(option_schema("exit-empty").is_some_and(|o| o.accepts(OptionScope::Server)));
+///
+/// // Some options live in two tables at once, and tmux takes a write at
+/// // either. Asking for one scope would have to pick, and picking is wrong.
+/// let remain = option_schema("remain-on-exit").expect("a documented option");
+/// assert_eq!(remain.scopes(), [OptionScope::Window, OptionScope::Pane]);
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -85,7 +86,8 @@ pub enum OptionScope {
 /// let schema = option_schema("history-limit").expect("a documented option");
 /// assert_eq!(schema.name(), "history-limit");
 /// assert_eq!(schema.kind(), OptionKind::Number);
-/// assert_eq!(schema.scope(), OptionScope::Session);
+/// assert_eq!(schema.scopes(), [OptionScope::Session]);
+/// assert!(schema.accepts(OptionScope::Session));
 ///
 /// // An option tmux does not have has no schema, which catches a typo before it
 /// // reaches the server.
@@ -95,12 +97,16 @@ pub enum OptionScope {
 pub struct OptionSchema {
     name: &'static str,
     kind: OptionKind,
-    scope: OptionScope,
+    scopes: &'static [OptionScope],
 }
 
 impl OptionSchema {
-    pub(crate) const fn new(name: &'static str, kind: OptionKind, scope: OptionScope) -> Self {
-        Self { name, kind, scope }
+    pub(crate) const fn new(
+        name: &'static str,
+        kind: OptionKind,
+        scopes: &'static [OptionScope],
+    ) -> Self {
+        Self { name, kind, scopes }
     }
 
     /// Return the option's tmux name.
@@ -115,10 +121,24 @@ impl OptionSchema {
         self.kind
     }
 
-    /// Return which table the option primarily lives in.
+    /// Return every table the option may be written in.
+    ///
+    /// Usually one, and tmux names no primary among the rest: `remain-on-exit`
+    /// is a window option and a pane option both, and a write is legal at
+    /// either.
     #[must_use]
-    pub const fn scope(&self) -> OptionScope {
-        self.scope
+    pub const fn scopes(&self) -> &'static [OptionScope] {
+        self.scopes
+    }
+
+    /// Report whether tmux will place a write of this option at `scope`.
+    ///
+    /// tmux resolves an option by name rather than by the flags it was sent
+    /// with, so a write it does not accept here is not refused: it lands at
+    /// whichever table the name belongs to, and reports success for doing it.
+    #[must_use]
+    pub fn accepts(&self, scope: OptionScope) -> bool {
+        self.scopes.contains(&scope)
     }
 }
 
@@ -148,10 +168,34 @@ impl OptionSchema {
 pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
     let name = name.split_once('[').map_or(name, |(base, _)| base);
 
-    generated::OPTION_SCHEMA
-        .binary_search_by(|entry| entry.name.cmp(name))
-        .ok()
-        .map(|index| &generated::OPTION_SCHEMA[index])
+    // tmux maps a few legacy spellings before it looks a name up, so both
+    // spellings have to reach the same entry.
+    let name = generated::OPTION_ALIASES
+        .iter()
+        .find_map(|(from, to)| (*from == name).then_some(*to))
+        .unwrap_or(name);
+
+    if let Ok(index) = generated::OPTION_SCHEMA.binary_search_by(|entry| entry.name.cmp(name)) {
+        return Some(&generated::OPTION_SCHEMA[index]);
+    }
+
+    // tmux takes an unambiguous prefix of an option's name for the option, so
+    // `mous` reaches `mouse`. Answering `None` for one would report a real
+    // option as unknown, and anything deciding where a write lands would then
+    // be deciding about a name tmux does not use.
+    //
+    // Reached only when the exact search missed, which is the rarer half.
+    let mut matched = None;
+    for entry in &generated::OPTION_SCHEMA {
+        if entry.name.starts_with(name) {
+            if matched.is_some() {
+                // Ambiguous. tmux refuses these by name, and says so better.
+                return None;
+            }
+            matched = Some(entry);
+        }
+    }
+    matched
 }
 
 /// One option's value, decoded according to what tmux declares about it.

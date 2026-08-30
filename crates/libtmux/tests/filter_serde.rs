@@ -172,7 +172,8 @@ fn assert_logical_shapes(definitions: &serde_json::Map<String, Value>) -> TestRe
             Some(&json!({
                 "type": "array",
                 "items": {"$ref": "#/$defs/expression"},
-                "minItems": 2
+                "minItems": 2,
+                "maxItems": 4096
             }))
         );
     }
@@ -217,8 +218,8 @@ fn assert_scalar_shapes(definitions: &serde_json::Map<String, Value>) -> TestRes
             "op": {"enum": ["in", "not_in"]},
             "field": {"$ref": "#/$defs/name"},
             "value": {"anyOf": [
-                {"type": "array", "items": {"type": "boolean"}},
-                {"type": "array", "items": {"type": "string"}}
+                {"type": "array", "items": {"type": "boolean"}, "maxItems": 4096},
+                {"type": "array", "items": {"type": "string"}, "maxItems": 4096}
             ]}
         }))
     );
@@ -864,6 +865,7 @@ mod serde_contract {
             FilterExpressionErrorKind::UnknownOperator => "unknown expression operator",
             FilterExpressionErrorKind::UnknownQuantifier => "unknown relation quantifier",
             FilterExpressionErrorKind::InvalidLiteral => "invalid expression literal",
+            FilterExpressionErrorKind::ComplexityLimit => "expression exceeds complexity limits",
             FilterExpressionErrorKind::InvalidStructure => "invalid expression structure",
             _ => "unknown future expression error",
         }
@@ -920,6 +922,63 @@ mod serde_contract {
         )
     }
 
+    fn scalar_value() -> Value {
+        serde_json::json!({"op": "eq", "field": "name", "value": "x"})
+    }
+
+    fn envelope(expression: &Value) -> Value {
+        serde_json::json!({"version": 1, "target": "record", "expr": expression})
+    }
+
+    fn nested_not(levels: usize) -> Value {
+        let mut expression = scalar_value();
+        for _ in 1..levels {
+            expression = serde_json::json!({"op": "not", "expr": expression});
+        }
+        envelope(&expression)
+    }
+
+    fn flat_and(total_nodes: usize) -> Value {
+        let expressions = (1..total_nodes).map(|_| scalar_value()).collect::<Vec<_>>();
+        envelope(&serde_json::json!({"op": "and", "args": expressions}))
+    }
+
+    fn membership_predicate(value_count: usize) -> Value {
+        let values = vec![Value::String("x".to_owned()); value_count];
+        serde_json::json!({"op": "in", "field": "name", "value": values})
+    }
+
+    fn membership(value_count: usize) -> Value {
+        envelope(&membership_predicate(value_count))
+    }
+
+    fn memberships(value_counts: &[usize]) -> Value {
+        let expressions = value_counts
+            .iter()
+            .copied()
+            .map(membership_predicate)
+            .collect::<Vec<_>>();
+        envelope(&serde_json::json!({"op": "and", "args": expressions}))
+    }
+
+    fn decode_value(value: &Value) -> Result<FilterExpr<Record>, serde_json::Error> {
+        serde::Deserialize::deserialize(value)
+    }
+
+    fn assert_value_limit(value: &Value) -> TestResult {
+        let Err(error) = decode_value(value) else {
+            return Err(invalid_test_error(
+                "an over-budget expression decoded successfully",
+            ));
+        };
+        let error = error.to_string();
+        assert_eq!(
+            error,
+            category_text(FilterExpressionErrorKind::ComplexityLimit)
+        );
+        Ok(())
+    }
+
     #[test]
     fn serde_traits_are_available_for_filter_expressions() -> TestResult {
         let expression = Record::filter_fields().name.eq("build");
@@ -927,6 +986,50 @@ mod serde_contract {
         let decoded = decode::<Record>(&encoded)?;
         assert_eq!(decoded, expression);
         Ok(())
+    }
+
+    #[test]
+    fn wire_decoder_enforces_expression_depth_budget() -> TestResult {
+        decode_value(&nested_not(64))?;
+        assert_value_limit(&nested_not(65))?;
+        Ok(())
+    }
+
+    #[test]
+    fn wire_decoder_enforces_expression_node_budget() -> TestResult {
+        decode_value(&flat_and(4_096))?;
+        assert_value_limit(&flat_and(4_097))?;
+        Ok(())
+    }
+
+    #[test]
+    fn wire_decoder_enforces_membership_value_budget() -> TestResult {
+        decode_value(&membership(4_096))?;
+        assert_value_limit(&membership(4_097))?;
+        decode_value(&memberships(&[2_048, 2_048]))?;
+        assert_value_limit(&memberships(&[2_048, 2_049]))?;
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_members_do_not_traverse_rejected_values() {
+        let mut rejected = Value::Null;
+        for _ in 0..1_024 {
+            rejected = serde_json::json!({"nested": rejected});
+        }
+        let mut document = envelope(&scalar_value());
+        document
+            .as_object_mut()
+            .expect("the test envelope is an object")
+            .insert("extra".to_owned(), rejected);
+
+        let error = decode_value(&document)
+            .expect_err("an unknown envelope member must not decode")
+            .to_string();
+        assert_eq!(
+            error,
+            category_text(FilterExpressionErrorKind::InvalidStructure)
+        );
     }
 
     #[test]
@@ -1569,6 +1672,34 @@ mod serde_contract {
 
         let phase = decode::<Record>(&scalar_document("phase", "eq", "\"ready\""))?;
         assert_eq!(phase, Record::filter_fields().phase.eq(Phase::Ready));
+        Ok(())
+    }
+
+    #[test]
+    fn ordering_operators_are_integer_only() -> TestResult {
+        for operator in ["lt", "lte", "gt", "gte"] {
+            for (field, value) in [("flag", "true"), ("phase", "\"ready\"")] {
+                assert_decode_error::<Record>(
+                    &scalar_document(field, operator, value),
+                    FilterExpressionErrorKind::UnknownOperator,
+                    &[],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn empty_ordering_operands_do_not_escape_field_validation() -> TestResult {
+        for operator in ["lt", "lte", "gt", "gte"] {
+            for field in ["name", "flag", "phase", "i32_value", "u32_value"] {
+                assert_decode_error::<Record>(
+                    &scalar_document(field, operator, "[]"),
+                    FilterExpressionErrorKind::UnknownOperator,
+                    &[],
+                )?;
+            }
+        }
         Ok(())
     }
 

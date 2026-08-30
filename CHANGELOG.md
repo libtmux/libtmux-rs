@@ -16,6 +16,108 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `Pane::wait_for_text` and `Pane::wait_for_quiet` return bounded, typed
+  outcomes while preserving wrapped and scrollback content. (#16)
+
+- `Server::wait_for_channel` and control-mode subscriptions support
+  notification-driven observation without polling. (#16)
+
+- `CaptureOptions` can preserve trailing spaces, trim blank cells, and report
+  pending escape sequences; `PaneOutput::snapshot` captures a stable view.
+  (#16)
+
+- `FilterSchema`, `filter_schema`, and `OperationKind::ALL` expose supported
+  query fields and operation kinds for callers that build typed plans. (#16)
+
+- `escape_format` escapes literal values embedded in tmux format expressions.
+  (#16)
+
+- `Window::respawn`, `Client::lock`, and `Server::lock_all` expose additional
+  tmux mutations through typed handles. (#16)
+
+- `Pane::join_into` and the window layout selection APIs support typed pane
+  joins and layout cycling. (#16)
+
+- `ControlClientLimits` configures finite admission limits for persistent
+  control clients. (#16)
+
+- `Error::AfterEffect` and `ErrorKind::PartialEffect` distinguish failures that
+  occur after tmux may already have changed state. (#16)
+
+- `test::scaled` and `LIBTMUX_TEST_TIMEOUT_SCALE` let downstream integration
+  tests scale timeout budgets consistently. (#16)
+
+### Changed
+
+- **Breaking.** `OptionSchema::scope` is replaced by `scopes` and `accepts`;
+  callers must test the operation and scope together. (#16)
+
+- **Breaking.** `Error::LinkGone` now carries `kind` and `target`; update
+  pattern matches that used its former session and index fields. (#16)
+
+- **Breaking.** The MCP `cancel_job` tool is replaced by `forget_job`.
+  Forgetting stops collection and discards retained output but does not
+  interrupt the command running in its pane. (#16)
+
+- `capture_since` returns the first retained screen when the requested cursor
+  predates retained history, making truncation observable without losing the
+  available snapshot. (#16)
+
+- MCP schemas now close fixed vocabularies and reject unknown fields instead
+  of silently accepting unsupported input. (#16)
+
+- `Window` display output includes enough identity to distinguish linked
+  placements. (#16)
+
+### Security
+
+- Option, hook, environment, layout, and workspace inputs are validated and
+  separated from tmux flags before execution. (#16)
+
+- `tmux-workspace` treats names and start directories as literal data and
+  rejects values that could be interpreted as tmux formats or options. (#16)
+
+### Fixed
+
+- Window selection, unlinking, swapping, moving, and linking preserve exact
+  window-link identity and refresh the affected handles. (#16)
+
+- Handles from another server fail with `ServerMismatch`, while containment
+  checks consult live tmux state instead of stale snapshots. (#16)
+
+- Option plans and direct writes validate array values and the operation's
+  actual option scope. (#16)
+
+- Hook writes preserve slot zero, reject invalid hook bytes, and do not
+  overwrite adjacent hook slots. (#16)
+
+- Control connections surface unread replies and terminal failures instead of
+  hanging or silently losing the final response. (#16)
+
+- Retained MCP jobs, pane tails, and streamed output honor their byte limits,
+  cancellation state, and truncation boundaries. (#16)
+
+- Async callers can use blocking tmux operations without deadlocking the
+  current runtime. (#16)
+
+- Server queries handle an empty tmux server without manufacturing a session
+  or indexing an empty result. (#16)
+
+- Unicode session and window names are validated without rejecting valid
+  non-ASCII text. (#16)
+
+- Filters preserve stable ordering for null relations, signed zero, and
+  schema-derived comparisons. (#16)
+
+- MCP rename results report the name tmux actually stored. (#16)
+
+- Recursive query derives retain their relation metadata. (#16)
+
+- Suspended clients and panes with `exit_mode` report their actual terminal
+  state. (#16)
+
 ## 0.1.0-alpha.8 - 2026-08-22
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.8;

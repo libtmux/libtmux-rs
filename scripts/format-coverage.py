@@ -30,6 +30,10 @@ SCOPES = {
     "ft->c": "client",
 }
 
+REVIEWED_EXCLUSIONS = {
+    "loop_last_flag": "excluded: only set inside a #{L:} format loop",
+}
+
 
 def catalogued() -> set[str]:
     """Format names this crate can request."""
@@ -75,6 +79,32 @@ def read_ledger() -> dict[str, str]:
     return entries
 
 
+def classify(name: str, scope: str, have: set[str]) -> str:
+    """Classify one upstream format against the listing catalog."""
+    if name in have:
+        return "catalogued"
+    if name in REVIEWED_EXCLUSIONS:
+        return REVIEWED_EXCLUSIONS[name]
+    if scope.startswith("context: "):
+        return f"excluded: only inside {scope.removeprefix('context: ')}"
+    if scope == "mouse":
+        return "excluded: needs a mouse event"
+    if scope == "buffer":
+        return "excluded: needs a paste buffer, which is not a hierarchy row"
+    if scope == "unknown":
+        return "excluded: format-internal"
+    return f"missing: {scope}"
+
+
+def expected_ledger(source: pathlib.Path) -> dict[str, str]:
+    """Build the ledger implied by one tmux source tree."""
+    have = catalogued()
+    return {
+        name: classify(name, scope, have)
+        for name, scope in published(source).items()
+    }
+
+
 def check() -> int:
     have = catalogued()
     ledger = read_ledger()
@@ -106,10 +136,37 @@ def check() -> int:
     return 0
 
 
+def check_source(source: pathlib.Path) -> int:
+    """Compare the checked ledger with one pinned tmux source tree."""
+    recorded = read_ledger()
+    expected = expected_ledger(source)
+    problems = []
+    for name in sorted(set(recorded) | set(expected)):
+        if name not in recorded:
+            problems.append(f"{name}: published by tmux, absent from the ledger")
+        elif name not in expected:
+            problems.append(f"{name}: recorded in the ledger, absent from tmux")
+        elif recorded[name] != expected[name]:
+            problems.append(
+                f"{name}: recorded as {recorded[name]!r}, expected {expected[name]!r}"
+            )
+
+    if problems:
+        for line in problems:
+            print(line, file=sys.stderr)
+        print(
+            f"\n{len(problems)} upstream disagreement(s). Rerun "
+            "`just format-coverage <tmux source>` and commit the result.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"format coverage matches {len(expected)} upstream formats")
+    return 0
+
+
 def generate(source: pathlib.Path) -> int:
-    have = catalogued()
-    scopes = published(source)
-    ledger = read_ledger() if LEDGER.exists() else {}
+    expected = expected_ledger(source)
 
     lines = [
         "# Every format name tmux publishes, and what this crate does about it.",
@@ -117,37 +174,29 @@ def generate(source: pathlib.Path) -> int:
         "# Regenerate with `just format-coverage <path to a tmux checkout>`.",
         "# A `missing` entry is a field a listing could carry and does not; an",
         "# `excluded` entry names why no listing can ever answer it.",
+        "#",
+        "# `catalogued` says the crate can decode the field, not that any listing asks",
+        "# for it. For which names each listing actually requests, see",
+        "# `list-profiles.txt`.",
         "",
     ]
-    for name, scope in sorted(scopes.items()):
-        if name in have:
-            status = "catalogued"
-        elif scope.startswith("context: "):
-            # Attached to one command's or one mode's tree, so no listing
-            # carries it however the row is requested.
-            status = f"excluded: only inside {scope.removeprefix('context: ')}"
-        elif scope == "mouse":
-            status = "excluded: needs a mouse event"
-        elif scope == "buffer":
-            status = "excluded: needs a paste buffer, which is not a hierarchy row"
-        elif scope == "unknown":
-            status = "excluded: format-internal"
-        else:
-            status = f"missing: {scope}"
-        # Keep a reviewed exclusion that this crude scope test would undo.
-        if ledger.get(name, "").startswith("excluded") and status.startswith("missing"):
-            status = ledger[name]
-        lines.append(f"{name} {status}")
+    for name in sorted(expected):
+        lines.append(f"{name} {expected[name]}")
 
     LEDGER.write_text("\n".join(lines) + "\n")
-    print(f"recorded {len(scopes)} formats")
+    print(f"recorded {len(expected)} formats")
     return 0
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--check"]:
         raise SystemExit(check())
+    if sys.argv[1:2] == ["--check-source"] and len(sys.argv) == 3:
+        raise SystemExit(check_source(pathlib.Path(sys.argv[2])))
     if len(sys.argv) != 2:
-        print("usage: format-coverage.py (--check | <tmux source>)", file=sys.stderr)
+        print(
+            "usage: format-coverage.py (--check | --check-source <tmux source> | <tmux source>)",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     raise SystemExit(generate(pathlib.Path(sys.argv[1])))

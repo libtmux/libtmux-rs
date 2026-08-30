@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -6,27 +5,32 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::client::Client;
+#[cfg(feature = "control-mode")]
+use crate::SessionId;
 use crate::formats::TmuxText;
-use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
-use crate::internal::environment;
+use crate::internal::core::Core;
 #[cfg(test)]
 use crate::internal::executor::Executor;
-use crate::internal::listing::{self, Pushdown as _};
-use crate::internal::options;
+use crate::internal::listing;
+#[cfg(feature = "control-mode")]
+use crate::internal::process::PersistentChild;
+use crate::internal::scoped;
 use crate::pane::Pane;
-#[cfg(feature = "query")]
-use crate::query::{Filterable, ManyRelation};
 use crate::session::Session;
-#[cfg(feature = "query")]
-use crate::snapshot::{SessionFields, WindowFields};
-use crate::window::Window;
 use crate::{
-    Command, CommandChain, CommandResult, DispatchLimits, EngineCapabilities, EnvironmentEntry,
-    Error, IndexedHooks, ObjectKind, OptionValue, OutputLimits, PaneId, ReleaseSuffix,
-    ReleaseVersion, ReplaceMode, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
-    SessionId, SparseValues, WindowId,
+    Command, CommandChain, CommandResult, EngineCapabilities, Error, ReleaseSuffix, ReleaseVersion,
+    ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
 };
+
+mod builder;
+mod channels;
+mod discovery;
+mod interactive;
+mod settings;
+pub use builder::ServerBuilder;
+pub use discovery::{SessionTree, WindowTree};
+#[cfg(feature = "query")]
+pub use discovery::{SessionTreeFields, WindowTreeFields};
 
 /// The first tmux release that has a server access list.
 use crate::version::since::SERVER_ACCESS as SERVER_ACCESS_SINCE;
@@ -171,8 +175,8 @@ impl PromptKind {
 /// Each reports `Ok(None)` when tmux does not have it.
 ///
 /// **Listing everything.** [`sessions`], [`windows`], [`panes`], and
-/// [`clients`], each with a `try_` twin that keeps the reason for a failure
-/// rather than reporting no rows. [`hierarchy`] gathers the whole tree in
+/// [`clients`], each with an `_or_empty` twin that reports no rows rather
+/// than the reason for a failure. [`hierarchy`] gathers the whole tree in
 /// three tmux commands rather than one per object.
 ///
 /// **Changing things.** [`new_session`], [`kill`], and [`with_session`],
@@ -271,6 +275,33 @@ pub struct Server {
     core: Arc<Core>,
 }
 
+/// What came of waiting on a `wait-for` channel.
+///
+/// Running out of time is an outcome rather than an error, because a caller
+/// retries "nothing signalled it" and "tmux could not be reached" differently,
+/// and an error kind would make them look alike.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::ChannelWait;
+///
+/// fn keep_waiting(outcome: ChannelWait) -> bool {
+///     matches!(outcome, ChannelWait::TimedOut)
+/// }
+///
+/// assert!(keep_waiting(ChannelWait::TimedOut));
+/// assert!(!keep_waiting(ChannelWait::Signalled));
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ChannelWait {
+    /// Something signalled the channel, or a signal was already waiting.
+    Signalled,
+    /// The time ran out with the channel unsignalled.
+    TimedOut,
+}
+
 impl Server {
     /// Build a handle onto a connection an object already holds.
     ///
@@ -279,6 +310,14 @@ impl Server {
     /// mode.
     pub(crate) const fn from_core(core: Arc<Core>) -> Self {
         Self { core }
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) async fn spawn_control(
+        &self,
+        session: &SessionId,
+    ) -> Result<PersistentChild, Error> {
+        self.core.spawn_control(session).await
     }
 
     /// Construct a server from the captured default endpoint context.
@@ -518,11 +557,12 @@ impl Server {
         self.core.execute_chain(chain).await
     }
 
-    /// Close the shared client executor and wait for active child cleanup.
+    /// Stop accepting clients and wait for every active client process.
     ///
     /// Shutdown is idempotent and affects every clone of this server.
     /// It never stops the tmux daemon itself. Await it before dropping the
-    /// Tokio runtime when deterministic reaping of client subprocesses matters.
+    /// Tokio runtime when deterministic reaping matters. With control mode
+    /// enabled, this also closes persistent control connections.
     ///
     /// # Errors
     ///
@@ -546,128 +586,20 @@ impl Server {
         self.core.shutdown().await
     }
 
-    /// List every session on the server, in tmux's own order.
-    ///
-    /// This is the lenient form: a server that is not running, or any other
-    /// failure of the underlying list operation, yields an empty `Vec`. Use
-    /// [`Server::sessions`] when the reason matters.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// // A fixture starts with no sessions. The lenient form reports that as
-    /// // an empty listing rather than as the failure it also collapses.
-    /// assert!(server.sessions_or_empty().await.is_empty());
-    ///
-    /// guard.session("work").await?;
-    ///
-    /// let sessions = server.sessions_or_empty().await;
-    /// assert_eq!(sessions.len(), 1);
-    /// assert_eq!(sessions[0].name().as_bytes(), b"work");
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn sessions_or_empty(&self) -> Vec<Session> {
-        self.sessions().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-sessions", &error);
-            Vec::new()
-        })
-    }
-
-    /// List every window on the server, in tmux's own order.
-    ///
-    /// A window linked into several sessions appears once per link, so a
-    /// window id can repeat. See [`Window`] for what that means for equality.
-    ///
-    /// This is the lenient form; use [`Server::windows`] when the reason
-    /// for an empty result matters.
-    pub async fn windows_or_empty(&self) -> Vec<Window> {
-        self.windows().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-windows", &error);
-            Vec::new()
-        })
-    }
-
-    /// List every window on the server, preserving any failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the list command cannot run, or when its output
-    /// cannot be decoded into snapshots.
-    pub async fn windows(&self) -> Result<Vec<Window>, Error> {
-        let projections = listing::windows(&self.core, listing::Scope::Server, None).await?;
-
-        Ok(projections
-            .into_iter()
-            .map(|projection| Window::new(Arc::clone(&self.core), projection))
-            .collect())
-    }
-
-    /// List every pane on the server, in tmux's own order.
-    ///
-    /// Panes under a linked window appear once per link, matching
-    /// [`Server::windows_or_empty`].
-    pub async fn panes_or_empty(&self) -> Vec<Pane> {
-        self.panes().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-panes", &error);
-            Vec::new()
-        })
-    }
-
-    /// List every pane on the server, preserving any failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the list command cannot run, or when its output
-    /// cannot be decoded into snapshots.
-    pub async fn panes(&self) -> Result<Vec<Pane>, Error> {
-        let projections = listing::panes(&self.core, listing::Scope::Server, None).await?;
-
-        Ok(projections
-            .into_iter()
-            .map(|projection| Pane::new(Arc::clone(&self.core), projection))
-            .collect())
-    }
-
-    /// List every client attached to the server, in tmux's own order.
-    pub async fn clients_or_empty(&self) -> Vec<Client> {
-        self.clients().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-clients", &error);
-            Vec::new()
-        })
-    }
-
-    /// List every client attached to the server, preserving any failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the list command cannot run, or when its output
-    /// cannot be decoded into snapshots.
-    pub async fn clients(&self) -> Result<Vec<Client>, Error> {
-        let infos = listing::clients(&self.core, None).await?;
-
-        Ok(infos
-            .into_iter()
-            .map(|info| Client::new(Arc::clone(&self.core), info))
-            .collect())
-    }
-
     /// Build a server from the `TMUX` variable tmux exports into every pane.
     ///
     /// tmux sets `TMUX` to `<socket_path>,<server_pid>,<session_id>`. Only the
     /// socket path is used: the pid and session id are frozen when the pane
     /// spawns, and the session id goes stale as soon as the pane's window is
     /// moved to another session.
+    ///
+    /// Being frozen is what makes the pid worth something to a caller who
+    /// wants to know the daemon has not been replaced since. A server that
+    /// restarts on the same socket answers here just as well, and reissues
+    /// ids from the start, so [`Server::generation`] and
+    /// [`Server::require_generation`] are what tell the two apart. This does
+    /// not check on its own initiative, because that would cost a round trip
+    /// on a call documented as running no tmux command.
     ///
     /// This runs no tmux command and does not check that the server is alive;
     /// use [`Server::is_alive`] for that.
@@ -737,7 +669,7 @@ impl Server {
     /// reason for an empty result matters.
     pub async fn attached_sessions_or_empty(&self) -> Vec<Session> {
         self.attached_sessions().await.unwrap_or_else(|error| {
-            Self::trace_lenient_listing("list-sessions", &error);
+            listing::trace_discarded("list-sessions", &error);
             Vec::new()
         })
     }
@@ -763,6 +695,10 @@ impl Server {
     /// listing, so this costs one round trip rather than a create followed by
     /// a lookup.
     ///
+    /// tmux expands the name as a format before it checks it, so `#(command)`
+    /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
+    /// before passing text a caller supplied.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the command, which includes a name
@@ -776,6 +712,20 @@ impl Server {
             listing::create_session(&self.core, |format| options.into_command(format)).await?;
 
         Ok(Session::new(Arc::clone(&self.core), info))
+    }
+
+    /// Lock every client on the server.
+    ///
+    /// Runs each client's `lock-command`, which is `lock -np` unless the
+    /// server was told otherwise. Succeeds when nobody is attached, having
+    /// locked nobody. [`crate::Session::lock`] narrows this to one session and
+    /// [`crate::Client::lock`] to one client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux refuses the command.
+    pub async fn lock_all(&self) -> Result<(), Error> {
+        listing::mutate(&self.core, "lock-server", Command::new("lock-server")).await
     }
 
     /// Stop the tmux daemon at this endpoint.
@@ -800,509 +750,6 @@ impl Server {
             });
         }
         Ok(())
-    }
-
-    /// Read one server option's exact stored value.
-    ///
-    /// Returns `None` when the option is known but holds no value. tmux
-    /// prints nothing in that case, so an option set to the empty string
-    /// cannot be told apart from an unset one.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        options::get(&self.core, options::Scope::Server, name).await
-    }
-
-    /// List the server option names.
-    ///
-    /// Values are not included: tmux renders them for display with three
-    /// different quoting styles, so re-parsing them would be guesswork. Read
-    /// each value with [`Server::get_option`], which returns exact bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the listing.
-    pub async fn option_names(&self) -> Result<Vec<String>, Error> {
-        options::names(&self.core, options::Scope::Server).await
-    }
-
-    /// Read every option set at this server, decoded by its declared kind.
-    ///
-    /// Costs one tmux command per option, because each value is read as the
-    /// bytes tmux stored rather than the form it lists them in. Use
-    /// [`Self::option_names`] when only the names are wanted, and
-    /// [`Self::typed_option`] for one value.
-    ///
-    /// An array option keeps the indexed name tmux lists it under, so
-    /// `command-alias[0]` and `command-alias[1]` are separate entries.
-    ///
-    /// Reports what is set *at this scope*, not what the object resolves to.
-    /// A session that has set nothing of its own answers empty even though
-    /// every option still has an effective value it inherits.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    /// An empty map means nothing is set, never that the listing failed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// server.set_option("buffer-limit", "42").await?;
-    /// let options = server.options().await?;
-    /// assert!(options.contains_key("buffer-limit"));
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn options(&self) -> Result<BTreeMap<String, OptionValue>, Error> {
-        options::typed_all(&self.core, options::Scope::Server).await
-    }
-
-    /// Set one server option.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or value.
-    pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
-        options::set(&self.core, options::Scope::Server, name, value, false).await
-    }
-
-    /// Remove one server option.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name.
-    pub async fn unset_option(&self, name: &str) -> Result<(), Error> {
-        options::unset(&self.core, options::Scope::Server, name).await
-    }
-
-    /// Read one global session option.
-    ///
-    /// Sessions inherit from this table, so it is where a default belongs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_global_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        options::get(&self.core, options::Scope::GlobalSession, name).await
-    }
-
-    /// Set one global session option.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or value.
-    pub async fn set_global_option(
-        &self,
-        name: &str,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        options::set(
-            &self.core,
-            options::Scope::GlobalSession,
-            name,
-            value,
-            false,
-        )
-        .await
-    }
-
-    /// Set a variable in the server's own environment.
-    ///
-    /// tmux keeps this and each session's environment in separate stores, and
-    /// merges them only when it starts a process. So a name set here is
-    /// reported as an unknown variable by [`Session::environment`] -- reading
-    /// a session does not fall back to the server -- while a pane started
-    /// afterwards is handed it all the same.
-    ///
-    /// Where both hold a name, the session's value is the one the process
-    /// gets. [`Self::hide_environment`] removes the name from the merge
-    /// entirely.
-    ///
-    /// Panes already running keep the environment they were started with.
-    ///
-    /// The value is marked sensitive, since an environment carries tokens.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or value.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// use libtmux::EnvironmentEntry;
-    ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// server.set_environment("EDITOR", "hx").await?;
-    /// assert!(matches!(
-    ///     server.environment("EDITOR").await?,
-    ///     Some(EnvironmentEntry::Set(value)) if value.as_bytes() == b"hx",
-    /// ));
-    ///
-    /// // Separate stores: the session has no entry of its own, and reading it
-    /// // does not fall back to the server. The value still reaches a process
-    /// // the session starts.
-    /// let session = server.new_session("separate").await?;
-    /// assert_eq!(session.environment("EDITOR").await?, None);
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn set_environment(
-        &self,
-        name: &str,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        environment::set(&self.core, environment::Scope::Global, name, value.into()).await
-    }
-
-    /// Read one variable from the server's environment.
-    ///
-    /// tmux keeps two different things under a name: a value, and a mark
-    /// saying a process started from it must not inherit the name at all.
-    /// [`EnvironmentEntry`] keeps them apart, because collapsing both to
-    /// absence would hide the second, which a caller sets deliberately with
-    /// [`Self::hide_environment`].
-    ///
-    /// `None` means tmux holds nothing under the name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached.
-    pub async fn environment(&self, name: &str) -> Result<Option<EnvironmentEntry>, Error> {
-        environment::get(&self.core, environment::Scope::Global, name).await
-    }
-
-    /// Read the server's whole environment.
-    ///
-    /// Costs one tmux command per variable, for the reason given on
-    /// [`Session::environment_all`]: a value containing a newline occupies
-    /// more than one line of the listing, and a continuation line holding an
-    /// `=` cannot be told from the next variable.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    /// An empty map means the server holds nothing, never that the listing
-    /// failed.
-    pub async fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
-        environment::all(&self.core, environment::Scope::Global).await
-    }
-
-    /// Hide a variable from processes tmux starts.
-    ///
-    /// Different from [`Self::unset_environment`], which deletes the server's
-    /// own entry and lets whatever tmux was started with show through. This
-    /// keeps an entry and marks it, so a process started afterwards is handed
-    /// an environment with the name *absent* even though the tmux server was
-    /// started with one. It is what [`EnvironmentEntry::Removed`] reports.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name.
-    pub async fn hide_environment(&self, name: &str) -> Result<(), Error> {
-        environment::hide(&self.core, environment::Scope::Global, name).await
-    }
-
-    /// Remove a variable from the server's environment.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name.
-    pub async fn unset_environment(&self, name: &str) -> Result<(), Error> {
-        environment::unset(&self.core, environment::Scope::Global, name).await
-    }
-
-    /// Read every value an array option holds, by index.
-    ///
-    /// Some tmux options hold a numbered set rather than one value:
-    /// `command-alias` and `terminal-overrides` are the common ones, and every
-    /// hook is one too. The indices are sparse and tmux keeps the gaps, so
-    /// this reports them rather than a list. An empty result means the option
-    /// holds nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// // Written far apart on purpose: nothing renumbers, so the gap stays.
-    /// server.set_array_option("command-alias", 30, "thirty=display -p 30").await?;
-    /// server.set_array_option("command-alias", 35, "five=display -p 35").await?;
-    ///
-    /// let aliases = server.array_option("command-alias").await?;
-    /// assert_eq!(aliases.get(31), None, "the gap is tmux's, and it is kept");
-    /// assert_eq!(
-    ///     aliases.get(35).map(|value| value.to_string_lossy().into_owned()),
-    ///     Some("five=display -p 35".to_owned()),
-    /// );
-    ///
-    /// server.unset_array_option("command-alias", 35).await?;
-    /// assert_eq!(server.array_option("command-alias").await?.get(35), None);
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn array_option(&self, name: &str) -> Result<SparseValues<TmuxText>, Error> {
-        Ok(SparseValues::from(
-            options::indexed(&self.core, options::Scope::GlobalSession, name).await?,
-        ))
-    }
-
-    /// Write one index of an array option, leaving the others alone.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the option name or the value.
-    pub async fn set_array_option(
-        &self,
-        name: &str,
-        index: u32,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        options::set(
-            &self.core,
-            options::Scope::GlobalSession,
-            &format!("{name}[{index}]"),
-            value,
-            false,
-        )
-        .await
-    }
-
-    /// Extend the value already at one index of an array option.
-    ///
-    /// Appends to that index's value rather than adding an entry, which is
-    /// what tmux's `-a` does here.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the option name or the value.
-    pub async fn append_array_option(
-        &self,
-        name: &str,
-        index: u32,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        options::set(
-            &self.core,
-            options::Scope::GlobalSession,
-            &format!("{name}[{index}]"),
-            value,
-            true,
-        )
-        .await
-    }
-
-    /// Remove one index of an array option, leaving a gap where it was.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the option name.
-    pub async fn unset_array_option(&self, name: &str, index: u32) -> Result<(), Error> {
-        options::unset(
-            &self.core,
-            options::Scope::GlobalSession,
-            &format!("{name}[{index}]"),
-        )
-        .await
-    }
-
-    /// Read one global window option.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_global_window_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        options::get(&self.core, options::Scope::GlobalWindow, name).await
-    }
-
-    /// Set one global window option.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or value.
-    pub async fn set_global_window_option(
-        &self,
-        name: &str,
-        value: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        options::set(&self.core, options::Scope::GlobalWindow, name, value, false).await
-    }
-
-    /// Set one global hook.
-    ///
-    /// Hooks live in the option tables, so [`Server::get_global_option`] reads
-    /// one back under an indexed name such as `after-new-window[0]`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the hook name or command.
-    pub async fn set_hook(&self, name: &str, command: impl Into<OsString>) -> Result<(), Error> {
-        options::set_hook(&self.core, options::Scope::GlobalSession, name, command).await
-    }
-
-    /// Remove one global hook.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the hook name.
-    pub async fn unset_hook(&self, name: &str) -> Result<(), Error> {
-        options::unset_hook(&self.core, options::Scope::GlobalSession, name).await
-    }
-
-    /// Write a whole hook at once.
-    ///
-    /// [`ReplaceMode::Replace`] clears the hook first, so only what is
-    /// written remains; [`ReplaceMode::Merge`] leaves entries at indices the
-    /// write does not name.
-    ///
-    /// Sent as one tmux invocation rather than one per index. That costs one
-    /// process instead of several, but it is not atomic: tmux applies a
-    /// shared invocation in order and stops at the first refusal, so a
-    /// rejected entry leaves the ones before it written.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux rejects the name or any command.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// use std::collections::BTreeMap;
-    /// use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
-    ///
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// let mut entries = BTreeMap::new();
-    /// entries.insert(0, TmuxText::from(b"display-message first".to_vec()));
-    /// entries.insert(3, TmuxText::from(b"display-message fourth".to_vec()));
-    ///
-    /// server
-    ///     .set_hooks("alert-bell", &IndexedHooks::from(entries), ReplaceMode::Replace)
-    ///     .await?;
-    ///
-    /// let written = server.hook("alert-bell").await?.expect("the hook is set");
-    /// assert_eq!(written.len(), 2);
-    /// assert!(written.get(1).is_none(), "the gap is kept");
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn set_hooks(
-        &self,
-        name: &str,
-        hooks: &IndexedHooks,
-        replace: ReplaceMode,
-    ) -> Result<(), Error> {
-        options::set_hooks(
-            &self.core,
-            options::Scope::GlobalSession,
-            name,
-            hooks,
-            replace,
-        )
-        .await
-    }
-
-    /// Read every hook set at this server.
-    ///
-    /// Only hooks holding something are reported: tmux lists every hook name
-    /// it knows, and the ones holding nothing are absent here rather than
-    /// present and empty.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// server.set_hook("alert-bell", "display-message rang").await?;
-    /// let hooks = server.hooks().await?;
-    /// assert!(hooks.contains_key("alert-bell"));
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn hooks(&self) -> Result<BTreeMap<String, IndexedHooks>, Error> {
-        options::hooks(&self.core, options::Scope::GlobalSession).await
-    }
-
-    /// Read one hook's commands, or `None` when it holds nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// assert!(server.hook("alert-bell").await?.is_none());
-    /// server.set_hook("alert-bell", "display-message rang").await?;
-    /// assert!(server.hook("alert-bell").await?.is_some());
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn hook(&self, name: &str) -> Result<Option<IndexedHooks>, Error> {
-        options::hook(&self.core, options::Scope::GlobalSession, name).await
     }
 
     /// Store data in a tmux paste buffer.
@@ -1477,23 +924,28 @@ impl Server {
     /// The result is [`TmuxText`] because a format can interpolate names that
     /// are not valid UTF-8.
     ///
+    /// A literal `#(command)` starts `command` in a shell. Recursive expansion,
+    /// such as `#{E:status-left}`, can also expose a command stored in the
+    /// expanded value. The job is asynchronous, so this call may return before
+    /// it produces output. Escaping the outer template with `##` does not
+    /// escape text introduced by a recursive expansion. Use only validated,
+    /// simple `#{field}` lookups with untrusted input.
+    ///
     /// # Errors
     ///
-    /// Returns an error when tmux rejects the format or the pane is gone.
+    /// Returns [`Error::ServerMismatch`] when the pane belongs to another
+    /// server, or an error when tmux rejects the format or the pane is gone.
     pub async fn format(&self, pane: Option<&Pane>, format: &str) -> Result<TmuxText, Error> {
         let mut command = Command::new("display-message").arg("-p");
         if let Some(pane) = pane {
+            self.core
+                .require_same_server(pane.server_identity(), "display-message")?;
             command = command.arg("-t").arg(pane.id().to_string());
         }
 
         let result = self.cmd(command.arg(OsString::from(format))).await?;
         if !result.success() {
-            return Err(Error::refused(
-                "display-message",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
-                None,
-            ));
+            return Err(Error::from_refused_result("display-message", &result, None));
         }
 
         // `-p` terminates its output with a newline that is framing rather
@@ -1504,31 +956,16 @@ impl Server {
         Ok(TmuxText::from(value.to_vec()))
     }
 
-    /// Refuse a capability the running tmux is too old for.
-    ///
-    /// Checked rather than left to tmux, which usually accepts an unknown
-    /// flag and ignores it: without this, "your tmux is too old" arrives as
-    /// "the command did nothing".
+    /// Read this server's release and refuse a capability it is too old for.
     pub(crate) async fn require(
         &self,
         capability: &'static str,
         needs: ReleaseVersion,
     ) -> Result<(), Error> {
-        let found = self.capabilities().await?.tmux_version();
-        // A development build carries no numbered release to compare, so it
-        // is taken at its word rather than refused.
-        if found
-            .behavior_release()
-            .is_some_and(|release| release < needs)
-        {
-            return Err(Error::UnsupportedCapability {
-                capability,
-                needs,
-                found: found.clone(),
-            });
-        }
-
-        Ok(())
+        self.capabilities()
+            .await?
+            .tmux_version()
+            .require(capability, needs)
     }
 
     /// Refuse when the running release is inside a range that gets it wrong.
@@ -1605,10 +1042,9 @@ impl Server {
             )
             .await?;
         if !result.success() {
-            return Err(Error::refused(
+            return Err(Error::from_refused_result(
                 "show-prompt-history",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
+                &result,
                 None,
             ));
         }
@@ -1681,12 +1117,7 @@ impl Server {
 
         let result = self.cmd(Command::new("server-access").arg("-l")).await?;
         if !result.success() {
-            return Err(Error::refused(
-                "server-access",
-                result.exit_code(),
-                result.stderr_lossy().into_owned(),
-                None,
-            ));
+            return Err(Error::from_refused_result("server-access", &result, None));
         }
 
         // tmux writes `name (R)` or `name (W)`, one per line. Split from the
@@ -1770,21 +1201,25 @@ impl Server {
 
     /// Create a session, run an operation with it, then kill it.
     ///
-    /// The session is killed whether the operation succeeded or failed, so a
-    /// short-lived task does not leave one behind. A panic still skips
-    /// cleanup: `Drop` on these handles is deliberately not destructive.
+    /// Once this future is polled, the scope owns creation and cleanup.
+    /// Cancellation or unwinding can let an in-flight creation finish, but a
+    /// session whose creation yields a handle is killed while the Tokio
+    /// runtime remains active. Ordinary handle `Drop` remains non-destructive.
     ///
     /// Setup and teardown failures convert into the operation's own error
     /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and the cleanup fail, the operation's error is
-    /// returned, because that is the work the caller was doing; the discarded
-    /// cleanup failure is recorded through `tracing` when that feature is on.
+    /// both the operation and cleanup fail, the cleanup error is returned as
+    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
+    /// creation; the operation error is discarded. When the operation fails
+    /// and cleanup succeeds, its generic error is returned unchanged: the
+    /// scope cannot certify replay safety for arbitrary callback work.
+    /// A canceled caller cannot receive a cleanup error, so tracing is its
+    /// only report.
     ///
     /// # Errors
     ///
     /// Returns the operation's error, or a converted [`Error`] when the
-    /// session could not be created, or could not be killed after the
-    /// operation succeeded.
+    /// session could not be created or could not be killed after creation.
     pub async fn with_session<T, E>(
         &self,
         options: impl Into<NewSessionOptions>,
@@ -1793,17 +1228,15 @@ impl Server {
     where
         E: From<Error>,
     {
-        let created = self.new_session(options).await?;
-        let outcome = operation(&created).await;
-
-        match (outcome, created.kill().await) {
-            (outcome, Ok(())) => outcome,
-            (Ok(_), Err(error)) => Err(error.into()),
-            (Err(outcome), Err(cleanup)) => {
-                listing::trace_discarded_cleanup(&cleanup);
-                Err(outcome)
-            }
-        }
+        let server = self.clone();
+        let options = options.into();
+        scoped::run(
+            "with-session",
+            async move { server.new_session(options).await },
+            Session::kill,
+            operation,
+        )
+        .await
     }
 
     /// Run a shell command through tmux and collect its output.
@@ -1833,11 +1266,7 @@ impl Server {
             .cmd(Command::new("run-shell").sensitive_arg(command.into()))
             .await?;
         if !result.success() {
-            return Err(Error::CommandFailed {
-                command: "run-shell",
-                exit_code: result.exit_code(),
-                stderr: result.stderr_lossy().into_owned(),
-            });
+            return Err(Error::from_refused_result("run-shell", &result, None));
         }
 
         let stdout = result.stdout();
@@ -1871,54 +1300,6 @@ impl Server {
         .await
     }
 
-    /// Signal a `wait-for` channel, releasing anything waiting on it.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the channel name.
-    pub async fn signal_channel(&self, channel: &str) -> Result<(), Error> {
-        listing::mutate(
-            &self.core,
-            "wait-for",
-            Command::new("wait-for")
-                .arg("-S")
-                .arg(OsString::from(channel)),
-        )
-        .await
-    }
-
-    /// Lock a `wait-for` channel, blocking later lock attempts on it.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the channel name.
-    pub async fn lock_channel(&self, channel: &str) -> Result<(), Error> {
-        listing::mutate(
-            &self.core,
-            "wait-for",
-            Command::new("wait-for")
-                .arg("-L")
-                .arg(OsString::from(channel)),
-        )
-        .await
-    }
-
-    /// Unlock a `wait-for` channel.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux refuses the channel name.
-    pub async fn unlock_channel(&self, channel: &str) -> Result<(), Error> {
-        listing::mutate(
-            &self.core,
-            "wait-for",
-            Command::new("wait-for")
-                .arg("-U")
-                .arg(OsString::from(channel)),
-        )
-        .await
-    }
-
     /// Start a tmux server without creating a session.
     ///
     /// # Errors
@@ -1926,196 +1307,6 @@ impl Server {
     /// Returns an error when tmux cannot be run.
     pub async fn start(&self) -> Result<(), Error> {
         listing::mutate(&self.core, "start-server", Command::new("start-server")).await
-    }
-
-    /// Show a popup over a client, running a command inside it.
-    ///
-    /// This needs a client with a terminal, so it fails on a server nothing is
-    /// attached to.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no suitable client exists or tmux refuses the
-    /// command.
-    pub async fn display_popup(
-        &self,
-        client: Option<&Client>,
-        command: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        let mut popup = Command::new("display-popup").arg("-E");
-        if let Some(client) = client {
-            popup = popup
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
-
-        listing::mutate(&self.core, "display-popup", popup.arg(command.into())).await
-    }
-
-    /// Show a menu over a client.
-    ///
-    /// Items are `(label, key, command)` triples in the order tmux should show
-    /// them. This needs a client with a terminal.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no suitable client exists or tmux refuses an
-    /// item.
-    pub async fn display_menu(
-        &self,
-        client: Option<&Client>,
-        title: &str,
-        items: impl IntoIterator<Item = (String, String, String)>,
-    ) -> Result<(), Error> {
-        let mut menu = Command::new("display-menu")
-            .arg("-T")
-            .arg(OsString::from(title));
-        if let Some(client) = client {
-            menu = menu
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
-        for (label, key, command) in items {
-            menu = menu
-                .arg(OsString::from(label))
-                .arg(OsString::from(key))
-                .arg(OsString::from(command));
-        }
-
-        listing::mutate(&self.core, "display-menu", menu).await
-    }
-
-    /// Open a command prompt on a client.
-    ///
-    /// The prompt runs `command` once the user answers, with `%%` replaced by
-    /// what they typed. Success means tmux opened the prompt, not that anyone
-    /// answered it.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no suitable client exists or tmux refuses.
-    pub async fn command_prompt(
-        &self,
-        client: Option<&Client>,
-        prompt: Option<&str>,
-        command: impl Into<OsString>,
-    ) -> Result<(), Error> {
-        let mut request = Command::new("command-prompt");
-        if let Some(client) = client {
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
-        if let Some(prompt) = prompt {
-            request = request.arg("-p").arg(OsString::from(prompt));
-        }
-
-        listing::mutate(&self.core, "command-prompt", request.arg(command.into())).await
-    }
-
-    /// Open one of tmux's interactive choosers on a client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no suitable client exists or tmux refuses.
-    pub async fn choose(&self, chooser: Chooser, client: Option<&Client>) -> Result<(), Error> {
-        let name = chooser.command();
-        let mut request = Command::new(name);
-        if let Some(client) = client {
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
-
-        listing::mutate(&self.core, name, request).await
-    }
-
-    /// Open tmux's window finder for a search string.
-    ///
-    /// This is separate from [`Server::choose`] because it needs something to
-    /// search for, where the other choosers list what already exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no suitable client exists or tmux refuses.
-    pub async fn find_window(&self, client: Option<&Client>, search: &str) -> Result<(), Error> {
-        let mut request = Command::new("find-window");
-        if let Some(client) = client {
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
-
-        listing::mutate(
-            &self.core,
-            "find-window",
-            request.arg(OsString::from(search)),
-        )
-        .await
-    }
-
-    /// Briefly show each pane's number on a client.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no suitable client exists or tmux refuses.
-    pub async fn display_panes(&self, client: Option<&Client>) -> Result<(), Error> {
-        let mut request = Command::new("display-panes");
-        if let Some(client) = client {
-            request = request
-                .arg("-t")
-                .arg(client.name().to_string_lossy().into_owned());
-        }
-
-        listing::mutate(&self.core, "display-panes", request).await
-    }
-
-    /// Read one server option, decoded according to its declared kind.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
-        Ok(options::get(&self.core, options::Scope::Server, name)
-            .await?
-            .map(|value| OptionValue::decode(name, value)))
-    }
-
-    /// Read one global session option, decoded according to its declared kind.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn typed_global_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
-        Ok(
-            options::get(&self.core, options::Scope::GlobalSession, name)
-                .await?
-                .map(|value| OptionValue::decode(name, value)),
-        )
-    }
-
-    /// Find the session with this exact name.
-    ///
-    /// Names are compared as bytes, because tmux permits names that are not
-    /// valid UTF-8.
-    ///
-    /// The comparison happens here rather than through tmux's `-f`, which
-    /// would filter server-side but requires building a format string around
-    /// the name. A name containing `#`, `}`, or a comma would change the
-    /// predicate's meaning, and tmux documents no escaping for those values,
-    /// so a lookup would be an injection point.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the session listing fails.
-    pub async fn session(&self, name: impl AsRef<[u8]>) -> Result<Option<Session>, Error> {
-        let name = name.as_ref();
-
-        Ok(self
-            .sessions()
-            .await?
-            .into_iter()
-            .find(|session| session.name() == name))
     }
 
     /// Which tmux daemon is answering on this endpoint.
@@ -2194,155 +1385,6 @@ impl Server {
         Err(Error::ServerGenerationChanged { expected, found })
     }
 
-    /// Find the session with this id.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the session listing fails.
-    pub async fn session_by_id(&self, id: &SessionId) -> Result<Option<Session>, Error> {
-        // An id is a sigil and digits, so it can be handed to tmux as a
-        // predicate and matched server-side. tmux returns the one row rather
-        // than every row for this to scan.
-        let infos = listing::sessions(&self.core, Some(&id.predicate("session_id"))).await?;
-
-        Ok(infos
-            .into_iter()
-            .next()
-            .map(|info| Session::new(Arc::clone(&self.core), info)))
-    }
-
-    /// Find the window with this id, through the first link that reaches it.
-    ///
-    /// A window linked into several sessions is returned once. Use
-    /// [`Server::windows_or_empty`] when the link matters.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the window listing fails.
-    pub async fn window_by_id(&self, id: &WindowId) -> Result<Option<Window>, Error> {
-        let projections = listing::windows(
-            &self.core,
-            listing::Scope::Server,
-            Some(&id.predicate("window_id")),
-        )
-        .await?;
-
-        // A window linked into several sessions has one row per link, and
-        // activity belongs to the link rather than to the window: the same
-        // window can be current in one session and not in another. Taking
-        // whichever row tmux happened to list first would pick by session
-        // name, so the current link wins and the lowest index breaks a tie.
-        Ok(projections
-            .into_iter()
-            .min_by_key(|projection| {
-                (
-                    !projection.link().is_active(),
-                    projection.link().identity().window_index(),
-                )
-            })
-            .map(|projection| Window::new(Arc::clone(&self.core), projection)))
-    }
-
-    /// Find the pane with this id.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the pane listing fails.
-    pub async fn pane_by_id(&self, id: &PaneId) -> Result<Option<Pane>, Error> {
-        let projections = listing::panes(
-            &self.core,
-            listing::Scope::Server,
-            Some(&id.predicate("pane_id")),
-        )
-        .await?;
-
-        Ok(projections
-            .into_iter()
-            .next()
-            .map(|projection| Pane::new(Arc::clone(&self.core), projection)))
-    }
-
-    /// Find the client attached to this terminal.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the client listing fails.
-    pub async fn client(&self, name: impl AsRef<[u8]>) -> Result<Option<Client>, Error> {
-        let name = name.as_ref();
-
-        Ok(self
-            .clients()
-            .await?
-            .into_iter()
-            .find(|client| client.name() == name))
-    }
-
-    /// Fetch the whole hierarchy in three commands.
-    ///
-    /// Walking down with [`Server::sessions_or_empty`], then each session's windows,
-    /// then each window's panes costs one command per object. tmux can answer
-    /// the same question with `list-sessions`, `list-windows -a`, and
-    /// `list-panes -a`, so this issues three regardless of how much is
-    /// running and stitches the result by winlink.
-    ///
-    /// Use it when you want everything. Use the scoped accessors when you
-    /// want one branch: they fetch less.
-    ///
-    /// The three listings are separate tmux commands, so this is not an
-    /// atomic capture. A window created between them appears in one listing
-    /// and not another, and is dropped rather than reported half-formed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when any of the three listings fails.
-    pub async fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
-        let (sessions, windows, panes) =
-            tokio::try_join!(self.sessions(), self.windows(), self.panes(),)?;
-
-        // Grouping is by the numeric part of each ID rather than the ID: it
-        // is Copy and unique among IDs of one kind, so stitching the three
-        // listings together allocates nothing per object.
-        //
-        // `list-panes -a` yields one row per winlink, so a pane in a window
-        // that two sessions link appears twice. A pane belongs to exactly one
-        // window however it was reached, so the duplicate rows describe the
-        // same pane and only the first is kept.
-        let mut seen = HashSet::new();
-        let mut panes_by_window: HashMap<u32, Vec<Pane>> = HashMap::new();
-        for pane in panes {
-            if !seen.insert(pane.id().number()) {
-                continue;
-            }
-            panes_by_window
-                .entry(pane.window_id().number())
-                .or_default()
-                .push(pane);
-        }
-
-        let mut windows_by_session: HashMap<u32, Vec<WindowTree>> = HashMap::new();
-        for window in windows {
-            // Cloned, not moved: a window linked into several sessions appears
-            // under each of them, and it holds the same panes in every one.
-            let panes = panes_by_window
-                .get(&window.id().number())
-                .cloned()
-                .unwrap_or_default();
-            windows_by_session
-                .entry(window.session_id().number())
-                .or_default()
-                .push(WindowTree { window, panes });
-        }
-
-        Ok(sessions
-            .into_iter()
-            .map(|session| {
-                let windows = windows_by_session
-                    .remove(&session.id().number())
-                    .unwrap_or_default();
-                SessionTree { session, windows }
-            })
-            .collect())
-    }
     /// Report whether a tmux daemon is answering at this endpoint.
     ///
     /// Every failure becomes `false`, including a missing executable. Use
@@ -2355,98 +1397,19 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be run at all. A daemon that is
-    /// simply not running is reported through `Ok(false)`-shaped emptiness by
-    /// the listings, so this distinguishes "nothing started" from "cannot ask".
+    /// Returns [`Error::ServerGone`] when no daemon is answering, or another
+    /// dispatch error when tmux cannot be asked.
     pub async fn check_alive(&self) -> Result<(), Error> {
         let result = self.cmd(Command::new("list-sessions")).await?;
         if result.success() {
             return Ok(());
         }
 
-        Err(Error::ObjectGone {
-            kind: ObjectKind::Session,
-            id: self.identity().socket_path().display().to_string(),
-        })
-    }
-
-    /// Report whether a session with this exact name exists.
-    ///
-    /// The comparison is over raw bytes, because tmux permits session names
-    /// that are not valid UTF-8.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the session listing fails.
-    pub async fn has_session(&self, name: impl AsRef<[u8]>) -> Result<bool, Error> {
-        let name = name.as_ref();
-
-        Ok(self
-            .sessions()
-            .await?
-            .iter()
-            .any(|session| session.name() == name))
-    }
-
-    /// Record a listing failure that a lenient accessor is about to discard.
-    ///
-    /// The lenient contract hides the cause from the return type, so this is
-    /// the only place it survives. Without the `tracing` feature the failure
-    /// is dropped, which is why every lenient accessor has a loud `try_*`
-    /// counterpart.
-    #[cfg_attr(
-        not(feature = "tracing"),
-        expect(
-            unused_variables,
-            reason = "the cause has no sink when tracing is disabled"
-        )
-    )]
-    fn trace_lenient_listing(list_command: &'static str, error: &Error) {
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            list_command,
-            error = %error,
-            "a lenient listing discarded a failure and returned empty",
-        );
-    }
-
-    /// List every session on the server, preserving any failure.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the list command cannot run, or when its output
-    /// cannot be decoded into snapshots.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// guard.session("work").await?;
-    ///
-    /// let sessions = guard.server().sessions().await?;
-    /// assert_eq!(sessions.len(), 1);
-    /// assert!(sessions[0].id().to_string().starts_with('$'));
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn sessions(&self) -> Result<Vec<Session>, Error> {
-        let infos = listing::sessions(&self.core, None).await?;
-
-        Ok(infos
-            .into_iter()
-            .map(|info| Session::new(Arc::clone(&self.core), info))
-            .collect())
+        Err(Error::from_refused_result("list-sessions", &result, None))
     }
 
     #[cfg(test)]
-    fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
+    pub(crate) fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
         Self {
             core: Arc::new(Core::from_executor_for_test(executor)),
         }
@@ -2476,301 +1439,139 @@ impl fmt::Debug for Server {
     }
 }
 
-/// A consuming builder for one inert [`Server`] handle.
-///
-/// # Examples
-///
-/// ```
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// use libtmux::{DispatchLimits, OutputLimits, Server};
-/// use std::time::Duration;
-///
-/// // Naming a socket and a budget is the whole of the configuration; everything
-/// // else is per-command.
-/// let server = Server::builder()
-///     .socket_name("builder-example")
-///     .default_timeout(Duration::from_secs(5))
-///     .output_limits(OutputLimits::default().max_stdout_bytes(1024 * 1024))
-///     .dispatch_limits(DispatchLimits::default().max_in_flight(4))
-///     .build()?;
-///
-/// // Building does not start tmux, so this has not touched the machine yet.
-/// let _ = server.identity();
-/// # Ok(())
-/// # }
-/// ```
-#[must_use = "a server builder has no effect until build is called"]
-pub struct ServerBuilder {
-    socket_name: Option<OsString>,
-    socket_path: Option<PathBuf>,
-    config_file: Option<PathBuf>,
-    colors: Option<u16>,
-    executable: OsString,
-    timeout: Duration,
-    output_limits: OutputLimits,
-    dispatch_limits: DispatchLimits,
-    #[cfg(feature = "test-support")]
-    prevent_server_start: bool,
-}
-
-// Redacted like `ServerIdentity`'s, and for the same reason: a builder holds
-// the socket path and the config path, and a caller who prints one while
-// debugging should not put either into a log.
-impl fmt::Debug for ServerBuilder {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ServerBuilder")
-            .field(
-                "socket_name",
-                &self.socket_name.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "socket_path",
-                &self.socket_path.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "config_file",
-                &self.config_file.as_ref().map(|_| "<redacted>"),
-            )
-            .field("colors", &self.colors)
-            .field("timeout", &self.timeout)
-            .field("output_limits", &self.output_limits)
-            .field("dispatch_limits", &self.dispatch_limits)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ServerBuilder {
-    fn new() -> Self {
-        Self {
-            socket_name: None,
-            socket_path: None,
-            config_file: None,
-            colors: None,
-            executable: OsString::from("tmux"),
-            timeout: CoreConfiguration::default_timeout(),
-            output_limits: OutputLimits::default(),
-            dispatch_limits: DispatchLimits::default(),
-            #[cfg(feature = "test-support")]
-            prevent_server_start: false,
-        }
-    }
-
-    /// Bound how many bytes one command may read from tmux.
-    ///
-    /// tmux answers with as many bytes as it has: a pane with a long history,
-    /// a buffer holding a pasted file, a `run-shell` that keeps printing.
-    /// Without a ceiling the operating system decides when to stop, and it
-    /// does that by killing this process.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use libtmux::OutputLimits;
-    ///
-    /// let server = libtmux::Server::builder()
-    ///     .output_limits(OutputLimits::default().max_stdout_bytes(1024 * 1024))
-    ///     .build()?;
-    /// # let _ = server;
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the limits"]
-    pub const fn output_limits(mut self, limits: OutputLimits) -> Self {
-        self.output_limits = limits;
-        self
-    }
-
-    /// Bound how many commands may run at once.
-    ///
-    /// Each one is a tmux client process with its own pipes and reader tasks,
-    /// and tmux serializes them on the far side anyway, so past a point more
-    /// clients buy queueing rather than throughput. A caller that fans out
-    /// wide -- an agent, a reconciler sweeping every pane -- otherwise turns
-    /// its own concurrency into pressure on the machine.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use libtmux::DispatchLimits;
-    ///
-    /// let server = libtmux::Server::builder()
-    ///     .dispatch_limits(DispatchLimits::default().max_in_flight(4))
-    ///     .build()?;
-    /// # let _ = server;
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the limits"]
-    pub const fn dispatch_limits(mut self, limits: DispatchLimits) -> Self {
-        self.dispatch_limits = limits;
-        self
-    }
-
-    /// Select a named tmux socket.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let server = libtmux::Server::builder().socket_name("example").build()?;
-    /// assert_eq!(server.socket_name(), Some(std::ffi::OsStr::new("example")));
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the socket name"]
-    pub fn socket_name(mut self, name: impl Into<OsString>) -> Self {
-        self.socket_name = Some(name.into());
-        self
-    }
-
-    /// Select an explicit tmux socket path.
-    ///
-    /// Relative paths are joined to the working directory captured by
-    /// [`ServerBuilder::build`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let server = libtmux::Server::builder()
-    ///     .socket_path("/tmp/libtmux-rs-test/explicit-example.sock")
-    ///     .build()?;
-    /// assert!(server.socket_path().is_absolute());
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the socket path"]
-    pub fn socket_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.socket_path = Some(path.into());
-        self
-    }
-
-    /// Select a tmux configuration file.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let server = libtmux::Server::builder()
-    ///     .config_file("/tmp/libtmux-config-example.conf")
-    ///     .build()?;
-    /// assert!(server.config_file().is_some());
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the config path"]
-    pub fn config_file(mut self, path: impl Into<PathBuf>) -> Self {
-        self.config_file = Some(path.into());
-        self
-    }
-
-    /// Select tmux's 88- or 256-color compatibility mode.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let server = libtmux::Server::builder().colors(88).build()?;
-    /// assert_eq!(server.colors(), Some(88));
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the color mode"]
-    pub const fn colors(mut self, colors: u16) -> Self {
-        self.colors = Some(colors);
-        self
-    }
-
-    /// Select the tmux executable without checking that it exists yet.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let server = libtmux::Server::builder().tmux_executable("tmux").build()?;
-    /// assert_eq!(server.tmux_executable(), std::ffi::OsStr::new("tmux"));
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the executable"]
-    pub fn tmux_executable(mut self, executable: impl Into<OsString>) -> Self {
-        self.executable = executable.into();
-        self
-    }
-
-    /// Set the per-command process deadline.
-    ///
-    /// A duration too large for the platform's monotonic clock is treated as
-    /// unbounded while command cancellation remains available.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let timeout = std::time::Duration::from_secs(4);
-    /// let server = libtmux::Server::builder().default_timeout(timeout).build()?;
-    /// assert_eq!(server.default_timeout(), timeout);
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    #[must_use = "use the returned builder to retain the timeout"]
-    pub const fn default_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    #[cfg(feature = "test-support")]
-    pub(crate) const fn prevent_server_start(mut self) -> Self {
-        self.prevent_server_start = true;
-        self
-    }
-
-    /// Capture process context and construct an inert server handle.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidServerConfiguration`] for invalid selector,
-    /// path, color, working-directory, or socket-root inputs.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let server = libtmux::Server::builder().build()?;
-    /// assert!(server.socket_path().is_absolute());
-    /// # Ok::<(), libtmux::Error>(())
-    /// ```
-    pub fn build(self) -> Result<Server, Error> {
-        let selection = match (self.socket_name, self.socket_path) {
-            (Some(name), None) => SocketSelection::Name(name),
-            (None, Some(path)) => SocketSelection::Path(path),
-            (None, None) => SocketSelection::Automatic,
-            (Some(_), Some(_)) => {
-                return Err(Error::invalid_server_configuration(
-                    ServerConfigurationErrorKind::ConflictingSocketSelectors,
-                ));
-            }
-        };
-        let configuration = CoreConfiguration::resolve(
-            &selection,
-            self.config_file,
-            self.colors,
-            self.executable,
-            self.timeout,
-            BuildContext::capture(),
-        )
-        .map_err(Error::invalid_server_configuration)?
-        .with_limits(self.output_limits, self.dispatch_limits);
-        #[cfg(feature = "test-support")]
-        let configuration = if self.prevent_server_start {
-            configuration.prevent_server_start()
-        } else {
-            configuration
-        };
-        Ok(Server {
-            core: Arc::new(Core::new(configuration)),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use tokio::sync::{Notify, watch};
 
-    use super::Server;
-    use crate::Error;
-    use crate::command::CommandRequest;
+    use super::{NewSessionOptions, Server};
+    use crate::command::{CommandRequest, CommandResult, ProcessStatus};
+    use crate::formats::{DecoderKind, FormatDescriptor, FormatPlan, ListProfile};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+    use crate::{Error, ErrorKind, TmuxVersion};
+
+    struct RefusingExecutor {
+        calls: AtomicUsize,
+    }
+
+    #[derive(Clone, Copy)]
+    enum SessionFollowup {
+        DispatchError,
+        EmptyListing,
+    }
+
+    struct ComposedSessionExecutor {
+        calls: AtomicUsize,
+        sessions_stdout: Vec<u8>,
+        followup: SessionFollowup,
+    }
+
+    impl Executor for ComposedSessionExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let sessions_stdout = self.sessions_stdout.clone();
+            let followup = self.followup;
+            DispatchFuture::new(async move {
+                if call == 3 && matches!(followup, SessionFollowup::DispatchError) {
+                    return Err(Error::Overloaded {
+                        request_id: request.request_id().get(),
+                        command: request.summary().clone(),
+                        in_flight: 1,
+                    });
+                }
+
+                let stdout = match call {
+                    0 => b"tmux 3.7b\n".to_vec(),
+                    1 => sessions_stdout,
+                    2 | 3 => Vec::new(),
+                    _ => panic!("one probe, one listing, one mutation, and one refresh"),
+                };
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    fn default_format_value(descriptor: &FormatDescriptor) -> &'static [u8] {
+        match descriptor.name() {
+            "session_id" => b"$1",
+            "window_id" => b"@1",
+            "pane_id" => b"%1",
+            "client_name" => b"client",
+            _ => match descriptor.decoder() {
+                DecoderKind::Ascii => b"ascii",
+                DecoderKind::Text => b"text",
+                DecoderKind::Bool
+                | DecoderKind::U8
+                | DecoderKind::U32
+                | DecoderKind::U64
+                | DecoderKind::I32
+                | DecoderKind::Timestamp
+                | DecoderKind::PaneProgress => b"0",
+                DecoderKind::SessionId => b"$1",
+                DecoderKind::WindowId => b"@1",
+                DecoderKind::PaneId => b"%1",
+                DecoderKind::PaneProgressState => b"normal",
+            },
+        }
+    }
+
+    fn session_listing_stdout() -> Vec<u8> {
+        let version = TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version");
+        let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
+        let mut stdout = Vec::new();
+        for descriptor in plan.descriptors_for_test() {
+            for byte in default_format_value(descriptor) {
+                if matches!(*byte, b'\\' | b'%') {
+                    stdout.push(b'\\');
+                }
+                stdout.push(*byte);
+            }
+            stdout.push(b'%');
+        }
+        stdout.push(b'\n');
+        stdout
+    }
+
+    impl Executor for RefusingExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            DispatchFuture::new(async move {
+                let (status, stdout, stderr) = if call == 0 {
+                    (0, b"tmux 3.7b\n".to_vec(), Vec::new())
+                } else {
+                    assert_eq!(call, 1, "one probe and one run-shell dispatch");
+                    assert_eq!(request.summary().sensitive_argument_count(), 1);
+                    (1 << 8, Vec::new(), b"sentinel-run-shell-output\n".to_vec())
+                };
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(status)),
+                    stdout,
+                    stderr,
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
 
     struct BlockingShutdownExecutor {
         closed: AtomicBool,
@@ -2843,6 +1644,93 @@ mod tests {
             .await
             .expect("later clone completes shutdown");
     }
+
+    #[tokio::test]
+    async fn run_shell_failure_withholds_sensitive_output() {
+        let server = Server::from_executor_for_test(Arc::new(RefusingExecutor {
+            calls: AtomicUsize::new(0),
+        }));
+
+        let error = server
+            .run_shell("sentinel-run-shell-command")
+            .await
+            .expect_err("the command is refused");
+        let diagnostic = format!("{error:?} {error}");
+        for secret in ["sentinel-run-shell-command", "sentinel-run-shell-output"] {
+            assert!(!diagnostic.contains(secret), "{diagnostic}");
+        }
+    }
+
+    #[tokio::test]
+    async fn session_refresh_failure_after_rename_marks_the_completed_effect() {
+        let executor = Arc::new(ComposedSessionExecutor {
+            calls: AtomicUsize::new(0),
+            sessions_stdout: session_listing_stdout(),
+            followup: SessionFollowup::DispatchError,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+        let mut session = server
+            .sessions()
+            .await
+            .expect("fixture session listing")
+            .pop()
+            .expect("one fixture session");
+
+        let error = session
+            .rename("renamed")
+            .await
+            .expect_err("refresh dispatch fails after rename succeeds");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
+        assert!(
+            matches!(
+                error,
+                Error::AfterEffect { operation: "rename-session", source }
+                    if source.kind() == ErrorKind::Refused && source.is_transient()
+            ),
+            "the refresh error remains available as the source",
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_session_step_requires_an_active_window_postcondition() {
+        let executor = Arc::new(ComposedSessionExecutor {
+            calls: AtomicUsize::new(0),
+            sessions_stdout: session_listing_stdout(),
+            followup: SessionFollowup::EmptyListing,
+        });
+        let server = Server::from_executor_for_test(executor.clone());
+        let session = server
+            .sessions()
+            .await
+            .expect("fixture session listing")
+            .pop()
+            .expect("one fixture session");
+
+        let error = session
+            .next_window()
+            .await
+            .expect_err("an accepted step must leave an active window");
+
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
+        assert!(matches!(
+            error,
+            Error::AfterEffect { operation: "next-window", source }
+                if matches!(*source, Error::ObjectGone { .. })
+        ));
+    }
+
+    #[test]
+    fn new_session_options_redact_the_shell_command() {
+        let secret = "sentinel-session-command";
+        let options = NewSessionOptions::new("work").command(secret);
+        assert!(!format!("{options:?}").contains(secret));
+
+        let summary = options.into_command("#{session_id}").summary();
+        assert_eq!(summary.sensitive_argument_count(), 1);
+        assert!(!summary.to_string().contains(secret));
+    }
 }
 
 /// Options for creating a session.
@@ -2875,7 +1763,7 @@ mod tests {
 /// # }
 /// ```
 #[must_use = "options describe a session but do not create one"]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NewSessionOptions {
     name: OsString,
     start_directory: Option<PathBuf>,
@@ -2883,6 +1771,19 @@ pub struct NewSessionOptions {
     command: Option<OsString>,
     width: Option<u32>,
     height: Option<u32>,
+}
+
+impl fmt::Debug for NewSessionOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewSessionOptions")
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_window_name", &self.window_name.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
 }
 
 impl NewSessionOptions {
@@ -2899,6 +1800,9 @@ impl NewSessionOptions {
     }
 
     /// Set the working directory for the session's first window.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     pub fn start_directory(mut self, directory: impl Into<PathBuf>) -> Self {
         self.start_directory = Some(directory.into());
         self
@@ -2951,7 +1855,7 @@ impl NewSessionOptions {
                 .arg(height.to_string());
         }
         if let Some(shell_command) = self.command {
-            command = command.arg(shell_command);
+            command = command.sensitive_arg(shell_command);
         }
         command
     }
@@ -3003,242 +1907,5 @@ impl Chooser {
             Self::Buffer => "choose-buffer",
             Self::Customize => "customize-mode",
         }
-    }
-}
-
-/// One session and everything under it, from [`Server::hierarchy`].
-///
-/// # Examples
-///
-/// ```
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// session.new_window("editor").await?;
-///
-/// // One round of listings for the whole hierarchy, rather than one call per
-/// // session and another per window.
-/// let tree = guard.server().hierarchy().await?;
-/// let found = tree
-///     .iter()
-///     .find(|branch| branch.session.name().to_string_lossy() == "work")
-///     .expect("the session just created");
-/// assert_eq!(found.windows.len(), 2);
-///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
-/// # Ok(())
-/// # }
-/// ```
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct SessionTree {
-    /// The session.
-    pub session: Session,
-    /// Its windows, in tmux's order. A window linked into several sessions
-    /// appears under each of them, as the listings report it.
-    pub windows: Vec<WindowTree>,
-}
-
-/// One window and its panes, from [`Server::hierarchy`].
-///
-/// # Examples
-///
-/// ```
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-/// # runtime.block_on(async {
-/// use libtmux::SplitDirection;
-///
-/// let guard = libtmux::test::TestServer::new().await?;
-/// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
-/// window.split(SplitDirection::Below).await?;
-///
-/// let tree = guard.server().hierarchy().await?;
-/// let panes: usize = tree
-///     .iter()
-///     .flat_map(|branch| branch.windows.iter())
-///     .map(|branch| branch.panes.len())
-///     .sum();
-/// assert_eq!(panes, 2);
-///
-/// guard.shutdown().await?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// # })?;
-/// # Ok(())
-/// # }
-/// ```
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct WindowTree {
-    /// The window, carrying the link it was reached through.
-    pub window: Window,
-    /// Its panes, in tmux's order.
-    pub panes: Vec<Pane>,
-}
-
-/// Typed filter handles for [`SessionTree`].
-///
-/// The session's own fields sit under [`session`], and [`windows`] is the
-/// relation that makes a question about a session's contents expressible.
-///
-/// [`session`]: SessionTreeFields::session
-/// [`windows`]: SessionTreeFields::windows
-///
-/// # Examples
-///
-/// ```
-/// # #[cfg(feature = "query")] {
-/// use libtmux::query::Filterable as _;
-/// use libtmux::{SessionTree, WindowTree};
-///
-/// let sessions = SessionTree::filter_fields();
-/// let windows = WindowTree::filter_fields();
-///
-/// // The session's own fields sit beside the relation rather than behind it, so
-/// // a question about the session and a question about what it contains compose.
-/// let building = sessions
-///     .session
-///     .session_name
-///     .starts_with("build")
-///     .and(sessions.windows.any(windows.window.window_name.eq("editor")));
-/// # let _ = building;
-/// # }
-/// ```
-#[cfg(feature = "query")]
-#[non_exhaustive]
-pub struct SessionTreeFields {
-    /// The session's own fields, the same set [`Session`] filters on.
-    pub session: SessionFields<SessionTree>,
-    /// The windows under this session.
-    pub windows: ManyRelation<SessionTree, WindowTree>,
-}
-
-// Named rather than exhaustive, as the generated field sets are: every handle
-// is a zero-sized name, so listing them prints a page of nothing.
-#[cfg(feature = "query")]
-impl fmt::Debug for SessionTreeFields {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SessionTreeFields")
-            .finish_non_exhaustive()
-    }
-}
-
-/// Typed filter handles for [`WindowTree`].
-///
-/// # Examples
-///
-/// ```
-/// # #[cfg(feature = "query")] {
-/// use libtmux::query::Filterable as _;
-/// use libtmux::{Pane, WindowTree};
-///
-/// let windows = WindowTree::filter_fields();
-/// let panes = Pane::filter_fields();
-///
-/// // `any` asks whether some pane matches, which is not the same question as
-/// // filtering the panes themselves: this keeps whole windows.
-/// let has_dead_pane = windows.panes.any(panes.pane_dead.eq(true));
-/// # let _ = has_dead_pane;
-/// # }
-/// ```
-#[cfg(feature = "query")]
-#[non_exhaustive]
-pub struct WindowTreeFields {
-    /// The window's own fields, the same set [`Window`] filters on.
-    pub window: WindowFields<WindowTree>,
-    /// The panes in this window.
-    pub panes: ManyRelation<WindowTree, Pane>,
-}
-
-#[cfg(feature = "query")]
-impl fmt::Debug for WindowTreeFields {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("WindowTreeFields")
-            .finish_non_exhaustive()
-    }
-}
-
-/// The wire name of the relation from a session to its windows.
-#[cfg(feature = "query")]
-const WINDOWS_RELATION: &str = "windows";
-
-/// The wire name of the relation from a window to its panes.
-#[cfg(feature = "query")]
-const PANES_RELATION: &str = "panes";
-
-/// Filtering a hierarchy branch reaches the session's fields and its windows.
-///
-/// A [`Session`] handle cannot carry a relation, because it does not hold its
-/// windows -- it fetches them. This is the shape that does hold them, so it is
-/// the shape a relation can be asked about.
-#[cfg(feature = "query")]
-impl Filterable for SessionTree {
-    type Fields = SessionTreeFields;
-
-    const FILTER_TARGET: &'static str = "session_tree";
-
-    fn filter_fields() -> Self::Fields {
-        Self::Fields {
-            session: SessionFields::for_target(Self::FILTER_TARGET),
-            windows: crate::query::__private::many_relation(Self::FILTER_TARGET, WINDOWS_RELATION),
-        }
-    }
-
-    fn __filter_matches(&self, predicate: &crate::query::__private::Predicate) -> bool {
-        if predicate.field() == WINDOWS_RELATION {
-            return predicate.matches_many(&self.windows);
-        }
-
-        self.session.__filter_matches(predicate)
-    }
-
-    fn __filter_validate(
-        predicate: &crate::query::__private::Predicate,
-    ) -> Result<(), crate::query::FilterExpressionError> {
-        if predicate.field() == WINDOWS_RELATION {
-            return predicate.validate_many::<WindowTree>();
-        }
-
-        <Session as Filterable>::__filter_validate(predicate)
-    }
-}
-
-/// Filtering a window branch reaches the window's fields and its panes.
-#[cfg(feature = "query")]
-impl Filterable for WindowTree {
-    type Fields = WindowTreeFields;
-
-    const FILTER_TARGET: &'static str = "window_tree";
-
-    fn filter_fields() -> Self::Fields {
-        Self::Fields {
-            window: WindowFields::for_target(Self::FILTER_TARGET),
-            panes: crate::query::__private::many_relation(Self::FILTER_TARGET, PANES_RELATION),
-        }
-    }
-
-    fn __filter_matches(&self, predicate: &crate::query::__private::Predicate) -> bool {
-        if predicate.field() == PANES_RELATION {
-            return predicate.matches_many(&self.panes);
-        }
-
-        self.window.__filter_matches(predicate)
-    }
-
-    fn __filter_validate(
-        predicate: &crate::query::__private::Predicate,
-    ) -> Result<(), crate::query::FilterExpressionError> {
-        if predicate.field() == PANES_RELATION {
-            return predicate.validate_many::<Pane>();
-        }
-
-        <Window as Filterable>::__filter_validate(predicate)
     }
 }

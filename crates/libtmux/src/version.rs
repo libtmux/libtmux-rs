@@ -450,6 +450,36 @@ impl TmuxVersion {
         }
     }
 
+    /// Refuse a capability this release is too old for.
+    ///
+    /// tmux usually accepts an unknown flag and ignores it, so without this
+    /// "your tmux is too old" arrives as "the command did nothing". A
+    /// development build carries no numbered release to compare and is taken
+    /// at its word rather than refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedCapability`] when this release is below
+    /// `needs`.
+    pub(crate) fn require(
+        &self,
+        capability: &'static str,
+        needs: ReleaseVersion,
+    ) -> Result<(), Error> {
+        if self
+            .behavior_release()
+            .is_some_and(|release| release < needs)
+        {
+            return Err(Error::UnsupportedCapability {
+                capability,
+                needs,
+                found: self.clone(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Require this version to meet the crate's minimum supported release.
     ///
     /// # Errors
@@ -611,6 +641,20 @@ pub mod since {
     /// The prompt history, and so [`crate::Server::prompt_history`].
     pub const PROMPT_HISTORY: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
 
+    /// `pane-border-format` becoming a pane option as well as a window one.
+    ///
+    /// Below this release tmux stores it only per window, and a write sent
+    /// with `-p` lands there instead -- reporting success for a change the
+    /// caller did not ask for. See [`crate::OptionSchema::accepts`].
+    pub const PANE_BORDER_FORMAT_PER_PANE: ReleaseVersion =
+        ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    /// `pane-border-style` and `pane-active-border-style` becoming pane
+    /// options as well as window ones, with the same consequence below it as
+    /// [`PANE_BORDER_FORMAT_PER_PANE`].
+    pub const PANE_BORDER_STYLE_PER_PANE: ReleaseVersion =
+        ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
     /// `capture-pane -F`, and so [`crate::Pane::capture_lines`].
     pub const CAPTURE_LINE_FLAGS: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 
@@ -624,4 +668,36 @@ pub mod since {
     /// segfaults. `mute_pane` pauses the pane below this release instead,
     /// which discards the queue on every supported release.
     pub const CONTROL_PANE_OFF: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// `capture-pane -T`, and so [`crate::CaptureOptions::trim_blank_cells`].
+    ///
+    /// Added in 3.4 to stop at the last used cell instead of the pane's full
+    /// width. The option string is `ab:CeE:JNpPqS:t:` on 3.2a and gains `T`
+    /// by 3.5a; tmux's own CHANGES puts it in the 3.3a-to-3.4 section.
+    ///
+    /// `-N` and `-P` need no such gate: both are present at 3.2a, which is
+    /// [`crate::TmuxVersion::MIN_SUPPORTED`].
+    pub const CAPTURE_TRIM_BLANK_CELLS: ReleaseVersion =
+        ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
+
+    /// `list-clients` leaving out a client that is stopped rather than gone,
+    /// and so [`crate::Error::ClientSuspended`] being reachable at all.
+    ///
+    /// From this release `sort_get_clients` screens the listing on
+    /// `CLIENT_UNATTACHEDFLAGS`, which covers the dead, the exiting and the
+    /// suspended together, so a suspended or locked client disappears from it.
+    /// Earlier releases screen on the session alone, and suspending a client
+    /// never clears that, so it stays listed and reads back normally.
+    ///
+    /// Measured on 3.2a, 3.4, 3.5a, 3.6b, 3.7 and 3.7c: the first four list a
+    /// suspended client, the last two do not.
+    pub const CLIENTS_HIDE_STOPPED: ReleaseVersion =
+        ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
+    /// The mirrored layouts, and so [`crate::Layout::MainHorizontalMirrored`]
+    /// and [`crate::Layout::MainVerticalMirrored`].
+    ///
+    /// Below this release `layout_set_lookup` does not carry those names, and
+    /// tmux refuses one as it would a typo.
+    pub const MIRRORED_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
 }

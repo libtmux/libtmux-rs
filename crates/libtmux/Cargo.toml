@@ -46,9 +46,26 @@ required-features = ["query"]
 name = "sweep"
 required-features = ["test-support"]
 
+# Control mode is the whole point of this one, and the socket comes from the
+# test helpers rather than from whatever the reader is attached to.
+[[example]]
+name = "watch"
+required-features = ["control-mode", "test-support"]
+
 [[example]]
 name = "matrix"
 required-features = ["plan", "control-mode", "blocking", "test-support", "query"]
+
+# Only for `unique_name`, so the jobs and their channels cannot collide with
+# another run on the same server. The waiting it demonstrates needs no feature.
+[[example]]
+name = "orchestrate"
+required-features = ["test-support"]
+
+# Same: `unique_name` only. Telling the failures apart needs no feature.
+[[example]]
+name = "recover"
+required-features = ["test-support"]
 
 [[bench]]
 name = "hierarchy"
@@ -73,7 +90,7 @@ default = ["query"]
 # Everything a caller might reach for, so a preset replaces remembering the
 # list. `test-support` is deliberately absent: it belongs to a dev-dependency,
 # not to a build of the library.
-full = ["blocking", "control-mode", "derive", "plan", "query", "serde", "tracing"]
+full = ["blocking", "control-mode", "derive", "plan", "query", "schema", "serde", "tracing"]
 # Exposes internal parsers to a fuzzer. Not a supported API, not in
 # `full`, and nothing but `fuzz/` turns it on.
 unstable-fuzzing = ["control-mode", "query", "serde"]
@@ -85,6 +102,9 @@ derive = ["dep:libtmux-macros", "query"]
 # because it is API surface a caller who only dispatches commands never needs.
 plan = []
 query = ["dep:caseless", "dep:regex"]
+# Describe serde's plan and portable-filter wire grammars without making schema
+# generation part of the ordinary serialization feature.
+schema = ["dep:schemars", "dep:serde_json", "serde"]
 serde = ["dep:serde"]
 test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
 tracing = ["dep:tracing"]
@@ -95,7 +115,9 @@ futures-core = { version = "0.3", optional = true }
 libtmux-macros = { workspace = true, optional = true }
 regex = { version = "1.13", optional = true }
 rustix = { version = "1.1.4", features = ["process"] }
+schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
@@ -104,7 +126,7 @@ tracing = { version = "0.1.29", optional = true }
 [dev-dependencies]
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 futures-core = "0.3"
-jsonschema = { version = "=0.49.9", default-features = false }
+jsonschema.workspace = true
 serde_json.workspace = true
 static_assertions = "1.1.0"
 tempfile.workspace = true

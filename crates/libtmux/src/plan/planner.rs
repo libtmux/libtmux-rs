@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Op, Part, Plan};
+use super::{Op, Plan};
 
 /// One tmux invocation: the operations it carries, in order.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,11 +262,12 @@ fn marked_decorates(ops: &[Op], index: usize) -> Vec<usize> {
         }
         // Only operations addressing the pane this creation left active may
         // fold: any other target would be sent to the marked pane instead.
-        let named: Vec<(usize, Part)> = op.slots().iter().flatten().copied().collect();
-        if named.is_empty()
+        let named = op.slots();
+        if named.iter().all(Option::is_none)
             || !named
                 .iter()
-                .all(|(slot, part)| *slot == index && *part == focused)
+                .flatten()
+                .all(|slot| slot.source_step == index && slot.part == focused)
         {
             break;
         }
@@ -302,6 +303,11 @@ fn split_at_boundaries(step: Step, boundaries: &BTreeSet<usize>) -> Vec<Step> {
     runs
 }
 
+// Only the control-mode runner reports a step per command; the blocking one
+// reports the runs `plan_runs` cut. So this is dead in a `plan` build with
+// `control-mode` off, which is 80 of the configurations the feature gate now
+// covers.
+#[cfg(feature = "control-mode")]
 impl Step {
     /// One invocation carrying one operation.
     pub(crate) fn single(index: usize) -> Self {

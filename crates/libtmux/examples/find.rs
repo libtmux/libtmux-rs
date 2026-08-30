@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = fields.pane_current_command.eq(wanted.as_str());
 
     let panes = server.panes().await?;
+    let found = panes.iter().matching(&running).count();
     for pane in panes.iter().matching(&running) {
         println!("{} in window {}", pane.id(), pane.window_id());
     }
@@ -27,6 +28,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match panes.iter().matching(&running).exactly_one() {
         Ok(pane) => println!("exactly one: {}", pane.id()),
         Err(error) => println!("not exactly one: {error}"),
+    }
+
+    // A search that matches nothing is the likeliest first run, so say what to
+    // search for instead of leaving the reader with a cardinality error.
+    if found == 0 {
+        println!("\nnothing here is running {wanted:?}. This server is running:");
+        let mut commands: Vec<_> = panes
+            .iter()
+            .filter_map(|pane| pane.current_command())
+            .map(|command| command.to_string_lossy().into_owned())
+            .collect();
+        commands.sort();
+        commands.dedup();
+        for command in &commands {
+            println!("  {command}");
+        }
+        if let Some(command) = commands.first() {
+            println!("\n  cargo run --example find --features query -- {command}");
+        }
     }
 
     server.shutdown().await?;

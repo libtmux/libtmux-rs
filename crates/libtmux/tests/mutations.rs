@@ -6,10 +6,25 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{NewSessionOptions, NewWindowOptions, SplitDirection, SplitOptions, TmuxText};
+use libtmux::{Layout, NewSessionOptions, NewWindowOptions};
+use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
 fn text(value: Option<&TmuxText>) -> Vec<u8> {
     value.expect("tmux reports the value").as_bytes().to_vec()
+}
+
+async fn wait_for_prompt(pane: &libtmux::Pane) {
+    for _ in 0..600 {
+        let lines = pane.capture().await.expect("pane captures");
+        if lines
+            .iter()
+            .any(|line| matches!(line.as_bytes().last(), Some(b'$' | b'#')))
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the pane never drew a prompt");
 }
 
 #[tokio::test]
@@ -329,6 +344,150 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
 }
 
 #[tokio::test]
+async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("line-cancellation")
+        .await
+        .expect("session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    wait_for_prompt(&pane).await;
+
+    let accepted = "send-line-accepted";
+    let release = "send-line-release";
+    let ran = "send-line-ran";
+    session
+        .set_hook(
+            "after-send-keys",
+            format!(
+                "if-shell -F '#{{==:#{{hook_flag_l}},1}}' \
+                 'wait-for -S {accepted}; wait-for {release}'"
+            ),
+        )
+        .await
+        .expect("the dispatch gate is installed");
+
+    let sending = tokio::spawn({
+        let pane = pane.clone();
+        async move { pane.send_line(format!("tmux wait-for -S {ran}")).await }
+    });
+    assert_eq!(
+        server
+            .wait_for_channel(accepted, std::time::Duration::from_secs(5))
+            .await
+            .expect("the send can signal"),
+        libtmux::ChannelWait::Signalled,
+        "the line did not reach tmux",
+    );
+
+    sending.abort();
+    assert!(
+        sending
+            .await
+            .expect_err("the line send is cancelled")
+            .is_cancelled(),
+    );
+    server
+        .signal_channel(release)
+        .await
+        .expect("the send is released");
+
+    assert_eq!(
+        server
+            .wait_for_channel(ran, std::time::Duration::from_secs(1))
+            .await
+            .expect("the command signal can be read"),
+        libtmux::ChannelWait::Signalled,
+        "cancellation stranded the literal text without Enter",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_line_send_preserves_adversarial_literal_text() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("literal-line")
+        .await
+        .expect("session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    wait_for_prompt(&pane).await;
+
+    pane.send_keys(
+        r#"stty -echo; printf 'reader-ready\n'; while IFS= read -r line; do printf 'got:<%s>\n' "$line"; done"#,
+    )
+    .await
+    .expect("the reader is typed");
+    pane.send_key_names(["Enter"])
+        .await
+        .expect("the reader is started");
+    assert_eq!(
+        pane.wait_for_text("reader-ready", std::time::Duration::from_secs(5))
+            .await
+            .expect("the reader can be watched"),
+        libtmux::PaneWait::Arrived,
+    );
+
+    for payload in [
+        "C-c Enter -l",
+        r#"; \; '#{pane_id}' "$()" `x`;"#,
+        "unicode-🦀-空",
+    ] {
+        pane.send_line(payload).await.expect("the line is sent");
+        let expected = format!("got:<{payload}>");
+        assert_eq!(
+            pane.wait_for_text(&expected, std::time::Duration::from_secs(5))
+                .await
+                .expect("the reader can be watched"),
+            libtmux::PaneWait::Arrived,
+        );
+        assert!(
+            pane.capture()
+                .await
+                .expect("the pane captures")
+                .iter()
+                .any(|line| line.as_bytes() == expected.as_bytes()),
+            "the captured line differs from the payload: {payload:?}",
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_line_send_redacts_input_and_classifies_a_gone_pane() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("line-error")
+        .await
+        .expect("session is created");
+    let window = session
+        .active_window()
+        .await
+        .expect("the window resolves")
+        .expect("a session has a window");
+    let pane = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("a second pane is created");
+    let stale = pane.clone();
+    pane.kill().await.expect("the pane is killed");
+
+    let secret = "sentinel-line-secret";
+    let error = stale.send_line(secret).await.expect_err("the pane is gone");
+
+    assert_eq!(error.kind(), libtmux::ErrorKind::ObjectGone);
+    let diagnostic = format!("{error:?} {error}");
+    assert!(!diagnostic.contains(secret), "{diagnostic}");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn killing_the_server_leaves_nothing_running() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server().clone();
@@ -399,18 +558,167 @@ async fn window_operations_move_and_resize() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server.new_session("moving").await.expect("session");
+    let destination = server
+        .new_session("moved-into")
+        .await
+        .expect("destination session");
 
     let mut window = session
         .new_window(NewWindowOptions::new("mover").command("sleep 300"))
         .await
         .expect("window is created");
 
-    window.move_to(&session, 20).await.expect("window is moved");
+    window
+        .move_to(&destination, 20)
+        .await
+        .expect("window is moved");
     assert_eq!(window.index(), 20);
+    assert_eq!(window.session_id(), destination.id());
+    assert!(
+        !session
+            .windows()
+            .await
+            .expect("source windows")
+            .iter()
+            .any(|candidate| candidate.id() == window.id()),
+    );
+    assert!(
+        destination
+            .windows()
+            .await
+            .expect("destination windows")
+            .iter()
+            .any(|candidate| candidate.id() == window.id()),
+    );
 
     window.resize(100, 30).await.expect("window is resized");
     assert_eq!(window.width(), 100);
     assert_eq!(window.height(), 30);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn handle_mutations_reject_another_server() {
+    use libtmux::{Error, ErrorKind, JoinOptions};
+
+    macro_rules! error_kind {
+        ($future:expr) => {
+            match $future.await {
+                Err(error @ Error::ServerMismatch { .. }) => error.kind(),
+                Err(error) => panic!("foreign handle returned {error:?}"),
+                Ok(_) => panic!("foreign handle was accepted"),
+            }
+        };
+    }
+
+    let left_guard = TestServer::builder().start().await.expect("tmux starts");
+    let right_guard = TestServer::builder().start().await.expect("tmux starts");
+    let left = left_guard.server();
+    let right = right_guard.server();
+    let left_session = left.new_session("left").await.expect("left session");
+    let right_session = right.new_session("right").await.expect("right session");
+    let mut left_window = left_session
+        .active_window()
+        .await
+        .expect("left window lookup")
+        .expect("left window");
+    let right_window = right_session
+        .active_window()
+        .await
+        .expect("right window lookup")
+        .expect("right window");
+    let mut left_pane = left_window.panes().await.expect("left panes").remove(0);
+    let right_pane = right_window.panes().await.expect("right panes").remove(0);
+
+    assert_eq!(left_session.id(), right_session.id());
+    assert_eq!(left_window.id(), right_window.id());
+    assert_eq!(left_pane.id(), right_pane.id());
+    let original_index = left_window.index();
+
+    let kinds = [
+        error_kind!(left_window.swap_with(&right_window)),
+        error_kind!(left_window.link_to(&right_session, Some(29))),
+        error_kind!(left_window.move_to(&right_session, 30)),
+        error_kind!(left_pane.swap_with(&right_pane)),
+        error_kind!(
+            left_pane
+                .clone()
+                .join_into(&right_pane, JoinOptions::new(SplitDirection::Below))
+        ),
+    ];
+
+    assert_eq!(kinds, [ErrorKind::InvalidInput; 5]);
+    assert_eq!(
+        left_session
+            .windows()
+            .await
+            .expect("left windows")
+            .first()
+            .expect("left window remains")
+            .index(),
+        original_index,
+    );
+
+    right_guard
+        .shutdown()
+        .await
+        .expect("right tmux fixture shuts down");
+    left_guard
+        .shutdown()
+        .await
+        .expect("left tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn pane_window_follows_an_external_move() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("pane-moved").await.expect("session");
+    let source = session
+        .active_window()
+        .await
+        .expect("source lookup")
+        .expect("source window");
+    let moving = source
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("moving pane");
+    let destination_session = server
+        .new_session(NewSessionOptions::new("pane-destination").command("sleep 300"))
+        .await
+        .expect("destination session");
+    let destination = destination_session
+        .active_window()
+        .await
+        .expect("destination lookup")
+        .expect("destination window");
+    let beside = destination
+        .panes()
+        .await
+        .expect("destination panes")
+        .remove(0);
+
+    let moved = server
+        .cmd(
+            libtmux::Command::new("join-pane")
+                .arg("-d")
+                .arg("-s")
+                .arg(moving.id().to_string())
+                .arg("-t")
+                .arg(beside.id().to_string()),
+        )
+        .await
+        .expect("join-pane runs");
+    assert!(moved.success(), "join-pane succeeds: {moved:?}");
+
+    let current = moving
+        .window()
+        .await
+        .expect("window lookup")
+        .expect("the pane still has a window");
+    assert_eq!(current.id(), destination.id());
+    assert_eq!(current.session_id(), destination_session.id());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -517,6 +825,42 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
         b"renamed",
     );
 
+    let destination = server
+        .new_session("linking-destination")
+        .await
+        .expect("destination session");
+    let selected = server
+        .cmd(
+            libtmux::Command::new("select-window")
+                .arg("-t")
+                .arg(format!("{}:{}", target.id(), window.id())),
+        )
+        .await
+        .expect("target link is selected");
+    assert!(selected.success());
+
+    window
+        .move_to(&destination, 9)
+        .await
+        .expect("the source link moves");
+    assert!(
+        !source
+            .windows()
+            .await
+            .expect("source windows")
+            .iter()
+            .any(|other| other.id() == window.id()),
+    );
+    assert!(
+        target
+            .windows()
+            .await
+            .expect("target windows")
+            .iter()
+            .any(|other| other.id() == window.id()),
+        "the other link remains",
+    );
+
     // Unlinking removes one winlink, and the window survives in the other.
     linked.unlink().await.expect("the link is removed");
     assert!(
@@ -528,7 +872,7 @@ async fn a_window_linked_into_two_sessions_is_one_window() {
             .any(|other| other.id() == window.id()),
     );
     assert!(
-        source
+        destination
             .windows()
             .await
             .expect("windows")
@@ -862,6 +1206,401 @@ async fn directional_focus_follows_the_layout_and_wraps_at_the_edge() {
             .id(),
         left.id(),
         "left from the right",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A layout is named, saved, or stepped through, and each is a different thing.
+///
+/// tmux takes a name it computes an arrangement from, a string it produced
+/// earlier that restores pane sizes exactly, or a step through its own list.
+/// The step is a flag rather than a name, so `select-layout next` is a refusal
+/// and nothing that takes a layout name could ever express it.
+#[tokio::test]
+async fn a_layout_is_named_saved_or_stepped_through() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("layouts").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    // Two panes, so the arrangements differ from each other.
+    window
+        .split(SplitOptions::new(SplitDirection::Below))
+        .await
+        .expect("a second pane");
+
+    window
+        .select_layout(Layout::EvenHorizontal)
+        .await
+        .expect("tmux arranges the panes");
+    let horizontal = window.layout().to_owned();
+
+    window
+        .select_layout(Layout::EvenVertical)
+        .await
+        .expect("tmux arranges the panes");
+    let vertical = window.layout().to_owned();
+    assert_ne!(
+        horizontal.as_bytes(),
+        vertical.as_bytes(),
+        "the two named layouts arrange two panes differently",
+    );
+
+    // A saved layout restores the exact arrangement, which is what a name
+    // cannot do: it carries the pane sizes rather than a rule for them.
+    window
+        .select_layout(&horizontal)
+        .await
+        .expect("tmux restores the saved layout");
+    assert_eq!(window.layout().as_bytes(), horizontal.as_bytes());
+
+    // Stepping is a flag on the same command, so it is reachable only as its
+    // own method. Passing "next" as a name is what tmux refuses.
+    assert!(
+        window.select_layout("next").await.is_err(),
+        "`next` is a flag rather than a layout name",
+    );
+    // Where a step lands is tmux's own list order, which this does not assert:
+    // that each step moves is the contract, and a saved layout is not
+    // necessarily a position in that list to come back to.
+    window.next_layout().await.expect("tmux steps forward");
+    let stepped = window.layout().to_owned();
+    assert_ne!(stepped.as_bytes(), horizontal.as_bytes());
+
+    window.previous_layout().await.expect("tmux steps back");
+    assert_ne!(window.layout().as_bytes(), stepped.as_bytes());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane broken out into its own window can be put back.
+///
+/// `break_out` moves a pane away and `join_into` moves one back, so between
+/// them a pane goes anywhere. Both consume the handle, because the pane's
+/// window changes and a snapshot of where it used to be is wrong; the pane
+/// itself keeps its id and whatever is running in it.
+#[tokio::test]
+async fn a_pane_broken_out_can_be_joined_back() {
+    use libtmux::{JoinOptions, SplitDirection};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("moving").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    // Two panes, because tmux has nothing to break a lone pane out of.
+    let leaving = window
+        .split(SplitOptions::new(SplitDirection::Below))
+        .await
+        .expect("a second pane");
+    let staying = window.panes().await.expect("panes").remove(0);
+    let travelled = leaving.id().clone();
+
+    leaving
+        .break_out()
+        .await
+        .expect("the pane leaves its window");
+    assert_eq!(
+        window.panes().await.expect("panes").len(),
+        1,
+        "the window it left keeps the other pane",
+    );
+
+    // The pane still exists, in a window of its own, under the same id.
+    let stranded = server
+        .pane_by_id(&travelled)
+        .await
+        .expect("lookup")
+        .expect("the pane outlived its old window");
+    assert_ne!(stranded.window_id(), window.id());
+
+    let returned = stranded
+        .join_into(&staying, JoinOptions::new(SplitDirection::Below))
+        .await
+        .expect("the pane comes back");
+
+    assert_eq!(returned.id(), &travelled, "the same pane, not a new one");
+    assert_eq!(returned.window_id(), window.id());
+    assert_eq!(window.panes().await.expect("panes").len(), 2);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The forms tmux has at every level, not only the one that was reachable.
+///
+/// tmux respawns a window as well as a pane, and locks a client and a whole
+/// server as well as a session. Only the narrower of each pair existed, so a
+/// caller wanting the other had to build the command by hand.
+#[tokio::test]
+async fn respawning_and_locking_reach_every_level_tmux_offers() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("levels").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    // A second pane, so respawning the window can be told from respawning one
+    // pane: the window form replaces every pane with the one it runs.
+    window
+        .split(SplitOptions::new(SplitDirection::Below))
+        .await
+        .expect("a second pane");
+    assert_eq!(window.panes().await.expect("panes").len(), 2);
+
+    window
+        .respawn(Some("sh"), true)
+        .await
+        .expect("the window restarts");
+    assert_eq!(
+        window.panes().await.expect("panes").len(),
+        1,
+        "respawning a window leaves the one pane its command runs in",
+    );
+
+    // Locking with nobody attached locks nobody, and tmux accepts that at
+    // every level rather than reporting it as a failure.
+    server.lock_all().await.expect("the server locks");
+    session.lock().await.expect("the session locks");
+    for client in server.clients_or_empty().await {
+        client.lock().await.expect("the client locks");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Renumber a session, leaving every index after the hole naming a different
+/// window than the handles cached.
+async fn renumber_after_dropping(
+    server: &libtmux::Server,
+    session: &libtmux::Session,
+    windows: &[libtmux::Window],
+    drop: usize,
+) {
+    windows[drop]
+        .clone()
+        .kill()
+        .await
+        .expect("the window is killed");
+    server
+        .cmd(
+            libtmux::Command::new("move-window")
+                .arg("-r")
+                .arg("-t")
+                .arg(session.id().to_string()),
+        )
+        .await
+        .expect("the session is renumbered");
+}
+
+/// The window sitting at an index, if anything is.
+fn place_of(windows: &[libtmux::Window], index: i32) -> Option<&libtmux::Window> {
+    windows.iter().find(|window| window.index() == index)
+}
+
+fn place(windows: &[libtmux::Window], id: &str) -> i32 {
+    windows
+        .iter()
+        .find(|window| window.id().to_string() == id)
+        .map(libtmux::Window::index)
+        .expect("the window is listed")
+}
+
+/// Swapping targets an identity, so a renumber cannot redirect it.
+///
+/// `swap-window -t` took `session:index` from a cached handle. Once anything
+/// renumbered the session that index named a different window, or none, so the
+/// swap moved the wrong pair or failed reporting `ObjectGone` with an index
+/// where a window id belongs. `is_object_gone` is the predicate a caller
+/// consults before dropping a handle, and it answered `true` for a window that
+/// was alive and listed.
+#[tokio::test]
+async fn swapping_a_window_after_a_renumber_reaches_the_same_window() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("home").await.expect("session");
+    for name in ["second", "third", "fourth"] {
+        session
+            .new_window(NewWindowOptions::new(name))
+            .await
+            .expect("window");
+    }
+
+    let windows = session.windows().await.expect("windows");
+    assert_eq!(windows.len(), 4, "four windows to renumber");
+    let mut first = windows[0].clone();
+    let last = windows[3].clone();
+    let (first_id, last_id) = (first.id().to_string(), last.id().to_string());
+
+    renumber_after_dropping(server, &session, &windows, 1).await;
+
+    let before = session.windows().await.expect("windows");
+    let (was_first, was_last) = (place(&before, &first_id), place(&before, &last_id));
+    assert_ne!(
+        was_last,
+        last.index(),
+        "the renumber moved the window out from under its cached index",
+    );
+
+    // Neither handle has been refreshed: this is what a caller holds.
+    first
+        .swap_with(&last)
+        .await
+        .expect("the windows are swapped");
+
+    let after = session.windows().await.expect("windows");
+    assert_eq!(
+        (place(&after, &first_id), place(&after, &last_id)),
+        (was_last, was_first),
+        "the two windows exchanged places",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn swapping_windows_across_sessions_refreshes_the_destination_link() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let left = server.new_session("left").await.expect("left session");
+    let right = server.new_session("right").await.expect("right session");
+    let mut left_window = left
+        .active_window()
+        .await
+        .expect("left window lookup")
+        .expect("left window");
+    let right_window = right
+        .active_window()
+        .await
+        .expect("right window lookup")
+        .expect("right window");
+    let left_id = left_window.id().clone();
+    let right_id = right_window.id().clone();
+    let destination_index = right_window.index();
+
+    left_window
+        .swap_with(&right_window)
+        .await
+        .expect("the windows are swapped");
+
+    assert_eq!(left_window.id(), &left_id);
+    assert_eq!(left_window.session_id(), right.id());
+    assert_eq!(left_window.index(), destination_index);
+    assert_eq!(
+        left.windows().await.expect("left windows")[0].id(),
+        &right_id,
+    );
+    assert_eq!(
+        right.windows().await.expect("right windows")[0].id(),
+        &left_id,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A rendered window target is offered for pasting, so it must not go stale.
+///
+/// `Display` rendered `session:index`. An index is a place within a session,
+/// and the window sitting at one moves whenever anything renumbers, so the
+/// rendered target reached a different window -- silently -- or nothing at
+/// all. Display is also what lands in logs and in interpolated error text, so
+/// the stale value travels well away from the handle that produced it.
+#[tokio::test]
+async fn a_rendered_window_target_survives_a_renumber() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("home").await.expect("session");
+    for name in ["second", "third", "fourth"] {
+        session
+            .new_window(NewWindowOptions::new(name))
+            .await
+            .expect("window");
+    }
+
+    // The subject is a window in the middle, and the one dropped is ahead of
+    // it, so after the renumber the index it cached is still OCCUPIED -- by a
+    // different live window. A subject at the end would leave its old index
+    // vacant, where a stale target fails loudly; this is the quiet case, and
+    // the one worth holding a test.
+    let windows = session.windows().await.expect("windows");
+    let subject = windows[1].clone();
+    let rendered = subject.to_string();
+    let identity = subject.id().to_string();
+
+    renumber_after_dropping(server, &session, &windows, 0).await;
+
+    // The handle has not been refreshed: this is the string a caller holds.
+    assert_eq!(rendered, subject.to_string(), "the rendering is unchanged");
+
+    let stale = rendered
+        .rsplit(':')
+        .next()
+        .and_then(|half| half.parse::<i32>().ok());
+    if let Some(index) = stale {
+        assert!(
+            place_of(&session.windows().await.expect("windows"), index).is_some(),
+            "the index {index} this rendering cached is occupied by another window",
+        );
+    }
+
+    // Select away from the window under test before asking, so that reaching
+    // it proves the target resolved rather than that it was already current.
+    //
+    // `display-message` is not the oracle here, though it is the obvious one.
+    // Its `-t` is declared `CMD_FIND_PANE, CMD_FIND_CANFAIL`, so a target it
+    // cannot resolve expands against the client's current pane and exits zero:
+    // it answers the same for `home:@99` and for a correct target. Asking it
+    // whether a rendering resolves would pass whenever the window under test
+    // is also the current one, which a fixture that just built it guarantees.
+    // `select-window` has no such permission and refuses.
+    server
+        .cmd(
+            libtmux::Command::new("select-window")
+                .arg("-t")
+                .arg(windows[3].id().to_string()),
+        )
+        .await
+        .expect("the command runs");
+
+    let selected = server
+        .cmd(
+            libtmux::Command::new("select-window")
+                .arg("-t")
+                .arg(rendered.clone()),
+        )
+        .await
+        .expect("the command runs");
+    assert!(
+        selected.success(),
+        "the rendered target still resolves: {rendered} said {:?}",
+        selected.stderr_lossy(),
+    );
+
+    // Read the current window with no target of its own, so this reading
+    // cannot fall back the way the one above would have.
+    let current = server
+        .cmd(
+            libtmux::Command::new("display-message")
+                .arg("-p")
+                .arg("#{window_id}"),
+        )
+        .await
+        .expect("the command runs");
+    assert_eq!(
+        current.stdout_lossy().trim(),
+        identity,
+        "{rendered} reaches the window it was taken from",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

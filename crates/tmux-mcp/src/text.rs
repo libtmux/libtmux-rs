@@ -32,7 +32,7 @@ enum State {
 }
 
 /// Strips escape sequences from a pane's output, across chunk boundaries.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct TextFilter {
     state: State,
     /// Whether the last byte written was a carriage return, which decides
@@ -52,12 +52,21 @@ impl TextFilter {
 
     /// Append the readable text of one chunk to `out`.
     pub(crate) fn push(&mut self, chunk: &[u8], out: &mut Vec<u8>) {
+        let mut out = Some(out);
         for &byte in chunk {
-            self.push_byte(byte, out);
+            self.push_byte(byte, &mut out);
         }
     }
 
-    fn push_byte(&mut self, byte: u8, out: &mut Vec<u8>) {
+    /// Advance the scanner without retaining rendered text.
+    pub(crate) fn advance(&mut self, chunk: &[u8]) {
+        let mut out = None;
+        for &byte in chunk {
+            self.push_byte(byte, &mut out);
+        }
+    }
+
+    fn push_byte(&mut self, byte: u8, out: &mut Option<&mut Vec<u8>>) {
         match self.state {
             State::Text => self.push_text_byte(byte, out),
             State::Escape => {
@@ -91,7 +100,7 @@ impl TextFilter {
         }
     }
 
-    fn push_text_byte(&mut self, byte: u8, out: &mut Vec<u8>) {
+    fn push_text_byte(&mut self, byte: u8, out: &mut Option<&mut Vec<u8>>) {
         match byte {
             0x1b => self.state = State::Escape,
             b'\r' => {
@@ -102,28 +111,49 @@ impl TextFilter {
             }
             b'\n' => {
                 self.pending_return = false;
-                out.push(b'\n');
+                if let Some(out) = out.as_deref_mut() {
+                    out.push(b'\n');
+                }
             }
             // A backspace is how a shell erases; dropping the erased byte
             // keeps a re-edited command line from reading as both versions.
             0x08 => {
                 self.flush_return(out);
-                if out.last().is_some_and(|&last| last != b'\n') {
+                if let Some(out) = out.as_deref_mut()
+                    && out.last().is_some_and(|&last| last != b'\n')
+                {
                     out.pop();
                 }
             }
             _ => {
                 self.flush_return(out);
-                out.push(byte);
+                if let Some(out) = out.as_deref_mut() {
+                    out.push(byte);
+                }
             }
         }
     }
 
-    fn flush_return(&mut self, out: &mut Vec<u8>) {
-        if std::mem::take(&mut self.pending_return) {
+    fn flush_return(&mut self, out: &mut Option<&mut Vec<u8>>) {
+        if std::mem::take(&mut self.pending_return)
+            && let Some(out) = out.as_deref_mut()
+        {
             out.push(b'\n');
         }
     }
+}
+
+/// Render `retained[from..]` from a filter state at `retained[0]`.
+pub(crate) fn readable_from(checkpoint: &TextFilter, retained: &[u8], from: usize) -> String {
+    let from = from.min(retained.len());
+    if from == retained.len() {
+        return String::new();
+    }
+    let mut filter = checkpoint.clone();
+    filter.advance(&retained[..from]);
+    let mut out = Vec::with_capacity(retained.len() - from);
+    filter.push(&retained[from..], &mut out);
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]

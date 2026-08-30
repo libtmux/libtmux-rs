@@ -1,8 +1,9 @@
 //! Serve tmux over MCP on stdio.
 
 use std::process::ExitCode;
+use std::time::Duration;
 
-use libtmux::{DispatchLimits, OutputLimits, Server};
+use libtmux::{ControlClientLimits, DispatchLimits, OutputLimits, Server};
 use rmcp::ServiceExt as _;
 use rmcp::transport::stdio;
 use tmux_mcp::cli::{HELP, Options, Stop};
@@ -14,6 +15,12 @@ use tmux_mcp::{Safety, TmuxTools};
 /// clients buy queueing rather than throughput, and an agent that fans out
 /// should meet a bounded queue rather than a fork bomb.
 const MAX_IN_FLIGHT: usize = 4;
+
+/// How many live watchers and waits may keep a tmux client attached.
+const MAX_CONTROL_CLIENTS: usize = 16;
+
+/// How long a saturated observer lane holds an MCP request.
+const CONTROL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// How many bytes one tool's tmux command may read.
 ///
@@ -67,6 +74,11 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     // it.
     let mut builder = Server::builder()
         .dispatch_limits(DispatchLimits::default().max_in_flight(MAX_IN_FLIGHT))
+        .control_client_limits(
+            ControlClientLimits::default()
+                .max_clients(MAX_CONTROL_CLIENTS)
+                .acquire_timeout(Some(CONTROL_ACQUIRE_TIMEOUT)),
+        )
         .output_limits(
             OutputLimits::default()
                 .max_stdout_bytes(MAX_TOOL_STDOUT_BYTES)
@@ -81,7 +93,7 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let server = builder.build()?;
 
     let safety = options.safety.unwrap_or_else(Safety::from_env);
-    let confirm = options.confirm || tmux_mcp::confirm_from_env();
+    let confirm = options.confirm.unwrap_or_else(tmux_mcp::confirm_from_env);
     let tools = TmuxTools::builder(server)
         .safety(safety)
         .confirm(confirm)

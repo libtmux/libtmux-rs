@@ -52,7 +52,7 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-hack,cargo-deny
+          tool: just,cargo-hack,cargo-deny,uv
 
       - uses: Swatinem/rust-cache@v2
 
@@ -137,7 +137,12 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          cargo +nightly fuzz run "$TARGET" "fuzz/seeds/$TARGET" \
+          # cargo-fuzz builds for the triple it was itself compiled for, and
+          # the installer above ships a musl binary. musl links libc
+          # statically, which a sanitizer cannot instrument, so the target
+          # has to be named here rather than left to how cargo-fuzz arrived.
+          host=$(rustc +nightly -vV | sed -n 's/^host: //p')
+          cargo +nightly fuzz run --target "$host" "$TARGET" "fuzz/seeds/$TARGET" \
             -- -max_total_time=300 -rss_limit_mb=4096
       - name: Keep any crash that was found
         if: failure()

@@ -42,7 +42,7 @@ use libtmux::plan::{
     KillWindow, NewSession, NewWindow, PaneSlot, Plan, Planner, SelectLayout, SelectPane,
     SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow,
 };
-use libtmux::{Server, Session, SessionId};
+use libtmux::{Server, Session, SessionId, escape_format};
 
 /// A failure while building a workspace.
 #[derive(Debug, thiserror::Error)]
@@ -157,7 +157,16 @@ impl<'server> WorkspaceBuilder<'server> {
                 .start_directory
                 .as_deref()
                 .or(workspace.start_directory.as_deref());
-            let window = plan.add(Self::window_op(session, config, directory));
+            let first_pane = config.panes.first();
+            let first_directory = first_pane
+                .and_then(|pane| pane.start_directory.as_deref())
+                .or(directory);
+            let window = plan.add(Self::window_op(
+                session,
+                config,
+                first_pane,
+                first_directory,
+            ));
             for (name, value) in &config.options {
                 plan.add(SetOption::window(window, name.as_str(), value.as_str()));
             }
@@ -170,9 +179,9 @@ impl<'server> WorkspaceBuilder<'server> {
                 let directory = pane.start_directory.as_deref().or(directory);
                 let mut split = SplitWindow::new(window);
                 if let Some(directory) = directory {
-                    split = split.start_directory(directory);
+                    split = split.start_directory(escape_format(directory));
                 }
-                for (name, value) in &pane.environment {
+                for (name, value) in config.environment.iter().chain(&pane.environment) {
                     split = split.environment(name.as_str(), value.as_str());
                 }
                 panes.push(plan.add(split));
@@ -251,18 +260,24 @@ impl<'server> WorkspaceBuilder<'server> {
                 .steps()
                 .iter()
                 .find_map(libtmux::plan::StepOutcome::refusal);
-            if matches!(refusal, Some(libtmux::Error::SessionExists { .. })) {
+            if matches!(refusal.as_ref(), Some(libtmux::Error::SessionExists { .. })) {
                 return Err(BuildError::SessionExists {
                     name: workspace.session_name.clone(),
                 });
             }
-            return Err(BuildError::Refused {
-                name: workspace.session_name.clone(),
-                detail: refusal.map_or_else(
-                    || String::from("tmux refused a step without saying why"),
-                    |error| error.to_string(),
-                ),
-            });
+            return match refusal {
+                Some(error) if result.created(0).is_some() => {
+                    Err(error.after_effect("workspace-build").into())
+                }
+                Some(error) => Err(BuildError::Refused {
+                    name: workspace.session_name.clone(),
+                    detail: error.to_string(),
+                }),
+                None => Err(BuildError::Refused {
+                    name: workspace.session_name.clone(),
+                    detail: String::from("tmux refused a step without saying why"),
+                }),
+            };
         }
 
         let created = result
@@ -274,16 +289,20 @@ impl<'server> WorkspaceBuilder<'server> {
             })?;
         self.server
             .session_by_id(&created)
-            .await?
+            .await
+            .map_err(|error| error.after_effect("workspace-build"))?
             .ok_or_else(|| BuildError::MissingInitialWindow {
                 name: workspace.session_name.clone(),
             })
     }
 
     fn session_op(workspace: &Workspace) -> NewSession {
-        let mut session = NewSession::new(workspace.session_name.as_str());
+        // A workspace file is not this program's own text. tmux expands a
+        // name and a start directory alike as formats, so an unescaped
+        // `#(command)` in either would run a shell for whoever wrote the file.
+        let mut session = NewSession::new(escape_format(workspace.session_name.as_str()));
         if let Some(directory) = workspace.start_directory.as_deref() {
-            session = session.start_directory(directory);
+            session = session.start_directory(escape_format(directory));
         }
         session
     }
@@ -291,14 +310,15 @@ impl<'server> WorkspaceBuilder<'server> {
     fn window_op(
         session: Slot<SessionSlot>,
         config: &WindowConfig,
+        first_pane: Option<&PaneConfig>,
         directory: Option<&Path>,
     ) -> NewWindow {
         let mut window = NewWindow::new(session);
         if let Some(name) = config.window_name.as_deref() {
-            window = window.name(name);
+            window = window.name(escape_format(name));
         }
         if let Some(directory) = directory {
-            window = window.start_directory(directory);
+            window = window.start_directory(escape_format(directory));
         }
         if let Ok(index) = u32::try_from(config.window_index.unwrap_or(-1)) {
             window = window.index(index);
@@ -308,7 +328,10 @@ impl<'server> WorkspaceBuilder<'server> {
         if let Some(shell) = config.window_shell.as_deref() {
             window = window.command(shell);
         }
-        for (name, value) in &config.environment {
+        let pane_environment = first_pane
+            .map(|pane| pane.environment.as_slice())
+            .unwrap_or_default();
+        for (name, value) in config.environment.iter().chain(pane_environment) {
             window = window.environment(name.as_str(), value.as_str());
         }
         window

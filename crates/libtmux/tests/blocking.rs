@@ -70,3 +70,38 @@ fn one_runtime_serves_several_servers() {
     runtime.run(first.shutdown()).expect("first shuts down");
     runtime.run(second.shutdown()).expect("second shuts down");
 }
+
+/// A runtime that goes out of scope inside an async context must not end the
+/// process.
+///
+/// `try_run` exists to tell a caller they are nested rather than panicking at
+/// them, and it does. What followed was worse than the panic it avoided: the
+/// value that reported the error blocks on shutdown when it drops, blocking is
+/// forbidden inside another runtime, and so the caller who handled the error
+/// correctly died on the next line anyway.
+///
+/// Constructing outside the async context is the point. A guard on
+/// `Runtime::new` would not reach this, because nothing here builds a runtime
+/// in the wrong place: it is built correctly at startup and dropped somewhere
+/// ordinary later, which is the shape a caller storing one in a struct writes.
+#[test]
+fn a_runtime_dropped_inside_an_async_context_does_not_end_the_process() {
+    let runtime = Runtime::new().expect("a runtime is built outside async");
+
+    let driver = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a driver runtime");
+
+    let reported = driver.block_on(async move {
+        let nested = runtime.try_run(async { 2 + 2 });
+        // The runtime falls out of scope here, inside the driver.
+        drop(runtime);
+        nested
+    });
+
+    assert!(
+        matches!(reported, Err(libtmux::Error::RuntimeNested)),
+        "try_run reports the nesting rather than panicking: {reported:?}",
+    );
+}

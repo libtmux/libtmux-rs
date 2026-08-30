@@ -45,6 +45,7 @@ pub(crate) async fn set(
         "set-environment",
         scope
             .apply(Command::new("set-environment"))
+            .arg("--")
             .arg(OsString::from(name))
             // An environment carries tokens, so the value never reaches a log.
             .sensitive_arg(value),
@@ -60,6 +61,7 @@ pub(crate) async fn hide(core: &Core, scope: Scope<'_>, name: &str) -> Result<()
         scope
             .apply(Command::new("set-environment"))
             .arg("-r")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
@@ -73,6 +75,7 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
         scope
             .apply(Command::new("set-environment"))
             .arg("-u")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
@@ -82,6 +85,12 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
 ///
 /// `None` means tmux does not hold the name at all, which is how a
 /// continuation line from a multi-line value is discarded.
+///
+/// It does not mean the request failed. tmux refuses a name it does not hold
+/// with "unknown variable", and refuses a target that is gone with "no such
+/// session" -- two different facts on the same exit code. Reading every
+/// refusal as the first told a caller their variable was unset when their
+/// session had ended, which is the answer they would act on.
 pub(crate) async fn get(
     core: &Core,
     scope: Scope<'_>,
@@ -91,11 +100,27 @@ pub(crate) async fn get(
         .execute(
             scope
                 .apply(Command::new("show-environment"))
+                .arg("--")
                 .arg(OsString::from(name)),
         )
         .await?;
     if !result.success() {
-        return Ok(None);
+        // "unknown variable: NAME" is the answer `None` exists for. Anything
+        // else -- a session that has ended, a server that has gone -- is a
+        // failure and must not read as a variable nobody set.
+        if result
+            .stderr_lossy()
+            .trim_start()
+            .starts_with("unknown variable")
+        {
+            return Ok(None);
+        }
+
+        return Err(Error::from_refused_result(
+            "show-environment",
+            &result,
+            None,
+        ));
     }
 
     let stdout = result.stdout();
@@ -127,10 +152,9 @@ pub(crate) async fn all(
         .execute(scope.apply(Command::new("show-environment")))
         .await?;
     if !result.success() {
-        return Err(Error::refused(
+        return Err(Error::from_refused_result(
             "show-environment",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             None,
         ));
     }

@@ -6,7 +6,8 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
-use libtmux::{Client, Command, NewWindowOptions, Pane, Server, Session};
+use libtmux::{Client, Command, ErrorKind, NewSessionOptions, NewWindowOptions, Pane, Server};
+use libtmux::{ServerGoneKind, Session};
 use libtmux::{SplitDirection, SplitOptions, Window};
 use static_assertions::assert_impl_all;
 
@@ -559,7 +560,39 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
 
     // Which question was being asked is what these primitives are for.
     assert!(!server.is_alive().await);
-    assert!(server.check_alive().await.is_err());
+    let error = server
+        .check_alive()
+        .await
+        .expect_err("the daemon is absent");
+    assert_eq!(error.kind(), ErrorKind::ServerGone, "{error}");
+    assert!(
+        matches!(
+            &error,
+            libtmux::Error::ServerGone {
+                kind: ServerGoneKind::Unreachable,
+                ..
+            }
+        ),
+        "the daemon, not one session, is absent: {error:?}",
+    );
+    assert!(!error.is_object_gone());
+
+    server.shutdown().await.expect("executor shuts down");
+}
+
+#[tokio::test]
+async fn typed_server_absence_errors_withhold_endpoint_paths() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let server = Server::builder()
+        .socket_path(directory.path().join("sentinel-absent.sock"))
+        .build()
+        .expect("an inert server handle is built");
+    let socket = server.socket_path().display().to_string();
+
+    let error = server.sessions().await.expect_err("the daemon is absent");
+    assert_eq!(error.kind(), ErrorKind::ServerGone, "{error}");
+    assert!(!error.to_string().contains(&socket));
+    assert!(!format!("{error:?}").contains(&socket));
 
     server.shutdown().await.expect("executor shuts down");
 }
@@ -705,6 +738,117 @@ async fn a_name_that_would_corrupt_a_tmux_filter_is_still_found() {
             .unwrap_or_else(|| panic!("{name} is found"));
         assert_eq!(found.name().as_bytes().to_vec(), name.as_bytes().to_vec());
     }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A field tmux left empty must not fail the listing that carries it.
+///
+/// Whether tmux stores an empty session name is not stable across the
+/// supported releases: 3.2a through 3.6b accept one because they validate a
+/// name not at all, tmux 3.7 rejects it with "invalid session", and 3.7a
+/// relaxed the check it had just added back to valid UTF-8 only. An empty
+/// start directory needs no such archaeology and reaches `session_path`
+/// everywhere. What this asserts is the part that does not vary: a listing
+/// must be able to read whatever tmux stored. Both fields were declared
+/// `Required` in the format catalog, which turns an empty field into a decode
+/// error, and a decode error fails the whole listing rather than the row that
+/// produced it, so one such session took the answer away from every caller of
+/// every session listing, including the lookups that would have found it to
+/// kill it.
+#[tokio::test]
+async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let keep = server.new_session("keep").await.expect("a named session");
+
+    // Asking tmux rather than predicting it: either answer is a release
+    // behaving as it does, and neither may cost another caller its listing.
+    let mut expected = 1;
+    if let Ok(unnamed) = server.new_session("").await {
+        assert!(unnamed.name().as_bytes().is_empty());
+        expected += 1;
+    }
+
+    let rootless = server
+        .new_session(NewSessionOptions::new("rootless").start_directory(""))
+        .await
+        .expect("an empty start directory");
+    assert!(rootless.path().as_bytes().is_empty());
+    expected += 1;
+
+    assert_eq!(
+        server.sessions().await.expect("every row decodes").len(),
+        expected,
+    );
+    assert_eq!(
+        server.hierarchy().await.expect("the whole tree").len(),
+        expected,
+    );
+    assert!(server.has_session("keep").await.expect("liveness"));
+    assert_eq!(
+        keep.refreshed()
+            .await
+            .expect("a healthy handle refreshes")
+            .name()
+            .as_bytes(),
+        b"keep",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A name reaches tmux as a format rather than as text.
+///
+/// tmux expands `-s` through `format_single` before it validates the result
+/// (`cmd-new-session.c`), which is what makes `#(command)` in a name run a
+/// shell command: `clean_name` neutralises `#(` only for a name arriving from
+/// a pane's own output, never for one a command supplied. That is coherent for
+/// tmux, whose caller is a person who could run the command anyway, and it is
+/// a trust boundary this crate's callers have to be told about, because their
+/// names come from arguments and request fields.
+///
+/// The expansion is what this asserts, because it is what can be observed
+/// without a race. A `#()` job runs asynchronously and nothing bounds how long
+/// it takes, so waiting for the file one writes is a guess with a number on
+/// it: this test failed exactly that way at load average 21. The execution
+/// follows from the expansion and is documented rather than gated.
+#[tokio::test]
+async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    // `#{version}` rather than anything about the session: tmux expands the
+    // name before the session it would describe exists, which is why a
+    // templated name so often expands to nothing.
+    let Ok(expanded) = server.new_session("#{version}").await else {
+        // A release that refuses the name is protecting the caller from all
+        // of this, and there is nothing left to observe.
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    };
+    assert_ne!(
+        expanded.name().as_bytes(),
+        b"#{version}",
+        "tmux expanded the format rather than storing the text it was given",
+    );
+    assert!(
+        !expanded.name().as_bytes().is_empty(),
+        "the expansion had a value to put there",
+    );
+
+    // The escaped form is the same text with the expansion turned off, so the
+    // pair is what proves the first one was expanded rather than mangled.
+    let literal = server
+        .new_session("##{version}")
+        .await
+        .expect("tmux accepts the escaped name");
+    assert_eq!(
+        literal.name().as_bytes(),
+        b"#{version}",
+        "an escaped `##` reaches tmux as a literal `#`",
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

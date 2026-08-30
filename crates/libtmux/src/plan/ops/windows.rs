@@ -1,6 +1,7 @@
 //! Operations that make or address a window.
 
 use std::ffi::OsString;
+use std::fmt;
 
 use super::{
     Chainable, Effects, Op, Operation, Safety, Scope, SessionTarget, Slot, WindowSlot, WindowTarget,
@@ -10,8 +11,10 @@ use crate::Command;
 use crate::window::assignment;
 
 /// Create a window in a session.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NewWindow {
     pub(crate) target: SessionTarget,
     #[cfg_attr(
@@ -21,6 +24,10 @@ pub struct NewWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     name: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -28,6 +35,10 @@ pub struct NewWindow {
             serialize_with = "crate::plan::wire::optional_argument",
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
     )]
     start_directory: Option<OsString>,
     #[cfg_attr(
@@ -37,6 +48,10 @@ pub struct NewWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     command: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -44,6 +59,10 @@ pub struct NewWindow {
             serialize_with = "crate::plan::wire::pairs",
             deserialize_with = "crate::plan::wire::parse_pairs"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<(crate::plan::wire::Argument, crate::plan::wire::Argument)>")
     )]
     environment: Vec<(OsString, OsString)>,
     index: Option<u32>,
@@ -94,6 +113,9 @@ impl NewWindow {
     }
 
     /// Name the window.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     #[must_use]
     pub fn name(mut self, name: impl Into<OsString>) -> Self {
         self.name = Some(name.into());
@@ -101,6 +123,9 @@ impl NewWindow {
     }
 
     /// Start the window's pane in this directory.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     #[must_use]
     pub fn start_directory(mut self, directory: impl Into<OsString>) -> Self {
         self.start_directory = Some(directory.into());
@@ -138,14 +163,29 @@ impl NewWindow {
             command = command.arg("-c").arg(directory.clone());
         }
         for (name, value) in &self.environment {
-            command = command.arg("-e").arg(assignment(name, value));
+            command = command.arg("-e").sensitive_arg(assignment(name, value));
         }
         // The shell command is positional, so it goes last: tmux stops parsing
         // flags at the first one.
         if let Some(shell_command) = &self.command {
-            command = command.arg(shell_command.clone());
+            command = command.sensitive_arg(shell_command.clone());
         }
         Some(command)
+    }
+}
+
+impl fmt::Debug for NewWindow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NewWindow")
+            .field("target", &self.target)
+            .field("has_name", &self.name.is_some())
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("environment_count", &self.environment.len())
+            .field("index", &self.index)
+            .field("focus", &self.focus)
+            .finish()
     }
 }
 
@@ -162,6 +202,8 @@ operation!(
 /// Make a window the active one.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SelectWindow {
     pub(crate) target: WindowTarget,
 }
@@ -198,6 +240,8 @@ operation!(
 /// Rename a window.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RenameWindow {
     pub(crate) target: WindowTarget,
     #[cfg_attr(
@@ -207,6 +251,7 @@ pub struct RenameWindow {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     name: OsString,
 }
 
@@ -245,6 +290,8 @@ operation!(
 /// Destroy a window.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct KillWindow {
     pub(crate) target: WindowTarget,
 }
@@ -256,6 +303,12 @@ impl KillWindow {
         Self {
             target: target.into(),
         }
+    }
+
+    /// The window this operation will destroy.
+    #[must_use]
+    pub const fn target(&self) -> &WindowTarget {
+        &self.target
     }
 
     pub(crate) fn render(&self, resolve: Resolver<'_>) -> Option<Command> {
@@ -284,6 +337,8 @@ operation!(
 /// split, so applying it earlier is work the next split undoes.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SelectLayout {
     pub(crate) target: WindowTarget,
     #[cfg_attr(
@@ -293,6 +348,7 @@ pub struct SelectLayout {
             deserialize_with = "crate::plan::wire::parse_argument"
         )
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
     layout: OsString,
 }
 

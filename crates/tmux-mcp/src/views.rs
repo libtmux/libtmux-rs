@@ -12,6 +12,7 @@
 use serde::Serialize;
 
 use crate::caller::Relation;
+use crate::schema::{ChannelWaitOutcomeSchema, OptionScopeSchema, WatchStopSchema};
 
 /// One session, as the protocol sees it.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -129,17 +130,16 @@ pub struct Branch {
     pub windows: Vec<BranchWindow>,
 }
 
-/// What this process is attached to.
+/// The selected tmux server and inherited caller context.
 ///
-/// Answered by the `tmux://server` resource. The socket is what makes a pane
-/// id mean anything: `%1` names a different pane on every tmux server, so a
-/// reader comparing ids across two of these has to compare sockets first.
+/// Answered by the `tmux://server` resource. The inherited pane is launch
+/// context, not a claim that it belongs to the selected socket.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ServerView {
     /// The socket this server talks to, as tmux reports it.
     pub socket: Option<String>,
-    /// The pane this process runs in, when tmux started it in one.
-    pub caller_pane: Option<String>,
+    /// The pane id inherited at launch, without a selected-socket claim.
+    pub inherited_caller_pane: Option<String>,
     /// How many sessions are on the server.
     pub sessions: usize,
 }
@@ -266,6 +266,7 @@ pub struct Watch {
     /// How many bytes arrived.
     pub bytes: usize,
     /// Why watching stopped.
+    #[schemars(with = "WatchStopSchema")]
     pub stopped: String,
 }
 
@@ -284,6 +285,7 @@ pub struct OptionSet {
     /// The option name.
     pub name: String,
     /// The scope it was written at.
+    #[schemars(with = "OptionScopeSchema")]
     pub scope: String,
 }
 
@@ -293,6 +295,7 @@ pub struct ChannelWait {
     /// The channel that was waited on.
     pub channel: String,
     /// `signalled` or `deadline`.
+    #[schemars(with = "ChannelWaitOutcomeSchema")]
     pub outcome: String,
 }
 
@@ -351,15 +354,13 @@ pub struct JobList {
     pub jobs: Vec<crate::jobs::JobView>,
 }
 
-/// A background command that was stopped.
+/// A background command that is no longer retained.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct JobCancelled {
+pub struct JobForgotten {
     /// The job that was forgotten.
     pub job: String,
-    /// The pane it was running in.
+    /// The pane associated with the job.
     pub pane: String,
-    /// Whether an interrupt was sent, which it is not for a finished job.
-    pub interrupted: bool,
 }
 
 /// One tmux server found on this machine.

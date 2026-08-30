@@ -8,9 +8,16 @@ use std::time::Duration;
 
 use tokio::sync::OnceCell;
 
+#[cfg(feature = "control-mode")]
+use crate::SessionId;
 use crate::command::{CommandChain, CommandRequest, CommandResult, RequestId};
 use crate::internal::executor::Executor;
+use crate::internal::process::LaunchContext;
+#[cfg(feature = "control-mode")]
+use crate::internal::process::{PersistentChild, PersistentClients};
 use crate::internal::subprocess::SubprocessExecutor;
+#[cfg(feature = "control-mode")]
+use crate::limits::ControlClientLimits;
 use crate::limits::{DispatchLimits, OutputLimits};
 use crate::target::endpoint_resolution::{
     EndpointInputs, IdentityError, ResolvedSocketSelector, resolve_server_endpoint,
@@ -76,13 +83,13 @@ pub(crate) struct CoreConfiguration {
     socket_name: Option<OsString>,
     config_file: Option<PathBuf>,
     colors: Option<u16>,
-    executable: OsString,
     timeout: Duration,
-    working_directory: PathBuf,
     global_argv: Vec<OsString>,
-    environment: Vec<(OsString, Option<OsString>)>,
+    launch: LaunchContext,
     output_limits: OutputLimits,
     dispatch_limits: DispatchLimits,
+    #[cfg(feature = "control-mode")]
+    control_client_limits: ControlClientLimits,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_supervisor_drop: bool,
 }
@@ -96,6 +103,12 @@ impl CoreConfiguration {
     ) -> Self {
         self.output_limits = output;
         self.dispatch_limits = dispatch;
+        self
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn with_control_client_limits(mut self, limits: ControlClientLimits) -> Self {
+        self.control_client_limits = limits;
         self
     }
 
@@ -163,34 +176,46 @@ impl CoreConfiguration {
             None => {}
             Some(_) => return Err(ServerConfigurationErrorKind::InvalidColorMode),
         }
+        // tmux replaces every byte outside `0x20..=0x7e` with `_` when it does
+        // not believe its client speaks UTF-8, and it decides that from the
+        // client process's own `TMUX`, `LANG`, `LC_ALL`, and `LC_CTYPE`. This
+        // crate unsets `TMUX` and inherits whatever locale its caller had, so
+        // a listing run from a container or a unit file returned `______` for
+        // a name and no error. `-u` says it directly instead of hoping.
+        global_argv.push(OsString::from("-u"));
 
         let pane = if inherited {
             context.inherited_tmux_pane
         } else {
             None
         };
-        let environment = vec![
-            (OsString::from("PATH"), context.path),
-            (OsString::from("TMUX"), None),
-            (OsString::from("TMUX_PANE"), pane),
-            (
-                OsString::from("TMUX_TMPDIR"),
-                socket_root.map(PathBuf::into_os_string),
-            ),
-        ];
+        let mut launch = LaunchContext::new(executable).with_current_dir(&working_directory);
+        launch = match context.path {
+            Some(path) => launch.with_environment("PATH", path),
+            None => launch.with_environment_removed("PATH"),
+        };
+        launch = launch.with_environment_removed("TMUX");
+        launch = match pane {
+            Some(pane) => launch.with_environment("TMUX_PANE", pane),
+            None => launch.with_environment_removed("TMUX_PANE"),
+        };
+        launch = match socket_root {
+            Some(root) => launch.with_environment("TMUX_TMPDIR", root.into_os_string()),
+            None => launch.with_environment_removed("TMUX_TMPDIR"),
+        };
 
         Ok(Self {
             identity,
             socket_name,
             config_file,
             colors,
-            executable,
             timeout,
-            working_directory,
             global_argv,
-            environment,
+            launch,
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
+            #[cfg(feature = "control-mode")]
+            control_client_limits: ControlClientLimits::default(),
             #[cfg(feature = "test-support")]
             synchronous_reap_on_supervisor_drop: false,
         })
@@ -203,10 +228,7 @@ impl CoreConfiguration {
     #[cfg(feature = "test-support")]
     pub(crate) fn prevent_server_start(mut self) -> Self {
         self.global_argv.insert(0, OsString::from("-N"));
-        self.environment.push((
-            OsString::from("TERM"),
-            Some(OsString::from("xterm-256color")),
-        ));
+        self.launch = self.launch.with_environment("TERM", "xterm-256color");
         self.synchronous_reap_on_supervisor_drop = true;
         self
     }
@@ -228,7 +250,7 @@ impl CoreConfiguration {
     }
 
     pub(crate) fn executable(&self) -> &OsStr {
-        &self.executable
+        self.launch.executable()
     }
 
     pub(crate) const fn timeout(&self) -> Duration {
@@ -237,7 +259,9 @@ impl CoreConfiguration {
 
     #[cfg(test)]
     pub(crate) fn working_directory(&self) -> &Path {
-        &self.working_directory
+        self.launch
+            .current_dir()
+            .expect("resolved Core launch context has a working directory")
     }
 
     #[cfg(test)]
@@ -251,10 +275,7 @@ impl CoreConfiguration {
         reason = "tests distinguish an absent action from removal and assignment"
     )]
     pub(crate) fn environment_value(&self, key: &OsStr) -> Option<Option<&OsStr>> {
-        self.environment
-            .iter()
-            .find(|(candidate, _)| candidate == key)
-            .map(|(_, value)| value.as_deref())
+        self.launch.environment_value(key)
     }
 }
 
@@ -294,36 +315,36 @@ pub(crate) struct Core {
     executor: Arc<dyn Executor>,
     capabilities: OnceCell<EngineCapabilities>,
     next_request_id: AtomicU64,
+    #[cfg(feature = "control-mode")]
+    persistent_clients: PersistentClients,
 }
 
 impl Core {
     pub(crate) fn new(configuration: CoreConfiguration) -> Self {
-        let mut executor =
-            SubprocessExecutor::new(configuration.executable.clone(), configuration.timeout)
-                .with_current_dir(configuration.working_directory.clone())
-                .with_output_limits(configuration.output_limits)
-                .with_dispatch_limits(configuration.dispatch_limits);
+        let executor = SubprocessExecutor::new(
+            configuration.launch.executable().to_os_string(),
+            configuration.timeout,
+        )
+        .with_launch_context(configuration.launch.clone())
+        .with_output_limits(configuration.output_limits)
+        .with_dispatch_limits(configuration.dispatch_limits);
         #[cfg(feature = "test-support")]
-        {
-            executor = executor.with_synchronous_reap_on_supervisor_drop(
-                configuration.synchronous_reap_on_supervisor_drop,
-            );
-        }
-        for (key, value) in &configuration.environment {
-            executor = match value {
-                Some(value) => executor.with_environment(key.clone(), value.clone()),
-                None => executor.with_environment_removed(key.clone()),
-            };
-        }
+        let executor = executor.with_synchronous_reap_on_supervisor_drop(
+            configuration.synchronous_reap_on_supervisor_drop,
+        );
         Self::with_executor(configuration, Arc::new(executor))
     }
 
     fn with_executor(configuration: CoreConfiguration, executor: Arc<dyn Executor>) -> Self {
+        #[cfg(feature = "control-mode")]
+        let control_client_limits = configuration.control_client_limits;
         Self {
             configuration,
             executor,
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
+            #[cfg(feature = "control-mode")]
+            persistent_clients: PersistentClients::new(control_client_limits),
         }
     }
 
@@ -334,13 +355,13 @@ impl Core {
             socket_name: None,
             config_file: None,
             colors: None,
-            executable: OsString::from("tmux"),
             timeout: DEFAULT_TIMEOUT,
-            working_directory: PathBuf::from("/"),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
+            #[cfg(feature = "control-mode")]
+            control_client_limits: ControlClientLimits::default(),
             global_argv: Vec::new(),
-            environment: Vec::new(),
+            launch: LaunchContext::new("tmux").with_current_dir("/"),
             #[cfg(feature = "test-support")]
             synchronous_reap_on_supervisor_drop: false,
         };
@@ -391,12 +412,61 @@ impl Core {
             .await
     }
 
+    #[cfg(feature = "control-mode")]
+    pub(crate) async fn spawn_control(
+        &self,
+        session: &SessionId,
+    ) -> Result<PersistentChild, Error> {
+        let mut global_argv = self.configuration.global_argv.clone();
+        global_argv.push(OsString::from("-C"));
+        let request = CommandRequest::with_global_argv(
+            self.next_request_id(),
+            &global_argv,
+            // Opening an observer must not copy this process's environment
+            // into the session it is inspecting.
+            Command::new("attach")
+                .arg("-E")
+                .arg("-t")
+                .arg(session.to_string()),
+        );
+        let reservation = self
+            .persistent_clients
+            .reserve(
+                request.request_id(),
+                request.summary().clone(),
+                tokio::time::Instant::now().checked_add(self.configuration.timeout),
+            )
+            .await?;
+        PersistentChild::spawn(&self.configuration.launch, &request, reservation)
+    }
+
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
-        self.executor.shutdown().await
+        #[cfg(feature = "control-mode")]
+        {
+            let (executor, ()) =
+                tokio::join!(self.executor.shutdown(), self.persistent_clients.shutdown());
+            executor
+        }
+        #[cfg(not(feature = "control-mode"))]
+        {
+            self.executor.shutdown().await
+        }
     }
 
     pub(crate) fn configuration(&self) -> &CoreConfiguration {
         &self.configuration
+    }
+
+    pub(crate) fn require_same_server(
+        &self,
+        other: &ServerIdentity,
+        operation: &'static str,
+    ) -> Result<(), Error> {
+        if self.configuration.identity() == other {
+            Ok(())
+        } else {
+            Err(Error::server_mismatch(operation))
+        }
     }
 }
 
@@ -519,6 +589,7 @@ mod tests {
                 b"-f".as_slice(),
                 b"/captured/work/relative-config;".as_slice(),
                 b"-8".as_slice(),
+                b"-u".as_slice(),
             ]
         );
         assert_eq!(
@@ -623,7 +694,10 @@ mod tests {
         )
         .expect("default socket uses the captured fallback");
 
-        assert_eq!(argv(&named), [b"-L".as_slice(), b"named;".as_slice()]);
+        assert_eq!(
+            argv(&named),
+            [b"-L".as_slice(), b"named;".as_slice(), b"-u".as_slice()]
+        );
         assert_eq!(
             named.identity().socket_path(),
             canonical.join("tmux-1000/named;")
@@ -633,7 +707,10 @@ mod tests {
             Some(Some(canonical.as_os_str()))
         );
         assert_eq!(named.environment_value(OsStr::new("TMUX_PANE")), Some(None));
-        assert_eq!(argv(&fallback), [b"-L".as_slice(), b"default".as_slice()]);
+        assert_eq!(
+            argv(&fallback),
+            [b"-L".as_slice(), b"default".as_slice(), b"-u".as_slice()]
+        );
         assert_eq!(
             fallback.environment_value(OsStr::new("TMUX_TMPDIR")),
             Some(Some(OsStr::new("/fallback")))
@@ -671,7 +748,8 @@ mod tests {
             argv(&configuration),
             [
                 b"-S".as_slice(),
-                b"/captured/work/relative/socket".as_slice()
+                b"/captured/work/relative/socket".as_slice(),
+                b"-u".as_slice(),
             ]
         );
         assert_eq!(
@@ -809,7 +887,7 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
         assert_eq!(
             stdout,
             format!(
-                "{}\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<display-message>\n<value\\;>\n<PATH={}>\n<TMUX=unset>\n<TMUX_PANE=unset>\n<TMUX_TMPDIR=unset>\n",
+                "{}\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<display-message>\n<value\\;>\n<PATH={}>\n<TMUX=unset>\n<TMUX_PANE=unset>\n<TMUX_TMPDIR=unset>\n",
                 canonical_workspace.display(),
                 workspace.path().join("socket;").display(),
                 workspace.path().join("config;").display(),

@@ -116,12 +116,11 @@ async fn list(
         }
 
         // Anything else is not an empty listing. The lenient accessors turn
-        // this back into an empty Vec; the `try_` forms exist so a caller who
+        // this back into an empty Vec; the loud forms exist so a caller who
         // must not guess gets the reason instead.
-        return Err(Error::refused(
+        return Err(Error::from_refused_result(
             list_command,
-            result.exit_code(),
-            stderr,
+            &result,
             scope.target().map(OsStr::new),
         ));
     }
@@ -138,6 +137,34 @@ fn decode_error(list_command: &'static str) -> impl Fn(FormatCodecError) -> Erro
 }
 
 /// List sessions.
+/// Record that a lenient listing threw a failure away.
+///
+/// The lenient forms return an empty vector for "nothing there" and for "the
+/// listing failed", which is the trade they exist for. A caller who chose them
+/// has said the reason does not change what they do -- but somebody reading a
+/// log later still needs to be able to tell the two apart, and an empty vector
+/// cannot.
+///
+/// This lives here rather than beside any one caller because all eleven of
+/// them need it. As a private associated function on `Server` it was reachable
+/// only from that file, so five listings recorded their discard and six did
+/// not, split by nothing but where the helper happened to sit.
+#[cfg_attr(
+    not(feature = "tracing"),
+    expect(
+        unused_variables,
+        reason = "the cause has no sink when tracing is disabled"
+    )
+)]
+pub(crate) fn trace_discarded(list_command: &'static str, error: &Error) {
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        list_command,
+        error = %error,
+        "a lenient listing discarded a failure and returned empty",
+    );
+}
+
 pub(crate) async fn sessions(core: &Core, filter: Option<&str>) -> Result<Vec<SessionInfo>, Error> {
     const LIST_COMMAND: &str = "list-sessions";
 
@@ -162,6 +189,38 @@ pub(crate) async fn windows(
 
     hydrate_window_projections_from_stdout(core.configuration().identity(), &plan, &stdout)
         .map_err(decode_error(LIST_COMMAND))
+}
+
+/// Resolve one pane and hydrate its containing window from the same tmux row.
+pub(crate) async fn window_for_pane(
+    core: &Core,
+    pane: &crate::PaneId,
+) -> Result<Option<WindowProjection>, Error> {
+    const LIST_COMMAND: &str = "list-panes";
+
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = window_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
+    let target = pane.to_string();
+    let filter = pane.predicate("pane_id");
+    let stdout = match list(
+        core,
+        LIST_COMMAND,
+        Scope::Target(&target),
+        Some(&filter),
+        plan.template(),
+    )
+    .await
+    {
+        Err(error) if error.is_object_gone() => return Ok(None),
+        result => result?,
+    };
+
+    Ok(
+        hydrate_window_projections_from_stdout(core.configuration().identity(), &plan, &stdout)
+            .map_err(decode_error(LIST_COMMAND))?
+            .into_iter()
+            .next(),
+    )
 }
 
 /// List panes, either server-wide or under one target.
@@ -209,21 +268,24 @@ async fn create_one<T>(
     let target = command.target().map(OsStr::to_os_string);
     let result = core.execute(command).await?;
     if !result.success() {
-        return Err(Error::refused(
+        return Err(Error::from_refused_result(
             command_name,
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
+            &result,
             target.as_deref(),
         ));
     }
 
-    hydrate(result.stdout())?
+    hydrate(result.stdout())
+        .map_err(|error| error.after_effect(command_name))?
         .into_iter()
         .next()
-        .ok_or(Error::CommandFailed {
-            command: command_name,
-            exit_code: result.exit_code(),
-            stderr: String::from("tmux printed no object for a creating command"),
+        .ok_or_else(|| {
+            Error::CommandFailed {
+                command: command_name,
+                exit_code: result.exit_code(),
+                stderr: String::from("tmux printed no object for a creating command"),
+            }
+            .after_effect(command_name)
         })
 }
 
@@ -288,30 +350,103 @@ pub(crate) async fn mutate(
         return Ok(());
     }
 
-    Err(Error::refused(
-        command_name,
-        result.exit_code(),
-        result.stderr_lossy().into_owned(),
-        target.as_deref(),
-    ))
+    Err(mutation_failure(command_name, &result, target.as_deref()))
 }
 
-/// Record a cleanup failure that a scoped operation is about to discard.
-///
-/// It is discarded because the operation failed first, and that error is the
-/// one the caller was pursuing. Without `tracing` the failure is lost, which
-/// is the price of returning one error rather than two.
-#[cfg_attr(
-    not(feature = "tracing"),
-    expect(
-        unused_variables,
-        reason = "the cause has no sink when tracing is disabled"
-    )
-)]
-pub(crate) fn trace_discarded_cleanup(error: &Error) {
-    #[cfg(feature = "tracing")]
-    tracing::debug!(
-        error = %error,
-        "a scoped operation discarded a cleanup failure after its body failed",
-    );
+fn mutation_failure(
+    command_name: &'static str,
+    result: &crate::CommandResult,
+    target: Option<&OsStr>,
+) -> Error {
+    Error::from_refused_result(command_name, result, target)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{create_session, mutation_failure};
+    use crate::command::{CommandRequest, CommandResult, ProcessStatus, RequestId};
+    use crate::internal::core::Core;
+    use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+    use crate::{Command, Error, ErrorKind};
+
+    struct CreationExecutor {
+        calls: AtomicUsize,
+        stdout: &'static [u8],
+    }
+
+    impl Executor for CreationExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let stdout = if call == 0 {
+                b"tmux 3.7b\n".to_vec()
+            } else {
+                assert_eq!(call, 1, "one probe and one creating command");
+                self.stdout.to_vec()
+            };
+            DispatchFuture::new(async move {
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn sensitive_mutation_failure_withholds_tmux_output() {
+        let secret = "sentinel-mutation-secret";
+        let command = Command::new("set-option")
+            .arg("--")
+            .arg("mouse")
+            .sensitive_arg(secret);
+        let result = CommandResult::new(
+            RequestId::new(1),
+            command.summary(),
+            ProcessStatus::from_exit_status(ExitStatus::from_raw(1 << 8)),
+            Vec::new(),
+            format!("bad value: {secret}\n").into_bytes(),
+        );
+
+        let error = mutation_failure("set-option", &result, None);
+        assert!(matches!(&error, Error::CommandFailed { .. }));
+        let diagnostic = format!("{error:?} {error}");
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
+
+    #[tokio::test]
+    async fn successful_creation_marks_decode_and_missing_object_failures() {
+        for stdout in [b"malformed\n".as_slice(), b"".as_slice()] {
+            let executor = Arc::new(CreationExecutor {
+                calls: AtomicUsize::new(0),
+                stdout,
+            });
+            let core = Core::from_executor_for_test(executor.clone());
+
+            let error = create_session(&core, |_format| Command::new("new-session"))
+                .await
+                .expect_err("tmux succeeded but did not describe the created session");
+
+            assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+            assert_eq!(error.kind(), ErrorKind::PartialEffect);
+            assert!(matches!(
+                error,
+                Error::AfterEffect {
+                    operation: "new-session",
+                    ..
+                }
+            ));
+        }
+    }
 }

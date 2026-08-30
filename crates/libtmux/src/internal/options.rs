@@ -12,12 +12,13 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt as _;
 
 use crate::formats::TmuxText;
 use crate::hooks::IndexedHooks;
 use crate::hooks::ReplaceMode;
 use crate::internal::core::Core;
-use crate::options::OptionValue;
+use crate::options::{OptionScope, OptionValue};
 use crate::{Command, CommandChain, Error};
 
 /// Which option table an operation reads or writes.
@@ -38,6 +39,16 @@ pub(crate) enum Scope<'target> {
 }
 
 impl Scope<'_> {
+    /// Which of tmux's option tables this scope names.
+    fn option_scope(self) -> OptionScope {
+        match self {
+            Self::Server => OptionScope::Server,
+            Self::GlobalSession | Self::Session(_) => OptionScope::Session,
+            Self::GlobalWindow | Self::Window(_) => OptionScope::Window,
+            Self::Pane(_) => OptionScope::Pane,
+        }
+    }
+
     /// Apply this scope's flags to an option command.
     fn apply(self, command: Command) -> Command {
         match self {
@@ -70,23 +81,34 @@ pub(crate) async fn get(
     let command = scope
         .apply(Command::new("show-options"))
         .arg("-v")
+        .arg("--")
         .arg(OsString::from(name));
     let result = core.execute(command).await?;
 
     if !result.success() {
-        // A user option that is not set is not merely empty, it is unknown.
-        // For a built-in name, failure means the caller named something tmux
-        // does not have.
-        if name.starts_with('@') {
+        let failure = Error::from_refused_result("show-options", &result, None);
+
+        // A user option that is not set is not merely empty, it is unknown to
+        // tmux, so that one failure is the answer `None`.
+        //
+        // Only that one. The earlier version asked what the caller had named
+        // and swallowed every failure for an `@` name, which made a pane that
+        // had gone away read as a pane whose option was never set -- tmux says
+        // "invalid option: @x" for the first and "no such pane: %1" for the
+        // second, in the stderr this already holds.
+        if name.starts_with('@')
+            && matches!(
+                failure,
+                Error::OptionRejected {
+                    kind: crate::OptionErrorKind::Unknown,
+                    ..
+                }
+            )
+        {
             return Ok(None);
         }
 
-        return Err(Error::refused(
-            "show-options",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        ));
+        return Err(failure);
     }
 
     let stdout = result.stdout();
@@ -107,12 +129,7 @@ pub(crate) async fn names(core: &Core, scope: Scope<'_>) -> Result<Vec<String>, 
         .execute(scope.apply(Command::new("show-options")))
         .await?;
     if !result.success() {
-        return Err(Error::refused(
-            "show-options",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        ));
+        return Err(Error::from_refused_result("show-options", &result, None));
     }
 
     Ok(result
@@ -138,9 +155,14 @@ pub(crate) async fn set(
         command = command.arg("-a");
     }
 
+    ensure_scope(core, scope, name).await?;
+
     run(
         core,
+        "set-option",
+        Some(name),
         command
+            .arg("--")
             .arg(OsString::from(name))
             .sensitive_arg(value.into()),
     )
@@ -149,28 +171,55 @@ pub(crate) async fn set(
 
 /// Remove one option, restoring whatever it inherits.
 pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
     run(
         core,
+        "set-option",
+        None,
         scope
             .apply(Command::new("set-option"))
             .arg("-u")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
 }
 
 /// Set one hook to a tmux command.
+///
+/// A hook is an array option, and tmux empties the whole array before storing
+/// an unindexed write: setting `alert-bell` discards whatever `alert-bell[1]`
+/// and up were running. Naming slot 0 explicitly takes the other branch of
+/// `cmd_set_option_exec` and leaves its neighbours alone, which is what
+/// setting one hook means. `set_hooks` already writes every slot by index for
+/// the same reason.
+///
+/// A name that already claims index syntax is forwarded whole. Parsing it here
+/// to check would have to decide what `alert-bell[x]` means, and tmux is the
+/// one that gets to answer that.
 pub(crate) async fn set_hook(
     core: &Core,
     scope: Scope<'_>,
     name: &str,
     command_text: impl Into<OsString>,
 ) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
+    let slot = if name.contains('[') {
+        OsString::from(name)
+    } else {
+        OsString::from(format!("{name}[0]"))
+    };
+
     run(
         core,
+        "set-hook",
+        None,
         scope
             .apply(Command::new("set-hook"))
-            .arg(OsString::from(name))
+            .arg("--")
+            .arg(slot)
             .sensitive_arg(command_text.into()),
     )
     .await
@@ -178,29 +227,134 @@ pub(crate) async fn set_hook(
 
 /// Remove one hook.
 pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
     run(
         core,
+        "set-hook",
+        None,
         scope
             .apply(Command::new("set-hook"))
             .arg("-u")
+            .arg("--")
             .arg(OsString::from(name)),
     )
     .await
 }
 
+/// Options tmux started keeping at a second scope after the supported floor.
+///
+/// Gating on the current table alone would allow a write that an older tmux
+/// silently places at the other scope, which is the defect this guard exists
+/// to stop.
+const LATE_SCOPES: &[(&str, OptionScope, crate::version::ReleaseVersion)] = &[
+    (
+        "pane-border-format",
+        OptionScope::Pane,
+        crate::version::since::PANE_BORDER_FORMAT_PER_PANE,
+    ),
+    (
+        "pane-active-border-style",
+        OptionScope::Pane,
+        crate::version::since::PANE_BORDER_STYLE_PER_PANE,
+    ),
+    (
+        "pane-border-style",
+        OptionScope::Pane,
+        crate::version::since::PANE_BORDER_STYLE_PER_PANE,
+    ),
+];
+
+/// Refuse a write tmux would carry out somewhere other than the handle says.
+///
+/// tmux picks an option's table from its name, not from the flags the command
+/// carried, so a mismatch is not refused: `mouse` sent with `-p` becomes the
+/// session's `mouse`, tmux exits 0, and reading it back through the same
+/// handle resolves the same way and agrees. Nothing downstream can tell.
+async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), Error> {
+    // A user option has no entry in tmux's table, and tmux honours the flags
+    // literally for one. Nothing to check, and nothing to get wrong.
+    if name.starts_with('@') {
+        return Ok(());
+    }
+
+    // `option_schema` resolves the name the way tmux does: it drops an index,
+    // maps the legacy spellings, and takes an unambiguous prefix.
+    let Some(schema) = crate::option_schema(name) else {
+        // tmux will answer "unknown option" itself, and its message names what
+        // it could not resolve better than a guess here would.
+        return Ok(());
+    };
+
+    let requested = scope.option_scope();
+    if !schema.accepts(requested) {
+        return Err(Error::OptionScopeMismatch {
+            option: schema.name().to_owned(),
+            requested,
+            declared: schema.scopes(),
+        });
+    }
+
+    // The schema is built from one tmux. Where a scope arrived later than the
+    // floor, the running server decides.
+    for (option, late, needs) in LATE_SCOPES {
+        if *option == schema.name() && *late == requested {
+            let found = core.capabilities().await?.tmux_version();
+            if !found.meets(needs) {
+                return Err(Error::UnsupportedCapability {
+                    capability: option,
+                    needs: *needs,
+                    found: found.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Run an option mutation, requiring tmux to accept it.
-async fn run(core: &Core, command: Command) -> Result<(), Error> {
+async fn run(
+    core: &Core,
+    command_name: &'static str,
+    option_name: Option<&str>,
+    command: Command,
+) -> Result<(), Error> {
     let result = core.execute(command).await?;
     if result.success() {
         return Ok(());
     }
 
-    Err(Error::refused(
-        "set-option",
-        result.exit_code(),
+    Err(mutation_failure(command_name, option_name, &result))
+}
+
+fn mutation_failure(
+    command_name: &'static str,
+    option_name: Option<&str>,
+    result: &crate::CommandResult,
+) -> Error {
+    let exit_code = result.exit_code();
+    if result.command().sensitive_argument_count() == 0 {
+        return Error::from_refused_result(command_name, result, None);
+    }
+
+    let failure = Error::refused(
+        command_name,
+        exit_code,
         result.stderr_lossy().into_owned(),
         None,
-    ))
+    );
+    match (option_name, failure) {
+        (Some(name), Error::OptionRejected { kind, .. }) => Error::OptionRejected {
+            kind,
+            detail: name.to_owned(),
+        },
+        (Some(name), Error::CommandFailed { .. }) => Error::OptionRejected {
+            kind: crate::OptionErrorKind::BadValue,
+            detail: name.to_owned(),
+        },
+        _ => Error::refused_withheld(command_name, exit_code),
+    }
 }
 
 /// List the hook slots that are set at one scope, as `name[index]`.
@@ -214,12 +368,7 @@ pub(crate) async fn hook_slots(core: &Core, scope: Scope<'_>) -> Result<Vec<Stri
         .execute(scope.apply(Command::new("show-hooks")))
         .await?;
     if !result.success() {
-        return Err(Error::refused(
-            "show-hooks",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        ));
+        return Err(Error::from_refused_result("show-hooks", &result, None));
     }
 
     Ok(result
@@ -300,16 +449,12 @@ async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<Strin
         .execute(
             scope
                 .apply(Command::new("show-options"))
+                .arg("--")
                 .arg(OsString::from(name)),
         )
         .await?;
     if !result.success() {
-        return Err(Error::refused(
-            "show-options",
-            result.exit_code(),
-            result.stderr_lossy().into_owned(),
-            None,
-        ));
+        return Err(Error::from_refused_result("show-options", &result, None));
     }
 
     Ok(result
@@ -369,13 +514,10 @@ pub(crate) async fn typed_all(
     Ok(decoded)
 }
 
-/// Write a whole hook at once.
+/// Write a whole hook with an exact replay boundary.
 ///
-/// Sent as one tmux invocation rather than one per index, which costs one
-/// process instead of several. That is not atomicity: tmux applies a shared
-/// invocation in order and stops at the first refusal, so a rejected entry
-/// leaves the ones before it written. It narrows the window, it does not
-/// close it.
+/// The first mutation is sent alone. A later failure follows an accepted
+/// effect; a first-command failure remains its leaf error.
 pub(crate) async fn set_hooks(
     core: &Core,
     scope: Scope<'_>,
@@ -383,6 +525,8 @@ pub(crate) async fn set_hooks(
     hooks: &IndexedHooks,
     replace: ReplaceMode,
 ) -> Result<(), Error> {
+    ensure_scope(core, scope, name).await?;
+
     let mut commands = Vec::with_capacity(hooks.len() + 1);
     if replace == ReplaceMode::Replace {
         // Clearing first is what makes this a replacement rather than a
@@ -391,6 +535,7 @@ pub(crate) async fn set_hooks(
             scope
                 .apply(Command::new("set-hook"))
                 .arg("-u")
+                .arg("--")
                 .arg(OsString::from(name)),
         );
     }
@@ -398,10 +543,13 @@ pub(crate) async fn set_hooks(
         commands.push(
             scope
                 .apply(Command::new("set-hook"))
+                .arg("--")
                 .arg(OsString::from(format!("{name}[{index}]")))
-                .sensitive_arg(OsString::from(
-                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                )),
+                // A hook command is bytes, as everything tmux stores is. The
+                // single-hook path forwards them; going through a `String`
+                // here would replace whatever is not UTF-8 before tmux ever
+                // sees it.
+                .sensitive_arg(OsString::from_vec(value.as_bytes().to_vec())),
         );
     }
 
@@ -409,24 +557,25 @@ pub(crate) async fn set_hooks(
     let Some(first) = commands.next() else {
         return Ok(());
     };
+    let Some(second) = commands.next() else {
+        return run(core, "set-hook", None, first).await;
+    };
+
+    run(core, "set-hook", None, first).await?;
     let result = match commands.next() {
-        None => core.execute(first).await?,
-        Some(second) => {
-            let mut chain = CommandChain::new(first).then(second);
+        None => core.execute(second).await,
+        Some(third) => {
+            let mut chain = CommandChain::new(second).then(third);
             for command in commands {
                 chain = chain.then(command);
             }
-            core.execute_chain(chain).await?
+            core.execute_chain(chain).await
         }
     };
+    let result = result.map_err(|error| error.after_effect("set-hooks"))?;
     if result.success() {
         return Ok(());
     }
 
-    Err(Error::refused(
-        "set-hook",
-        result.exit_code(),
-        result.stderr_lossy().into_owned(),
-        None,
-    ))
+    Err(mutation_failure("set-hook", None, &result).after_effect("set-hooks"))
 }

@@ -2,9 +2,9 @@
 
 This repository is a Cargo workspace of four published crates, and the gates
 below are what a change has to pass. It was extracted from the Python libtmux
-repository; a convention you recognise from that project does not apply here
-unless a file here says so, and none of its commands do — nothing here uses
-`uv`, `pytest`, `ruff`, or `mypy`.
+repository; its `uv`, `pytest`, `ruff`, and `mypy` conventions do not apply to
+the Rust crates. The `mcp_swap.py` maintenance utility is the exception: `uv`
+supplies its dependencies, and `pytest` tests it under `just check`.
 
 For how the prose reads — README, changelog, release notes, commit messages,
 rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
@@ -15,7 +15,8 @@ You need tmux 3.2a or newer on `PATH` and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
 `rust-toolchain.toml` pins the toolchain, so rustup installs it on the first
-cargo command. The gate also needs the two MSRV floors and three tools:
+cargo command. The gate also needs the two MSRV floors, `uv`, and three Cargo
+tools:
 
 ```console
 $ rustup toolchain install 1.85.0 1.88.0
@@ -24,6 +25,9 @@ $ rustup toolchain install 1.85.0 1.88.0
 ```console
 $ cargo install just cargo-hack cargo-deny
 ```
+
+Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+separately; Cargo does not manage the Python test environment.
 
 Nightly is needed only for `just api-check`, `just example-coverage-check`,
 and `just fuzz`, none of which are part of the local gate.
@@ -68,6 +72,36 @@ Tests run against real tmux. There are no mocks; a test that would need one is
 usually asking for a design change. `libtmux::test::TestServer`, behind the
 `test-support` feature, gives each test an isolated socket and deterministic
 cleanup. Tests are functions, not methods on a struct.
+
+Every test runs against whatever `tmux` resolves to, unless
+`LIBTMUX_TEST_TMUX` names one:
+
+```console
+$ LIBTMUX_TEST_TMUX=/path/to/tmux-3.5a just test
+```
+
+Fixture deadlines bound a tmux that starts with a core to spare. On a machine
+running several times its cores in work -- a shared runner, or a laptop with
+another suite on it -- five seconds stops bounding startup and starts deciding
+results, and tests that wait on a fixture fail in a set that moves between
+runs. `LIBTMUX_TEST_TIMEOUT_SCALE` widens every fixture deadline by a factor,
+read once and never below `1`:
+
+```console
+$ LIBTMUX_TEST_TIMEOUT_SCALE=4 just test
+```
+
+Unset, deadlines are what they always were. It is not a fix for a test that
+waits on the wrong thing: it moves the ceiling, so a hung fixture takes that
+much longer to say so.
+
+Prefer that over prepending to `PATH`. `TestServer` used to read only `PATH`,
+so the variable steered the format-compatibility tests and nothing else, and a
+run pinned that way passed against whichever tmux `PATH` held. A pass about
+the wrong binary reports nothing and looks exactly like a pass about the right
+one. `just compat` builds each pinned release and runs the whole suite against
+it, so a test that depends on behaviour a release does not have needs a
+`libtmux::since::*` gate rather than an assumption about the machine.
 
 Doctests are a separate target and are part of the gate:
 
@@ -162,12 +196,29 @@ the test, and two shapes account for most of them:
   without it passes on an idle machine and not on a loaded one.
 - **A fixed sleep standing in for a wait.** A duration chosen to cover a
   latency that has no upper bound is a guess, and load is what collects on it.
-  Wait for the observable instead — this workspace ships `wait_for_text` and
-  `wait_for_idle` for exactly that, and a wait must assert the outcome it got,
-  since one that runs to its deadline still returns successfully.
+  Wait for the observable instead — `Pane::wait_for_text` and
+  `Pane::wait_for_quiet` are in the library and need no feature, and
+  `tmux-mcp` exposes the same shapes as tools. A wait must assert the outcome
+  it got, since one that runs to its deadline still returns successfully.
 
 A test that only passes on an idle machine is a broken test, and the fix
 belongs in the test rather than in a rerun.
+
+### Asking tmux what it does
+
+Establish a behaviour with the command the code sends, not with a convenient
+one. `display-message` carries `CMD_CLIENT_CANFAIL`, so it resolves a target
+it cannot find by falling back rather than refusing: `display-message -t
+<session>:<vacated index>` answers about some other window, while
+`select-window` with the same target exits 1. A probe built on it reports a
+behaviour the real command does not have.
+
+The same flag makes the reverse true. An absent target expands every format
+empty and exits zero, so a probe that counts an empty answer as absence cannot
+tell it from a command that failed.
+
+Two investigations here have been decided by that difference, in both
+directions, so the rule is worth the extra minute: send what the code sends.
 
 ## Checks that must pass
 
@@ -175,12 +226,16 @@ belongs in the test rather than in a rerun.
 $ just check
 ```
 
-That runs, in order: `fmt-check`, `clippy`, `test`, `doctest`,
-`fixture-root`, `docs`, `doc-blocks`, `format-coverage-check`, `features`,
-`deny`, `msrv`, `package`.
+That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
+`compat-supervisor-test`, `doctest`, `examples`, `fixture-root`, `docs`,
+`doc-blocks`, `parity-claims`, `format-coverage-check`, `features`, `deny`,
+`msrv`, `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.
+
+`compat-supervisor-test` exercises the Linux pidfd containment used by the
+slow compatibility lane. It skips on other Unix targets; CI runs it on Linux.
 
 Four gates are **not** in `just check` and run only in CI:
 
@@ -196,6 +251,19 @@ macOS runner bills at ten times a Linux one and the lints are
 platform-independent. On a pull request, `tests on macOS` and `fuzz parsers`
 report as skipping. That is the design, not a failure.
 
+`just parity-claims` fails when a row of `parity.md` marked `implemented` or
+`verified` names no caller-reachable Rust path, or puts an associated item on
+the wrong owner. Paths are checked against `public-api.txt`; private details do
+not satisfy the gate. `just api-check` proves the index still matches rustdoc
+JSON in CI.
+
+`just examples` runs every shipped example against a server it owns and
+fails when one exits nonzero or leaves a socket in `/tmp/libtmux-rs-dev/`.
+`cargo test --all-targets` compiles an example and never runs it, so before
+this an example that failed on every run passed every gate. It points `$TMUX`
+at its own socket, which is how `inspect` and `find` find a server without
+reaching the one the reader is using.
+
 The gates worth explaining:
 
 **Doctests must actually run.** A `#[cfg(feature = "…")]` inside a doctest
@@ -205,8 +273,9 @@ instead — `#![cfg_attr(feature = "x", doc = "…")]`. When adding a doctest fo
 gated API, break it once and confirm it fails.
 
 **The public surface is recorded.** `crates/libtmux/docs/public-api.txt` lists
-every public item. `just api` regenerates it; `just api-check` fails when the
-tree disagrees. Adding or changing public API means committing the regenerated
+every public item with its signature and each non-blanket trait
+implementation. `just api` regenerates it; `just api-check` fails when the tree
+disagrees. Adding or changing public API means committing the regenerated
 file, and that diff is the review artefact. There is no semver gate while the
 crates are prerelease: `cargo-semver-checks` treats a prerelease-to-prerelease
 step as a major change and skips every lint, reporting `0 checks: 0 pass, 254
@@ -252,6 +321,10 @@ a name recorded `catalogued` but absent from the catalog, and a name recorded
 `missing` that has since been added. Adding a format is therefore two steps —
 the catalog entry, then the ledger — and the gate fails in between.
 
+The pinned tmux 3.7b compatibility lane also compares every recorded status
+with that tag's source before it builds tmux. Added, removed, or reclassified
+upstream formats therefore fail the source-backed gate.
+
 Rerecording does need a tmux checkout, because it reads `format.c` for both
 `format_table[]` and the names attached by `format_add` and `cmdq_add_format`:
 
@@ -260,11 +333,10 @@ $ just format-coverage ../tmux
 ```
 
 The scope on a `missing` row is inferred from which member of the format tree
-the callback reads, so it is a guess. An `excluded:` reason written by hand
-survives rerecording, which is how a reviewed judgement outlives the crude test
-that would otherwise demote it back to `missing`. A `missing` row is a field a
-listing could carry and does not; adding one is ordinary work, leaving it
-unrecorded is not.
+the callback reads, so it is a guess. Reviewed exceptions live in the script,
+not in its generated output, and survive rerecording. A `missing` row is a
+field a listing could carry and does not; adding one is ordinary work, leaving
+it unrecorded is not.
 
 **Parsers that read from outside are fuzzed.** The control-mode line parser,
 the filter-expression wire format, and the workspace YAML loader each have a
@@ -276,6 +348,12 @@ input is not valid input.
 verifies what the tarballs contain. A packaged crate ships its README, so a
 README telling a reader to depend on a version that is no longer current is
 shipped install instructions, and this is what catches it.
+
+The gate verifies the workspace tarballs as one prospective release set. Cargo
+resolves workspace dependencies from the packaged crates in a temporary
+registry, not from their path entries. It does not assert that those versions
+are already on crates.io; the release workflow packages one tagged crate at a
+time, after its dependencies have been published.
 
 ## The language floor
 

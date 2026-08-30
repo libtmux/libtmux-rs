@@ -190,6 +190,9 @@ impl Workspace {
 impl WindowConfig {
     fn from_yaml(value: &Yaml, index: usize) -> Result<Self, ConfigError> {
         let at = format!("windows[{index}]");
+        if !matches!(value, Yaml::Hash(_)) {
+            return Err(ConfigError::invalid(format!("{at} must be a mapping")));
+        }
         let panes = match &value["panes"] {
             // A window with no panes still has the one tmux creates with it.
             Yaml::BadValue | Yaml::Null => vec![PaneConfig::default()],
@@ -631,6 +634,19 @@ fn path(value: &std::path::Path) -> String {
 /// shell, and deciding which of YAML's bare-scalar rules it trips is a larger
 /// job than quoting everything.
 fn quoted(value: &str) -> String {
-    let escaped = value.replace('\\', r"\\").replace('"', r#"\""#);
-    format!("\"{escaped}\"")
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str(r#"\""#),
+            '\\' => escaped.push_str(r"\\"),
+            character if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') => {
+                let code = u32::from(character);
+                let _ = write!(escaped, r"\u{code:04x}");
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    escaped
 }

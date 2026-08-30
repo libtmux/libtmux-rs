@@ -5,6 +5,7 @@
 //! plan, is a pane.
 
 use std::ffi::OsString;
+use std::fmt;
 
 use super::{
     Chainable, Effects, Op, Operation, PaneSlot, PaneTarget, Safety, Scope, Slot, WindowTarget,
@@ -14,8 +15,10 @@ use crate::Command;
 use crate::window::assignment;
 
 /// Split a window, making a pane.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SplitWindow {
     pub(crate) target: WindowTarget,
     vertical: bool,
@@ -26,6 +29,10 @@ pub struct SplitWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     start_directory: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -34,6 +41,10 @@ pub struct SplitWindow {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     command: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -41,6 +52,10 @@ pub struct SplitWindow {
             serialize_with = "crate::plan::wire::pairs",
             deserialize_with = "crate::plan::wire::parse_pairs"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<(crate::plan::wire::Argument, crate::plan::wire::Argument)>")
     )]
     environment: Vec<(OsString, OsString)>,
     focus: bool,
@@ -75,6 +90,9 @@ impl SplitWindow {
     }
 
     /// Start the new pane in this directory.
+    ///
+    /// tmux expands this as a format, so [`crate::escape_format`] belongs
+    /// around text a program did not write.
     #[must_use]
     pub fn start_directory(mut self, directory: impl Into<OsString>) -> Self {
         self.start_directory = Some(directory.into());
@@ -117,12 +135,26 @@ impl SplitWindow {
             command = command.arg("-c").arg(directory.clone());
         }
         for (name, value) in &self.environment {
-            command = command.arg("-e").arg(assignment(name, value));
+            command = command.arg("-e").sensitive_arg(assignment(name, value));
         }
         if let Some(shell_command) = &self.command {
-            command = command.arg(shell_command.clone());
+            command = command.sensitive_arg(shell_command.clone());
         }
         Some(command)
+    }
+}
+
+impl fmt::Debug for SplitWindow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SplitWindow")
+            .field("target", &self.target)
+            .field("vertical", &self.vertical)
+            .field("has_start_directory", &self.start_directory.is_some())
+            .field("has_command", &self.command.is_some())
+            .field("environment_count", &self.environment.len())
+            .field("focus", &self.focus)
+            .finish()
     }
 }
 
@@ -137,8 +169,10 @@ operation!(
 );
 
 /// Send text or named keys to a pane.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SendKeys {
     pub(crate) target: PaneTarget,
     #[cfg_attr(
@@ -148,6 +182,10 @@ pub struct SendKeys {
             deserialize_with = "crate::plan::wire::parse_optional_argument"
         )
     )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<crate::plan::wire::Argument>")
+    )]
     text: Option<OsString>,
     #[cfg_attr(
         feature = "serde",
@@ -155,6 +193,10 @@ pub struct SendKeys {
             serialize_with = "crate::plan::wire::list",
             deserialize_with = "crate::plan::wire::parse_list"
         )
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Vec<crate::plan::wire::Argument>")
     )]
     keys: Vec<OsString>,
     enter: bool,
@@ -203,7 +245,7 @@ impl SendKeys {
             command = command.arg("--");
         }
         if let Some(text) = &self.text {
-            command = command.arg(text.clone());
+            command = command.sensitive_arg(text.clone());
         }
         for key in &self.keys {
             command = command.arg(key.clone());
@@ -212,6 +254,18 @@ impl SendKeys {
             command = command.arg("Enter");
         }
         Some(command)
+    }
+}
+
+impl fmt::Debug for SendKeys {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SendKeys")
+            .field("target", &self.target)
+            .field("has_text", &self.text.is_some())
+            .field("key_count", &self.keys.len())
+            .field("enter", &self.enter)
+            .finish()
     }
 }
 
@@ -226,6 +280,8 @@ operation!(
 /// Make a pane the active one.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SelectPane {
     pub(crate) target: PaneTarget,
 }
@@ -266,6 +322,8 @@ operation!(
 /// mix its lines with its neighbours'.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CapturePane {
     pub(crate) target: PaneTarget,
     escape_sequences: bool,
@@ -315,6 +373,8 @@ operation!(
 /// Destroy a pane.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct KillPane {
     pub(crate) target: PaneTarget,
 }
@@ -326,6 +386,12 @@ impl KillPane {
         Self {
             target: target.into(),
         }
+    }
+
+    /// The pane this operation will destroy.
+    #[must_use]
+    pub const fn target(&self) -> &PaneTarget {
+        &self.target
     }
 
     pub(crate) fn render(&self, resolve: Resolver<'_>) -> Option<Command> {

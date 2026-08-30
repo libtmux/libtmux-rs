@@ -29,6 +29,8 @@ You may be looking for:
   transport switches, testing
 - [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
   package**, if you want an agent to drive tmux
+- [Examples](crates/libtmux/examples) — six programs that run and clean up
+  after themselves, from reading a server to watching one over control mode
 - [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
 - [Parity ledger](crates/libtmux/docs/parity.md) — capability-by-capability
   against Python libtmux
@@ -82,10 +84,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let session = server.new_session("work").await?;
     let window = session.new_window("editor").await?;
-    let pane = window.active_pane().await?.expect("a window has a pane");
+    let pane = window.active_pane().await?.expect("the new window has a pane");
 
-    pane.send_keys("echo built").await?;
-    pane.send_key_names(["Enter"]).await?;
+    pane.send_line("echo built").await?;
 
     assert_eq!(server.sessions().await?.len(), 1);
 
@@ -108,8 +109,10 @@ Typed field handles build the expression, so a comparison that has no meaning
 for a field is a compile error rather than an empty result:
 
 ```rust
+use std::time::Duration;
+
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::test::TestServer;
+use libtmux::test::{TestServer, retry_until};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,7 +120,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = guard.server();
     server.new_session("work").await?;
 
-    let panes = server.panes().await?;
     let fields = libtmux::Pane::filter_fields();
 
     // `pane_active` is a flag, so `.eq(true)` compiles; `.gt(..)` would not.
@@ -126,8 +128,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .starts_with("sh")
         .and(fields.pane_active.eq(true));
 
-    let found = panes.iter().matching(&active).count();
-    assert_eq!(found, 1, "the session's one pane is active and running a shell");
+    // tmux hands back a pane the moment it forks, before the shell in it has
+    // started, so what a pane is running is worth waiting for rather than
+    // assuming. A wait must assert the outcome it got: this one fails if the
+    // deadline passes without the expression ever matching.
+    retry_until(Duration::from_secs(5), async || {
+        server
+            .panes()
+            .await
+            .is_ok_and(|panes| panes.iter().matching(&active).count() == 1)
+    })
+    .await?;
 
     guard.shutdown().await?;
     Ok(())
