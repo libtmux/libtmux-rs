@@ -16,7 +16,7 @@ repository = "https://github.com/libtmux/libtmux-rs"
 # Shared dependency versions. A crate names the features it needs; the
 # version lives here so a bump is one edit rather than one per crate.
 [workspace.dependencies]
-jsonschema = { version = "=0.49.9", default-features = false }
+jsonschema = { version = "=0.51.0", default-features = false }
 libtmux = { path = "crates/libtmux", version = "0.1.0-alpha.8" }
 # Exact, not caret. The derive expands to paths into a hidden core surface, so
 # a macro from one release paired with a core from another is not a
