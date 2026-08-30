@@ -16,190 +16,107 @@ full.
 
 ## Unreleased
 
-### Fixed
-
-- `Window::select` and `Window::unlink` target the window by id rather than by
-  its cached index. An index is a slot: breaking a lone pane out of a window
-  relinks it at a free index, and anything that then occupies the vacated slot
-  inherits the index a handle still holds. tmux answers such a target without
-  complaint, so both commands could act on a different live window and report
-  success. `unlink` still reports `Error::LinkGone` rather than
-  `Error::ObjectGone` when the link is gone and the window is not.
-
-- A tmux target naming a place no longer reports the object there as gone.
-  tmux answers an unresolved target by echoing it back, and the echo carries a
-  sigil only for an identity: `can't find window: @3` names a window, while
-  `can't find window: 3` names index 3 of whichever session was asked. Reading
-  the second as the first reported index 3 as window `@3`, a different object
-  that is often alive, and `Error::is_object_gone` then answered `true` -- the
-  one predicate a caller consults before discarding a handle. Such a miss is
-  now `Error::LinkGone`, which answers `false`.
-
-- `Error::LinkGone` carries `target: String`, the whole target as sent, in
-  place of `session: String` and `index: i32`. It is now also raised where
-  nothing established an index, and tmux drops the session half when it echoes
-  a coordinate back, so the pair could not be filled truthfully. `unlink` had
-  been quoting the index its own handle cached, which is the value the variant
-  documents as unsafe to report.
-
-- `Window::swap_with` targets the other window by id rather than by its cached
-  index, the fix already applied to `select` and `unlink`. After a renumber the
-  cached index named a different window, so the swap moved the wrong pair or
-  failed reporting `ObjectGone` for a window that was alive and listed one line
-  above.
-
-- `Display for Window` renders `session:@id` rather than `session:index`. The
-  rendering is offered for pasting into a tmux command; carrying an index it
-  reached a different window after a renumber, without saying so, and Display
-  is also what reaches logs and interpolated error text.
-
 ### Added
 
-- `LIBTMUX_TEST_TIMEOUT_SCALE` multiplies every fixture deadline in
-  `libtmux::test`. The fixture's five seconds bound a tmux that starts with a
-  core to spare; on a machine running several times its cores in work they stop
-  bounding startup and start deciding results, and the fixture suite fails in a
-  set that moves between runs while every member passes alone. Read once, never
-  below `1`, and unset it changes nothing.
+- `Pane::wait_for_text` and `Pane::wait_for_quiet` return bounded, typed
+  outcomes while preserving wrapped and scrollback content. (#16)
 
-- `Pane::wait_for_text` and `Pane::wait_for_quiet`, with `PaneWait` naming the
-  outcome. Waiting for a pane needed a loop the caller wrote, and
-  `test::retry_until` sits behind `test-support`, so the only production answer
-  was to poll by hand. Neither needs a feature. Each look reads the scrollback
-  with wrapped lines joined, so text that scrolled away is still found and a
-  line wider than the pane matches across its wrap. A pane whose process ends
-  answers `PaneWait::Dead` rather than running to the deadline, and running out
-  of time is `PaneWait::TimedOut` rather than an error.
+- `Server::wait_for_channel` and control-mode subscriptions support
+  notification-driven observation without polling. (#16)
 
-- `CaptureOptions::trailing_spaces`, `trim_blank_cells`, and
-  `pending_escape`, covering `capture-pane`'s `-N`, `-T` and `-P`. Without
-  `-N` tmux strips the spaces a program printed at a line's end, so no typed
-  capture could return byte-exact pane content and a caller wanting it had to
-  drop to `Pane::cmd`. `-T` needs tmux 3.4 and is refused below it;
-  `since::CAPTURE_TRIM_BLANK_CELLS` names the boundary. `-N` and `-P` are
-  available on every supported release.
+- `CaptureOptions` can preserve trailing spaces, trim blank cells, and report
+  pending escape sequences; `PaneOutput::snapshot` captures a stable view.
+  (#16)
 
-- `Server::wait_for_channel`, the blocking half of `wait-for`.
-  `Server::signal_channel` had no counterpart, so waiting meant dropping to
-  `Server::cmd`, which `tmux-mcp` did. Nothing polls: tmux releases the wait
-  when the channel is signalled. Running out of time returns
-  `ChannelWait::TimedOut` rather than an error, so "nothing signalled it"
-  stays distinct from "tmux could not be reached". A signal with nobody
-  waiting is kept and spends itself on the next wait, so a command that
-  finishes before its watcher starts does not lose the race.
+- `FilterSchema`, `filter_schema`, and `OperationKind::ALL` expose supported
+  query fields and operation kinds for callers that build typed plans. (#16)
+
+- `escape_format` escapes literal values embedded in tmux format expressions.
+  (#16)
+
+- `Window::respawn`, `Client::lock`, and `Server::lock_all` expose additional
+  tmux mutations through typed handles. (#16)
+
+- `Pane::join_into` and the window layout selection APIs support typed pane
+  joins and layout cycling. (#16)
+
+- `ControlClientLimits` configures finite admission limits for persistent
+  control clients. (#16)
+
+- `Error::AfterEffect` and `ErrorKind::PartialEffect` distinguish failures that
+  occur after tmux may already have changed state. (#16)
+
+- `test::scaled` and `LIBTMUX_TEST_TIMEOUT_SCALE` let downstream integration
+  tests scale timeout budgets consistently. (#16)
+
+### Changed
+
+- **Breaking.** `OptionSchema::scope` is replaced by `scopes` and `accepts`;
+  callers must test the operation and scope together. (#16)
+
+- **Breaking.** `Error::LinkGone` now carries `kind` and `target`; update
+  pattern matches that used its former session and index fields. (#16)
+
+- **Breaking.** The MCP `cancel_job` tool is replaced by `forget_job`.
+  Forgetting stops collection and discards retained output but does not
+  interrupt the command running in its pane. (#16)
+
+- `capture_since` returns the first retained screen when the requested cursor
+  predates retained history, making truncation observable without losing the
+  available snapshot. (#16)
+
+- MCP schemas now close fixed vocabularies and reject unknown fields instead
+  of silently accepting unsupported input. (#16)
+
+- `Window` display output includes enough identity to distinguish linked
+  placements. (#16)
+
+### Security
+
+- Option, hook, environment, layout, and workspace inputs are validated and
+  separated from tmux flags before execution. (#16)
+
+- `tmux-workspace` treats names and start directories as literal data and
+  rejects values that could be interpreted as tmux formats or options. (#16)
 
 ### Fixed
 
-- `libtmux::test::TestServer` now takes its tmux from `LIBTMUX_TEST_TMUX`
-  before falling back to `PATH`. The variable previously steered only the
-  format-compatibility tests, so pointing it at a pinned build and running the
-  suite produced a green run against whatever `PATH` held -- a pass about the
-  wrong binary, which reports nothing and looks exactly like a pass about the
-  right one. `TestServer::builder().tmux_executable(...)` still overrides it.
+- Window selection, unlinking, swapping, moving, and linking preserve exact
+  window-link identity and refresh the affected handles. (#16)
 
-- A stopped client is no longer reported as a gone one. tmux leaves a
-  suspended or locked client out of `list-clients` -- from 3.7 the listing
-  screens out the dead, the exiting and the suspended together -- so reading
-  through the handle gave `Error::ObjectGone` and `Error::is_object_gone`
-  answered true for a client that comes back the moment its process continues.
-  `Client::refresh` now asks tmux on that path and reports the new
-  `Error::ClientSuspended`, which maps to `ErrorKind::Refused`, so the handle
-  survives. `Client::lock`, `Session::lock`, `Server::lock_all` and a server
-  with `lock-after-time` set all reach the same state. Releases below 3.7 keep
-  such a client listed and are unaffected.
+- Handles from another server fail with `ServerMismatch`, while containment
+  checks consult live tmux state instead of stale snapshots. (#16)
 
-- Document that tmux may not store the session name it was given. Releases
-  through 3.6b rewrite `:` and `.` to `_` silently, 3.7 refuses such a name,
-  and 3.7a keeps it, so `new_session("a:b")` hands back a session called `a_b`
-  on most supported releases. `Session::name` always reports what tmux stored;
-  it is the request that can differ from it.
+- Option plans and direct writes validate array values and the operation's
+  actual option scope. (#16)
 
-- A control-mode reply no longer waits on the caller draining events. The
-  connection stopped reading when nobody took its events, and a reply arrives
-  on the connection that stopped, so a caller awaiting one deadlocked: no
-  error, no timeout, and `ControlSender::is_closed` reporting false. It needed
-  no pane output to happen — a caller that only sends fills the queue with the
-  notifications its own commands raise. Measured identically on tmux 3.2a
-  through 3.7c. The connection now holds what the caller has not taken and
-  keeps reading while a reply is outstanding, pausing only when none is, so
-  events are still never dropped and never reordered.
+- Hook writes preserve slot zero, reject invalid hook bytes, and do not
+  overwrite adjacent hook slots. (#16)
 
-- `ControlModeErrorKind::Unread` says a caller stopped reading events and the
-  connection could not reach that command's reply. Reading continues while a
-  reply is outstanding but not without limit: `run-shell` without `-b` answers
-  its own block at once and parks the queue for as long as its shell command
-  runs, so the next command sent is outstanding for that long. Past what the
-  connection will hold it answers rather than stalling, because the caller who
-  would drain is the one awaiting the reply. Nothing held is discarded, so
-  draining and sending again works, and `Error::kind` reports it as `Refused`.
+- Control connections surface unread replies and terminal failures instead of
+  hanging or silently losing the final response. (#16)
 
-- The `control` module documentation no longer shows a loop that sends a
-  command from inside its own event loop, and no longer says that doing so
-  works. It does not: a reply arrives on the connection the events arrive on,
-  so a loop that stops reading to await one is waiting on the connection it
-  stopped reading. The example now watches from its own task, which is the
-  shape the crate's own concurrency test uses.
+- Retained MCP jobs, pane tails, and streamed output honor their byte limits,
+  cancellation state, and truncation boundaries. (#16)
 
-- A `watch` example shows control mode doing what it is for: one connection
-  carrying commands down and the server's own reports back, with the watcher
-  in its own task so neither direction waits for the other. The crate's async
-  story had no runnable example of its own.
+- Async callers can use blocking tmux operations without deadlocking the
+  current runtime. (#16)
 
-- `Window::respawn`, `Client::lock`, and `Server::lock_all` reach the levels
-  tmux offers that the crate did not. `Pane::respawn` restarted one pane and
-  nothing restarted a window, and `Session::lock` locked one session while
-  neither a single client nor the whole server could be locked at all.
+- Server queries handle an empty tmux server without manufacturing a session
+  or indexing an empty result. (#16)
 
-- `Pane::join_into` moves a pane into another window, beside a pane already
-  there. `Pane::break_out` took a pane out into a window of its own and nothing
-  put one back, so a pane could leave and not return without dropping to
-  `Server::cmd`. Placement is a `JoinOptions` carrying a direction, an optional
-  size, and whether to span the window; it carries no command or directory,
-  because tmux spawns nothing here.
+- Unicode session and window names are validated without rejecting valid
+  non-ASCII text. (#16)
 
-- `Window::select_layout` takes a `Layout` naming one of the seven
-  arrangements tmux knows, so a layout that does not exist is a compile error
-  rather than a refusal at the far end of a round trip. It still takes a saved
-  layout string, now as `LayoutSpec::Saved`, and a `&TmuxText` converts into
-  one so a layout read from `Window::layout` goes straight back.
-  `Layout::MainHorizontalMirrored` and `MainVerticalMirrored` need tmux 3.5 and
-  report `since::MIRRORED_LAYOUTS` below it.
+- Filters preserve stable ordering for null relations, signed zero, and
+  schema-derived comparisons. (#16)
 
-- `Window::next_layout` and `Window::previous_layout` step through tmux's
-  layout list. tmux takes those as flags rather than layout names, so no
-  argument to `select_layout` could reach them and a caller had to drop to
-  `Server::cmd`.
+- MCP rename results report the name tmux actually stored. (#16)
 
-- `Error::Overloaded` says what happened before it says which command it
-  happened to. It led with the tmux format string the dispatch carried, which
-  is long enough to be truncated, so the meaning arrived after the part a
-  reader has to scroll past, and it now also says that nothing was sent and a
-  retry is safe.
+- Recursive query derives retain their relation metadata. (#16)
 
-- `blocking::Runtime` no longer ends the process when it is dropped inside an
-  async context. Dropping a tokio runtime blocks until its tasks stop, and
-  blocking is forbidden inside another runtime, so a runtime built correctly at
-  startup and dropped inside async work aborted: `try_run` reported the nesting
-  as a recoverable error and the value that reported it then killed the caller
-  who handled it. Such a drop now shuts the runtime down in the background,
-  which gives up waiting for the executor to reap its tmux children in that
-  case; a drop outside an async context still waits.
-
-- The `scratch` example runs to completion and removes its socket. It asserted
-  its own cleanup with the loud `sessions`, which reports the server tmux
-  correctly shut down when its last session died as the failure it is, so the
-  example exited nonzero on every run and never reached the line that cleaned
-  up. `just examples` now runs every example and fails on a nonzero exit or a
-  socket left behind.
-
-- `Server::sessions` no longer fails on a session whose name or working
-  directory is empty. Most supported tmux releases accept both, and the snapshot decoder refused the empty field rather than
-  reading it: one such session made `sessions`, `windows`, `hierarchy`,
-  `has_session` and `Session::refreshed` fail for every caller, and
-  `sessions_or_empty` report no sessions while several existed. The poison row
-  could not be reached to be killed either, because looking it up failed the
-  same way. `session_name`, `session_path` and `window_linked_sessions_list`
-  now decode an empty value as a value.
+- Suspended clients and panes with `exit_mode` report their actual terminal
+  state. (#16)
 
 ## 0.1.0-alpha.8 - 2026-08-22
 
