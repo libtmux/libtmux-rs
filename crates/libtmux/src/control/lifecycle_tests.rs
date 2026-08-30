@@ -224,9 +224,13 @@ async fn attach_uses_the_cores_captured_launch_context() {
 
     let control = attach(&server).await.expect("control mode attaches");
     let captured = fs::read_to_string(&record).expect("launch context is recorded");
+    let physical_directory = fixture
+        .path()
+        .canonicalize()
+        .expect("fixture directory resolves");
     let expected = format!(
         "{}\n/captured/path\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<-C>\n<attach>\n<-E>\n<-t>\n<$1>\n",
-        fixture.path().display(),
+        physical_directory.display(),
         fixture.path().join("socket;").display(),
         fixture.path().join("config;").display(),
     );
