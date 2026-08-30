@@ -104,7 +104,7 @@ tracing = { version = "0.1.29", optional = true }
 [dev-dependencies]
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 futures-core = "0.3"
-jsonschema = { version = "=0.49.9", default-features = false }
+jsonschema = { version = "=0.50.1", default-features = false }
 serde_json.workspace = true
 static_assertions = "1.1.0"
 tempfile.workspace = true
