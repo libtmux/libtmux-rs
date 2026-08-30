@@ -328,11 +328,11 @@ async fn an_open_response_block_has_one_deadline() {
         &process_script(&parent, &descendant, &prefix),
     );
     let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
-    let (mut commands, events) = attach(&server)
+    let (commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
+        .reply_timeout(REPLY_TIMEOUT)
         .split();
-    commands.timeout = REPLY_TIMEOUT;
 
     let error = tokio::time::timeout(
         Duration::from_secs(2),
@@ -390,11 +390,11 @@ async fn a_reply_deadline_starts_before_begin() {
         &process_script(&parent, &descendant, &prefix),
     );
     let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
-    let (mut commands, events) = attach(&server)
+    let (commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
+        .reply_timeout(REPLY_TIMEOUT)
         .split();
-    commands.timeout = REPLY_TIMEOUT;
 
     let error = tokio::time::timeout(
         Duration::from_secs(2),
@@ -433,13 +433,12 @@ async fn the_earliest_committed_deadline_ends_the_connection() {
         &process_script(&parent, &descendant, &prefix),
     );
     let server = basic_server(fixture.path(), executable, Duration::from_secs(2));
-    let (mut later, events) = attach(&server)
+    let (later, events) = attach(&server)
         .await
         .expect("control mode attaches")
+        .reply_timeout(Duration::from_secs(2))
         .split();
-    later.timeout = Duration::from_secs(2);
-    let mut earlier = later.clone();
-    earlier.timeout = Duration::from_millis(100);
+    let earlier = later.clone().reply_timeout(REPLY_TIMEOUT);
 
     let first = tokio::spawn(async move { later.send(Command::new("list-sessions")).await });
     tokio::time::timeout(TEST_TIMEOUT, async {
@@ -500,11 +499,11 @@ async fn a_blocked_write_uses_the_reply_deadline() {
         &process_script(&parent, &descendant, opening_success()),
     );
     let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
-    let (mut commands, events) = attach(&server)
+    let (commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
+        .reply_timeout(REPLY_TIMEOUT)
         .split();
-    commands.timeout = REPLY_TIMEOUT;
 
     let error = tokio::time::timeout(
         Duration::from_secs(2),

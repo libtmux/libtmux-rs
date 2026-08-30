@@ -721,12 +721,14 @@ function libtmux::control::ControlEvents::shutdown: async fn(self) -> Result<(),
 function libtmux::control::ControlMode::attach: async fn(server: &libtmux::Server, session: &libtmux::SessionId) -> Result<Self, libtmux::Error>
 function libtmux::control::ControlMode::attach_with_limits: async fn(server: &libtmux::Server, session: &libtmux::SessionId, limits: libtmux::ControlLimits) -> Result<Self, libtmux::Error>
 function libtmux::control::ControlMode::next_event: async fn(&mut self) -> Option<libtmux::control::Event>
+function libtmux::control::ControlMode::reply_timeout: fn(self, timeout: Duration) -> Self
 function libtmux::control::ControlMode::send: async fn(&self, command: libtmux::Command) -> Result<libtmux::control::BlockResult, libtmux::Error>
 function libtmux::control::ControlMode::shutdown: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::control::ControlMode::split: fn(self) -> (libtmux::control::ControlSender, libtmux::control::ControlEvents)
 function libtmux::control::ControlSender::is_closed: fn(&self) -> bool
 function libtmux::control::ControlSender::mute_pane: async fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
 function libtmux::control::ControlSender::pause_after: async fn(&self, behind: Duration) -> Result<(), libtmux::Error>
+function libtmux::control::ControlSender::reply_timeout: fn(self, timeout: Duration) -> Self
 function libtmux::control::ControlSender::resume_pane: async fn(&self, pane: &libtmux::PaneId) -> Result<(), libtmux::Error>
 function libtmux::control::ControlSender::send: async fn(&self, command: libtmux::Command) -> Result<libtmux::control::BlockResult, libtmux::Error>
 function libtmux::control::ControlSender::subscribe: async fn(&self, name: &str, watching: &libtmux::control::Subscription, format: &str) -> Result<(), libtmux::Error>

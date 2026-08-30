@@ -503,6 +503,19 @@ impl ControlMode {
         (self.sender, self.events)
     }
 
+    /// Set how long a command waits for its result block.
+    ///
+    /// Retunes the sender this connection sends through, and leaves the
+    /// opening handshake, which has already happened, alone. See
+    /// [`ControlSender::reply_timeout`].
+    #[must_use]
+    pub fn reply_timeout(self, timeout: Duration) -> Self {
+        Self {
+            sender: self.sender.reply_timeout(timeout),
+            ..self
+        }
+    }
+
     /// Send one command and wait for its result block.
     ///
     /// # Errors
@@ -605,6 +618,23 @@ pub struct ControlSender {
 }
 
 impl ControlSender {
+    /// Set how long a command waits for its result block.
+    ///
+    /// The default is the server's [`default_timeout`], which also bounds the
+    /// opening handshake. Those two are not comparable: attaching forks tmux
+    /// and waits for a server to answer, where a command is a round trip on a
+    /// connection that is already open. Set this when a command should give up
+    /// sooner than attaching was allowed to take.
+    ///
+    /// The deadline covers the whole call, so a command large enough to be
+    /// worth serializing spends part of its own budget being written.
+    ///
+    /// [`default_timeout`]: crate::ServerBuilder::default_timeout
+    #[must_use]
+    pub fn reply_timeout(self, timeout: Duration) -> Self {
+        Self { timeout, ..self }
+    }
+
     /// Send one command and wait for its result block.
     ///
     /// A block that tmux closed with `%error` is a result, not an error: it is
