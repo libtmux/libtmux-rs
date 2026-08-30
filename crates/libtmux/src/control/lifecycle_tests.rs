@@ -25,6 +25,12 @@ use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId, 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
+/// How long a reply that never arrives is waited for.
+///
+/// Set on the sender rather than the server: attaching forks a process, and a
+/// deadline short enough to fire on a missing reply does not bound that.
+const REPLY_TIMEOUT: Duration = Duration::from_millis(100);
+
 fn fixture_root() -> PathBuf {
     let root = PathBuf::from("/tmp/libtmux-rs-test");
     fs::create_dir_all(&root).expect("fixture root is creatable");
@@ -321,11 +327,12 @@ async fn an_open_response_block_has_one_deadline() {
         fixture.path(),
         &process_script(&parent, &descendant, &prefix),
     );
-    let server = basic_server(fixture.path(), executable, Duration::from_millis(100));
-    let (commands, events) = attach(&server)
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
+    let (mut commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
         .split();
+    commands.timeout = REPLY_TIMEOUT;
 
     let error = tokio::time::timeout(
         Duration::from_secs(2),
@@ -382,11 +389,12 @@ async fn a_reply_deadline_starts_before_begin() {
         fixture.path(),
         &process_script(&parent, &descendant, &prefix),
     );
-    let server = basic_server(fixture.path(), executable, Duration::from_millis(100));
-    let (commands, events) = attach(&server)
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
+    let (mut commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
         .split();
+    commands.timeout = REPLY_TIMEOUT;
 
     let error = tokio::time::timeout(
         Duration::from_secs(2),
@@ -491,15 +499,18 @@ async fn a_blocked_write_uses_the_reply_deadline() {
         fixture.path(),
         &process_script(&parent, &descendant, opening_success()),
     );
-    let server = basic_server(fixture.path(), executable, Duration::from_millis(100));
-    let (commands, events) = attach(&server)
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
+    let (mut commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
         .split();
+    commands.timeout = REPLY_TIMEOUT;
 
     let error = tokio::time::timeout(
         Duration::from_secs(2),
-        commands.send(Command::new("display-message").arg("x".repeat(2 * 1024 * 1024))),
+        // Four times the pipe buffer, so the write blocks. A larger argument
+        // spends its own deadline being serialized before the request commits.
+        commands.send(Command::new("display-message").arg("x".repeat(256 * 1024))),
     )
     .await
     .expect("the blocked write reaches its deadline")
