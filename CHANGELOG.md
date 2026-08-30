@@ -18,6 +18,12 @@ full.
 
 ### Added
 
+- `ControlSender::reply_timeout` and `ControlMode::reply_timeout` set how long
+  a command waits for its result block. Attaching still uses the server
+  timeout, which bounds the opening handshake; the two were one value before,
+  and forking tmux and a round trip on an open connection are not comparable
+  latencies.
+
 - `Pane::wait_for_text` and `Pane::wait_for_quiet` return bounded, typed
   outcomes while preserving wrapped and scrollback content. (#16)
 
