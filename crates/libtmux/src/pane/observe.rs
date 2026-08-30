@@ -331,12 +331,8 @@ impl Pane {
             .tmux_version()
             .clone();
 
-        // One process per look, not two. Asking whether the pane died is a
-        // second `tmux` otherwise, and spawning is the whole cost: measured on
-        // 3.7d, a capture alone takes 4.0 ms and a capture chained with the
-        // flag also takes 4.0 ms, while the two sent separately take 8.0 ms.
-        // The flag goes first so that it is whatever precedes the first
-        // newline, which a capture of any shape cannot make ambiguous.
+        // Capture the dead flag and pane contents in one tmux process. The flag
+        // comes first so the first newline is an unambiguous boundary.
         let look = CommandChain::new(
             Command::new("display-message")
                 .arg("-p")
