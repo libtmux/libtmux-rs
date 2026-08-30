@@ -154,4 +154,3 @@ clients (22 fields)
   client_utf8
   client_width
   client_written
-

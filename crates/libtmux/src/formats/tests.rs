@@ -1938,7 +1938,10 @@ fn each_listing_records_the_fields_it_requests() {
             FormatPlan::for_profile(ListProfile::Clients, &version),
         ),
     ];
-    for (label, plan) in plans {
+    for (index, (label, plan)) in plans.into_iter().enumerate() {
+        if index > 0 {
+            recorded.push('\n');
+        }
         let mut names: Vec<&str> = plan
             .descriptors_for_test()
             .iter()
@@ -1949,7 +1952,6 @@ fn each_listing_records_the_fields_it_requests() {
         for name in names {
             let _ = writeln!(recorded, "  {name}");
         }
-        recorded.push('\n');
     }
 
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/list-profiles.txt");
