@@ -16,6 +16,22 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.9 - 2026-08-31
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.9;
+`tmux-mcp` is 0.1.0-alpha.10, because it was already at alpha.9.
+
+Take this one if you drive tmux from an async caller, or if you pass it names
+that came from somewhere you do not control. Blocking tmux operations no
+longer deadlock the runtime they are called from, and option, hook,
+environment, layout, and workspace inputs are validated and separated from
+tmux flags before execution; `tmux-workspace` now rejects names and start
+directories that could be read as tmux formats or options.
+
+Three exported items changed shape. `OptionSchema::scope` is replaced by
+`scopes` and `accepts`, `Error::LinkGone` carries `kind` and `target`, and the
+MCP `cancel_job` tool is now `forget_job`.
+
 ### Added
 
 - `ControlSender::reply_timeout` and `ControlMode::reply_timeout` set how long
