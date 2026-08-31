@@ -617,7 +617,13 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
         .await
         .expect("sender task joins")
         .expect_err("the interrupted command closes");
-    assert_eq!(send_error.kind(), ErrorKind::Transport);
+    assert!(matches!(
+        &send_error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
     assert!(
         !send_error.is_transient(),
         "the stopped sender cannot reopen its connection",
@@ -878,7 +884,13 @@ async fn an_error_opening_block_is_not_ready() {
     let error = attach(&server)
         .await
         .expect_err("an opening error is not a successful attach");
-    assert_eq!(error.kind(), ErrorKind::Transport);
+    assert!(matches!(
+        error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
 
     server.shutdown().await.expect("server shuts down");
 }
