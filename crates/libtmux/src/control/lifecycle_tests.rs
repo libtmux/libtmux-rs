@@ -31,6 +31,14 @@ const POLL_INTERVAL: Duration = Duration::from_millis(1);
 /// deadline short enough to fire on a missing reply does not bound that.
 const REPLY_TIMEOUT: Duration = Duration::from_millis(100);
 
+/// How long the opening handshake gets when its timing out is the assertion.
+///
+/// The fixture sends no opening block, so the handshake times out whatever
+/// this is; it only has to outlast the fork. At 100 ms a loaded runner reaped
+/// the process group before the shell published the PIDs the test then
+/// asserts were reaped.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
+
 fn fixture_root() -> PathBuf {
     let root = PathBuf::from("/tmp/libtmux-rs-test");
     fs::create_dir_all(&root).expect("fixture root is creatable");
@@ -253,9 +261,9 @@ async fn opening_handshake_times_out_and_reaps_the_process_group() {
     let descendant = fixture.path().join("descendant.pid");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let executable = write_script(fixture.path(), &process_script(&parent, &descendant, ""));
-    let server = basic_server(fixture.path(), executable, Duration::from_millis(100));
+    let server = basic_server(fixture.path(), executable, HANDSHAKE_TIMEOUT);
 
-    let error = tokio::time::timeout(Duration::from_secs(2), attach(&server))
+    let error = tokio::time::timeout(TEST_TIMEOUT, attach(&server))
         .await
         .expect("the configured deadline ends attach")
         .expect_err("an absent opening block times out");
