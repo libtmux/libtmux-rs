@@ -37,6 +37,11 @@ const REPLY_TIMEOUT: Duration = Duration::from_millis(100);
 /// this is; it only has to outlast the fork. At 100 ms a loaded runner reaped
 /// the process group before the shell published the PIDs the test then
 /// asserts were reaped.
+///
+/// This widens that race rather than closing it: a fork slower than a second
+/// fails the same way. Closing it needs the child's PID from the spawn itself
+/// instead of from a file the child writes, which `internal::process` does not
+/// expose the way `internal::subprocess` does for its own tests.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn fixture_root() -> PathBuf {
@@ -296,10 +301,16 @@ async fn a_short_reply_deadline_does_not_bound_attaching() {
         .reply_timeout(REPLY_TIMEOUT)
         .split();
 
-    let error = commands
-        .send(Command::new("display-message"))
-        .await
-        .expect_err("the command keeps the shorter deadline");
+    // Bounded well under the server's deadline, so a `reply_timeout` that did
+    // not take effect fails here rather than passing five seconds later on the
+    // connection's own default.
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        commands.send(Command::new("display-message")),
+    )
+    .await
+    .expect("the command keeps the shorter deadline")
+    .expect_err("the command times out");
     assert_eq!(error.kind(), ErrorKind::Timeout);
     let shutdown = events
         .shutdown()
