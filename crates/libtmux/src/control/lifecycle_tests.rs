@@ -277,6 +277,40 @@ async fn opening_handshake_times_out_and_reaps_the_process_group() {
 }
 
 #[tokio::test]
+async fn a_short_reply_deadline_does_not_bound_attaching() {
+    let fixture = directory();
+    let parent = fixture.path().join("parent.pid");
+    let descendant = fixture.path().join("descendant.pid");
+    let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
+    // The opening block lands well after the reply deadline would have fired,
+    // so an attach still spending that deadline could not finish.
+    let prefix = format!("/bin/sleep 0.3\n{}", opening_success());
+    let executable = write_script(
+        fixture.path(),
+        &process_script(&parent, &descendant, &prefix),
+    );
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
+    let (commands, events) = attach(&server)
+        .await
+        .expect("attaching outlasts the reply deadline")
+        .reply_timeout(REPLY_TIMEOUT)
+        .split();
+
+    let error = commands
+        .send(Command::new("display-message"))
+        .await
+        .expect_err("the command keeps the shorter deadline");
+    assert_eq!(error.kind(), ErrorKind::Timeout);
+    let shutdown = events
+        .shutdown()
+        .await
+        .expect_err("the actor reports timeout");
+    assert_eq!(shutdown.kind(), ErrorKind::Timeout);
+
+    server.shutdown().await.expect("server shuts down");
+}
+
+#[tokio::test]
 async fn cancelling_attach_reaps_the_process_group() {
     let fixture = directory();
     let parent = fixture.path().join("parent.pid");
@@ -515,8 +549,9 @@ async fn a_blocked_write_uses_the_reply_deadline() {
 
     let error = tokio::time::timeout(
         Duration::from_secs(2),
-        // Four times the pipe buffer, so the write blocks. A larger argument
-        // spends its own deadline being serialized before the request commits.
+        // Sized between two bounds rather than to be asserted on: past the
+        // pipe buffer, and short of the 2 MiB that spends this deadline being
+        // serialized before the request can commit.
         commands.send(Command::new("display-message").arg("x".repeat(256 * 1024))),
     )
     .await
