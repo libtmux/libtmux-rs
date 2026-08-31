@@ -1618,6 +1618,25 @@ Combining the two would let a handful of long-lived watchers starve every
 short command. Admission lasts until the control process is cleaned up, and a
 full lane returns `Error::Overloaded` before another process starts.
 
+Deadlines divide the same way, and for a while did not. One value -- the
+server's `default_timeout` -- bounded both the opening handshake and every
+command's reply, because attaching seeds it into the actor and the sender
+together. Those are not comparable waits: the handshake forks tmux and waits
+for a server to come up, where a command is a round trip on a connection that
+is already open. A caller who wanted a command to give up in 100 ms was also
+telling `attach` to fork a process in 100 ms, and on a loaded machine it
+cannot. Three of this crate's own tests were flaky for that reason before
+`ControlSender::reply_timeout` existed.
+
+The deadline sits on the sender rather than in `ControlLimits`, which
+`attach_with_limits` already threads through, because limits are fixed when
+the connection opens and a sender is not. `ControlSender` is `Clone`, and two
+clones of one connection can carry different deadlines; the actor honours the
+earliest committed one, which is what
+`the_earliest_committed_deadline_ends_the_connection` pins. A limit set once
+at attach could not express that. What stays on the server is the connection
+budget and the default every sender starts from.
+
 ### Which tmux releases the lanes build
 
 The final patch of each series rather than its first: 3.2a, 3.5a, 3.6b, and
