@@ -604,8 +604,8 @@ fn check_subscription_name(name: &str) -> Result<(), Error> {
 
 /// Sends commands down a control-mode connection.
 ///
-/// Cheap to clone, and every method takes `&self`, so several tasks can issue
-/// commands while another watches events.
+/// Cheap to clone, and every method that sends takes `&self`, so several tasks
+/// can issue commands while another watches events.
 #[derive(Clone, Debug)]
 pub struct ControlSender {
     commands: mpsc::Sender<Request>,
