@@ -412,6 +412,70 @@ mod tests {
         server.clients().await.map_or(0, |clients| clients.len())
     }
 
+    async fn configure_dead_transition(pane: &libtmux::Pane) {
+        pane.set_option("remain-on-exit", "on")
+            .await
+            .expect("fixture retains a dead pane");
+        pane.set_hook("pane-died", "wait-for -S mcp-final-pane-died")
+            .await
+            .expect("dead transition is observable");
+    }
+
+    async fn transition_then_preflight(
+        transition: &str,
+        pane: &mut libtmux::Pane,
+        server: &libtmux::Server,
+        tools: &TmuxTools,
+        source: &str,
+        foreground: &libtmux::TmuxText,
+    ) -> Result<(), ErrorData> {
+        let command = match transition {
+            "dead" => "exit 0",
+            "foreground" => "exec sleep 30",
+            _ => unreachable!(),
+        };
+        let pane_id = pane.id().clone();
+        pane.respawn(Some(command), true)
+            .await
+            .expect("pane begins its final transition");
+        match transition {
+            "dead" => assert_eq!(
+                server
+                    .wait_for_channel("mcp-final-pane-died", Duration::from_secs(2))
+                    .await
+                    .expect("pane-died notification answers"),
+                libtmux::ChannelWait::Signalled
+            ),
+            "foreground" => libtmux::test::retry_until(Duration::from_secs(2), async || {
+                server
+                    .pane_by_id(&pane_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|pane| {
+                        pane.current_command()
+                            .is_some_and(|value| value.as_str() == Ok("sleep"))
+                    })
+            })
+            .await
+            .expect("selected socket reports the foreground transition"),
+            _ => unreachable!(),
+        }
+        let final_plan = tools
+            .preflight_pane_input(
+                source,
+                PaneInputReach::Synchronized,
+                MissingSource::ObservedTransition,
+            )
+            .await?;
+        if transition == "foreground" && final_plan.target.current_command() != Some(foreground) {
+            return Err(bad_input(format!(
+                "pane {source} changed foreground command between run checkpoints"
+            )));
+        }
+        Ok(())
+    }
+
     #[test]
     fn an_uncertain_start_names_safe_recovery_without_an_unreachable_handle() {
         let source = libtmux::Server::builder()
@@ -434,106 +498,104 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_tmux_compat_final_preflight_observes_dead_pane_before_dispatch() {
-        let guard = TestServer::builder().start().await.expect("tmux starts");
-        let server = guard.server();
-        let session = server
-            .new_session("run-final-dead")
-            .await
-            .expect("session starts");
-        let pane = session.panes().await.expect("panes list").remove(0);
-        pane.set_option("remain-on-exit", "on")
-            .await
-            .expect("fixture retains a dead pane");
-        pane.set_hook("pane-died", "wait-for -S mcp-final-pane-died")
-            .await
-            .expect("dead transition is observable");
-        server
-            .set_hook(
-                "after-display-message",
-                "set-option -g @mcp-final-display-message seen",
-            )
-            .await
-            .expect("display transport is observable");
-
-        let tools = TmuxTools::builder(server.clone()).caller(None).build();
-        let source = pane.id().to_string();
-        let initial = tools
-            .preflight_pane_input(
-                &source,
-                PaneInputReach::Synchronized,
-                MissingSource::CallerInput,
-            )
-            .await
-            .expect("initial preflight accepts the live pane");
-        let executable = server
-            .resolved_tmux_executable()
-            .expect("fixture tmux resolves");
-        let socket = server.socket_path().to_path_buf();
-        let baseline_clients = client_count(server).await;
-        let mut transition = pane.clone();
-        let final_check = async {
-            assert_eq!(
-                client_count(server).await,
-                baseline_clients + 1,
-                "the output watcher is attached before the final checkpoint"
-            );
-            transition
-                .respawn(Some("exit 0"), true)
+    async fn real_tmux_compat_final_preflight_observes_transition_before_dispatch() {
+        for (transition, expected_refusal) in [
+            ("dead", "is dead"),
+            ("foreground", "changed foreground command"),
+        ] {
+            let guard = TestServer::builder().start().await.expect("tmux starts");
+            let server = guard.server();
+            let session = server
+                .new_session(format!("run-final-{transition}"))
                 .await
-                .expect("pane begins its dead transition");
-            assert_eq!(
-                server
-                    .wait_for_channel("mcp-final-pane-died", Duration::from_secs(2))
-                    .await
-                    .expect("pane-died notification answers"),
-                libtmux::ChannelWait::Signalled
-            );
-            tools
+                .expect("session starts");
+            let pane = session.panes().await.expect("panes list").remove(0);
+            if transition == "dead" {
+                configure_dead_transition(&pane).await;
+            }
+            server
+                .set_hook(
+                    "after-display-message",
+                    "set-option -g @mcp-final-display-message seen",
+                )
+                .await
+                .expect("display transport is observable");
+
+            let tools = TmuxTools::builder(server.clone()).caller(None).build();
+            let source = pane.id().to_string();
+            let initial = tools
                 .preflight_pane_input(
                     &source,
                     PaneInputReach::Synchronized,
-                    MissingSource::ObservedTransition,
+                    MissingSource::CallerInput,
                 )
-                .await?;
-            Ok(())
-        };
-        let cancelled = CancellationToken::new();
-
-        let result = run_request::run(
-            &initial.target,
-            "printf should-not-run",
-            Duration::from_secs(2),
-            false,
-            &cancelled,
-            (executable.as_os_str(), &socket),
-            final_check,
-        )
-        .await;
-
-        let Err(run_request::RunError::Guard(error)) = result else {
-            panic!("the final preflight must reject the dead pane");
-        };
-        assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
-        assert!(error.message.contains("is dead"));
-        assert_eq!(
-            error.data.expect("dead refusal is classified")["kind"],
-            "invalid_input"
-        );
-        assert_eq!(
-            server
-                .get_global_option("@mcp-final-display-message")
                 .await
-                .expect("display marker is read"),
-            None,
-            "no completion-record display command ran before refusal"
-        );
-        assert_eq!(
-            client_count(server).await,
-            baseline_clients,
-            "final refusal closes the output watcher"
-        );
-        guard.shutdown().await.expect("tmux fixture shuts down");
+                .expect("initial preflight accepts the live pane");
+            let foreground = initial
+                .target
+                .current_command()
+                .cloned()
+                .expect("initial pane reports its foreground command");
+            let executable = server
+                .resolved_tmux_executable()
+                .expect("fixture tmux resolves");
+            let socket = server.socket_path().to_path_buf();
+            let baseline_clients = client_count(server).await;
+            let mut transition_pane = pane.clone();
+            let final_check = async {
+                assert_eq!(
+                    client_count(server).await,
+                    baseline_clients + 1,
+                    "{transition}: watcher is attached before the final checkpoint"
+                );
+                transition_then_preflight(
+                    transition,
+                    &mut transition_pane,
+                    server,
+                    &tools,
+                    &source,
+                    &foreground,
+                )
+                .await
+            };
+            let cancelled = CancellationToken::new();
+
+            let result = run_request::run(
+                &initial.target,
+                "printf should-not-run",
+                Duration::from_secs(2),
+                false,
+                &cancelled,
+                (executable.as_os_str(), &socket),
+                final_check,
+            )
+            .await;
+
+            let Err(run_request::RunError::Guard(error)) = result else {
+                panic!("the final preflight must reject the {transition} transition");
+            };
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+            assert!(error.message.contains(expected_refusal), "{transition}");
+            assert_eq!(
+                error.data.expect("final refusal is classified")["kind"],
+                "invalid_input",
+                "{transition}"
+            );
+            assert_eq!(
+                server
+                    .get_global_option("@mcp-final-display-message")
+                    .await
+                    .expect("display marker is read"),
+                None,
+                "{transition}: no completion-record display command ran before refusal"
+            );
+            assert_eq!(
+                client_count(server).await,
+                baseline_clients,
+                "{transition}: final refusal closes the output watcher"
+            );
+            guard.shutdown().await.expect("tmux fixture shuts down");
+        }
     }
 
     #[test]

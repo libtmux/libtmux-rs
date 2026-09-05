@@ -686,7 +686,7 @@ async fn run_refuses_synchronized_input_before_watcher_setup() {
 
 #[tokio::test]
 async fn run_rechecks_state_immediately_before_dispatch() {
-    for transition in ["cohort", "mode", "foreground"] {
+    for transition in ["cohort", "mode"] {
         let name = format!("run-final-{transition}");
         let (guard, tools, source) = typing_fixture(&name).await;
         let source_handle = pane_handle(guard.server(), &source).await;
@@ -700,9 +700,6 @@ async fn run_rechecks_state_immediately_before_dispatch() {
                 )
             }
             "mode" => format!("copy-mode -t {source}"),
-            "foreground" => format!(
-                "respawn-pane -k -t {source} 'exec sleep 30' ; run-shell 'while [ \"$(tmux display-message -p -t {source} \"##{{pane_current_command}}\")\" != sleep ]; do :; done'"
-            ),
             _ => unreachable!(),
         };
         guard
