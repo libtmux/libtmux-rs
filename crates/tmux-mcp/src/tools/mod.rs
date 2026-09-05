@@ -13,8 +13,7 @@ use rmcp::model::ErrorData;
 
 use crate::caller::Relation;
 use crate::{
-    Capture, Marks, PaneView, Panes, ServerView, SessionView, Sessions, TmuxTools, WindowView,
-    Windows, resources,
+    Capture, Marks, PaneView, Panes, SessionView, Sessions, TmuxTools, WindowView, Windows,
 };
 
 use error::{bad_input, object_gone, tmux_error};
@@ -330,90 +329,6 @@ impl TmuxTools {
                 "stale": false,
             })),
         )
-    }
-
-    /// Answer one resource, doing the same tmux work the matching tool does.
-    ///
-    /// Reusing the renderers keeps a resource and its tool from drifting into
-    /// two descriptions of the same pane.
-    pub(super) async fn read_target(
-        &self,
-        uri: &str,
-        target: resources::Target,
-    ) -> Result<rmcp::model::ReadResourceResult, ErrorData> {
-        use resources::Target;
-
-        match target {
-            Target::Capabilities => resources::json(uri, self.capability_report.as_ref()),
-            Target::Server => {
-                let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
-                resources::json(
-                    uri,
-                    &ServerView {
-                        socket: self
-                            .socket()
-                            .await
-                            .map(|path| path.to_string_lossy().into_owned()),
-                        inherited_caller_pane: self.caller_pane().map(ToOwned::to_owned),
-                        sessions: sessions.len(),
-                    },
-                )
-            }
-            Target::Sessions => {
-                let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &Self::render_sessions(&sessions))
-            }
-            Target::Windows => {
-                let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &Self::render_windows(&windows))
-            }
-            Target::Panes => {
-                let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &self.render_panes(&panes).await)
-            }
-            Target::Session(name) => {
-                // A URI that names one session answers with that session, not
-                // a collection holding it. The list wrapper the tools use is
-                // there because structured tool content has to be an object;
-                // a resource body has no such constraint.
-                let session = self.find_session(&name).await?;
-                let mut rendered = Self::render_sessions(std::slice::from_ref(&session));
-                resources::json(uri, &rendered.sessions.remove(0))
-            }
-            Target::SessionWindows(name) => {
-                let session = self.find_session(&name).await?;
-                let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &Self::render_windows(&windows))
-            }
-            Target::Window(name, index) => {
-                let session = self.find_session(&name).await?;
-                let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
-                let window = windows
-                    .into_iter()
-                    .find(|window| window.index().to_string() == index)
-                    .ok_or_else(|| object_gone("window", &format!("{name}:{index}")))?;
-                let mut rendered = Self::render_windows(std::slice::from_ref(&window));
-                resources::json(uri, &rendered.windows.remove(0))
-            }
-            Target::Pane(id) => {
-                let pane = self.find_pane(&id).await?;
-                let mut rendered = self.render_panes(std::slice::from_ref(&pane)).await;
-                resources::json(uri, &rendered.panes.remove(0))
-            }
-            Target::PaneContent(id) => {
-                let pane = self.find_pane(&id).await?;
-                let lines = pane
-                    .capture_with(CaptureOptions::visible())
-                    .await
-                    .map_err(|e| tmux_error(&e))?;
-                let body = lines
-                    .iter()
-                    .map(|line| line.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Ok(resources::text(uri, body))
-            }
-        }
     }
 
     /// Resolve a window id, reporting an unknown one as invalid input.

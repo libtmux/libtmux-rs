@@ -220,24 +220,20 @@ record; registration, descriptions, annotations, selection, and
 
 ## Resources
 
-Alongside the tools, the hierarchy is browsable as URIs. Clients show these in
-a picker, so attaching a pane to a conversation is something you do directly
-rather than something you ask an agent to go and fetch.
+`tmux://capabilities` reports the startup-frozen effective surface, selected
+socket, socket provenance, direct process reach, tmux effects, output classes,
+nested authority, and whole-call MCP annotations. No dynamic resource
+templates are registered.
 
 | URI | Holds |
 |---|---|
-| `tmux://server` | The selected tmux server and inherited caller context |
-| `tmux://sessions` | Every session |
-| `tmux://windows` | Every window, across sessions |
-| `tmux://panes` | Every pane, across sessions |
-| `tmux://sessions/{name}` | One session |
-| `tmux://sessions/{name}/windows` | Its windows |
-| `tmux://sessions/{name}/windows/{index}` | One window |
-| `tmux://panes/{id}` | One pane |
-| `tmux://panes/{id}/content` | What that pane is showing, as text |
+| `tmux://capabilities` | The frozen effective tool surface and connection provenance |
 
-Everything above is also reachable through a tool, so an agent loses nothing
-if its client does not support resources.
+Read this resource when a client needs to explain its authority or cache the
+effective surface. Read tmux state through inspect tools; there are no live
+session, window, pane, or output resources to drift away from the tool catalog.
+That keeps mutable tmux state in typed calls while the authority description
+stays stable for the life of the MCP process.
 
 ## Toolset selection
 
@@ -296,6 +292,11 @@ now run in the client. Update existing client calls with this mapping:
 | `set_environment` | No generic caller-controlled environment route remains. |
 | `run_plan` | Use `call_read_tools_batch` for inspect-only batches; issue typed state-changing calls separately. |
 | `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
+| `tmux://server` | Use `get_server_info`; `tmux://capabilities` reports the frozen socket provenance and tool selection. |
+| `tmux://sessions`, `tmux://windows`, `tmux://panes` | Use `list_sessions`, `list_windows`, and `list_panes`. |
+| `tmux://sessions/{name}`, `tmux://panes/{id}` | Use `get_session_info` and `get_pane_info`. |
+| `tmux://sessions/{name}/windows`, `tmux://sessions/{name}/windows/{index}` | Use `list_windows`, filter by `session_id`, then pass the returned stable id to `get_window_info`. |
+| `tmux://panes/{id}/content` | Use `capture_pane` or continue from a cursor with `capture_since`. |
 | Prompt `run_and_wait` | Use one `run_shell_command`; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
 | Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, call `exit_copy_mode`; otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`. Wait briefly and snapshot again. `keys: ["C-\\"]` is stronger; do not turn pane recovery into teardown. |
 | Prompt `diagnose_pane` | Start with `snapshot_pane`; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with `capture_since`, and use `search_panes` if the target is uncertain. |

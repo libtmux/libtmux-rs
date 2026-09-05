@@ -159,19 +159,17 @@ impl ServerHandler for TmuxTools {
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, ErrorData> {
         let uri = request.uri.as_str();
-        let target = resources::Target::parse(uri).ok_or_else(|| {
-            // The same classification the tools use, so a client that reads
-            // `data` does not need a second vocabulary for resources.
-            ErrorData::invalid_params(
+        if uri != resources::CAPABILITIES_URI {
+            return Err(ErrorData::invalid_params(
                 format!("no resource {uri}"),
                 Some(serde_json::json!({
                     "kind": "invalid_input",
                     "retryable": false,
                     "stale": false,
                 })),
-            )
-        })?;
-        Ok(self.read_target(uri, target).await?.into())
+            ));
+        }
+        Ok(resources::capabilities(self.capability_report.as_ref())?.into())
     }
 
     fn get_info(&self) -> ServerInfo {
