@@ -18,8 +18,9 @@ result is not an atomic view of a pane that changes during the call.
 without capturing every pane into the client's context.
 
 Use `capture_since` for later output. Keep its opaque cursor and check `missed`;
-a gap means the retained live tail overflowed, not that the current text is the
-complete history. Cursors observe output without changing pane state.
+a gap can mean the pane outran the buffer, its live tail was evicted, or the
+server restarted. The current text is then not complete history. Cursors observe
+output without changing pane state.
 
 ## Respecting human-owned pane modes
 

@@ -71,9 +71,10 @@ what a wait is for, the stream is the better source.
 
 `capture_since` keeps a live tail per pane instead of anchoring into
 scrollback. The cursor names an offset in a byte ring the crate owns, so
-"what changed since I last looked" is answered exactly, and the answer is
-`missed` only when the ring itself overflowed — a condition this crate can
-observe, unlike scrollback tmux has already trimmed.
+"what changed since I last looked" is answered exactly while that cursor
+still names retained output. `missed` reports a gap after buffer overrun, live
+tail eviction, or server restart — conditions this crate can observe, unlike
+scrollback tmux has already trimmed.
 
 ## Two tmux details that read the wrong way
 
