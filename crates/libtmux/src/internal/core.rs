@@ -253,6 +253,10 @@ impl CoreConfiguration {
         self.launch.executable()
     }
 
+    pub(crate) fn resolved_executable(&self) -> Option<PathBuf> {
+        self.launch.resolved_executable()
+    }
+
     pub(crate) const fn timeout(&self) -> Duration {
         self.timeout
     }

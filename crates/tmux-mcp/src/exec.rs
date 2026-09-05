@@ -26,9 +26,11 @@ const MAX_TOTAL_PATTERN_BYTES: usize = 16_384;
 
 mod run;
 
+#[cfg(test)]
+pub(crate) use run::prepared_shutdown_completions;
 pub(crate) use run::{RunDispatch, RunProgress, prepare_run, readable};
 #[cfg(test)]
-use run::{Scanner, find, finished};
+use run::{Scanner, find, finished, quote_shell_word, render_payload};
 
 /// How a run finished.
 ///

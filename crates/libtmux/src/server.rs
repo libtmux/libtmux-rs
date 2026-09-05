@@ -443,6 +443,16 @@ impl Server {
         self.core.configuration().executable()
     }
 
+    /// Resolve the configured tmux executable from the captured launch context.
+    ///
+    /// Bare names use the `PATH` captured by [`ServerBuilder::build`]. Relative
+    /// paths use its captured working directory. The returned path preserves a
+    /// configured wrapper or symlink rather than canonicalizing it.
+    #[must_use]
+    pub fn resolved_tmux_executable(&self) -> Option<PathBuf> {
+        self.core.configuration().resolved_executable()
+    }
+
     /// Return the captured per-command timeout.
     ///
     /// # Examples

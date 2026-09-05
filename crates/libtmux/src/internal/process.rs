@@ -1,4 +1,6 @@
 use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,6 +85,46 @@ impl LaunchContext {
         self.current_dir.as_deref()
     }
 
+    pub(crate) fn resolved_executable(&self) -> Option<PathBuf> {
+        let working_directory = self.current_dir.as_deref()?;
+        if !working_directory.is_absolute() || !working_directory.is_dir() {
+            return None;
+        }
+        let executable = self.executable.as_os_str();
+        if executable.as_bytes().is_empty() || executable.as_bytes().contains(&0) {
+            return None;
+        }
+
+        if executable.as_bytes().contains(&b'/') {
+            let configured = Path::new(executable);
+            let candidate = if configured.is_absolute() {
+                configured.to_path_buf()
+            } else {
+                working_directory.join(configured)
+            };
+            return runnable_file(&candidate).then_some(candidate);
+        }
+
+        let path = self
+            .environment
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "PATH")
+            .and_then(|(_, value)| value.as_deref())?;
+        if path.as_bytes().contains(&0) {
+            return None;
+        }
+        std::env::split_paths(path).find_map(|directory| {
+            let directory = if directory.is_absolute() {
+                directory
+            } else {
+                working_directory.join(directory)
+            };
+            let candidate = directory.join(executable);
+            runnable_file(&candidate).then_some(candidate)
+        })
+    }
+
     #[cfg(test)]
     #[allow(
         clippy::option_option,
@@ -115,6 +157,11 @@ impl LaunchContext {
 
         !std::env::split_paths(&path).any(|directory| directory.join(executable).is_file())
     }
+}
+
+fn runnable_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 pub(crate) fn validate_request(
@@ -423,4 +470,133 @@ fn lock_persistent(shared: &PersistentShared) -> MutexGuard<'_, PersistentLifecy
         .lifecycle
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStringExt as _;
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::path::{Path, PathBuf};
+
+    use super::LaunchContext;
+
+    fn executable(path: &Path) {
+        std::fs::write(path, b"#!/bin/sh\nexit 0\n").expect("fixture executable is written");
+        let mut permissions = std::fs::metadata(path)
+            .expect("fixture metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(path, permissions).expect("fixture executable is runnable");
+    }
+
+    fn launch(executable: impl Into<OsString>, cwd: &Path, path: Option<&OsStr>) -> LaunchContext {
+        let launch = LaunchContext::new(executable).with_current_dir(cwd);
+        match path {
+            Some(path) => launch.with_environment("PATH", path),
+            None => launch.with_environment_removed("PATH"),
+        }
+    }
+
+    #[test]
+    fn resolver_preserves_absolute_relative_and_symlink_paths() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).expect("bin exists");
+        let target = bin.join("real");
+        let link = bin.join("wrapper");
+        executable(&target);
+        symlink(&target, &link).expect("symlink exists");
+
+        assert_eq!(
+            launch(&link, root.path(), None).resolved_executable(),
+            Some(link.clone())
+        );
+        assert_eq!(
+            launch("bin/wrapper", root.path(), None).resolved_executable(),
+            Some(link)
+        );
+    }
+
+    #[test]
+    fn resolver_searches_captured_path_in_order() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        std::fs::create_dir(&first).expect("first exists");
+        std::fs::create_dir(&second).expect("second exists");
+        std::fs::write(first.join("tmux"), b"not executable").expect("first candidate exists");
+        executable(&second.join("tmux"));
+        let path = std::env::join_paths([first, second.clone()]).expect("fixture PATH joins");
+
+        assert_eq!(
+            launch("tmux", root.path(), Some(&path)).resolved_executable(),
+            Some(second.join("tmux"))
+        );
+    }
+
+    #[test]
+    fn resolver_anchors_empty_and_relative_path_entries_to_captured_cwd() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let relative = root.path().join("relative");
+        std::fs::create_dir(&relative).expect("relative bin exists");
+        executable(&root.path().join("from-empty"));
+        executable(&relative.join("from-relative"));
+        let path = OsString::from(":relative");
+
+        assert_eq!(
+            launch("from-empty", root.path(), Some(&path)).resolved_executable(),
+            Some(root.path().join("from-empty"))
+        );
+        assert_eq!(
+            launch("from-relative", root.path(), Some(&path)).resolved_executable(),
+            Some(relative.join("from-relative"))
+        );
+    }
+
+    #[test]
+    fn resolver_preserves_apostrophe_newline_and_non_utf8_bytes() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let name = OsString::from_vec(b"tmux-'line\n-\xff".to_vec());
+        let path = root.path().join(&name);
+        executable(&path);
+
+        assert_eq!(
+            launch(path.as_os_str(), root.path(), None).resolved_executable(),
+            Some(path)
+        );
+    }
+
+    #[test]
+    fn resolver_fails_closed_for_missing_context_nul_and_nonexecutables() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let plain = root.path().join("plain");
+        std::fs::write(&plain, b"plain").expect("plain file exists");
+        let directory = root.path().join("directory");
+        std::fs::create_dir(&directory).expect("directory exists");
+        let nul = OsString::from_vec(b"tmux\0bad".to_vec());
+
+        assert_eq!(
+            launch("tmux", root.path(), None).resolved_executable(),
+            None
+        );
+        assert_eq!(launch(nul, root.path(), None).resolved_executable(), None);
+        assert_eq!(
+            launch(&plain, root.path(), None).resolved_executable(),
+            None
+        );
+        assert_eq!(
+            launch(&directory, root.path(), None).resolved_executable(),
+            None
+        );
+
+        let vanished = root.path().join("vanished");
+        std::fs::create_dir(&vanished).expect("captured cwd exists");
+        let path = PathBuf::from("bin");
+        std::fs::remove_dir(&vanished).expect("captured cwd vanishes");
+        assert_eq!(
+            launch("tmux", &vanished, Some(path.as_os_str())).resolved_executable(),
+            None
+        );
+    }
 }

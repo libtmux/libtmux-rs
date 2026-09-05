@@ -12,6 +12,7 @@ use crate::{
 };
 
 use super::error::{EffectBoundary, bad_input, tmux_error};
+use super::pane_input::{MissingSource, PaneInputReach};
 
 /// Translate a request-owned run failure at the protocol boundary.
 fn run_error(error: run_request::RunError) -> ErrorData {
@@ -30,6 +31,7 @@ fn run_error(error: run_request::RunError) -> ErrorData {
                 "stale": false,
             })),
         ),
+        run_request::RunError::Guard(error) => error,
     }
 }
 
@@ -140,25 +142,76 @@ impl TmuxTools {
         cancelled: tokio_util::sync::CancellationToken,
         reporter: Reporter,
     ) -> Result<Json<RunView>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
-        // A pane mode routes input to tmux bindings instead of the workload.
-        // The attached client owns the transition back to ordinary input.
-        if target.is_in_mode() {
+        if command.as_bytes().contains(&0) {
+            return Err(bad_input("command must not contain a NUL byte".to_owned()));
+        }
+        let initial = self
+            .preflight_pane_input(
+                &pane,
+                PaneInputReach::Synchronized,
+                MissingSource::CallerInput,
+            )
+            .await?;
+        if initial.configured.len() != 1 {
             return Err(bad_input(format!(
-                "pane {pane} is in a tmux mode, where input invokes mode bindings rather \
-                     than reaching the shell. Read with capture_pane or snapshot_pane and \
-                     wait for the attached person to leave the mode before sending input."
+                "pane {pane} has synchronized input enabled for {} panes; run_shell_command requires one configured recipient",
+                initial.configured.len()
             )));
         }
+        let foreground = initial
+            .target
+            .current_command()
+            .cloned()
+            .ok_or_else(|| bad_input(format!("pane {pane} reported no foreground command")))?;
+        let executable = self.server.resolved_tmux_executable().ok_or_else(|| {
+            ErrorData::internal_error(
+                "the configured tmux executable cannot be resolved from its captured launch context"
+                    .to_owned(),
+                Some(serde_json::json!({
+                    "kind": "unreachable",
+                    "retryable": false,
+                    "stale": false,
+                })),
+            )
+        })?;
+        let socket = self.server.socket_path().to_path_buf();
+        let checkpoint_pane = initial.target.id().to_string();
+        let final_check = async {
+            let final_plan = self
+                .preflight_pane_input(
+                    &checkpoint_pane,
+                    PaneInputReach::Synchronized,
+                    MissingSource::ObservedTransition,
+                )
+                .await?;
+            if final_plan.configured.len() != 1 {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} gained synchronized recipients between run checkpoints"
+                )));
+            }
+            let final_foreground = final_plan.target.current_command().ok_or_else(|| {
+                bad_input(format!(
+                    "pane {checkpoint_pane} reported no foreground command at the final checkpoint"
+                ))
+            })?;
+            if final_foreground != &foreground {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} changed foreground command between run checkpoints"
+                )));
+            }
+            Ok(())
+        };
         let view = reporting(
             reporter,
             "still running",
             run_request::run(
-                &target,
+                &initial.target,
                 &command,
                 Self::budget(seconds),
                 suppress_history,
                 &cancelled,
+                (executable.as_os_str(), &socket),
+                final_check,
             ),
         )
         .await

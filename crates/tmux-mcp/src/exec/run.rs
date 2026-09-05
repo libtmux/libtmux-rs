@@ -1,6 +1,9 @@
 //! Sentinel-bracketed command dispatch and stream scanning.
 
+use std::ffi::{OsStr, OsString};
 use std::ops::Range;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use libtmux::{Error, Pane};
@@ -15,6 +18,9 @@ use super::{OUTPUT_LIMIT, RunOutcome, RunView};
 /// Only has to be unique among the runs this process makes; a sentinel is
 /// already unmistakable in the stream because it carries a real escape byte.
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+static PREPARED_SHUTDOWN_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
 
 /// A pane stream and the sentinels for one command.
 pub(crate) struct Run {
@@ -44,7 +50,7 @@ impl RunProgress<'_> {
 /// A watched run whose pane has not been changed yet.
 pub(crate) struct PreparedRun {
     pane: Pane,
-    payload: String,
+    payload: OsString,
     run: Run,
 }
 
@@ -87,6 +93,107 @@ impl PreparedRun {
         }
         RunDispatch::Confirmed(run)
     }
+
+    /// Close the watcher without sending the prepared pane input.
+    pub(crate) async fn shutdown(self) -> Result<(), Error> {
+        let Self { run, .. } = self;
+        let Run { output, .. } = run;
+        let result = output.shutdown().await;
+        #[cfg(test)]
+        PREPARED_SHUTDOWN_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+        result
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn prepared_shutdown_completions() -> u64 {
+    PREPARED_SHUTDOWN_COMPLETIONS.load(Ordering::Relaxed)
+}
+
+pub(super) fn quote_shell_word(value: &OsStr) -> OsString {
+    let mut quoted = Vec::with_capacity(value.as_bytes().len() + 2);
+    quoted.push(b'\'');
+    for byte in value.as_bytes() {
+        if *byte == b'\'' {
+            quoted.extend_from_slice(b"'\\''");
+        } else {
+            quoted.push(*byte);
+        }
+    }
+    quoted.push(b'\'');
+    OsString::from_vec(quoted)
+}
+
+fn marker_client(executable: &OsStr, socket: &Path, nonce: &str, closing: bool) -> Vec<u8> {
+    let mut client = Vec::new();
+    client.extend_from_slice(br"( \exec ");
+    client.extend_from_slice(quote_shell_word(executable).as_bytes());
+    client.extend_from_slice(br" -S ");
+    client.extend_from_slice(quote_shell_word(socket.as_os_str()).as_bytes());
+    client.extend_from_slice(br#" run-shell "printf '\\033_"#);
+    client.extend_from_slice(nonce.as_bytes());
+    if closing {
+        client.extend_from_slice(br#"e;$1\\033\\\\'" )"#);
+    } else {
+        client.extend_from_slice(br#"s\\033\\\\'" )"#);
+    }
+    client
+}
+
+fn append_command_branch(
+    payload: &mut Vec<u8>,
+    command: &OsStr,
+    inherited_xtrace: bool,
+    inherited_errexit: bool,
+    opening: &[u8],
+    closing: &[u8],
+) {
+    payload.extend_from_slice(if inherited_errexit {
+        b"*e*)\n\\set +e\nif "
+    } else {
+        b"*)\n\\set +e\nif "
+    });
+    payload.extend_from_slice(opening);
+    payload.extend_from_slice(b"; then\n( ");
+    payload.extend_from_slice(if inherited_errexit {
+        b"\\set -e; \\eval "
+    } else {
+        b"\\set +e; \\eval "
+    });
+    let operand = if inherited_xtrace {
+        let mut operand = OsString::from("\\set -x\n");
+        operand.push(command);
+        operand
+    } else {
+        command.to_os_string()
+    };
+    payload.extend_from_slice(quote_shell_word(&operand).as_bytes());
+    payload.extend_from_slice(b" )\n\\set -- \"$?\"\n");
+    payload.extend_from_slice(closing);
+    payload.extend_from_slice(b"\nfi\n;;\n");
+}
+
+pub(super) fn render_payload(
+    executable: &OsStr,
+    socket: &Path,
+    nonce: &str,
+    command: &OsStr,
+    suppress_history: bool,
+) -> OsString {
+    let opening = marker_client(executable, socket, nonce, false);
+    let closing = marker_client(executable, socket, nonce, true);
+    let mut payload = Vec::new();
+    if suppress_history {
+        payload.push(b' ');
+    }
+    payload.extend_from_slice(b"(\ncase $- in\n*x*)\n\\set +x\ncase $- in\n");
+    append_command_branch(&mut payload, command, true, true, &opening, &closing);
+    append_command_branch(&mut payload, command, true, false, &opening, &closing);
+    payload.extend_from_slice(b"esac\n;;\n*)\ncase $- in\n");
+    append_command_branch(&mut payload, command, false, true, &opening, &closing);
+    append_command_branch(&mut payload, command, false, false, &opening, &closing);
+    payload.extend_from_slice(b"esac\n;;\nesac\n)");
+    OsString::from_vec(payload)
 }
 
 /// Attach a watcher and construct a run without sending pane input.
@@ -98,6 +205,8 @@ pub(crate) async fn prepare_run(
     pane: &Pane,
     command: &str,
     suppress_history: bool,
+    executable: &OsStr,
+    socket: &Path,
 ) -> Result<PreparedRun, Error> {
     let nonce = format!(
         "{:x}{:x}",
@@ -110,13 +219,12 @@ pub(crate) async fn prepare_run(
     // Attached before the keys are sent, so no output can arrive unseen.
     let output = pane.stream_output().await?;
 
-    // The command runs in a subshell: a bare `exit` in it would otherwise end
-    // the pane's own shell. A leading space is how `suppress_history` keeps
-    // the line out of shell history, for shells configured to do that.
-    let lead = if suppress_history { " " } else { "" };
-    let payload = format!(
-        "{lead}printf '\\033_{nonce}s\\033\\\\'; ( {command} ); __tmux_mcp=$?; \
-         printf '\\033_{nonce}e;%d\\033\\\\' \"$__tmux_mcp\"; unset __tmux_mcp"
+    let payload = render_payload(
+        executable,
+        socket,
+        &nonce,
+        OsStr::new(command),
+        suppress_history,
     );
 
     Ok(PreparedRun {
@@ -167,6 +275,8 @@ pub(super) struct Scanner {
     collected: RetainedBytes,
     /// How far the search for the opening sentinel has looked.
     open_scanned: usize,
+    /// The byte immediately after a found opening sentinel.
+    open_at: Option<usize>,
     /// How far the search for the closing sentinel has looked.
     scanned: usize,
     /// Where the closing sentinel was found, once it has been.
@@ -197,6 +307,7 @@ impl Scanner {
             closed,
             collected: RetainedBytes::new(),
             open_scanned: 0,
+            open_at: None,
             scanned: 0,
             close_at: None,
             body_at: None,
@@ -218,13 +329,18 @@ impl Scanner {
         self.publish_append = chunk.len();
 
         if self.body_at.is_none() {
-            let collected = self.collected.as_slice();
-            let from = self
-                .open_scanned
-                .saturating_sub(self.opened.len().saturating_sub(1));
-            self.body_at =
-                find(&collected[from..], &self.opened).map(|at| from + at + self.opened.len());
-            self.open_scanned = collected.len();
+            if self.open_at.is_none() {
+                let collected = self.collected.as_slice();
+                let from = self
+                    .open_scanned
+                    .saturating_sub(self.opened.len().saturating_sub(1));
+                self.open_at =
+                    find(&collected[from..], &self.opened).map(|at| from + at + self.opened.len());
+                self.open_scanned = collected.len();
+            }
+            if let Some(open_at) = self.open_at {
+                self.body_at = opening_separator_end(self.collected.as_slice(), open_at);
+            }
         }
 
         if self.close_at.is_none() {
@@ -254,6 +370,9 @@ impl Scanner {
                 self.body_at = Some(body_at.saturating_sub(excess));
             }
             self.open_scanned = self.open_scanned.saturating_sub(excess);
+            if let Some(open_at) = self.open_at {
+                self.open_at = (excess <= open_at).then_some(open_at.saturating_sub(excess));
+            }
             if let Some(close_at) = self.close_at {
                 if excess <= close_at {
                     self.close_at = Some(close_at - excess);
@@ -348,6 +467,14 @@ impl Scanner {
     }
 }
 
+fn opening_separator_end(collected: &[u8], at: usize) -> Option<usize> {
+    match collected.get(at..) {
+        Some([b'\n', ..]) => Some(at + 1),
+        Some([b'\r', b'\n', ..]) => Some(at + 2),
+        _ => None,
+    }
+}
+
 /// Assemble the answer once the closing sentinel is whole.
 ///
 /// Returns `None` while the status digits are still arriving, so the caller
@@ -370,9 +497,9 @@ pub(super) fn finished(
     // one without the opening one means trimming dropped it. What is left is
     // still the command's output, minus its beginning, and reporting it beats
     // reporting nothing.
-    let body = find(collected, opened).map_or(&collected[..at], |start| {
-        &collected[start + opened.len()..at]
-    });
+    let body = find(collected, opened)
+        .and_then(|start| opening_separator_end(collected, start + opened.len()))
+        .map_or(&collected[..at], |start| &collected[start..at]);
 
     Some(RunView {
         // Filled in by the caller, which is what holds the connection.

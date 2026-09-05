@@ -22,6 +22,10 @@ use crate::{Command, CommandResult, Error, ObjectKind};
 mod observe;
 mod settings;
 
+const fn pane_mode_is_active(count: u32) -> bool {
+    count > 0
+}
+
 /// One tmux pane, as reached through one window link.
 ///
 /// A pane belongs to exactly one window, but that window can be linked into
@@ -282,6 +286,12 @@ impl Pane {
         *self.projection.pane().pane_dead()
     }
 
+    /// Report whether this pane has synchronized input enabled.
+    #[must_use]
+    pub fn is_synchronized(&self) -> bool {
+        *self.projection.pane().pane_synchronized()
+    }
+
     /// Report whether tmux is copying this pane's output to a command.
     ///
     /// [`Self::pipe`] toggles when given no command, so a caller who lost track
@@ -327,7 +337,7 @@ impl Pane {
     /// means the pane has a mode open.
     #[must_use]
     pub fn is_in_mode(&self) -> bool {
-        *self.projection.pane().pane_in_mode() > 0
+        pane_mode_is_active(*self.projection.pane().pane_in_mode())
     }
 
     /// Return the identity of the server this pane belongs to.
@@ -1586,7 +1596,7 @@ fn parse_env_id(value: Option<&OsStr>) -> Result<PaneId, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CaptureOptions, send_line_command};
+    use super::{CaptureOptions, pane_mode_is_active, send_line_command};
     use crate::TmuxVersion;
 
     #[test]
@@ -1615,6 +1625,14 @@ mod tests {
 
             assert_eq!(summary.sensitive_argument_count(), 1);
             assert!(!summary.to_string().contains(secret));
+        }
+    }
+
+    #[test]
+    fn every_nonzero_mode_depth_is_active() {
+        assert!(!pane_mode_is_active(0));
+        for depth in [1, 2, u32::MAX] {
+            assert!(pane_mode_is_active(depth), "mode depth {depth}");
         }
     }
 }

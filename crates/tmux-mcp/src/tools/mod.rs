@@ -3,6 +3,7 @@ mod control;
 mod error;
 mod inspect;
 mod observe;
+mod pane_input;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

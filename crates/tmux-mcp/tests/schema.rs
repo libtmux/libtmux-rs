@@ -159,6 +159,30 @@ fn foreground_commands_expose_no_retired_job_handle() -> TestResult {
 }
 
 #[test]
+fn pane_input_guards_add_no_mode_controls() -> TestResult {
+    let tools = tools("execute")?;
+    for name in [
+        "send_keys",
+        "send_keys_batch",
+        "paste_text",
+        "run_shell_command",
+    ] {
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("pane input route");
+        let properties = tool.input_schema["properties"]
+            .as_object()
+            .expect("object properties");
+        for prohibited in ["force", "cancel_mode", "exit_mode"] {
+            assert!(!properties.contains_key(prohibited), "{name}: {prohibited}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn pane_text_results_also_declare_their_structured_tmux_metadata() -> TestResult {
     let tools = tools("inspect,execute")?;
     for name in [

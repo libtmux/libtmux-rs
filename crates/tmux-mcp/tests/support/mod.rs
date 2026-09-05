@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use libtmux::{Command, Server};
 use rmcp::handler::server::wrapper::{Json, Parameters};
+use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::{ServiceExt as _, serve_server};
 use serde_json::Value;
 use tmux_mcp::{Selection, TmuxTools};
 
@@ -35,6 +37,28 @@ pub(crate) fn bare_tools(server: &Server) -> TmuxTools {
             Selection::parse(Some("inspect,manage,execute"), None, None).expect("test surface"),
         )
         .build()
+}
+
+/// Invoke one tool through its public MCP route.
+pub(crate) async fn call_tool(
+    tools: TmuxTools,
+    name: &'static str,
+    arguments: Value,
+) -> CallToolResult {
+    let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
+    let server = tokio::spawn(async move {
+        let service = serve_server(tools, server_transport)
+            .await
+            .expect("server starts");
+        let _ = service.waiting().await;
+    });
+    let client = ().serve(client_transport).await.expect("client connects");
+    let request = CallToolRequestParams::new(name)
+        .with_arguments(arguments.as_object().cloned().expect("object arguments"));
+    let result = client.call_tool(request).await.expect("tool call answers");
+    client.cancel().await.expect("client shuts down");
+    let _ = server.await;
+    result
 }
 
 /// Wait until a pane's shell can receive input.

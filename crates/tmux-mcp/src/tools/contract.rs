@@ -940,12 +940,12 @@ impl TmuxTools {
         for (index, operation) in operations.into_iter().enumerate() {
             let tool = "send_keys".to_owned();
             let outcome = self
-                .send_keys(Parameters(crate::SendKeysArgs {
+                .send_keys_one(crate::SendKeysArgs {
                     pane: operation.pane,
                     text: operation.text,
                     keys: operation.keys,
                     enter: operation.enter,
-                }))
+                })
                 .await;
             match outcome {
                 Ok(value) => results.push(BatchItem {

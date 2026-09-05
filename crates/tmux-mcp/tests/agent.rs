@@ -3,17 +3,44 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use libtmux::test::TestServer;
-use libtmux::{Command, NewWindowOptions, Server, SplitDirection, SplitOptions};
+use libtmux::{Command, NewSessionOptions, NewWindowOptions, Server, SplitDirection, SplitOptions};
 use serde_json::Value;
 use tmux_mcp::{CallerIdentity, TmuxTools};
 use tokio_util::sync::CancellationToken;
 
 mod support;
 
-use support::{args, bare_tools, json, prompt_ready};
+use support::{args, bare_tools, call_tool, json, prompt_ready};
+
+struct RawServerFiles {
+    directory: PathBuf,
+    executable: PathBuf,
+    socket: PathBuf,
+    config: PathBuf,
+    running: bool,
+}
+
+impl Drop for RawServerFiles {
+    fn drop(&mut self) {
+        if self.running {
+            let _ = std::process::Command::new(&self.executable)
+                .arg("-S")
+                .arg(&self.socket)
+                .arg("kill-server")
+                .status();
+        }
+        let _ = std::fs::remove_file(&self.socket);
+        let _ = std::fs::remove_file(&self.executable);
+        let _ = std::fs::remove_file(&self.config);
+        let _ = std::fs::remove_dir(&self.directory);
+    }
+}
 
 async fn fixture(name: &str) -> (TestServer, TmuxTools) {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -57,6 +84,36 @@ async fn split(server: &Server, pane: &str) -> String {
         .to_string()
 }
 
+async fn pane_handle(server: &Server, pane: &str) -> libtmux::Pane {
+    server
+        .panes()
+        .await
+        .expect("panes list")
+        .into_iter()
+        .find(|candidate| candidate.id().to_string() == pane)
+        .expect("pane exists")
+}
+
+async fn set_window_synchronized(server: &Server, pane: &str, enabled: bool) {
+    let pane = pane_handle(server, pane).await;
+    server
+        .window_by_id(pane.window_id())
+        .await
+        .expect("window lookup")
+        .expect("source window exists")
+        .set_option("synchronize-panes", if enabled { "on" } else { "off" })
+        .await
+        .expect("window synchronization changes");
+}
+
+async fn synchronized_fixture(name: &str) -> (TestServer, TmuxTools, String, String) {
+    let (guard, tools, source) = typing_fixture(name).await;
+    let peer = split(guard.server(), &source).await;
+    prompt_ready(guard.server(), &peer).await;
+    set_window_synchronized(guard.server(), &source, true).await;
+    (guard, tools, source, peer)
+}
+
 async fn socket_of(server: &Server) -> String {
     server
         .cmd(
@@ -93,6 +150,99 @@ async fn clients_settle(server: &Server, wanted: usize) -> usize {
         seen = client_count(server).await;
     }
     seen
+}
+
+async fn run_view(tools: &TmuxTools, pane: &str, command: &str) -> Value {
+    json(
+        tools
+            .run_command(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "command": command,
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("command run answers"),
+    )
+}
+
+async fn run_error(tools: &TmuxTools, pane: &str, command: &str) -> rmcp::model::ErrorData {
+    tools
+        .run_command(
+            args(serde_json::json!({
+                "pane": pane,
+                "command": command,
+                "seconds": 2
+            })),
+            CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
+        )
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("guarded run is refused: {command}"))
+}
+
+async fn assert_channel_quiet(server: &Server, channel: &str) {
+    assert_eq!(
+        server
+            .wait_for_channel(channel, Duration::from_millis(250))
+            .await
+            .expect("channel wait answers"),
+        libtmux::ChannelWait::TimedOut,
+        "refused input signalled {channel}"
+    );
+}
+
+async fn pane_screen(tools: &TmuxTools, pane: &str) -> String {
+    json(
+        tools
+            .capture_pane(args(serde_json::json!({"pane": pane})))
+            .await
+            .expect("pane capture answers"),
+    )["text"]
+        .as_str()
+        .expect("capture text")
+        .to_owned()
+}
+
+async fn assert_paste_refused_unchanged(tools: &TmuxTools, server: &Server, pane: &str) {
+    let buffers = server.buffer_names().await.expect("buffers list");
+    let screen = pane_screen(tools, pane).await;
+    let error = tools
+        .paste_text(args(serde_json::json!({"pane": pane, "text": "guarded"})))
+        .await
+        .err()
+        .expect("paste is refused");
+    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert_eq!(server.buffer_names().await.expect("buffers list"), buffers);
+    assert_eq!(pane_screen(tools, pane).await, screen);
+}
+
+async fn send_and_wait(
+    tools: &TmuxTools,
+    server: &Server,
+    pane: &str,
+    command: &str,
+    channel: &str,
+) {
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": format!("{command}; tmux wait-for -S {channel}"),
+            "enter": true
+        })))
+        .await
+        .expect("fixture shell input is sent");
+    assert_eq!(
+        server
+            .wait_for_channel(channel, Duration::from_secs(2))
+            .await
+            .expect("fixture signal is observed"),
+        libtmux::ChannelWait::Signalled
+    );
 }
 
 #[tokio::test]
@@ -135,6 +285,270 @@ async fn send_keys_reports_synchronized_target_expansion() {
         .collect();
 
     assert_eq!(actual, expected);
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn send_keys_uses_the_effective_per_pane_cohort() {
+    let (guard, tools, source) = typing_fixture("effective-cohort").await;
+    let peer = split(guard.server(), &source).await;
+    let excluded = split(guard.server(), &source).await;
+    for pane in [&peer, &excluded] {
+        prompt_ready(guard.server(), pane).await;
+    }
+    let source_handle = pane_handle(guard.server(), &source).await;
+    let window = guard
+        .server()
+        .window_by_id(source_handle.window_id())
+        .await
+        .expect("window lookup")
+        .expect("source window exists");
+    window
+        .set_option("synchronize-panes", "on")
+        .await
+        .expect("window synchronization is enabled");
+    pane_handle(guard.server(), &excluded)
+        .await
+        .set_option("synchronize-panes", "off")
+        .await
+        .expect("one peer opts out");
+
+    let linked = guard
+        .server()
+        .new_session("effective-cohort-link")
+        .await
+        .expect("linked session starts");
+    window
+        .link_to(&linked, None)
+        .await
+        .expect("source window is linked");
+    let other = linked
+        .active_window()
+        .await
+        .expect("active window lookup")
+        .expect("linked session has a window");
+    other
+        .set_option("synchronize-panes", "on")
+        .await
+        .expect("other window synchronizes independently");
+
+    let result = json(
+        tools
+            .send_keys(args(serde_json::json!({"pane": source, "keys": ["C-l"]})))
+            .await
+            .expect("keys are sent"),
+    );
+    let actual: Vec<_> = result["panes"]
+        .as_array()
+        .expect("configured cohort")
+        .iter()
+        .map(|pane| pane.as_str().expect("pane id").to_owned())
+        .collect();
+    let mut expected = vec![source, peer];
+    expected.sort_unstable();
+
+    assert_eq!(actual, expected);
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
+    let (guard, tools, source, peer) = synchronized_fixture("cohort-refusal").await;
+
+    let peer_handle = pane_handle(guard.server(), &peer).await;
+    peer_handle
+        .copy_mode()
+        .await
+        .expect("fixture enters copy mode");
+    let modal_channel = "mcp-modal-refusal";
+    let modal_error = tools
+        .send_keys(args(serde_json::json!({
+            "pane": source,
+            "text": format!("tmux wait-for -S {modal_channel}"),
+            "enter": true
+        })))
+        .await
+        .err()
+        .expect("a modal configured peer refuses the whole input");
+    assert_eq!(
+        modal_error.data.expect("typed refusal")["kind"],
+        "invalid_input"
+    );
+    assert_channel_quiet(guard.server(), modal_channel).await;
+
+    peer_handle
+        .exit_mode()
+        .await
+        .expect("fixture leaves copy mode");
+    peer_handle
+        .set_option("remain-on-exit", "on")
+        .await
+        .expect("fixture retains a dead pane");
+    let mut peer_handle = peer_handle;
+    peer_handle
+        .respawn(Some("exit 0"), true)
+        .await
+        .expect("fixture command exits");
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        pane_handle(guard.server(), &peer).await.is_dead()
+    })
+    .await
+    .expect("peer becomes dead");
+    let dead_channel = "mcp-dead-refusal";
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": source,
+            "text": format!("tmux wait-for -S {dead_channel}"),
+            "enter": true
+        })))
+        .await
+        .err()
+        .expect("a dead configured peer refuses the whole input");
+    assert_channel_quiet(guard.server(), dead_channel).await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn an_unsynchronized_source_ignores_unreached_modal_peers() {
+    let (guard, tools, source, peer) = synchronized_fixture("unsynchronized-source").await;
+    let source_handle = pane_handle(guard.server(), &source).await;
+    source_handle
+        .set_option("synchronize-panes", "off")
+        .await
+        .expect("source opts out");
+    pane_handle(guard.server(), &peer)
+        .await
+        .copy_mode()
+        .await
+        .expect("unreached peer enters copy mode");
+
+    let sent = json(
+        tools
+            .send_keys(args(serde_json::json!({"pane": source, "keys": ["C-l"]})))
+            .await
+            .expect("source-only input succeeds"),
+    );
+    assert_eq!(sent["panes"], serde_json::json!([source]));
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
+    let (guard, tools, source, peer) = synchronized_fixture("paste-preflight").await;
+    let peer_screen = pane_screen(&tools, &peer).await;
+    tools
+        .paste_text(args(serde_json::json!({
+            "pane": source,
+            "text": "MCP-PASTE-TARGET"
+        })))
+        .await
+        .expect("target-only paste succeeds");
+    assert!(
+        pane_screen(&tools, &source)
+            .await
+            .contains("MCP-PASTE-TARGET")
+    );
+    assert_eq!(pane_screen(&tools, &peer).await, peer_screen);
+
+    let mut source_handle = pane_handle(guard.server(), &source).await;
+    source_handle
+        .copy_mode()
+        .await
+        .expect("fixture enters copy mode");
+    assert_paste_refused_unchanged(&tools, guard.server(), &source).await;
+
+    source_handle
+        .exit_mode()
+        .await
+        .expect("fixture leaves copy mode");
+    source_handle
+        .set_option("remain-on-exit", "on")
+        .await
+        .expect("fixture retains a dead pane");
+    source_handle
+        .respawn(Some("exit 0"), true)
+        .await
+        .expect("fixture command exits");
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        pane_handle(guard.server(), &source).await.is_dead()
+    })
+    .await
+    .expect("source becomes dead");
+    assert_paste_refused_unchanged(&tools, guard.server(), &source).await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn send_keys_batch_preflights_each_executed_row() {
+    let (guard, tools, source, peer) = synchronized_fixture("batch-preflight").await;
+    let target = guard
+        .server()
+        .new_session("batch-target")
+        .await
+        .expect("independent target session starts")
+        .active_window()
+        .await
+        .expect("active window lookup")
+        .expect("target window exists")
+        .active_pane()
+        .await
+        .expect("active pane lookup")
+        .expect("target pane exists")
+        .id()
+        .to_string();
+    prompt_ready(guard.server(), &target).await;
+    guard
+        .server()
+        .set_hook("after-send-keys", format!("copy-mode -t {peer}"))
+        .await
+        .expect("row transition hook is installed");
+
+    for on_error in ["continue", "stop"] {
+        pane_handle(guard.server(), &peer)
+            .await
+            .exit_mode()
+            .await
+            .expect("peer mode is reset between cases");
+        let channel = format!("mcp-batch-{on_error}");
+        let response = call_tool(
+            tools.clone(),
+            "send_keys_batch",
+            serde_json::json!({
+                "operations": [
+                    {"pane": source, "keys": ["C-l"], "enter": false},
+                    {"pane": source, "keys": ["C-l"], "enter": false},
+                    {
+                        "pane": target,
+                        "text": format!("tmux wait-for -S {channel}"),
+                        "enter": true
+                    }
+                ],
+                "on_error": on_error
+            }),
+        )
+        .await;
+        let result = response
+            .structured_content
+            .as_ref()
+            .unwrap_or_else(|| panic!("batch has structured content: {response:?}"));
+        assert_eq!(result["failed"], 1, "{on_error}: {result}");
+        assert_eq!(
+            result["succeeded"],
+            if on_error == "continue" { 2 } else { 1 }
+        );
+        if on_error == "continue" {
+            assert_eq!(
+                guard
+                    .server()
+                    .wait_for_channel(&channel, Duration::from_secs(2))
+                    .await
+                    .expect("continued row signals"),
+                libtmux::ChannelWait::Signalled
+            );
+        } else {
+            assert_channel_quiet(guard.server(), &channel).await;
+        }
+    }
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -225,6 +639,416 @@ async fn run_shell_command_reports_output_status_and_cancellation() {
             .expect("pane list")
             .is_empty()
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn run_refuses_synchronized_input_before_watcher_setup() {
+    let (guard, tools, source, _) = synchronized_fixture("run-initial-guard").await;
+    guard
+        .server()
+        .set_hook(
+            "client-attached",
+            "set-option -g @mcp-initial-watcher attached",
+        )
+        .await
+        .expect("watcher hook is installed");
+    let baseline_clients = client_count(guard.server()).await;
+    let channel = "mcp-initial-run-refusal";
+
+    let error = run_error(&tools, &source, &format!("tmux wait-for -S {channel}")).await;
+
+    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert_eq!(client_count(guard.server()).await, baseline_clients);
+    assert_eq!(
+        guard
+            .server()
+            .get_global_option("@mcp-initial-watcher")
+            .await
+            .expect("hook record is read"),
+        None,
+        "the initial guard runs before watcher attachment"
+    );
+    assert_channel_quiet(guard.server(), channel).await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn run_rechecks_state_immediately_before_dispatch() {
+    for transition in ["cohort", "mode", "dead", "foreground"] {
+        let name = format!("run-final-{transition}");
+        let (guard, tools, source) = typing_fixture(&name).await;
+        let source_handle = pane_handle(guard.server(), &source).await;
+        let hook = match transition {
+            "cohort" => {
+                let peer = split(guard.server(), &source).await;
+                prompt_ready(guard.server(), &peer).await;
+                format!(
+                    "set-option -w -t {} synchronize-panes on",
+                    source_handle.window_id()
+                )
+            }
+            "mode" => format!("copy-mode -t {source}"),
+            "dead" => {
+                source_handle
+                    .set_option("remain-on-exit", "on")
+                    .await
+                    .expect("fixture retains a dead pane");
+                format!("respawn-pane -k -t {source} 'exit 0'")
+            }
+            "foreground" => format!(
+                "respawn-pane -k -t {source} 'exec sleep 30' ; run-shell 'while [ \"$(tmux display-message -p -t {source} \"##{{pane_current_command}}\")\" != sleep ]; do :; done'"
+            ),
+            _ => unreachable!(),
+        };
+        guard
+            .server()
+            .set_hook("client-attached", hook)
+            .await
+            .expect("transition hook is installed");
+        let baseline_clients = client_count(guard.server()).await;
+        let channel = format!("mcp-final-{transition}");
+
+        let error = run_error(&tools, &source, &format!("tmux wait-for -S {channel}")).await;
+
+        assert_eq!(
+            error.data.expect("typed refusal")["kind"],
+            "invalid_input",
+            "{transition}"
+        );
+        assert_eq!(
+            clients_settle(guard.server(), baseline_clients).await,
+            baseline_clients,
+            "{transition}: final refusal closes the watcher"
+        );
+        assert_channel_quiet(guard.server(), &channel).await;
+        if transition == "dead" {
+            libtmux::test::retry_until(Duration::from_secs(2), async || {
+                pane_handle(guard.server(), &source).await.is_dead()
+            })
+            .await
+            .expect("source becomes dead");
+        }
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+}
+
+#[tokio::test]
+async fn run_reports_phase_aware_source_disappearance() {
+    let (guard, tools, source) = typing_fixture("run-disappearance").await;
+    split(guard.server(), &source).await;
+    guard
+        .server()
+        .set_hook("client-attached", format!("kill-pane -t {source}"))
+        .await
+        .expect("transition hook is installed");
+    let baseline_clients = client_count(guard.server()).await;
+
+    let final_error = tools
+        .run_command(
+            args(serde_json::json!({
+                "pane": source,
+                "command": "printf should-not-run",
+                "seconds": 2
+            })),
+            CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
+        )
+        .await
+        .err()
+        .expect("a pane killed after the initial checkpoint is refused");
+    let final_detail = final_error.data.expect("transition detail");
+    assert_eq!(final_error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+    assert_eq!(final_detail["kind"], "object_gone");
+    assert_eq!(final_detail["retryable"], false);
+    assert_eq!(final_detail["stale"], true);
+    assert_eq!(
+        clients_settle(guard.server(), baseline_clients).await,
+        baseline_clients,
+        "the prepared watcher is closed"
+    );
+
+    let initial_error = tools
+        .run_command(
+            args(serde_json::json!({
+                "pane": "%4294967295",
+                "command": "printf unknown",
+                "seconds": 2
+            })),
+            CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
+        )
+        .await
+        .err()
+        .expect("an initially unknown pane is caller input");
+    assert_eq!(initial_error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        initial_error.data.expect("caller detail")["kind"],
+        "object_gone"
+    );
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn run_transport_preserves_raw_executable_and_socket_paths() {
+    let actual = Server::new()
+        .expect("default server config")
+        .resolved_tmux_executable()
+        .expect("configured tmux resolves");
+    let mut nonce = [0_u8; 8];
+    getrandom::fill(&mut nonce).expect("fixture nonce");
+    let directory = std::env::temp_dir().join(format!("libtmux-raw-{}", u64::from_ne_bytes(nonce)));
+    std::fs::create_dir(&directory).expect("private fixture directory");
+    let executable = directory.join(OsString::from_vec(b"tmux-\'\xff".to_vec()));
+    let socket = directory.join(OsString::from_vec(b"socket-\'\xfe".to_vec()));
+    let config = directory.join("tmux.conf");
+    std::os::unix::fs::symlink(actual, &executable).expect("raw executable symlink");
+    std::fs::write(&config, []).expect("empty fixture config");
+    let mut files = RawServerFiles {
+        directory,
+        executable: executable.clone(),
+        socket: socket.clone(),
+        config: config.clone(),
+        running: true,
+    };
+    let server = Server::builder()
+        .tmux_executable(executable.clone())
+        .socket_path(socket.clone())
+        .config_file(config)
+        .build()
+        .expect("raw server config");
+    let session = server
+        .new_session(NewSessionOptions::new("raw-transport").command("/bin/sh"))
+        .await
+        .expect("raw-path server starts");
+    let pane = session
+        .panes()
+        .await
+        .expect("panes list")
+        .remove(0)
+        .id()
+        .to_string();
+    prompt_ready(&server, &pane).await;
+    let result = run_view(&bare_tools(&server), &pane, "printf RAW-TRANSPORT; false").await;
+
+    assert_eq!(
+        server
+            .resolved_tmux_executable()
+            .expect("raw executable resolves")
+            .as_os_str()
+            .as_bytes(),
+        executable.as_os_str().as_bytes()
+    );
+    assert_eq!(
+        server.socket_path().as_os_str().as_bytes(),
+        socket.as_os_str().as_bytes()
+    );
+    assert_eq!(result["exit_status"], 1, "{result}");
+    assert!(
+        result["output"]
+            .as_str()
+            .expect("output")
+            .contains("RAW-TRANSPORT")
+    );
+    server
+        .cmd(Command::new("kill-server"))
+        .await
+        .expect("raw server stops");
+    files.running = false;
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pane must retain state across the framing cases"
+)]
+async fn run_framing_preserves_parent_shell_state_and_status() {
+    let (guard, tools, pane) = typing_fixture("run-frame-state").await;
+    send_and_wait(
+        &tools,
+        guard.server(),
+        &pane,
+        "set -- original-positional; readonly __tmux_mcp=parent; readonly __tmux_mcp_status=parent; readonly MCP_PARENT_PWD=$PWD",
+        "mcp-frame-state-ready",
+    )
+    .await;
+
+    let changed = run_view(
+        &tools,
+        &pane,
+        "printf 'POS:%s' \"$1\"; cd /; export MCP_FRAME_CHILD=changed; false",
+    )
+    .await;
+    assert_eq!(changed["outcome"], "completed");
+    assert_eq!(changed["exit_status"], 1);
+    assert!(
+        changed["output"]
+            .as_str()
+            .expect("output")
+            .contains("POS:original-positional")
+    );
+
+    let parent = run_view(
+        &tools,
+        &pane,
+        "test \"$PWD\" = \"$MCP_PARENT_PWD\"; printf 'STATE:%s:%s:%s' \"$1\" \"$__tmux_mcp\" \"${MCP_FRAME_CHILD-unset}\"",
+    )
+    .await;
+    assert_eq!(parent["exit_status"], 0);
+    assert!(
+        parent["output"]
+            .as_str()
+            .expect("output")
+            .contains("STATE:original-positional:parent:unset")
+    );
+
+    let exited = run_view(&tools, &pane, "exit 7").await;
+    assert_eq!(exited["outcome"], "completed");
+    assert_eq!(exited["exit_status"], 7);
+    let trailing = run_view(&tools, &pane, "printf COMMENT # valid trailing comment").await;
+    assert_eq!(trailing["exit_status"], 0);
+    assert!(
+        trailing["output"]
+            .as_str()
+            .expect("output")
+            .contains("COMMENT")
+    );
+    let invalid = run_view(&tools, &pane, "if then").await;
+    assert_eq!(invalid["outcome"], "completed");
+    assert_ne!(invalid["exit_status"], 0);
+    let defined = run_view(&tools, &pane, "printf() { :; }; trap ':' 0; false").await;
+    assert_eq!(defined["exit_status"], 1);
+
+    send_and_wait(
+        &tools,
+        guard.server(),
+        &pane,
+        "stty -onlcr",
+        "mcp-frame-lf-ready",
+    )
+    .await;
+    let lf = run_view(&tools, &pane, "printf LF").await;
+    assert_eq!(lf["exit_status"], 0);
+    assert!(lf["output"].as_str().expect("output").contains("LF"));
+    send_and_wait(
+        &tools,
+        guard.server(),
+        &pane,
+        "stty onlcr",
+        "mcp-frame-crlf-ready",
+    )
+    .await;
+
+    let executable = guard
+        .server()
+        .resolved_tmux_executable()
+        .expect("fixture tmux resolves");
+    let executable = executable
+        .to_str()
+        .expect("fixture path supports a shell alias");
+    send_and_wait(
+        &tools,
+        guard.server(),
+        &pane,
+        &format!("printf() {{ :; }}; command() {{ :; }}; alias printf=: command=: {executable}=:"),
+        "mcp-frame-shadows-ready",
+    )
+    .await;
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "cd /; PATH=/libtmux-mcp-missing; echo MCP-DRIFT-READY",
+            "enter": true
+        })))
+        .await
+        .expect("pane launch context is changed");
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        pane_screen(&tools, &pane).await.contains("MCP-DRIFT-READY")
+    })
+    .await
+    .expect("pane launch-context drift is visible");
+    let shadowed = run_view(&tools, &pane, "/usr/bin/printf BODY; false").await;
+    assert_eq!(shadowed["outcome"], "completed");
+    assert_eq!(shadowed["exit_status"], 1);
+    assert!(
+        shadowed["output"]
+            .as_str()
+            .expect("output")
+            .contains("BODY")
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn run_frame_preserves_inherited_xtrace_without_frame_trace() {
+    let (guard, tools, pane) = typing_fixture("run-frame-xtrace").await;
+    let executable = guard
+        .server()
+        .resolved_tmux_executable()
+        .expect("fixture tmux resolves");
+    let executable = executable.as_os_str().to_string_lossy().into_owned();
+    let socket = guard
+        .server()
+        .socket_path()
+        .as_os_str()
+        .to_string_lossy()
+        .into_owned();
+
+    for (name, enable_errexit) in [("x", false), ("xe", true)] {
+        let options = if enable_errexit {
+            "set -ex"
+        } else {
+            "set +e; set -x"
+        };
+        send_and_wait(
+            &tools,
+            guard.server(),
+            &pane,
+            &format!("PS4='MCP-USER-TRACE-{name}:'; {options}"),
+            &format!("mcp-frame-{name}-ready"),
+        )
+        .await;
+        let command = if enable_errexit {
+            "case $- in *x*) printf XSEEN;; *) printf XLOST;; esac; printf BODY; false; printf AFTER"
+        } else {
+            "case $- in *x*) printf XSEEN;; *) printf XLOST;; esac; printf BODY; false"
+        };
+        let result = run_view(&tools, &pane, command).await;
+        let output = result["output"].as_str().expect("output");
+        assert_eq!(result["outcome"], "completed", "{name}: {result}");
+        assert_eq!(result["exit_status"], 1, "{name}: {result}");
+        assert!(output.contains("MCP-USER-TRACE"), "{name}: {output:?}");
+        assert!(output.contains("XSEEN"), "{name}: {output:?}");
+        assert!(output.contains("BODY"), "{name}: {output:?}");
+        if enable_errexit {
+            assert!(!output.contains("AFTER"), "{name}: {output:?}");
+        }
+        for forbidden in [
+            "set +e",
+            "set -e",
+            "set --",
+            "run-shell",
+            "eval ",
+            executable.as_str(),
+            socket.as_str(),
+        ] {
+            assert!(
+                !output.contains(forbidden),
+                "{name}: leaked {forbidden:?} in {output:?}"
+            );
+        }
+
+        send_and_wait(
+            &tools,
+            guard.server(),
+            &pane,
+            "case $- in *x*) :;; *) false;; esac; set +ex",
+            &format!("mcp-frame-{name}-parent-x"),
+        )
+        .await;
+    }
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

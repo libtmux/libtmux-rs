@@ -366,34 +366,30 @@ fn decode_timestamp(slot: ParsedSlot<'_>) -> Result<i64, FormatCodecError> {
         .ok_or_else(|| invalid_value(&slot))
 }
 
-fn decode_session_id(slot: ParsedSlot<'_>) -> Result<SessionId, FormatCodecError> {
+fn decode_identity<T>(slot: ParsedSlot<'_>) -> Result<T, FormatCodecError>
+where
+    T: FromStr + ToString,
+{
     if !slot.as_bytes().is_ascii() {
         return Err(invalid_value(&slot));
     }
-    std::str::from_utf8(slot.as_bytes())
+    let identity = std::str::from_utf8(slot.as_bytes())
         .ok()
-        .and_then(|text| SessionId::from_str(text).ok())
-        .ok_or_else(|| invalid_value(&slot))
+        .and_then(|text| T::from_str(text).ok())
+        .filter(|identity| identity.to_string().as_bytes() == slot.as_bytes());
+    identity.ok_or_else(|| invalid_value(&slot))
+}
+
+fn decode_session_id(slot: ParsedSlot<'_>) -> Result<SessionId, FormatCodecError> {
+    decode_identity(slot)
 }
 
 fn decode_window_id(slot: ParsedSlot<'_>) -> Result<WindowId, FormatCodecError> {
-    if !slot.as_bytes().is_ascii() {
-        return Err(invalid_value(&slot));
-    }
-    std::str::from_utf8(slot.as_bytes())
-        .ok()
-        .and_then(|text| WindowId::from_str(text).ok())
-        .ok_or_else(|| invalid_value(&slot))
+    decode_identity(slot)
 }
 
 fn decode_pane_id(slot: ParsedSlot<'_>) -> Result<PaneId, FormatCodecError> {
-    if !slot.as_bytes().is_ascii() {
-        return Err(invalid_value(&slot));
-    }
-    std::str::from_utf8(slot.as_bytes())
-        .ok()
-        .and_then(|text| PaneId::from_str(text).ok())
-        .ok_or_else(|| invalid_value(&slot))
+    decode_identity(slot)
 }
 
 fn decode_pane_progress(slot: ParsedSlot<'_>) -> Result<u8, FormatCodecError> {

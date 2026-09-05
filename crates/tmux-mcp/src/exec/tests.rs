@@ -1,11 +1,155 @@
 use super::*;
 
+use std::ffi::{OsStr, OsString};
+use std::io::Write as _;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::path::Path;
+use std::process::{Command, Stdio};
+
 #[test]
 fn finding_a_needle_reports_where_it_starts() {
     assert_eq!(find(b"abcdef", b"cd"), Some(2));
     assert_eq!(find(b"abcdef", b"xy"), None);
     assert_eq!(find(b"ab", b"abcdef"), None);
     assert_eq!(find(b"abc", b""), None);
+}
+
+#[test]
+fn shell_words_preserve_raw_bytes_and_split_apostrophes() {
+    for (input, expected) in [
+        (b"".as_slice(), b"''".as_slice()),
+        (b"plain", b"'plain'"),
+        (b"a'b", b"'a'\\''b'"),
+        (b"line\n\xff", b"'line\n\xff'"),
+    ] {
+        let input = OsString::from_vec(input.to_vec());
+        assert_eq!(quote_shell_word(&input).as_bytes(), expected);
+    }
+}
+
+#[test]
+fn rendered_frame_is_raw_variable_free_and_posix_syntax() {
+    let executable = OsString::from_vec(b"/tmp/tmux-'\xff".to_vec());
+    let socket = OsString::from_vec(b"/tmp/socket-'\xfe".to_vec());
+    let payload = render_payload(
+        &executable,
+        Path::new(&socket),
+        "nonce",
+        OsStr::new("printf body # trailing comment"),
+        false,
+    );
+    let bytes = payload.as_bytes();
+
+    assert_eq!(
+        find(bytes, executable.as_bytes()),
+        None,
+        "raw paths are shell quoted"
+    );
+    assert_eq!(
+        bytes
+            .windows(b"run-shell".len())
+            .filter(|w| *w == b"run-shell")
+            .count(),
+        8
+    );
+    assert_eq!(
+        bytes
+            .windows(b"\\set -x\n".len())
+            .filter(|w| *w == b"\\set -x\n")
+            .count(),
+        2
+    );
+    for forbidden in [
+        b"__tmux_mcp".as_slice(),
+        b"/usr/bin/printf",
+        b"command printf",
+    ] {
+        assert_eq!(find(bytes, forbidden), None, "forbidden bookkeeping token");
+    }
+    assert!(
+        find(bytes, b"'\\''").is_some(),
+        "apostrophes are split without loss"
+    );
+    assert!(find(bytes, b"# trailing comment'").is_some());
+
+    let mut child = Command::new("/bin/sh")
+        .arg("-n")
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("POSIX shell starts");
+    child
+        .stdin
+        .take()
+        .expect("syntax checker stdin")
+        .write_all(bytes)
+        .expect("payload is written");
+    assert!(child.wait().expect("syntax checker exits").success());
+}
+
+#[test]
+fn rendered_frame_matches_the_exact_four_branch_snapshot() {
+    let actual = render_payload(
+        OsStr::new("/tmp/tmux"),
+        Path::new("/tmp/socket"),
+        "nonce",
+        OsStr::new("printf body # trailing comment"),
+        false,
+    );
+    let opening =
+        r#"( \exec '/tmp/tmux' -S '/tmp/socket' run-shell "printf '\\033_nonces\\033\\\\'" )"#;
+    let closing =
+        r#"( \exec '/tmp/tmux' -S '/tmp/socket' run-shell "printf '\\033_noncee;$1\\033\\\\'" )"#;
+    let expected = format!(
+        r#"(
+case $- in
+*x*)
+\set +x
+case $- in
+*e*)
+\set +e
+if {opening}; then
+( \set -e; \eval '\set -x
+printf body # trailing comment' )
+\set -- "$?"
+{closing}
+fi
+;;
+*)
+\set +e
+if {opening}; then
+( \set +e; \eval '\set -x
+printf body # trailing comment' )
+\set -- "$?"
+{closing}
+fi
+;;
+esac
+;;
+*)
+case $- in
+*e*)
+\set +e
+if {opening}; then
+( \set -e; \eval 'printf body # trailing comment' )
+\set -- "$?"
+{closing}
+fi
+;;
+*)
+\set +e
+if {opening}; then
+( \set +e; \eval 'printf body # trailing comment' )
+\set -- "$?"
+{closing}
+fi
+;;
+esac
+;;
+esac
+)"#
+    );
+
+    assert_eq!(actual.as_bytes(), expected.as_bytes());
 }
 
 #[test]
@@ -111,7 +255,7 @@ fn scan(stream: &[u8], splits: &[usize]) -> Option<RunView> {
 fn one_run() -> Vec<u8> {
     let mut stream = Vec::new();
     stream.extend_from_slice(br"printf '\033_Ns\033\\'; ( echo hi ); ");
-    stream.extend_from_slice(b"\r\n\x1b_Ns\x1b\\hi\r\n\x1b_Ne;42\x1b\\");
+    stream.extend_from_slice(b"\r\n\x1b_Ns\x1b\\\r\nhi\r\n\x1b_Ne;42\x1b\\");
     stream
 }
 
@@ -130,6 +274,7 @@ fn scanner_publishes_state_at_a_trimmed_body_start() {
     let mut body = b"\x1b[31mred".to_vec();
     body.resize(OUTPUT_LIMIT + 4, b'x');
     let mut stream = opened;
+    stream.push(b'\n');
     stream.extend_from_slice(&body);
 
     assert!(scanner.push(&stream).is_none());
@@ -212,6 +357,7 @@ fn a_close_waiting_for_status_does_not_suspend_trimming() {
     let closed = b"\x1b_Ne;".to_vec();
     let mut scanner = Scanner::new(opened.clone(), closed.clone());
     let mut chunk = opened;
+    chunk.push(b'\n');
     chunk.resize(OUTPUT_LIMIT + 32, b'x');
     chunk.extend_from_slice(&closed);
 
@@ -228,6 +374,7 @@ fn completed_output_resumes_at_the_trim_checkpoint() {
     let mut body = b"\x1b[31mred".to_vec();
     body.resize(OUTPUT_LIMIT + 4 - ending.len(), b'x');
     let mut stream = opened.clone();
+    stream.push(b'\n');
     stream.extend_from_slice(&body);
     stream.extend_from_slice(&ending);
     let mut scanner = Scanner::new(opened, closed);
@@ -271,6 +418,22 @@ fn a_run_split_at_every_byte_is_still_read() {
 }
 
 #[test]
+fn opening_record_separators_are_not_command_output() {
+    for separator in [b"\n".as_slice(), b"\r\n"] {
+        let mut stream = b"echo source\r\n\x1b_Ns\x1b\\".to_vec();
+        stream.extend_from_slice(separator);
+        stream.extend_from_slice(b"BODY\r\n\x1b_Ne;0\x1b\\");
+        let splits: Vec<usize> = (1..stream.len()).collect();
+
+        let view = scan(&stream, &splits)
+            .unwrap_or_else(|| unreachable!("every separator split must complete"));
+
+        assert_eq!(view.exit_status, Some(0));
+        assert_eq!(view.output, "BODY\n");
+    }
+}
+
+#[test]
 fn a_run_that_never_answered_is_reported_as_no_shell() {
     let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());
     assert!(scanner.push(b"some editor drew a screen").is_none());
@@ -284,7 +447,7 @@ fn a_run_that_never_answered_is_reported_as_no_shell() {
 #[test]
 fn a_run_still_going_at_its_deadline_keeps_that_outcome() {
     let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());
-    assert!(scanner.push(b"\x1b_Ns\x1b\\working").is_none());
+    assert!(scanner.push(b"\x1b_Ns\x1b\\\nworking").is_none());
 
     let view = scanner.unfinished(RunOutcome::Deadline, "%0".to_owned());
 
@@ -302,6 +465,7 @@ fn a_status_is_read_from_between_the_sentinels() {
     let mut stream = Vec::new();
     stream.extend_from_slice(b"echo hi\r\n");
     stream.extend_from_slice(opened);
+    stream.push(b'\n');
     stream.extend_from_slice(b"hi\r\n");
     stream.extend_from_slice(closed);
     stream.extend_from_slice(b"7\x1b\\");
@@ -320,6 +484,7 @@ fn a_half_arrived_status_is_not_reported() {
     let closed = b"\x1b_1e;";
     let mut stream = Vec::new();
     stream.extend_from_slice(opened);
+    stream.push(b'\n');
     stream.extend_from_slice(b"out");
     stream.extend_from_slice(closed);
     stream.extend_from_slice(b"12");
@@ -343,6 +508,7 @@ fn the_echoed_command_is_not_mistaken_for_a_sentinel() {
     stream.extend_from_slice(br"printf '\033_ab1e;%d\033\\' $s");
     stream.extend_from_slice(b"\r\n");
     stream.extend_from_slice(opened);
+    stream.extend_from_slice(b"\r\n");
     stream.extend_from_slice(b"hi\r\n");
     stream.extend_from_slice(closed);
     stream.extend_from_slice(b"0\x1b\\");

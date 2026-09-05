@@ -13,6 +13,7 @@ use crate::{
 
 use super::error::{EffectBoundary, bad_input, tmux_error, vanished};
 use super::lossy;
+use super::pane_input::{MissingSource, PaneInputReach};
 
 /// Numbers temporary paste buffers so concurrent calls cannot share one.
 static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -43,6 +44,47 @@ impl TmuxTools {
             return Err(Self::self_harm("session", own));
         }
         Ok(())
+    }
+
+    pub(crate) async fn send_keys_one(
+        &self,
+        SendKeysArgs {
+            pane,
+            text,
+            keys,
+            enter,
+        }: SendKeysArgs,
+    ) -> Result<Json<Sent>, ErrorData> {
+        let keys = keys.unwrap_or_default();
+        if text.is_none() && keys.is_empty() && !enter {
+            return Err(bad_input("send_keys needs text, keys, or enter".to_owned()));
+        }
+
+        let plan = self
+            .preflight_pane_input(
+                &pane,
+                PaneInputReach::Synchronized,
+                MissingSource::CallerInput,
+            )
+            .await?;
+        let mut boundary = EffectBoundary::new("send_keys");
+        if let Some(text) = text {
+            boundary.tmux(plan.target.send_keys(text).await)?;
+            boundary.mark();
+        }
+        if !keys.is_empty() {
+            boundary.tmux(plan.target.send_key_names(keys).await)?;
+            boundary.mark();
+        }
+        if enter {
+            boundary.tmux(plan.target.send_key_names(["Enter"]).await)?;
+            boundary.mark();
+        }
+
+        Ok(Json(Sent {
+            pane: plan.target.id().to_string(),
+            panes: plan.configured,
+        }))
     }
 }
 
@@ -215,55 +257,9 @@ impl TmuxTools {
     )]
     pub async fn send_keys(
         &self,
-        Parameters(SendKeysArgs {
-            pane,
-            text,
-            keys,
-            enter,
-        }): Parameters<SendKeysArgs>,
+        Parameters(args): Parameters<SendKeysArgs>,
     ) -> Result<Json<Sent>, ErrorData> {
-        let keys = keys.unwrap_or_default();
-        if text.is_none() && keys.is_empty() && !enter {
-            return Err(bad_input("send_keys needs text, keys, or enter".to_owned()));
-        }
-
-        let target = self.find_pane(&pane).await?;
-        let window = self.find_window(target.window_id().as_ref()).await?;
-        let synchronized = window
-            .get_option("synchronize-panes")
-            .await
-            .map_err(|error| tmux_error(&error))?
-            .is_some_and(|value| value.as_bytes() == b"on");
-        let mut panes = if synchronized {
-            window
-                .panes()
-                .await
-                .map_err(|error| tmux_error(&error))?
-                .into_iter()
-                .map(|pane| pane.id().to_string())
-                .collect()
-        } else {
-            vec![target.id().to_string()]
-        };
-        panes.sort_unstable();
-        let mut boundary = EffectBoundary::new("send_keys");
-        if let Some(text) = text {
-            boundary.tmux(target.send_keys(text).await)?;
-            boundary.mark();
-        }
-        if !keys.is_empty() {
-            boundary.tmux(target.send_key_names(keys).await)?;
-            boundary.mark();
-        }
-        if enter {
-            boundary.tmux(target.send_key_names(["Enter"]).await)?;
-            boundary.mark();
-        }
-
-        Ok(Json(Sent {
-            pane: target.id().to_string(),
-            panes,
-        }))
+        self.send_keys_one(args).await
     }
 
     /// Move focus to a pane, or to the one beside it.
@@ -511,7 +507,14 @@ impl TmuxTools {
         &self,
         Parameters(PasteTextArgs { pane, text }): Parameters<PasteTextArgs>,
     ) -> Result<Json<Pasted>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
+        let target = self
+            .preflight_pane_input(
+                &pane,
+                PaneInputReach::TargetOnly,
+                MissingSource::CallerInput,
+            )
+            .await?
+            .target;
         let bytes = text.len();
         let buffer = format!(
             "tmux-mcp-{}-{}",
