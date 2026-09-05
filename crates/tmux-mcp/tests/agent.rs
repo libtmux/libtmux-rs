@@ -22,6 +22,7 @@ use support::{args, bare_tools, call_tool, json, prompt_ready};
 
 struct RawServerFiles {
     directory: PathBuf,
+    bootstrap_executable: PathBuf,
     executable: PathBuf,
     socket: PathBuf,
     config: PathBuf,
@@ -48,11 +49,12 @@ impl RawServerFiles {
         let socket = directory.join(OsString::from_vec(socket_name.to_vec()));
         let config = directory.join("tmux.conf");
         let owner = directory.join("owner");
-        std::os::unix::fs::symlink(actual, &executable).expect("raw executable symlink");
+        std::os::unix::fs::symlink(&actual, &executable).expect("raw executable symlink");
         std::fs::write(&config, []).expect("empty fixture config");
         std::fs::write(&owner, std::process::id().to_string()).expect("fixture owner record");
         Self {
             directory,
+            bootstrap_executable: actual,
             executable,
             socket,
             config,
@@ -64,7 +66,7 @@ impl RawServerFiles {
 
     async fn start(&mut self, name: &str) -> (Server, String) {
         let server = Server::builder()
-            .tmux_executable(self.executable.clone())
+            .tmux_executable(self.bootstrap_executable.clone())
             .socket_path(self.socket.clone())
             .config_file(self.config.clone())
             .build()
@@ -85,6 +87,15 @@ impl RawServerFiles {
         (server, pane)
     }
 
+    fn route(&self) -> Server {
+        Server::builder()
+            .tmux_executable(self.executable.clone())
+            .socket_path(self.socket.clone())
+            .config_file(self.config.clone())
+            .build()
+            .expect("raw route config")
+    }
+
     async fn shutdown(&mut self, server: &Server) {
         server
             .cmd(Command::new("kill-server"))
@@ -97,7 +108,7 @@ impl RawServerFiles {
 
     fn cleanup(&mut self) -> io::Result<()> {
         if self.running {
-            let status = std::process::Command::new(&self.executable)
+            let status = std::process::Command::new(&self.bootstrap_executable)
                 .arg("-S")
                 .arg(&self.socket)
                 .arg("kill-server")
@@ -993,11 +1004,12 @@ async fn run_reports_phase_aware_source_disappearance() {
 #[tokio::test]
 async fn run_transport_preserves_raw_executable_and_socket_paths() {
     let mut files = RawServerFiles::create(b"tmux-\'\xff", b"socket-\'\xfe");
-    let (server, pane) = files.start("raw-transport").await;
-    let result = run_view(&bare_tools(&server), &pane, "printf RAW-TRANSPORT; false").await;
+    let (bootstrap, pane) = files.start("raw-transport").await;
+    let route = files.route();
+    let result = run_view(&bare_tools(&route), &pane, "printf RAW-TRANSPORT; false").await;
 
     assert_eq!(
-        server
+        route
             .resolved_tmux_executable()
             .expect("raw executable resolves")
             .as_os_str()
@@ -1005,7 +1017,7 @@ async fn run_transport_preserves_raw_executable_and_socket_paths() {
         files.executable.as_os_str().as_bytes()
     );
     assert_eq!(
-        server.socket_path().as_os_str().as_bytes(),
+        route.socket_path().as_os_str().as_bytes(),
         files.socket.as_os_str().as_bytes()
     );
     assert_eq!(result["exit_status"], 1, "{result}");
@@ -1015,7 +1027,7 @@ async fn run_transport_preserves_raw_executable_and_socket_paths() {
             .expect("output")
             .contains("RAW-TRANSPORT")
     );
-    files.shutdown(&server).await;
+    files.shutdown(&bootstrap).await;
 }
 
 async fn assert_terminal_control_route_is_preflight_failure(
@@ -1024,33 +1036,34 @@ async fn assert_terminal_control_route_is_preflight_failure(
     case: &str,
 ) {
     let mut files = RawServerFiles::create(executable_name, socket_name);
-    let (server, pane) = files.start(&format!("route-control-{case}")).await;
-    let tools = bare_tools(&server);
-    server
+    let (bootstrap, pane) = files.start(&format!("route-control-{case}")).await;
+    let tools = bare_tools(&files.route());
+    bootstrap
         .set_hook(
             "client-attached",
             "set-option -g @mcp-route-watcher attached",
         )
         .await
         .expect("watcher attachment is observable");
-    server
+    bootstrap
         .set_hook(
             "after-display-message",
             "set-option -g @mcp-route-display seen",
         )
         .await
         .expect("display transport is observable");
-    let baseline_clients = client_count(&server).await;
-    let screen = pane_screen(&tools, &pane).await;
+    let baseline_clients = client_count(&bootstrap).await;
+    let bootstrap_tools = bare_tools(&bootstrap);
+    let screen = pane_screen(&bootstrap_tools, &pane).await;
     let channel = format!("mcp-route-control-{case}");
 
     let error = run_error(&tools, &pane, &format!("tmux wait-for -S {channel}")).await;
 
     assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
     assert_eq!(error.data.expect("typed refusal")["kind"], "unreachable");
-    assert_eq!(client_count(&server).await, baseline_clients);
+    assert_eq!(client_count(&bootstrap).await, baseline_clients);
     assert_eq!(
-        server
+        bootstrap
             .get_global_option("@mcp-route-watcher")
             .await
             .expect("watcher record is read"),
@@ -1058,16 +1071,16 @@ async fn assert_terminal_control_route_is_preflight_failure(
         "{case}: route validation precedes watcher attachment"
     );
     assert_eq!(
-        server
+        bootstrap
             .get_global_option("@mcp-route-display")
             .await
             .expect("display record is read"),
         None,
         "{case}: no completion display payload ran"
     );
-    assert_eq!(pane_screen(&tools, &pane).await, screen);
-    assert_channel_quiet(&server, &channel).await;
-    files.shutdown(&server).await;
+    assert_eq!(pane_screen(&bootstrap_tools, &pane).await, screen);
+    assert_channel_quiet(&bootstrap, &channel).await;
+    files.shutdown(&bootstrap).await;
 }
 
 #[tokio::test]

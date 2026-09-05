@@ -162,6 +162,21 @@ impl TmuxTools {
         if command.as_bytes().contains(&0) {
             return Err(bad_input("command must not contain a NUL byte".to_owned()));
         }
+        let executable = self.server.resolved_tmux_executable().ok_or_else(|| {
+            ErrorData::internal_error(
+                "the configured tmux executable cannot be resolved from its captured launch context"
+                    .to_owned(),
+                Some(serde_json::json!({
+                    "kind": "unreachable",
+                    "retryable": false,
+                    "stale": false,
+                })),
+            )
+        })?;
+        let socket = self.server.socket_path().to_path_buf();
+        if !exec::route_is_terminal_safe(executable.as_os_str(), &socket) {
+            return Err(run_error(run_request::RunError::Frame));
+        }
         let initial = self
             .preflight_pane_input(
                 &pane,
@@ -180,18 +195,6 @@ impl TmuxTools {
             .current_command()
             .cloned()
             .ok_or_else(|| bad_input(format!("pane {pane} reported no foreground command")))?;
-        let executable = self.server.resolved_tmux_executable().ok_or_else(|| {
-            ErrorData::internal_error(
-                "the configured tmux executable cannot be resolved from its captured launch context"
-                    .to_owned(),
-                Some(serde_json::json!({
-                    "kind": "unreachable",
-                    "retryable": false,
-                    "stale": false,
-                })),
-            )
-        })?;
-        let socket = self.server.socket_path().to_path_buf();
         let checkpoint_pane = initial.target.id().to_string();
         let final_check = async {
             let final_plan = self

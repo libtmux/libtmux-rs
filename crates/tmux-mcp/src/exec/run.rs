@@ -153,6 +153,10 @@ pub(super) fn route_path_is_terminal_safe(value: &OsStr) -> bool {
     !value.as_bytes().iter().any(u8::is_ascii_control)
 }
 
+pub(crate) fn route_is_terminal_safe(executable: &OsStr, socket: &Path) -> bool {
+    route_path_is_terminal_safe(executable) && route_path_is_terminal_safe(socket.as_os_str())
+}
+
 fn display_client(executable: &OsStr, socket: &Path, message: &[u8]) -> Vec<u8> {
     let mut client = Vec::new();
     client.extend_from_slice(br"( \exec ");
@@ -301,8 +305,7 @@ pub(super) fn frame_with_random(
     suppress_history: bool,
     mut fill: impl FnMut(&mut [u8]) -> Result<(), getrandom::Error>,
 ) -> Result<Frame, FrameError> {
-    if !route_path_is_terminal_safe(executable) || !route_path_is_terminal_safe(socket.as_os_str())
-    {
+    if !route_is_terminal_safe(executable, socket) {
         return Err(FrameError::TerminalControl);
     }
     for _ in 0..NONCE_ATTEMPTS {

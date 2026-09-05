@@ -33,7 +33,9 @@ use run::{
     FrameError, Scanner, find, frame_with_random, quote_shell_word, render_payload,
     route_path_is_terminal_safe,
 };
-pub(crate) use run::{PrepareRunError, RunDispatch, RunProgress, prepare_run, readable};
+pub(crate) use run::{
+    PrepareRunError, RunDispatch, RunProgress, prepare_run, readable, route_is_terminal_safe,
+};
 
 /// How a run finished.
 ///
