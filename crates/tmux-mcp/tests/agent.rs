@@ -4,7 +4,9 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::io;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,22 +25,42 @@ struct RawServerFiles {
     executable: PathBuf,
     socket: PathBuf,
     config: PathBuf,
+    owner: PathBuf,
     running: bool,
+    cleaned: bool,
+}
+
+impl RawServerFiles {
+    fn cleanup(&mut self) -> io::Result<()> {
+        if self.running {
+            let status = std::process::Command::new(&self.executable)
+                .arg("-S")
+                .arg(&self.socket)
+                .arg("kill-server")
+                .status()?;
+            if !status.success() && self.socket.exists() {
+                return Err(io::Error::other("raw-path tmux server did not stop"));
+            }
+            self.running = false;
+        }
+        for path in [&self.socket, &self.executable, &self.config, &self.owner] {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        std::fs::remove_dir(&self.directory)?;
+        self.cleaned = true;
+        Ok(())
+    }
 }
 
 impl Drop for RawServerFiles {
     fn drop(&mut self) {
-        if self.running {
-            let _ = std::process::Command::new(&self.executable)
-                .arg("-S")
-                .arg(&self.socket)
-                .arg("kill-server")
-                .status();
+        if !self.cleaned {
+            let _ = self.cleanup();
         }
-        let _ = std::fs::remove_file(&self.socket);
-        let _ = std::fs::remove_file(&self.executable);
-        let _ = std::fs::remove_file(&self.config);
-        let _ = std::fs::remove_dir(&self.directory);
     }
 }
 
@@ -791,19 +813,27 @@ async fn run_transport_preserves_raw_executable_and_socket_paths() {
         .expect("configured tmux resolves");
     let mut nonce = [0_u8; 8];
     getrandom::fill(&mut nonce).expect("fixture nonce");
-    let directory = std::env::temp_dir().join(format!("libtmux-raw-{}", u64::from_ne_bytes(nonce)));
+    let root = PathBuf::from("/tmp/libtmux-rs-test");
+    std::fs::create_dir_all(&root).expect("owned fixture root");
+    let directory = root.join(format!("raw-{}", u64::from_ne_bytes(nonce)));
     std::fs::create_dir(&directory).expect("private fixture directory");
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+        .expect("private fixture permissions");
     let executable = directory.join(OsString::from_vec(b"tmux-\'\xff".to_vec()));
     let socket = directory.join(OsString::from_vec(b"socket-\'\xfe".to_vec()));
     let config = directory.join("tmux.conf");
+    let owner = directory.join("owner");
     std::os::unix::fs::symlink(actual, &executable).expect("raw executable symlink");
     std::fs::write(&config, []).expect("empty fixture config");
+    std::fs::write(&owner, std::process::id().to_string()).expect("fixture owner record");
     let mut files = RawServerFiles {
         directory,
         executable: executable.clone(),
         socket: socket.clone(),
         config: config.clone(),
+        owner,
         running: true,
+        cleaned: false,
     };
     let server = Server::builder()
         .tmux_executable(executable.clone())
@@ -849,6 +879,8 @@ async fn run_transport_preserves_raw_executable_and_socket_paths() {
         .await
         .expect("raw server stops");
     files.running = false;
+    files.cleanup().expect("raw fixture files are removed");
+    assert!(!files.directory.exists(), "raw fixture directory is gone");
 }
 
 #[tokio::test]
