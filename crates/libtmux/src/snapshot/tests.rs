@@ -5,8 +5,6 @@ use super::{
     ClientFields, ClientInfo, PaneFields, PaneProgressState, SessionFields, SessionInfo,
     WindowFields,
 };
-#[cfg(any(feature = "query", feature = "test-support"))]
-use crate::PaneId;
 #[cfg(feature = "query")]
 use crate::formats::{CLIENT_INFO_DESCRIPTORS, CLIENT_LAST_SESSION, CLIENT_SESSION};
 use crate::formats::{
@@ -29,7 +27,7 @@ use crate::target::WindowLinkIdentity;
 use crate::test::TestServer;
 #[cfg(feature = "test-support")]
 use crate::{Command, ReleaseSuffix, ReleaseVersion};
-use crate::{ServerIdentity, SessionId, TmuxText, TmuxVersion, WindowId};
+use crate::{PaneId, ServerIdentity, SessionId, TmuxText, TmuxVersion, WindowId};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 #[cfg(feature = "test-support")]
