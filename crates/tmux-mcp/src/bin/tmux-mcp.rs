@@ -8,8 +8,10 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use libtmux::{Command, ControlClientLimits, DispatchLimits, OutputLimits, Server};
-use rmcp::ServiceExt as _;
-use rmcp::transport::stdio;
+use rmcp::model::{ErrorData, JsonRpcMessage};
+use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
+use rmcp::transport::{Transport, async_rw::AsyncRwTransport, stdio};
+use rmcp::{RoleServer, ServiceExt as _};
 use tmux_mcp::cli::{HELP, Options, Stop};
 use tmux_mcp::{Selection, SocketProvenance, TmuxTools};
 
@@ -38,6 +40,56 @@ const MAX_TOOL_STDOUT_BYTES: usize = 8 * 1024 * 1024;
 
 /// How many bytes of tmux's diagnostics one command may read.
 const MAX_TOOL_STDERR_BYTES: usize = 256 * 1024;
+const MAX_SERIALIZED_REQUEST_ID_BYTES: usize = 512 * 1024;
+
+struct RequestIdTransport<T> {
+    inner: T,
+}
+
+impl<T> RequestIdTransport<T> {
+    const fn new(inner: T) -> Self {
+        Self { inner }
+    }
+}
+
+impl<T> Transport<RoleServer> for RequestIdTransport<T>
+where
+    T: Transport<RoleServer>,
+{
+    type Error = T::Error;
+
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<RoleServer>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        self.inner.send(item)
+    }
+
+    async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
+        loop {
+            let message = self.inner.receive().await?;
+            let oversized = match &message {
+                JsonRpcMessage::Request(request) => serde_json::to_vec(&request.id)
+                    .map_or(true, |id| id.len() > MAX_SERIALIZED_REQUEST_ID_BYTES),
+                _ => false,
+            };
+            if !oversized {
+                return Some(message);
+            }
+            let response = TxJsonRpcMessage::<RoleServer>::error(
+                ErrorData::invalid_request("Request ID exceeds the response framing limit", None),
+                None,
+            );
+            if self.inner.send(response).await.is_err() {
+                return None;
+            }
+        }
+    }
+
+    fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.close()
+    }
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -200,7 +252,11 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_default(),
     );
 
-    let service = tools.serve(stdio()).await;
+    let (stdin, stdout) = stdio();
+    let transport = RequestIdTransport::new(AsyncRwTransport::<RoleServer, _, _>::new_server(
+        stdin, stdout,
+    ));
+    let service = tools.serve(transport).await;
     let result: Result<(), Box<dyn std::error::Error>> = match service {
         Ok(service) => service
             .waiting()

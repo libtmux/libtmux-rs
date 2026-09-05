@@ -50,7 +50,11 @@ impl Process {
 
     fn request(&mut self, method: &str, params: &Value) -> Value {
         self.seq += 1;
-        let id = self.seq;
+        let id = json!(self.seq);
+        self.request_with_id(&id, method, params).0
+    }
+
+    fn request_with_id(&mut self, id: &Value, method: &str, params: &Value) -> (Value, usize) {
         writeln!(
             self.stdin,
             "{}",
@@ -68,8 +72,10 @@ impl Process {
             let message: Value = serde_json::from_str(line.trim_end()).unwrap_or_else(|error| {
                 panic!("stdout carried non-JSON-RPC data: {line:?} ({error})")
             });
-            if message.get("id") == Some(&json!(id)) {
-                return message;
+            if message.get("id") == Some(id)
+                || (message.get("error").is_some() && message.get("id").is_none_or(Value::is_null))
+            {
+                return (message, line.len());
             }
         }
     }
@@ -214,6 +220,43 @@ fn explicit_toolsets_reach_the_running_process() {
     assert_eq!(all_names.len(), 47);
     assert!(!inspect_names.contains(&"kill_session".to_owned()));
     assert!(all_names.contains(&"kill_session".to_owned()));
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+}
+
+#[test]
+fn oversized_request_id_fails_before_tool_dispatch() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let mut process = Process::start(&["--socket", socket], &[]);
+    let accepted_id = json!("i".repeat(512 * 1024 - 2));
+    let (accepted, _) = process.request_with_id(&accepted_id, "tools/list", &json!({}));
+    assert!(accepted["result"]["tools"].is_array());
+
+    let (response, response_bytes) = process.request_with_id(
+        &json!("i".repeat(1_000_000)),
+        "tools/call",
+        &json!({"name": "create_session", "arguments": {"name": "must-not-exist"}}),
+    );
+    let listed = process.request(
+        "tools/call",
+        &json!({"name": "list_sessions", "arguments": {}}),
+    );
+    let sessions = listed["result"]["structuredContent"]["sessions"]
+        .as_array()
+        .expect("session list");
+
+    assert!(
+        sessions
+            .iter()
+            .all(|session| session["name"] != "must-not-exist"),
+        "oversized request reached create_session",
+    );
+    assert_eq!(response["error"]["code"], -32600);
+    assert!(response.get("id").is_none() || response["id"].is_null());
+    assert!(response_bytes <= 1_000_000, "{response_bytes} bytes");
+    process.finish();
     runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
 }
 

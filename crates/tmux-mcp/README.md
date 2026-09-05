@@ -221,10 +221,13 @@ record; registration, descriptions, annotations, selection, and
 `set_synchronize_panes` expands later pane input to every pane in its window.
 `send_keys` and `send_keys_batch` report every pane that received the input.
 `call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
-the complete JSON-RPC response line, including an accepted request ID and
-newline, at 1,000,000 bytes. Truncated payloads and omitted bytes are explicit,
-and every executed row remains present. Its one client approval covers every
-nested name in its schema; inner tools do not receive separate approval.
+the complete JSON-RPC response line, including its request ID and newline, at
+1,000,000 bytes. Truncated payloads and omitted bytes are explicit, and every
+executed row remains present.
+A serialized request ID may use at most 512 KiB. A larger ID receives a bounded
+invalid-request response before tool dispatch.
+Its one client approval covers every nested name in its schema; inner tools do
+not receive separate approval.
 `on_error` is either `stop` or `continue`.
 
 The capability row is not a second hand-maintained catalog. The same row a
@@ -436,10 +439,10 @@ and read an option while keeping each child’s complete MCP envelope:
 ```
 
 Each result row preserves `content`, `structuredContent`, `_meta`, and
-`isError`. If the complete JSON-RPC response line for an accepted request ID
-would exceed 1,000,000 bytes, the batch truncates nested payloads until it fits
-without dropping an executed row. It reports `resultTruncated` per affected row
-plus outer `truncated` and `truncatedBytes` values.
+`isError`. If the complete JSON-RPC response line would exceed 1,000,000 bytes,
+the batch truncates nested payloads until it fits without dropping an executed
+row. It reports `resultTruncated` per affected row plus outer `truncated` and
+`truncatedBytes` values.
 
 ## When it earns its keep
 
