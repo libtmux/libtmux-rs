@@ -120,7 +120,13 @@ impl TmuxTools {
                        exit status with everything it wrote. This is the tool for \"run this \
                        and tell me if it worked\". Output is read from the pane's live stream, \
                        so nothing is missed and the shell prompt is not included. The command \
-                       runs in a subshell, so cd and export do not persist. \
+                       runs in a subshell, so cd and export do not persist and invalid syntax \
+                       completes with a nonzero status. It requires one configured input \
+                       recipient and observes its mode, liveness, cohort, and foreground command \
+                       before watcher setup and again before dispatch. These checks do not lock \
+                       the pane and can race with tmux processing the input. The pane must run a \
+                       trusted POSIX-compatible shell whose reserved words and special builtins \
+                       retain their meanings, against a trusted tmux server and configuration. \
                        Reaching the deadline or cancelling this request stops the waiting, not \
                        the command; inspect the pane before sending more input.",
         title = "Run Command In Pane",

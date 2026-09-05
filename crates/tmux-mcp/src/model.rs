@@ -62,12 +62,12 @@ pub struct SelectPaneArgs {
 pub struct RunCommandArgs {
     /// The `%`-prefixed pane to run in.
     pub pane: String,
-    /// The shell command to run.
+    /// The command for the pane's trusted POSIX-compatible shell.
     ///
-    /// It runs inside a subshell, so several lines are fine and a bare `exit`
-    /// does not end the pane's own shell. An unbalanced quote or bracket does
-    /// leave that shell waiting for the rest, which shows up as a run that
-    /// reaches its deadline having produced nothing.
+    /// Shell reserved words and special builtins must retain their standard
+    /// meanings. The command runs inside a subshell, so several lines are fine
+    /// and a bare `exit` does not end the pane's own shell. Invalid syntax is
+    /// contained and completes with the shell's nonzero status.
     pub command: String,
     /// How long to allow, in seconds. Defaults to 30, capped at 600.
     pub seconds: Option<u64>,

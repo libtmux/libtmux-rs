@@ -246,7 +246,11 @@ impl TmuxTools {
                        literally, so C-c in it types those three characters. Use `keys` for \
                        anything without a character of its own -- C-c to interrupt a running \
                        command, Escape, Up, C-d -- which are tmux key names and are \
-                       interpreted. Text is sent first, then keys, then Enter if asked.",
+                       interpreted. Text is sent first, then keys, then Enter if asked. Before \
+                       input, the configured synchronized-pane cohort is observed; a dead or \
+                       mode-owned member refuses the whole call. Returned pane IDs describe \
+                       configured membership, not confirmed delivery. The observation can race \
+                       with tmux processing the input.",
         title = "Send Keys To Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],
@@ -496,7 +500,9 @@ impl TmuxTools {
                        key by key. Use this for anything long or awkward: send_keys types the \
                        text, so a shell reading it can react to each character, and a \
                        bracketed-paste aware program treats a paste as one block. The buffer \
-                       is deleted afterwards.",
+                       is deleted afterwards. Paste targets only the named pane, even when \
+                       synchronized input is enabled. A dead or mode-owned target is refused \
+                       before buffer creation; that observation can still race with tmux.",
         title = "Paste Text Into Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],

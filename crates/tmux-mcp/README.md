@@ -220,8 +220,13 @@ directly from that registry.
 | `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
 | `teardown` (4) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window` |
 
-`set_synchronize_panes` expands later pane input to every pane in its window.
-`send_keys` and `send_keys_batch` report every pane that received the input.
+`set_synchronize_panes` changes the window default; individual pane overrides
+determine the effective configured recipient cohort. `send_keys` observes that
+cohort before input and refuses the whole call if a configured pane is dead or
+in a tmux mode. `send_keys_batch` repeats the check for each executed row.
+Returned pane IDs describe configured membership and do not prove delivery.
+`paste_text` refuses a dead or mode-owned target before buffer creation and,
+even with synchronized input enabled, targets only the named pane.
 `call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
 the complete JSON-RPC response line, including its request ID and newline, at
 1,000,000 bytes. Truncated payloads and omitted bytes are explicit, and every
@@ -406,6 +411,11 @@ the pane program. Spawn tools start only the configured process and accept no
 command or environment payload. No public tool runs a caller-authored host
 command.
 
+`run_shell_command` requires a trusted POSIX-compatible pane shell whose
+reserved words and special builtins retain their standard meanings. The tmux
+server and configuration are trusted too: command aliases and hooks are
+executable configuration, not a sandbox boundary.
+
 Pane output and tmux metadata may contain sensitive or untrusted text.
 Environment values may contain secrets. Hooks may contain executable
 configuration. Existing aliases, hooks, plugins, status jobs, and pane
@@ -453,7 +463,10 @@ agent has to wait, look, or avoid breaking the terminal it is working in.
 finish, and answers with its exit status and output. Reaching the deadline ends
 the waiting, not the pane command. Inspect the pane before sending more input;
 use `send_keys` with `keys: ["C-c"]` only when pane-wide interruption is
-intended.
+intended. The tool requires one configured input recipient and observes its
+cohort, mode, liveness, and foreground command before watcher setup and again
+before dispatch. Invalid syntax completes with a nonzero shell status. These
+checks do not lock the pane; state can change before tmux processes the input.
 
 **Waiting for something you did not start.** `wait_for_text` watches the
 pane's output stream for a pattern, with stop patterns for the failures you

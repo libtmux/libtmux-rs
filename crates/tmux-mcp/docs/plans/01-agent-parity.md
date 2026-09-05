@@ -30,12 +30,24 @@ change in the caller's window, and `capture-pane` on the dead pane includes
 tmux's own `Pane is dead (status 42, ...)` banner. Kept in reserve; it is the
 only option that survives a pane whose foreground process is not a shell.
 
-**Invisible APC sentinels on the output stream — chosen.** The command is
-bracketed by two `printf` calls emitting APC strings, which terminals discard:
+**Invisible APC sentinels on the output stream — chosen.** The pane shell uses
+the resolved tmux executable and exact socket to ask synchronous `run-shell`
+clients to emit APC strings, which terminals discard. Each inherited-xtrace
+and inherited-errexit branch has this variable-free shape:
 
 ```
-printf '\033_<nonce>s\033\\'; ( <command> ); s=$?; printf '\033_<nonce>e;%d\033\\' $s
+\set +e
+if ( \exec '<resolved-tmux>' -S '<socket>' run-shell "printf '\\033_<nonce>s\\033\\\\'" ); then
+  ( \set -e; \eval '<one quoted command operand>' )
+  \set -- "$?"
+  ( \exec '<resolved-tmux>' -S '<socket>' run-shell "printf '\\033_<nonce>e;$1\\033\\\\'" )
+fi
 ```
+
+The paired branch uses `set +e`. When xtrace is inherited, the outer frame
+turns it off and prefixes the quoted `eval` operand with `set -x` plus a
+newline, so caller commands retain tracing without exposing frame bookkeeping.
+The opening client gates the command; a failed opening marker cannot run it.
 
 `ControlMode` is attached before the keys are sent, so the reply arrives on a
 byte stream that began earlier than the command. Everything between the two
@@ -49,8 +61,17 @@ appears only when `printf` runs. Matching the raw byte sequence is therefore
 unambiguous, which is what lets this replace the regex-over-`capture-pane`
 scrubbing the Python server needs.
 
-The command is wrapped in `( ... )` because a bare `exit` would otherwise end
-the caller's shell.
+The complete command is one quoted `eval` operand inside a subshell. Invalid
+syntax closes with a nonzero status; trailing comments, `cd`, exports, traps,
+functions, and bare `exit` cannot consume or mutate the outer frame or parent
+shell. No fixed variable or pane-side `printf` name is trusted. Direct
+`display-message`, background or targeted `run-shell`, and bare,
+`command`-qualified, or fixed-path pane `printf` were rejected because they
+changed effects, lost ordering, or remained shadowable or nonportable.
+
+The pane shell is trusted to preserve POSIX meanings for `case`, `set`, `eval`,
+and `exec`; the tmux server and configuration, including command aliases, are
+trusted too. The frame does not claim to resist a hostile mutated shell.
 
 ## Waiting for text
 

@@ -887,9 +887,9 @@ impl TmuxTools {
 
     #[tool(
         name = "set_synchronize_panes",
-        description = "Set whether input to a window is copied to every pane. Enabling this \
-                       duplicates subsequent pane input to every pane in the window, amplifying \
-                       what one send_keys call reaches.",
+        description = "Set the window default for synchronized pane input. Individual pane \
+                       overrides still determine the effective configured cohort, so enabling \
+                       this can amplify what one send_keys call reaches.",
         title = "Set Synchronize Panes",
         meta = crate::capability_meta!(
             Execute, None,
@@ -918,7 +918,10 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Send an ordered batch of input operations to panes",
+        description = "Send an ordered batch of input operations to panes. Each executed row \
+                       repeats send_keys' effective synchronized-cohort, dead-pane, and pane-mode \
+                       preflight immediately before that row. These observations can race with \
+                       tmux processing the input.",
         title = "Send Keys Batch",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "operations" => [TmuxLookup, PaneInput], "on_error" => [None]

@@ -273,7 +273,9 @@ pub struct ChannelSignal {
 pub struct Sent {
     /// The pane the caller targeted.
     pub pane: String,
-    /// Every pane that received the input after synchronized-input expansion.
+    /// The effective configured recipient IDs observed before dispatch.
+    ///
+    /// Membership does not confirm delivery and may change after observation.
     pub panes: Vec<String>,
 }
 
