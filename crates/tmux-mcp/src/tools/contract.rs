@@ -1019,9 +1019,9 @@ impl TmuxTools {
     #[tool(
         description = "Call a serial batch of at most sixteen enabled inspect tools. One \
                        approval for this batch covers every enabled nested name; inner tools do \
-                       not receive separate client approval. The full serialized outer MCP \
-                       response is capped at 1,000,000 bytes; truncated payloads and omitted \
-                       bytes are explicit.",
+                       not receive separate client approval. The complete JSON-RPC response \
+                       line, including its request ID and newline, is capped at 1,000,000 bytes; \
+                       truncated payloads and omitted bytes are explicit.",
         title = "Call Read Tools Batch",
         meta = crate::capability_meta!(
             Inspect, None,

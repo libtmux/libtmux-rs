@@ -2,7 +2,9 @@
 
 What this crate needed to be usable by an agent rather than merely to exercise
 `libtmux`. Each decision below was settled by running the alternatives against
-real tmux, not by reasoning about them.
+real tmux, not by reasoning about them. Names and surface decisions reflect the
+current 47-tool capability contract; rejected prototypes remain where their
+measurements are useful.
 
 ## Completion signalling
 
@@ -55,8 +57,9 @@ the caller's shell.
 `wait_for_text` reads the same stream rather than polling `capture-pane`. That
 removes the two failure modes polling has: output that scrolls past between
 polls is still seen, and there is no grid anchor for tmux to invalidate when
-`history-limit` trims. Neither is there a reason for a wait ceiling, so a wait
-is bounded only by the deadline the caller asked for.
+`history-limit` trims. A call accepts at most 32 patterns per list, 4,096 bytes
+per pattern, and 16 KiB across each compiled set. Rust's regex engine gives a
+linear-time bound, and the caller's deadline is capped at 600 seconds.
 
 The trade is real and worth stating: a stream is what programs wrote, not what
 the screen shows. Escape sequences are stripped before matching, but a
@@ -79,8 +82,8 @@ written down rather than left to be rediscovered.
 
 **`Server::shutdown` is not `kill-server`.** It closes this crate's subprocess
 executor and, as libtmux's own documentation says, "never stops the tmux
-daemon itself". A `kill_server` built on it reports success while every
-session survives, and leaves the handle unusable for later calls. Worse, a
+daemon itself". A retired `kill_server` prototype built on it reported success
+while every session survived, and left the handle unusable for later calls. Worse, a
 test that asks *that same handle* whether the server is alive gets the answer
 the closed executor gives, and agrees. Checking the outcome of a destructive
 command needs a handle the command never touched.
@@ -99,8 +102,8 @@ the difference.
 Every tool returns a typed value, so its shape is published as an output
 schema and the value arrives as structured content. Before this, eighteen
 tools encoded JSON inside a text block and thirteen returned a bare string —
-`split_pane` gave `"%3"`, `resize_pane` gave `"80x24"`, `kill_server` gave
-`"killed"` — with nothing describing any of it.
+the old `split_pane` gave `"%3"`, `resize_pane` gave `"80x24"`, and
+`kill_server` gave `"killed"` — with nothing describing any of it.
 
 Lists are wrapped in a named object rather than returned bare. The protocol
 says structured content is an object, and rmcp will serve a top-level array
@@ -110,7 +113,7 @@ wrapper also leaves somewhere to put a count or a cursor later.
 The cost is real and worth naming: `tools/list` went from about 25 KB to
 53 KB, of which 28 KB is output schemas. That is the same budget the
 `alwaysLoad` anchors exist to protect, so the two decisions pull against each
-other. Output schemas won because an agent that can read what `run_command`
+other. Output schemas won because an agent that can read what `run_shell_command`
 answers with does not have to call it to find out, and because the schemas
 carry the field documentation with them.
 
@@ -150,32 +153,48 @@ not string-matching tmux's stderr here.
 
 ## The hierarchy as resources
 
-Tools are what an agent calls; resources are what a person attaches. A client
-shows resources in a picker, so "put that pane in the conversation" is a
-gesture someone makes rather than a call an agent has to be talked into. That
-is the whole reason these exist: every value behind them is already reachable
-through a tool, so a client without resource support loses nothing.
+An earlier surface mirrored the live tmux hierarchy with four listable and five
+templated resources. That duplicated inspect tools, made URI listings stale as
+objects closed, and created a second schema and error surface.
 
-Nine URIs mirror the hierarchy, four listable and five templated. Templates
-carry the ones that name something, because a listing that enumerated every
-pane would go stale the moment a pane closed.
+The current server exposes one static resource, `tmux://capabilities`. It
+reports the frozen effective tool surface, socket/configuration provenance,
+input interpreter boundaries, effects, outputs, and annotations from the same
+native registry used for tool registration. Live sessions, windows, panes, and
+output remain tool results. Because one process is pinned to one socket, no
+resource URI can select another server.
 
-Two details are not obvious. Session names are percent-decoded and pane ids
-are not: tmux spells a pane `%1`, so the sigil that starts every id is also
-the character that starts an escape. Decoding would make `%25` ambiguous
-between pane 25 and an encoded percent, and pane 25 is the reading that can
-actually occur. And the Python server takes a `{?socket_name}` query on each
-resource because it picks a server per call; this one is bound to a socket at
-launch, so that query would be a way to reach a tmux the operator did not
-choose. It is left out.
+That resource is also the check against registration drift. Every advertised
+tool carries the same complete capability row in its `_meta`, including its
+native input and output schemas. Listing, calling, documentation generation,
+and reporting therefore cannot disagree without a registry test failing.
 
-Errors carry the same `kind`/`retryable`/`stale` classification the tools use,
-so a client that reads those fields does not need a second vocabulary.
+Selection is frozen before the first tmux command. The four toolsets are an
+unordered subset; named inclusion follows expansion, and exclusion wins last.
+An empty `LIBTMUX_TOOLSETS` value is the valid zero subset, while an empty
+element in a nonempty list is an error. This distinction matters for an
+aggregate-only server: `call_read_tools_batch` can be the only advertised tool
+and still own its 16 nested inspect routes. Excluding one route prunes both its
+dispatch authority and the native operation union in the input schema. With
+all 16 excluded, the operation item schema is deliberately unsatisfiable.
+
+Interpreter disclosure follows the value to its actual boundary. A name used
+to construct `#{name}` remains a `tmux-format` sink even after validation;
+`inputLiteralization.names = validated-variable-name` says why it cannot inject
+a format. Literal names, titles, and start directories instead report
+`double-hash-once` under the same schema-keyed field.
+
+The read aggregate keeps the full nested MCP envelope rather than extracting
+only structured content. Its 1,000,000-byte ceiling is measured on the
+serialized outer `CallToolResult`, including the SDK's text rendering. When a
+row would cross the ceiling, payload removal is rolled back into explicit
+`resultTruncated` and `truncatedBytes` accounting before the response is
+emitted.
 
 ## A cancelled wait used to keep its connection
 
 rmcp cancels a withdrawn request by firing a `CancellationToken`. Nothing
-here watched it, so `wait_for_text` and `run_command` held their control-mode
+here watched it, so `wait_for_text` and `run_shell_command` held their control-mode
 connection for the whole deadline the caller originally asked for -- long
 after anyone was waiting for the answer. A client that cancels routinely, on
 an escape key or its own timeout, would accumulate one tmux process per
@@ -195,7 +214,7 @@ chunk is already in flight stops rather than reading one more.
 ## Tasks: measured, not adopted
 
 The MCP tasks extension is the one capability whose shape fits this domain.
-`run_command` owns the deadline problem itself -- reaching the deadline ends
+`run_shell_command` owns the deadline problem itself -- reaching the deadline ends
 the waiting, not the command, and the agent is told to send `C-c` -- which is
 what not having a task model looks like.
 
@@ -219,7 +238,7 @@ before it could save anything.
 
 The budget it would be paid from is measured rather than guessed at:
 `cargo run --example budget` reports what a client downloads at `tools/list`,
-per tier and per tool. That number is what makes adding a tool a decision.
+per toolset and per tool. That number is what makes adding a tool a decision.
 
 **`what_changed` at pane granularity.** tmux has no signal for it. The two
 that look like one are not:
@@ -237,22 +256,21 @@ and says so, rather than answering per pane and being wrong.
 
 Three capabilities were measured the same way before any of them was built: a
 probe server that answers just enough protocol to get past the handshake, then
-records what each installed agent CLI declares and sends. Two were built and
-one was not.
+records what each installed agent CLI declares and sends. Client support still
+informs the design, but it does not create server-side authority.
 
 | Capability | What a client does | Built |
 | --- | --- | --- |
 | `progressToken` | Codex attaches one to every `tools/call` | yes |
-| `elicitation` | Codex declares it, with `form` and `url` | yes |
+| `elicitation` | Codex declares it, with `form` and `url` | no internal consent gate |
 | MCP tasks | nothing declares it | no |
 | `resources/subscribe` | Codex reads resources and never subscribes, even against a server advertising `subscribe: true` | no |
 
-The last row is the one that matters for resources here. `%layout-change` and
-the other notifications now arrive typed from libtmux, so pushing
-`notifications/resources/updated` would be a small amount of work. It stays
-unbuilt for the same reason tasks does: a notification nobody has subscribed
-to is not delivered to anyone, and shipping it would leave a capability that
-looks supported and is never exercised.
+The last row also supports keeping `tmux://capabilities` static. Live hierarchy
+resources and `notifications/resources/updated` stay out: they would duplicate
+inspect tools and add a capability clients did not exercise. Elicitation is not
+an authorization boundary; clients can apply their own approval UI to the four
+whole-call annotations.
 
 Worth re-measuring with the same probe rather than re-reasoned about.
 
@@ -285,28 +303,22 @@ the next call that uses it.
 `select_pane` is a tool because changing focus is an action. Position is not:
 `pane_at_top`, `pane_at_bottom`, `pane_at_left`, `pane_at_right` and the
 `pane_left`/`pane_right`/`pane_top`/`pane_bottom` coordinates are already
-filter fields on the pane target, so "the bottom-right pane" is one
-`find_panes` expression and needs no tool of its own.
+available in pane metadata. `find_pane_by_position` resolves the pane touching
+a requested edge or direction without accepting a raw tmux format.
 
 ## Commands that outlive the call
 
-`run_command` holds the caller's turn until the command ends or the deadline
-does. For a build that is wrong twice over: an agent can do nothing else
-meanwhile, and a client that gives up first leaves the pane busy with no way
-to ask about it again. Two things at once was not possible at all.
+`run_shell_command` waits for its sentinel-bracketed command and returns the
+exit status and bounded output in the same call. Background job handles,
+`job_status`, and `forget_job` were prototyped, but they created authority that
+outlived the call and a second retained-output lifecycle. They are not part of
+the 47-tool surface.
 
-A job is the same sentinel-bracketed run reading in a task of its own, so the
-answer is collected whether or not anyone waits. The two share one `Scanner`;
-what differs is who decides when to stop reading.
-
-Polling is cheap because `job_status` answers from a cursor, the contract
-`capture_since` already uses. The alternative -- returning the whole output
-each poll -- costs the caller its own output again on every look, which is the
-cost the tool exists to avoid.
-
-`forget_job` stops collecting and forgets retained output without changing the
-pane. To interrupt whatever a pane is running, use `send_keys` with
-`keys: ["C-c"]`; that pane-wide operation affects unrelated queued input too.
+MCP can still run unrelated calls concurrently while a command waits. A caller
+that reaches its deadline gets an honest incomplete outcome rather than an
+unreachable handle. To interrupt whatever a pane is running, use `send_keys`
+with `keys: ["C-c"]`; that pane-wide operation affects unrelated queued input
+too.
 
 ## Where a fallback has to be bounded
 
@@ -340,5 +352,5 @@ So prompt-aware capture is exact where it applies and absent for most panes.
 It is shipped because it costs one flag and is strictly better where it works,
 and because the answer says which case it is. Installing shell integration
 into a live pane would widen it, and is not done here: it means typing into a
-shell that may not be at a prompt, which is the failure `run_command` already
+shell that may not be at a prompt, which is the failure `run_shell_command` already
 reports as `no_shell`.

@@ -586,9 +586,8 @@ a thing it can say. That is deliberate: the grammar stays per-object so it can
 later compile to tmux's own `-f`, which evaluates against one row.
 
 Cross-object questions are asked by narrowing first, which is what tmux does
-with a target: `Session::panes` and `Window::panes` choose the rows,
-and the expression chooses among them. `tmux-mcp`'s `find_panes` takes both
-for exactly this reason.
+with a target: `Session::panes` and `Window::panes` choose the rows, and the
+expression chooses among them.
 
 Relations are how a parent is asked about, and they need a parent that holds
 its children. A `Session` handle does not: it fetches its windows. The shape

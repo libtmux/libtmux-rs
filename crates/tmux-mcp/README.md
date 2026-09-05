@@ -209,7 +209,9 @@ and a minimal tmux configuration.
 Forty-seven tools belong to the unordered `inspect`, `manage`, `execute`, and
 `teardown` toolsets. Each native route carries one machine-readable capability
 record; registration, descriptions, annotations, selection, and
-`tmux://capabilities` all read that record.
+`tmux://capabilities` all read that record. The
+[generated tool reference](TOOLS.md) records every route and capability
+directly from that registry.
 
 | Toolset | Intent | Tools |
 |---|---|---|
@@ -226,13 +228,12 @@ the complete JSON-RPC response line, including its request ID and newline, at
 executed row remains present.
 A serialized request ID may use at most 512 KiB. A larger ID receives a bounded
 invalid-request response before tool dispatch.
-Its one client approval covers every nested name in its schema; inner tools do
-not receive separate approval.
-`on_error` is either `stop` or `continue`.
+`on_error` is either `stop` or `continue`. Its one client approval covers every
+nested name in its schema; inner tools do not receive separate approval.
 
 The capability row is not a second hand-maintained catalog. The same row a
-client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries
-the native input and output schemas, process reach, effect and output sets,
+client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries the
+native input and output schemas, process reach, effect and output sets,
 schema-keyed input literalization, annotations, and any nested authority. The
 native definition also classifies every input sink, but that validation detail
 is not duplicated on the wire. For example, `get_tmux_variables.names` is
@@ -276,8 +277,6 @@ resolved path, attach command, daemon state, and configuration provenance:
 Read this resource when a client needs to explain its authority or cache the
 effective surface. Read tmux state through inspect tools; there are no live
 session, window, pane, or output resources to drift away from the tool catalog.
-That keeps mutable tmux state in typed calls while the authority description
-stays stable for the life of the MCP process.
 
 ## Toolset selection
 
@@ -389,7 +388,7 @@ $ tmux-mcp --socket-name work
 ```
 
 `-S` and `-L` work too. `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` provide the
-same startup choices. `LIBTMUX_TMUX_CONFIG` selects an explicit tmux
+same startup choices. Set `LIBTMUX_TMUX_CONFIG` to use an explicit tmux
 configuration at an absolute path. Socket names and paths are mutually
 exclusive. `tmux-mcp --help` lists every flag.
 
@@ -473,8 +472,8 @@ named window corner. `snapshot_pane` adds geometry, cursor, and mode state to
 the visible content.
 
 **Reading several things.** `call_read_tools_batch` runs a bounded serial batch
-of enabled inspect operations. Its nested authority shrinks when an operation is
-excluded.
+of enabled inspect operations. Its nested authority shrinks when an operation
+is excluded.
 
 **Reading tmux variables.** `get_tmux_variables` accepts one to 32 validated
 variable names and constructs bounded `#{variable}` references itself. The
@@ -520,10 +519,10 @@ $ cargo run --example readonly
 $ cargo run --example surface
 ```
 
-`readonly` serves the `inspect` toolset. `surface` prints selected toolsets,
-named inclusions and exclusions, controlled descriptions, schemas, and
-capability fields without starting a tmux server. This prints an aggregate-only
-surface with one nested operation excluded:
+`readonly` serves the `inspect` toolset. `surface` prints any selected toolset
+combination, named inclusions and exclusions, controlled descriptions, schemas,
+and capability fields without starting a tmux server. This prints an
+aggregate-only surface with one nested operation excluded:
 
 ```console
 $ cargo run --example surface -- '' call_read_tools_batch show_environment
