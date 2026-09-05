@@ -267,7 +267,7 @@ async fn invalid_line_is_not_an_unknown_dispatch() {
 }
 
 #[tokio::test]
-async fn cancelling_after_send_keeps_the_start_visible() {
+async fn cancelling_after_send_releases_the_start() {
     let (guard, session) = session_fixture("job-start-cancel").await;
     let pane = session.panes().await.expect("panes list").remove(0);
     wait_for_prompt(&pane).await;
@@ -310,28 +310,19 @@ async fn cancelling_after_send_keeps_the_start_visible() {
             .expect_err("the caller's start future was cancelled")
             .is_cancelled(),
     );
-    let visible = jobs.list();
+    assert!(
+        jobs.list().is_empty(),
+        "a cancelled start must not leave unreachable state",
+    );
+    assert!(
+        jobs.reserve().is_ok(),
+        "a cancelled start releases its bounded slot",
+    );
     guard
         .server()
         .signal_channel(release)
         .await
         .expect("the blocked tmux command is released");
-
-    let owned = visible
-        .into_iter()
-        .next()
-        .expect("the cancelled start remains visible");
-    assert_eq!(owned.pane, pane.id().to_string());
-    assert_eq!(owned.state, JobState::Starting);
-    assert!(jobs.holds(&owned.job));
-    libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
-        jobs.read(&owned.job, None)
-            .is_some_and(|progress| progress.output.contains(marker))
-    })
-    .await
-    .expect("the owned watcher retains output written before publication");
-    assert_eq!(jobs.forget(&owned.job), Some(pane.id().to_string()));
-    assert!(jobs.read(&owned.job, None).is_none());
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
