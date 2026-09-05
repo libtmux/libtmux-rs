@@ -29,7 +29,10 @@ mod run;
 #[cfg(test)]
 pub(crate) use run::prepared_shutdown_completions;
 #[cfg(test)]
-use run::{FrameError, Scanner, find, frame_with_random, quote_shell_word, render_payload};
+use run::{
+    FrameError, Scanner, find, frame_with_random, quote_shell_word, render_payload,
+    route_path_is_terminal_safe,
+};
 pub(crate) use run::{PrepareRunError, RunDispatch, RunProgress, prepare_run, readable};
 
 /// How a run finished.

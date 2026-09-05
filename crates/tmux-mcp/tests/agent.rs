@@ -31,6 +31,70 @@ struct RawServerFiles {
 }
 
 impl RawServerFiles {
+    fn create(executable_name: &[u8], socket_name: &[u8]) -> Self {
+        let actual = Server::new()
+            .expect("default server config")
+            .resolved_tmux_executable()
+            .expect("configured tmux resolves");
+        let mut nonce = [0_u8; 8];
+        getrandom::fill(&mut nonce).expect("fixture nonce");
+        let root = PathBuf::from("/tmp/libtmux-rs-test");
+        std::fs::create_dir_all(&root).expect("owned fixture root");
+        let directory = root.join(format!("raw-{}", u64::from_ne_bytes(nonce)));
+        std::fs::create_dir(&directory).expect("private fixture directory");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("private fixture permissions");
+        let executable = directory.join(OsString::from_vec(executable_name.to_vec()));
+        let socket = directory.join(OsString::from_vec(socket_name.to_vec()));
+        let config = directory.join("tmux.conf");
+        let owner = directory.join("owner");
+        std::os::unix::fs::symlink(actual, &executable).expect("raw executable symlink");
+        std::fs::write(&config, []).expect("empty fixture config");
+        std::fs::write(&owner, std::process::id().to_string()).expect("fixture owner record");
+        Self {
+            directory,
+            executable,
+            socket,
+            config,
+            owner,
+            running: false,
+            cleaned: false,
+        }
+    }
+
+    async fn start(&mut self, name: &str) -> (Server, String) {
+        let server = Server::builder()
+            .tmux_executable(self.executable.clone())
+            .socket_path(self.socket.clone())
+            .config_file(self.config.clone())
+            .build()
+            .expect("raw server config");
+        self.running = true;
+        let session = server
+            .new_session(NewSessionOptions::new(name).command("/bin/sh"))
+            .await
+            .expect("raw-path server starts");
+        let pane = session
+            .panes()
+            .await
+            .expect("panes list")
+            .remove(0)
+            .id()
+            .to_string();
+        prompt_ready(&server, &pane).await;
+        (server, pane)
+    }
+
+    async fn shutdown(&mut self, server: &Server) {
+        server
+            .cmd(Command::new("kill-server"))
+            .await
+            .expect("raw server stops");
+        self.running = false;
+        self.cleanup().expect("raw fixture files are removed");
+        assert!(!self.directory.exists(), "raw fixture directory is gone");
+    }
+
     fn cleanup(&mut self) -> io::Result<()> {
         if self.running {
             let status = std::process::Command::new(&self.executable)
@@ -928,52 +992,8 @@ async fn run_reports_phase_aware_source_disappearance() {
 
 #[tokio::test]
 async fn run_transport_preserves_raw_executable_and_socket_paths() {
-    let actual = Server::new()
-        .expect("default server config")
-        .resolved_tmux_executable()
-        .expect("configured tmux resolves");
-    let mut nonce = [0_u8; 8];
-    getrandom::fill(&mut nonce).expect("fixture nonce");
-    let root = PathBuf::from("/tmp/libtmux-rs-test");
-    std::fs::create_dir_all(&root).expect("owned fixture root");
-    let directory = root.join(format!("raw-{}", u64::from_ne_bytes(nonce)));
-    std::fs::create_dir(&directory).expect("private fixture directory");
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-        .expect("private fixture permissions");
-    let executable = directory.join(OsString::from_vec(b"tmux-\'\xff".to_vec()));
-    let socket = directory.join(OsString::from_vec(b"socket-\'\xfe".to_vec()));
-    let config = directory.join("tmux.conf");
-    let owner = directory.join("owner");
-    std::os::unix::fs::symlink(actual, &executable).expect("raw executable symlink");
-    std::fs::write(&config, []).expect("empty fixture config");
-    std::fs::write(&owner, std::process::id().to_string()).expect("fixture owner record");
-    let mut files = RawServerFiles {
-        directory,
-        executable: executable.clone(),
-        socket: socket.clone(),
-        config: config.clone(),
-        owner,
-        running: true,
-        cleaned: false,
-    };
-    let server = Server::builder()
-        .tmux_executable(executable.clone())
-        .socket_path(socket.clone())
-        .config_file(config)
-        .build()
-        .expect("raw server config");
-    let session = server
-        .new_session(NewSessionOptions::new("raw-transport").command("/bin/sh"))
-        .await
-        .expect("raw-path server starts");
-    let pane = session
-        .panes()
-        .await
-        .expect("panes list")
-        .remove(0)
-        .id()
-        .to_string();
-    prompt_ready(&server, &pane).await;
+    let mut files = RawServerFiles::create(b"tmux-\'\xff", b"socket-\'\xfe");
+    let (server, pane) = files.start("raw-transport").await;
     let result = run_view(&bare_tools(&server), &pane, "printf RAW-TRANSPORT; false").await;
 
     assert_eq!(
@@ -982,11 +1002,11 @@ async fn run_transport_preserves_raw_executable_and_socket_paths() {
             .expect("raw executable resolves")
             .as_os_str()
             .as_bytes(),
-        executable.as_os_str().as_bytes()
+        files.executable.as_os_str().as_bytes()
     );
     assert_eq!(
         server.socket_path().as_os_str().as_bytes(),
-        socket.as_os_str().as_bytes()
+        files.socket.as_os_str().as_bytes()
     );
     assert_eq!(result["exit_status"], 1, "{result}");
     assert!(
@@ -995,13 +1015,69 @@ async fn run_transport_preserves_raw_executable_and_socket_paths() {
             .expect("output")
             .contains("RAW-TRANSPORT")
     );
+    files.shutdown(&server).await;
+}
+
+async fn assert_terminal_control_route_is_preflight_failure(
+    executable_name: &[u8],
+    socket_name: &[u8],
+    case: &str,
+) {
+    let mut files = RawServerFiles::create(executable_name, socket_name);
+    let (server, pane) = files.start(&format!("route-control-{case}")).await;
+    let tools = bare_tools(&server);
     server
-        .cmd(Command::new("kill-server"))
+        .set_hook(
+            "client-attached",
+            "set-option -g @mcp-route-watcher attached",
+        )
         .await
-        .expect("raw server stops");
-    files.running = false;
-    files.cleanup().expect("raw fixture files are removed");
-    assert!(!files.directory.exists(), "raw fixture directory is gone");
+        .expect("watcher attachment is observable");
+    server
+        .set_hook(
+            "after-display-message",
+            "set-option -g @mcp-route-display seen",
+        )
+        .await
+        .expect("display transport is observable");
+    let baseline_clients = client_count(&server).await;
+    let screen = pane_screen(&tools, &pane).await;
+    let channel = format!("mcp-route-control-{case}");
+
+    let error = run_error(&tools, &pane, &format!("tmux wait-for -S {channel}")).await;
+
+    assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+    assert_eq!(error.data.expect("typed refusal")["kind"], "unreachable");
+    assert_eq!(client_count(&server).await, baseline_clients);
+    assert_eq!(
+        server
+            .get_global_option("@mcp-route-watcher")
+            .await
+            .expect("watcher record is read"),
+        None,
+        "{case}: route validation precedes watcher attachment"
+    );
+    assert_eq!(
+        server
+            .get_global_option("@mcp-route-display")
+            .await
+            .expect("display record is read"),
+        None,
+        "{case}: no completion display payload ran"
+    );
+    assert_eq!(pane_screen(&tools, &pane).await, screen);
+    assert_channel_quiet(&server, &channel).await;
+    files.shutdown(&server).await;
+}
+
+#[tokio::test]
+async fn run_rejects_terminal_control_in_the_executable_route() {
+    assert_terminal_control_route_is_preflight_failure(b"tmux-\x03", b"socket", "executable").await;
+}
+
+#[tokio::test]
+async fn run_rejects_terminal_control_in_the_socket_route() {
+    assert_terminal_control_route_is_preflight_failure(b"tmux", b"socket-\x03", "socket").await;
 }
 
 #[tokio::test]

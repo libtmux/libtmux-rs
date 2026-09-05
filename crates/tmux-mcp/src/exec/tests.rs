@@ -30,6 +30,50 @@ fn shell_words_preserve_raw_bytes_and_split_apostrophes() {
 }
 
 #[test]
+fn route_words_reject_only_ascii_terminal_control_bytes() {
+    for byte in 0_u8..=u8::MAX {
+        let value = OsString::from_vec(vec![b'x', byte]);
+        assert_eq!(
+            route_path_is_terminal_safe(&value),
+            !(byte <= 0x1f || byte == 0x7f),
+            "byte {byte:#04x}"
+        );
+    }
+}
+
+#[test]
+fn terminal_control_routes_fail_before_entropy() {
+    for (executable, socket) in [
+        (
+            OsString::from_vec(b"tmux-\x03".to_vec()),
+            OsString::from("s"),
+        ),
+        (
+            OsString::from("tmux"),
+            OsString::from_vec(b"s-\x03".to_vec()),
+        ),
+    ] {
+        let mut entropy_called = false;
+        let error = frame_with_random(
+            &executable,
+            Path::new(&socket),
+            OsStr::new("true"),
+            false,
+            |bytes| {
+                entropy_called = true;
+                bytes.fill(0);
+                Ok(())
+            },
+        )
+        .err()
+        .unwrap_or_else(|| unreachable!("terminal control must stop framing"));
+
+        assert!(matches!(error, FrameError::TerminalControl));
+        assert!(!entropy_called, "route validation precedes frame creation");
+    }
+}
+
+#[test]
 fn rendered_frame_is_raw_variable_free_and_posix_syntax() {
     let executable = OsString::from_vec(b"/tmp/tmux-'\xff".to_vec());
     let socket = OsString::from_vec(b"/tmp/socket-'\xfe".to_vec());
