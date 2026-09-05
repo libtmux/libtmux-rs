@@ -2468,24 +2468,28 @@ def test_unreadable_config_reports_instead_of_crashing(
     assert info.config_path.read_bytes() == body
 
 
-def test_unreadable_config_does_not_stop_the_other_clis(
+def test_malformed_later_config_aborts_all_selected_configs(
     fake_home: pathlib.Path,
     fake_repo: pathlib.Path,
 ) -> None:
-    """One bad config does not prevent the remaining CLIs from swapping."""
-    bad = mcp_swap.CLIS["cursor"]
+    """A later parse failure leaves every selected config unchanged."""
+    good = mcp_swap.CLIS["cursor"]
+    _write_json(good.config_path, {"mcpServers": {}})
+    good_original = good.config_path.read_bytes()
+    bad = mcp_swap.CLIS["gemini"]
     bad.config_path.parent.mkdir(parents=True, exist_ok=True)
     bad.config_path.write_bytes(b"{ not json")
-    good = mcp_swap.CLIS["gemini"]
-    _write_json(good.config_path, {"mcpServers": {}})
+    bad_original = bad.config_path.read_bytes()
     args = mcp_swap.build_parser().parse_args(
         ["use", "--no-build", "--no-preflight", "--repo", str(fake_repo), "--cli", "cursor", "--cli", "gemini"]
     )
 
     assert mcp_swap.cmd_use_local(args) == 1
-
-    written = json.loads(good.config_path.read_text())
-    assert "tmux" in written["mcpServers"]
+    assert good.config_path.read_bytes() == good_original
+    assert bad.config_path.read_bytes() == bad_original
+    assert not mcp_swap.STATE_FILE.exists()
+    assert mcp_swap._orphaned_backups(good.config_path) == []
+    assert mcp_swap._orphaned_backups(bad.config_path) == []
 
 
 class CorruptStateCase(t.NamedTuple):
@@ -2618,27 +2622,32 @@ def test_unwritable_directory_aborts_before_swapping(
         info.config_path.parent.chmod(0o700)
 
 
-def test_unwritable_directory_does_not_stop_the_other_clis(
+def test_unwritable_later_backup_aborts_all_selected_configs(
     fake_home: pathlib.Path,
     fake_repo: pathlib.Path,
 ) -> None:
-    """One unwritable config directory does not abort the whole run."""
+    """A later backup failure leaves every selected config unchanged."""
     if os.geteuid() == 0:
         pytest.skip("root ignores directory permissions")
+    reachable = mcp_swap.CLIS["cursor"]
+    _write_json(reachable.config_path, {"mcpServers": {}})
+    reachable_original = reachable.config_path.read_bytes()
     blocked = mcp_swap.CLIS["grok"]
     blocked.config_path.parent.mkdir(parents=True, exist_ok=True)
     blocked.config_path.write_text('[mcp_servers.o]\ncommand = "x"\n', encoding="utf-8")
+    blocked_original = blocked.config_path.read_bytes()
     blocked.config_path.parent.chmod(0o500)
-    reachable = mcp_swap.CLIS["cursor"]
-    _write_json(reachable.config_path, {"mcpServers": {}})
     args = mcp_swap.build_parser().parse_args(
-        ["use", "--no-build", "--no-preflight", "--repo", str(fake_repo), "--cli", "grok", "--cli", "cursor"]
+        ["use", "--no-build", "--no-preflight", "--repo", str(fake_repo), "--cli", "cursor", "--cli", "grok"]
     )
 
     try:
         assert mcp_swap.cmd_use_local(args) == 1
-        written = json.loads(reachable.config_path.read_text())
-        assert "tmux" in written["mcpServers"]
+        assert reachable.config_path.read_bytes() == reachable_original
+        assert blocked.config_path.read_bytes() == blocked_original
+        assert not mcp_swap.STATE_FILE.exists()
+        assert mcp_swap._orphaned_backups(reachable.config_path) == []
+        assert mcp_swap._orphaned_backups(blocked.config_path) == []
     finally:
         blocked.config_path.parent.chmod(0o700)
 
