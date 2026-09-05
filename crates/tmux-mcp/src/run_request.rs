@@ -24,11 +24,22 @@ pub(crate) enum RunError {
     DispatchUnknown(Box<libtmux::Error>),
     /// Pane state changed after watcher setup and before dispatch.
     Guard(ErrorData),
+    /// Completion framing failed before the pane watcher was attached.
+    Frame,
 }
 
 impl From<libtmux::Error> for RunError {
     fn from(error: libtmux::Error) -> Self {
         Self::Tmux(error)
+    }
+}
+
+impl From<exec::PrepareRunError> for RunError {
+    fn from(error: exec::PrepareRunError) -> Self {
+        match error {
+            exec::PrepareRunError::Tmux(error) => Self::Tmux(error),
+            exec::PrepareRunError::Frame => Self::Frame,
+        }
     }
 }
 

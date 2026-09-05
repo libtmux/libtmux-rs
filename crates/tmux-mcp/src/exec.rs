@@ -28,9 +28,9 @@ mod run;
 
 #[cfg(test)]
 pub(crate) use run::prepared_shutdown_completions;
-pub(crate) use run::{RunDispatch, RunProgress, prepare_run, readable};
 #[cfg(test)]
-use run::{Scanner, find, finished, quote_shell_word, render_payload};
+use run::{FrameError, Scanner, find, frame_with_random, quote_shell_word, render_payload};
+pub(crate) use run::{PrepareRunError, RunDispatch, RunProgress, prepare_run, readable};
 
 /// How a run finished.
 ///

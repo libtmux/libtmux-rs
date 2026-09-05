@@ -585,7 +585,7 @@ async fn teardown_refuses_the_inherited_caller_pane() {
 }
 
 #[tokio::test]
-async fn run_shell_command_reports_output_status_and_cancellation() {
+async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellation() {
     let (guard, tools, pane) = typing_fixture("run").await;
     let baseline_clients = client_count(guard.server()).await;
     let finished = json(

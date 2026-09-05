@@ -32,6 +32,15 @@ fn run_error(error: run_request::RunError) -> ErrorData {
             })),
         ),
         run_request::RunError::Guard(error) => error,
+        run_request::RunError::Frame => ErrorData::internal_error(
+            "run_shell_command could not construct a secure completion frame; no pane input was sent"
+                .to_owned(),
+            Some(serde_json::json!({
+                "kind": "unreachable",
+                "retryable": false,
+                "stale": false,
+            })),
+        ),
     }
 }
 
