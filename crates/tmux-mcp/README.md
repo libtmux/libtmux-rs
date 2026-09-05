@@ -218,6 +218,9 @@ record; registration, descriptions, annotations, selection, and
 | `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
 | `teardown` (4) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window` |
 
+`set_synchronize_panes` expands later pane input to every pane in its window.
+`send_keys` and `send_keys_batch` report every pane that received the input.
+
 The capability row is not a second hand-maintained catalog. The same row a
 client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries
 process reach, effect and output sets, annotations, and any nested authority.
@@ -226,8 +229,8 @@ process reach, effect and output sets, annotations, and any nested authority.
 
 `tmux://capabilities` reports the startup-frozen effective surface, selected
 socket, socket provenance, direct process reach, tmux effects, output classes,
-nested authority, and whole-call MCP annotations. No dynamic resource
-templates are registered.
+future-input amplification, nested authority, and whole-call MCP annotations.
+No dynamic resource templates are registered.
 
 | URI | Holds |
 |---|---|

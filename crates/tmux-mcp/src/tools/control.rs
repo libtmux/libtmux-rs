@@ -360,6 +360,24 @@ impl TmuxTools {
         }
 
         let target = self.find_pane(&pane).await?;
+        let window = self.find_window(target.window_id().as_ref()).await?;
+        let synchronized = window
+            .get_option("synchronize-panes")
+            .await
+            .map_err(|error| tmux_error(&error))?
+            .is_some_and(|value| value.as_bytes() == b"on");
+        let mut panes = if synchronized {
+            window
+                .panes()
+                .await
+                .map_err(|error| tmux_error(&error))?
+                .into_iter()
+                .map(|pane| pane.id().to_string())
+                .collect()
+        } else {
+            vec![target.id().to_string()]
+        };
+        panes.sort_unstable();
         let mut boundary = EffectBoundary::new("send_keys");
         if let Some(text) = text {
             boundary.tmux(target.send_keys(text).await)?;
@@ -376,6 +394,7 @@ impl TmuxTools {
 
         Ok(Json(Sent {
             pane: target.id().to_string(),
+            panes,
         }))
     }
 

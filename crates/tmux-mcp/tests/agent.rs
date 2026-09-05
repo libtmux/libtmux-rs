@@ -88,6 +88,66 @@ async fn typing_fixture(name: &str) -> (TestServer, TmuxTools, String) {
 }
 
 #[tokio::test]
+async fn send_keys_reports_every_synchronized_target_pane() {
+    let (guard, tools) = fixture("synchronized-targets").await;
+    let first = panes(&tools).await[0]["id"]
+        .as_str()
+        .expect("a pane id")
+        .to_owned();
+    tools
+        .split_pane(args(serde_json::json!({"pane": first})))
+        .await
+        .expect("the pane splits");
+    let listed = panes(&tools).await;
+    let window = listed[0]["window_id"].as_str().expect("a window id");
+    let expected: std::collections::BTreeSet<_> = listed
+        .iter()
+        .map(|pane| pane["id"].as_str().expect("a pane id"))
+        .collect();
+    let direct = json(
+        tools
+            .send_keys(args(serde_json::json!({
+                "pane": first,
+                "keys": ["C-l"]
+            })))
+            .await
+            .expect("keys are sent"),
+    );
+    assert_eq!(direct["panes"], serde_json::json!([first]));
+
+    guard
+        .server()
+        .windows()
+        .await
+        .expect("windows can be read")
+        .into_iter()
+        .find(|candidate| candidate.id().to_string() == window)
+        .expect("the window exists")
+        .set_option("synchronize-panes", "on")
+        .await
+        .expect("synchronized input is enabled");
+
+    let result = json(
+        tools
+            .send_keys(args(serde_json::json!({
+                "pane": first,
+                "keys": ["C-l"]
+            })))
+            .await
+            .expect("keys are sent"),
+    );
+    let actual: std::collections::BTreeSet<_> = result["panes"]
+        .as_array()
+        .expect("resolved target panes")
+        .iter()
+        .map(|pane| pane.as_str().expect("a pane id"))
+        .collect();
+
+    assert_eq!(actual, expected);
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn a_pane_listing_says_which_pane_the_server_runs_in() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let bare = bare_tools(guard.server());

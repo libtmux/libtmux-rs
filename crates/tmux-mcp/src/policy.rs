@@ -665,6 +665,42 @@ mod tests {
     }
 
     #[test]
+    fn synchronize_panes_is_the_only_declared_input_amplifier() {
+        let selection = Selection::parse(Some("inspect,manage,execute,teardown"), None, None)
+            .expect("selection");
+        let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
+            .expect("complete manifest");
+        let report = serde_json::to_value(resolved.report).expect("report serializes");
+        let tools = report["tools"].as_array().expect("tool rows");
+
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool["amplifiesFutureInput"].is_boolean()),
+            "every manifest row carries the amplification fact"
+        );
+        let amplified: Vec<_> = tools
+            .iter()
+            .filter(|tool| tool["amplifiesFutureInput"] == true)
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert_eq!(amplified, ["set_synchronize_panes"]);
+        let synchronize = resolved
+            .router
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "set_synchronize_panes")
+            .expect("synchronize route");
+        assert!(
+            synchronize
+                .description
+                .as_deref()
+                .expect("description")
+                .contains("duplicates subsequent pane input to every pane in the window")
+        );
+    }
+
+    #[test]
     fn native_surface_matches_the_cross_port_contract() {
         let expected: BTreeSet<_> = [
             "list_sessions",

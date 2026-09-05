@@ -309,8 +309,10 @@ pub struct ChannelSignal {
 /// Keys that were sent.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Sent {
-    /// The pane they were sent to.
+    /// The pane the caller targeted.
     pub pane: String,
+    /// Every pane that received the input after synchronized-input expansion.
+    pub panes: Vec<String>,
 }
 
 /// A pane's size after being resized.

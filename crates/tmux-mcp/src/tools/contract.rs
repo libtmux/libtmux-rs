@@ -696,11 +696,18 @@ impl TmuxTools {
 
     #[tool(
         name = "set_synchronize_panes",
-        description = "Set whether input to a window is copied to every pane",
+        description = "Set whether input to a window is copied to every pane. Enabling this \
+                       duplicates subsequent pane input to every pane in the window, amplifying \
+                       what one send_keys call reaches.",
         title = "Set Synchronize Panes",
-        meta = crate::capability_meta!(Execute, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument], "enabled" => [None]
-        })
+        meta = crate::capability_meta!(
+            Execute, None,
+            effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
+            sinks = {"window" => [TmuxArgument], "enabled" => [None]},
+            literalized = [], validated = [], nested = [],
+            amplifies_future_input = true,
+            self_bounded = false, always_load = false,
+        )
     )]
     pub async fn set_synchronize_panes(
         &self,

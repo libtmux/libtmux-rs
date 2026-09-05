@@ -87,6 +87,10 @@ impl Annotations {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the capability contract carries independent boolean facts"
+)]
 pub(crate) struct Capability {
     pub(crate) toolset: Toolset,
     pub(crate) process_reach: ProcessReach,
@@ -99,6 +103,7 @@ pub(crate) struct Capability {
     pub(crate) literalized_tmux_formats: BTreeSet<String>,
     pub(crate) validated_tmux_formats: BTreeSet<String>,
     pub(crate) nested_authority: BTreeSet<String>,
+    pub(crate) amplifies_future_input: bool,
     pub(crate) self_bounded: bool,
 }
 
@@ -442,6 +447,35 @@ macro_rules! capability_meta {
         nested = [$($nested:literal),* $(,)?],
         self_bounded = $self_bounded:expr,
         always_load = $always_load:expr $(,)?
+    ) => {
+        $crate::capability_meta!(
+            $toolset, $reach,
+            effects = [$($effect),+],
+            outputs = [$($output),*],
+            secrets = $secrets,
+            untrusted = $untrusted,
+            sinks = {$($input => [$($sink),+]),*},
+            literalized = [$($literalized),*],
+            validated = [$($validated),*],
+            nested = [$($nested),*],
+            amplifies_future_input = false,
+            self_bounded = $self_bounded,
+            always_load = $always_load,
+        )
+    };
+    (
+        $toolset:ident, $reach:ident,
+        effects = [$($effect:ident),+ $(,)?],
+        outputs = [$($output:ident),* $(,)?],
+        secrets = $secrets:expr,
+        untrusted = $untrusted:expr,
+        sinks = {$($input:literal => [$($sink:ident),+ $(,)?]),* $(,)?},
+        literalized = [$($literalized:literal),* $(,)?],
+        validated = [$($validated:literal),* $(,)?],
+        nested = [$($nested:literal),* $(,)?],
+        amplifies_future_input = $amplifies:expr,
+        self_bounded = $self_bounded:expr,
+        always_load = $always_load:expr $(,)?
     ) => {{
         $crate::manifest::metadata(
             $crate::manifest::Capability {
@@ -475,6 +509,7 @@ macro_rules! capability_meta {
                 nested_authority: [$($nested.to_owned()),*]
                     .into_iter()
                     .collect(),
+                amplifies_future_input: $amplifies,
                 self_bounded: $self_bounded,
             },
             $always_load,
