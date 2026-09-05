@@ -542,6 +542,19 @@ fn retired_background_job_subsystem_is_structurally_absent() -> TestResult {
 
 #[test]
 fn aggregate_effects_and_outputs_follow_pruned_authority() -> TestResult {
+    let inspect = tools("inspect")?;
+    let capture = inspect
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "capture_since")
+        .expect("capture_since route");
+    let capture_capability = capture
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+        .expect("capability row");
+    assert_eq!(capture_capability["tmuxEffects"], json!(["observe"]));
+
     let selected = Selection::parse(
         Some(""),
         Some("call_read_tools_batch"),
@@ -574,7 +587,7 @@ fn aggregate_effects_and_outputs_follow_pruned_authority() -> TestResult {
         .filter(|name| {
             !matches!(
                 *name,
-                "wait_for_text" | "call_read_tools_batch" | "capture_pane"
+                "wait_for_text" | "call_read_tools_batch" | "capture_since"
             )
         })
         .collect::<Vec<_>>()

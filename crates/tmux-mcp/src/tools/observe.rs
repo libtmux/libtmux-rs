@@ -239,10 +239,10 @@ impl TmuxTools {
                        turns without re-reading the whole screen. The answer says missed=true \
                        if the cursor no longer names retained output, including when the pane \
                        outran the buffer, its live tail was evicted, or the server restarted. \
-                       Starting a tail attaches a retained client, changing the session's \
-                       attached-client state until the tail is evicted or the server stops.",
+                       Starting a tail owns a retained observer until the tail is evicted or \
+                       the server stops.",
         title = "Read New Pane Output",
-        meta = crate::capability_meta!(Inspect, None, [Observe, Change], [TmuxMetadata, TerminalContent], true, true, {
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
             "pane" => [TmuxLookup],
             "cursor" => [None]
         })
