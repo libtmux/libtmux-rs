@@ -428,7 +428,7 @@ impl TmuxTools {
         meta = crate::capability_meta!(
             Inspect, None,
             effects = [Observe],
-            outputs = [TmuxMetadata],
+            outputs = [TmuxMetadata, ConfiguredCommand],
             secrets = true,
             untrusted = true,
             sinks = {

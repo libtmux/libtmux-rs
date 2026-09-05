@@ -218,6 +218,10 @@ record; registration, descriptions, annotations, selection, and
 | `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
 | `teardown` (4) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window` |
 
+The capability row is not a second hand-maintained catalog. The same row a
+client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries
+process reach, effect and output sets, annotations, and any nested authority.
+
 ## Resources
 
 `tmux://capabilities` reports the startup-frozen effective surface, selected

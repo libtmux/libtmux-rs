@@ -597,6 +597,7 @@ mod tests {
     use std::os::unix::ffi::OsStringExt as _;
 
     use super::{Selection, Toolset, confirm_from_value};
+    use crate::manifest::OutputClass;
 
     #[test]
     fn toolset_selection_distinguishes_empty_from_empty_tokens() {
@@ -634,6 +635,33 @@ mod tests {
                 row.name == tool.name && description.starts_with(row.controlled_opener())
             })
         }));
+    }
+
+    #[test]
+    fn configured_value_reads_disclose_configured_command_output() {
+        let selection = Selection::parse(Some("inspect"), None, None).expect("selection");
+        let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
+            .expect("complete manifest");
+
+        for name in ["get_tmux_variables", "show_option"] {
+            let tool = resolved
+                .report
+                .tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .expect("tool row");
+            assert_eq!(
+                tool.capability.output_classes,
+                [OutputClass::TmuxMetadata, OutputClass::ConfiguredCommand]
+                    .into_iter()
+                    .collect(),
+                "{name}",
+            );
+            assert!(
+                tool.controlled_opener()
+                    .starts_with("Read configured tmux commands;")
+            );
+        }
     }
 
     #[test]
