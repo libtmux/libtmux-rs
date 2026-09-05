@@ -607,13 +607,10 @@ mod tests {
             .into_iter()
             .find(|tool| tool.name == "set_synchronize_panes")
             .expect("synchronize route");
-        assert!(
-            synchronize
-                .description
-                .as_deref()
-                .expect("description")
-                .contains("duplicates subsequent pane input to every pane in the window")
-        );
+        let description = synchronize.description.as_deref().expect("description");
+        for claim in ["window default", "Individual pane overrides", "can amplify"] {
+            assert!(description.contains(claim), "missing {claim:?}");
+        }
     }
 
     #[test]
