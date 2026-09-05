@@ -236,12 +236,56 @@ impl io::Write for ByteCounter {
     }
 }
 
+#[derive(Clone)]
+struct ReadBatchWire {
+    request_id: rmcp::model::RequestId,
+    result_type_supported: bool,
+}
+
+impl Default for ReadBatchWire {
+    fn default() -> Self {
+        Self {
+            request_id: rmcp::model::RequestId::Number(0),
+            result_type_supported: true,
+        }
+    }
+}
+
+impl ReadBatchWire {
+    fn from_context(context: &RequestContext<rmcp::RoleServer>) -> Self {
+        let result_type_supported = context.protocol_version().as_ref().is_some_and(|version| {
+            version.as_str() >= rmcp::model::ProtocolVersion::V_2026_07_28.as_str()
+        });
+        Self {
+            request_id: context.id.clone(),
+            result_type_supported,
+        }
+    }
+
+    fn response_bytes<T: Serialize>(&self, batch: &T) -> usize {
+        let Ok(value) = serde_json::to_value(batch) else {
+            return usize::MAX;
+        };
+        let mut result = rmcp::model::ServerResult::CallToolResult(
+            rmcp::model::CallToolResult::structured(value),
+        );
+        if !self.result_type_supported {
+            result.strip_result_type_for_legacy_peer();
+        }
+        let response = rmcp::model::ServerJsonRpcMessage::response(result, self.request_id.clone());
+        let mut bytes = ByteCounter::default();
+        serde_json::to_writer(&mut bytes, &response)
+            .map_or(usize::MAX, |()| bytes.0.saturating_add(1))
+    }
+}
+
 struct ReadBatchAccumulator {
     results: Vec<BatchItem>,
     truncated: bool,
     truncated_bytes: usize,
     stopped_at: Option<usize>,
     on_error: OnError,
+    wire: ReadBatchWire,
 }
 
 impl Default for ReadBatchAccumulator {
@@ -251,13 +295,22 @@ impl Default for ReadBatchAccumulator {
 }
 
 impl ReadBatchAccumulator {
-    const fn new(on_error: OnError) -> Self {
+    fn new(on_error: OnError) -> Self {
+        Self::for_wire(on_error, ReadBatchWire::default())
+    }
+
+    fn for_request(on_error: OnError, context: &RequestContext<rmcp::RoleServer>) -> Self {
+        Self::for_wire(on_error, ReadBatchWire::from_context(context))
+    }
+
+    const fn for_wire(on_error: OnError, wire: ReadBatchWire) -> Self {
         Self {
             results: Vec::new(),
             truncated: false,
             truncated_bytes: 0,
             stopped_at: None,
             on_error,
+            wire,
         }
     }
 
@@ -314,12 +367,7 @@ impl ReadBatchAccumulator {
             truncated_bytes: self.truncated_bytes,
             on_error: self.on_error,
         };
-        let Ok(value) = serde_json::to_value(&view) else {
-            return usize::MAX;
-        };
-        let response = rmcp::model::CallToolResult::structured(value);
-        let mut bytes = ByteCounter::default();
-        serde_json::to_writer(&mut bytes, &response).map_or(usize::MAX, |()| bytes.0)
+        self.wire.response_bytes(&view)
     }
 
     fn stop_at(&mut self, index: usize) {
@@ -1014,7 +1062,7 @@ impl TmuxTools {
             .into_iter()
             .flat_map(|row| row.capability.nested_authority.iter().map(String::as_str))
             .collect();
-        let mut batch = ReadBatchAccumulator::new(on_error);
+        let mut batch = ReadBatchAccumulator::for_request(on_error, &context);
         batch.results.reserve(operations.len());
         for (index, operation) in operations.into_iter().enumerate() {
             let tool = operation.tool;
@@ -1109,6 +1157,77 @@ mod batch_tests {
     use super::*;
 
     #[test]
+    fn read_batch_caps_the_complete_json_rpc_line_for_the_request_id() {
+        let request_id_text = "batch-wire-91";
+        let request_id = rmcp::model::RequestId::String(request_id_text.into());
+        let mut batch = ReadBatchAccumulator::for_wire(
+            OnError::Stop,
+            ReadBatchWire {
+                request_id: request_id.clone(),
+                result_type_supported: true,
+            },
+        );
+
+        assert!(batch.push(BatchItem {
+            index: 0,
+            tool: "capture_pane".to_owned(),
+            success: true,
+            result: Some(serde_json::json!({
+                "structuredContent": {"text": "x".repeat(499_540)}
+            })),
+            result_truncated: false,
+            error: None,
+        }));
+        assert!(batch.push(BatchItem {
+            index: 1,
+            tool: "list_sessions".to_owned(),
+            success: true,
+            result: Some(serde_json::json!({
+                "structuredContent": {"sessions": []}
+            })),
+            result_truncated: false,
+            error: None,
+        }));
+
+        let result = batch.finish();
+        let response = rmcp::model::CallToolResult::structured(
+            serde_json::to_value(&result).expect("batch result converts to JSON"),
+        );
+        let envelope = rmcp::model::ServerJsonRpcMessage::response(
+            rmcp::model::ServerResult::CallToolResult(response),
+            request_id,
+        );
+        let mut line = serde_json::to_vec(&envelope).expect("JSON-RPC response serializes");
+        line.push(b'\n');
+        let message: serde_json::Value =
+            serde_json::from_slice(&line).expect("JSON-RPC response parses");
+        let report = &message["result"]["structuredContent"];
+
+        assert_eq!(line.last(), Some(&b'\n'));
+        assert_eq!(message["jsonrpc"], "2.0");
+        assert_eq!(message["id"], request_id_text);
+        assert!(
+            line.len() <= READ_BATCH_MAX_BYTES,
+            "complete JSON-RPC line is {} bytes",
+            line.len()
+        );
+        assert_eq!(report["results"].as_array().map(Vec::len), Some(2));
+        assert_eq!(report["results"][0]["index"], 0);
+        assert_eq!(report["results"][1]["index"], 1);
+        assert_eq!(report["truncated"], true);
+        assert!(
+            report["truncatedBytes"]
+                .as_u64()
+                .is_some_and(|bytes| bytes > 0)
+        );
+        assert!(
+            report["results"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["resultTruncated"] == true))
+        );
+    }
+
+    #[test]
     fn read_batch_caps_the_full_outer_response_at_one_million_bytes() {
         let item = |index, text: String| BatchItem {
             index,
@@ -1124,9 +1243,7 @@ mod batch_tests {
 
         assert!(batch.push(item(0, "x".repeat(510_000))));
         let result = batch.finish();
-        let value = serde_json::to_value(&result).expect("batch result converts to JSON");
-        let envelope = rmcp::model::CallToolResult::structured(value);
-        let encoded = serde_json::to_vec(&envelope).expect("outer tool result serializes");
+        let encoded = ReadBatchWire::default().response_bytes(&result);
         let report = serde_json::to_value(&result).expect("batch result converts to JSON");
 
         assert_eq!(report["truncated"], true);
@@ -1140,7 +1257,7 @@ mod batch_tests {
         assert!(report.get("truncated_bytes").is_none());
         assert!(report["results"][0].get("result_truncated").is_none());
         assert_eq!(result.results.len(), 1);
-        assert!(encoded.len() <= 1_000_000, "{} bytes", encoded.len());
+        assert!(encoded <= 1_000_000, "{encoded} bytes");
     }
 
     #[test]
@@ -1159,10 +1276,7 @@ mod batch_tests {
         }
 
         let result = batch.finish();
-        let envelope = rmcp::model::CallToolResult::structured(
-            serde_json::to_value(&result).expect("batch result converts to JSON"),
-        );
-        let encoded = serde_json::to_vec(&envelope).expect("outer tool result serializes");
+        let encoded = ReadBatchWire::default().response_bytes(&result);
 
         assert_eq!(result.results.len(), READ_BATCH_MAX_OPERATIONS);
         assert_eq!(result.failed, READ_BATCH_MAX_OPERATIONS);
@@ -1178,6 +1292,6 @@ mod batch_tests {
                 .collect::<Vec<_>>(),
             (0..READ_BATCH_MAX_OPERATIONS).collect::<Vec<_>>()
         );
-        assert!(encoded.len() <= 1_000_000, "{} bytes", encoded.len());
+        assert!(encoded <= 1_000_000, "{encoded} bytes");
     }
 }
