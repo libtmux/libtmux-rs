@@ -293,11 +293,13 @@ pub struct WaitForTextArgs {
     /// The `%`-prefixed pane to watch.
     pub pane: String,
     /// Text that ends the wait successfully. Omit to wait for any output.
+    #[schemars(length(max = 32))]
     pub patterns: Option<Vec<String>>,
     /// Text that ends the wait as a failure, reported as `stopped`.
     ///
     /// Give the failure markers you already know — `error:`, `Traceback` — and
     /// a failed run returns at once instead of at the deadline.
+    #[schemars(length(max = 32))]
     pub stop: Option<Vec<String>>,
     /// Read both lists as regular expressions rather than literal text.
     #[serde(default)]
@@ -339,6 +341,7 @@ pub struct SelectWindowArgs {
 #[serde(deny_unknown_fields)]
 pub struct SearchPanesArgs {
     /// The text to look for.
+    #[schemars(length(max = 4096))]
     pub pattern: String,
     /// Read the pattern as a regular expression rather than literal text.
     #[serde(default)]

@@ -66,6 +66,35 @@ fn an_invalid_literal_is_still_a_literal() {
     assert!(patterns.first_match(b"a(").is_some());
 }
 
+#[test]
+fn pattern_size_is_bounded() {
+    let error = Patterns::compile(&["x".repeat(4097)], false, true)
+        .err()
+        .unwrap_or_else(|| unreachable!("an oversized literal is rejected"));
+
+    assert!(error.1.contains("4096"), "{}", error.1);
+}
+
+#[test]
+fn pattern_count_is_bounded() {
+    let patterns = vec!["x".to_owned(); 33];
+    let error = Patterns::compile(&patterns, false, true)
+        .err()
+        .unwrap_or_else(|| unreachable!("too many patterns are rejected"));
+
+    assert!(error.1.contains("32"), "{}", error.1);
+}
+
+#[test]
+fn aggregate_pattern_size_is_bounded() {
+    let patterns = vec!["x".repeat(4096); 5];
+    let error = Patterns::compile(&patterns, false, true)
+        .err()
+        .unwrap_or_else(|| unreachable!("oversized aggregate patterns are rejected"));
+
+    assert!(error.1.contains("16384"), "{}", error.1);
+}
+
 /// Feed a scanner one run's stream, split at the given byte offsets.
 fn scan(stream: &[u8], splits: &[usize]) -> Option<RunView> {
     let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());

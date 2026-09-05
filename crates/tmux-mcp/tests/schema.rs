@@ -194,6 +194,35 @@ fn choice_vocabularies_reject_unknown_values() -> TestResult {
 }
 
 #[test]
+fn pattern_schemas_publish_the_runtime_limits() -> TestResult {
+    let tools = tools("inspect")?;
+    for (name, valid, invalid) in [
+        (
+            "search_panes",
+            json!({"pattern": "x".repeat(4096)}),
+            json!({"pattern": "x".repeat(4097)}),
+        ),
+        (
+            "wait_for_text",
+            json!({"pane": "%1", "patterns": vec!["x"; 32]}),
+            json!({"pane": "%1", "patterns": vec!["x"; 33]}),
+        ),
+    ] {
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("route");
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        let validator = jsonschema::draft202012::new(&schema)?;
+
+        assert!(validator.is_valid(&valid), "{name} rejected its limit");
+        assert!(!validator.is_valid(&invalid), "{name} exceeded its limit");
+    }
+    Ok(())
+}
+
+#[test]
 fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
     let eligible: Vec<_> = INSPECT
         .iter()

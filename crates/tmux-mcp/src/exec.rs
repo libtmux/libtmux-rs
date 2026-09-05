@@ -20,6 +20,10 @@ use crate::text::TextFilter;
 #[cfg(test)]
 use crate::text::readable_from;
 
+const MAX_PATTERNS: usize = 32;
+const MAX_PATTERN_BYTES: usize = 4_096;
+const MAX_TOTAL_PATTERN_BYTES: usize = 16_384;
+
 mod run;
 
 pub(crate) use run::{PreparedRun, RunDispatch, RunProgress, prepare_run, readable};
@@ -169,8 +173,28 @@ impl Patterns {
         regex: bool,
         match_case: bool,
     ) -> Result<Self, (String, String)> {
+        if sources.len() > MAX_PATTERNS {
+            return Err((
+                "set".to_owned(),
+                format!("contains more than {MAX_PATTERNS} patterns"),
+            ));
+        }
         let mut compiled = Vec::with_capacity(sources.len());
-        for source in sources {
+        let mut total_bytes = 0_usize;
+        for (index, source) in sources.iter().enumerate() {
+            if source.len() > MAX_PATTERN_BYTES {
+                return Err((
+                    format!("{}", index + 1),
+                    format!("exceeds {MAX_PATTERN_BYTES} bytes"),
+                ));
+            }
+            total_bytes = total_bytes.saturating_add(source.len());
+            if total_bytes > MAX_TOTAL_PATTERN_BYTES {
+                return Err((
+                    "set".to_owned(),
+                    format!("exceeds {MAX_TOTAL_PATTERN_BYTES} bytes in total"),
+                ));
+            }
             let body = if regex {
                 source.clone()
             } else {

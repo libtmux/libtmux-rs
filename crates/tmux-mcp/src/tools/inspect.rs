@@ -35,6 +35,31 @@ const SEPARATOR: &str = "\u{241e}";
 /// A pattern like `.` matches every line of every pane, and an agent that
 /// asked for that wants a signal, not a transcript of the server.
 const SEARCH_MATCHES: usize = 200;
+const SEARCH_BYTES: usize = 1 << 20;
+
+struct SearchBudget {
+    remaining: usize,
+    capped: bool,
+}
+
+impl SearchBudget {
+    const fn new() -> Self {
+        Self {
+            remaining: SEARCH_BYTES,
+            capped: false,
+        }
+    }
+
+    fn take(&mut self, bytes: usize) -> bool {
+        if bytes > self.remaining {
+            self.capped = true;
+            false
+        } else {
+            self.remaining -= bytes;
+            true
+        }
+    }
+}
 
 #[tool_router(router = inspect_router, vis = "pub(super)")]
 impl TmuxTools {
@@ -338,7 +363,9 @@ impl TmuxTools {
 
     /// Find which panes are showing something.
     #[tool(
-        description = "Search what panes are displaying, and report the pane and line of \
+        description = "Search what panes are displaying with Rust's linear-time regex engine, \
+                       accepting at most 4,096 pattern bytes and matching at most 1 MiB. Report \
+                       the pane and line of \
                        every match. Use this to find where something is -- which pane has \
                        the failing test, which one printed the error -- instead of capturing \
                        panes one at a time. Searches the visible screen by default; set \
@@ -384,20 +411,28 @@ impl TmuxTools {
             CaptureOptions::visible()
         };
         let mut found: Vec<MatchView> = Vec::new();
-        for pane in &panes {
+        let mut budget = SearchBudget::new();
+        let mut panes_searched = 0;
+        'panes: for pane in &panes {
             // A pane that cannot be read is not a reason to abandon the
             // search: it is usually one that closed while this ran.
             let Ok(lines) = pane.capture_with(options).await else {
                 continue;
             };
+            panes_searched += 1;
             if found.len() >= SEARCH_MATCHES {
                 // Reading the remaining panes could not change the answer, and
                 // each one costs a capture.
+                budget.capped = true;
                 break;
             }
             for (number, line) in lines.iter().enumerate() {
                 if found.len() >= SEARCH_MATCHES {
-                    break;
+                    budget.capped = true;
+                    break 'panes;
+                }
+                if !budget.take(line.as_bytes().len()) {
+                    break 'panes;
                 }
                 if patterns.first_match(line.as_bytes()).is_some() {
                     found.push(MatchView {
@@ -413,9 +448,9 @@ impl TmuxTools {
         Ok(Json(Matches {
             // Saying the ceiling was reached is the difference between "that
             // is all of them" and "that is all you are getting".
-            capped: found.len() >= SEARCH_MATCHES,
+            capped: budget.capped || found.len() >= SEARCH_MATCHES,
             matches: found,
-            panes_searched: panes.len(),
+            panes_searched,
         }))
     }
 
@@ -709,5 +744,22 @@ impl TmuxTools {
         }
 
         Ok(Json(Hooks { hooks }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SearchBudget;
+
+    #[test]
+    fn search_budget_refuses_bytes_beyond_the_limit() {
+        let mut budget = SearchBudget {
+            remaining: 3,
+            capped: false,
+        };
+
+        assert!(budget.take(2));
+        assert!(!budget.take(2));
+        assert!(budget.capped);
     }
 }

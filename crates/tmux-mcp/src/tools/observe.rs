@@ -384,7 +384,8 @@ impl TmuxTools {
                        status instead of guessing from output. Use this for output you did \
                        not author, such as a server logging that it is ready. The live stream \
                        attaches a client while waiting, changing the session's attached-client \
-                       state.",
+                       state. Each list accepts at most 32 patterns, each at most 4,096 bytes, \
+                       using Rust's linear-time regex engine.",
         title = "Wait For Pane Text",
         meta = crate::capability_meta!(Inspect, None, [Observe, Change], [TerminalContent], true, true, {
             "pane" => [TmuxArgument],
