@@ -189,7 +189,7 @@ fn explicit_existing_socket_defaults_without_teardown() {
         &json!({"name": "list_sessions", "arguments": {}}),
     );
 
-    assert_eq!(names.len(), 43);
+    assert_eq!(names.len(), 41);
     assert!(!names.iter().any(|name| name == "kill_session"));
     assert_eq!(
         listed["result"]["structuredContent"]["sessions"][0]["name"],
@@ -217,7 +217,7 @@ fn explicit_toolsets_reach_the_running_process() {
     all.finish();
 
     assert_eq!(inspect_names.len(), 18);
-    assert_eq!(all_names.len(), 47);
+    assert_eq!(all_names.len(), 45);
     assert!(!inspect_names.contains(&"kill_session".to_owned()));
     assert!(all_names.contains(&"kill_session".to_owned()));
     runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
@@ -340,7 +340,7 @@ fn stale_default_socket_path_is_replaced_before_claiming_a_live_daemon() {
 
     assert_eq!(report["socket"]["serverState"], "created");
     assert_eq!(report["socket"]["configurationProvenance"], "minimal");
-    assert_eq!(report["toolCount"], 47);
+    assert_eq!(report["toolCount"], 45);
 }
 
 #[test]
@@ -380,7 +380,7 @@ fn default_startup_reports_dedicated_minimal_socket_provenance() {
     assert_eq!(report["boundary"]["perCallSocketSelection"], false);
     assert_eq!(report["boundary"]["hostCommandExecution"], false);
     assert_eq!(report["boundary"]["dynamicResources"], false);
-    assert_eq!(report["toolCount"], 47);
+    assert_eq!(report["toolCount"], 45);
 
     process.finish();
     std::fs::remove_dir_all(root).expect("fixture cleanup");
@@ -451,13 +451,13 @@ fn only_the_process_whose_config_marker_loaded_claims_minimal_provenance() {
     std::fs::remove_dir_all(root).expect("fixture cleanup");
 
     assert_eq!(owner_report["socket"]["configurationProvenance"], "minimal");
-    assert_eq!(owner_report["toolCount"], 47);
+    assert_eq!(owner_report["toolCount"], 45);
     assert_eq!(follower_report["socket"]["serverState"], "existing");
     assert_eq!(
         follower_report["socket"]["configurationProvenance"],
         "unknown"
     );
-    assert_eq!(follower_report["toolCount"], 43);
+    assert_eq!(follower_report["toolCount"], 41);
 }
 
 #[test]

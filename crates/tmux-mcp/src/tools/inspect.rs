@@ -245,14 +245,15 @@ impl TmuxTools {
         }))
     }
 
-    /// Report everything about one pane in a single answer.
+    /// Report pane state and bounded content in one answer.
     #[tool(
-        description = "Read a pane's whole state at once: what it is showing, plus the \
-                       cursor position, whether it is in copy mode, and how far it is \
-                       scrolled. Prefer this over capture_pane when you need to reason \
-                       about where the pane is rather than only what it says -- a cursor \
-                       at column zero on a fresh line is a shell waiting, and a pane in \
-                       copy mode will not accept keys.",
+        description = "Read pane content with cursor position, mode state, and scroll \
+                       position in one reply. The state query and capture are separate, \
+                       so the result is not atomic. Prefer this over capture_pane when \
+                       you need to reason about where the pane is rather than only what \
+                       it says -- a cursor at column zero on a fresh line is a shell \
+                       waiting, and a pane in a mode may route keys to tmux instead of \
+                       the workload.",
         title = "Snapshot Pane State",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
             "pane" => [TmuxLookup],

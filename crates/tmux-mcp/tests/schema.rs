@@ -41,8 +41,6 @@ const MANAGE: &[&str] = &[
     "move_window",
     "swap_pane",
     "set_pane_title",
-    "enter_copy_mode",
-    "exit_copy_mode",
     "wait_for_channel",
     "signal_channel",
     "set_mouse_enabled",

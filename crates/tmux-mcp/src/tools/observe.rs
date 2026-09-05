@@ -141,13 +141,13 @@ impl TmuxTools {
         reporter: Reporter,
     ) -> Result<Json<RunView>, ErrorData> {
         let target = self.find_pane(&pane).await?;
-        // A pane in copy mode does not pass keys to the shell, so the command
-        // would be read as navigation and the wait would run to its deadline
-        // with nothing to show for it.
+        // A pane mode routes input to tmux bindings instead of the workload.
+        // The attached client owns the transition back to ordinary input.
         if target.is_in_mode() {
             return Err(bad_input(format!(
-                "pane {pane} is in copy mode, where keys move the cursor rather than \
-                     reaching the shell. Leave it first."
+                "pane {pane} is in a tmux mode, where input invokes mode bindings rather \
+                     than reaching the shell. Read with capture_pane or snapshot_pane and \
+                     wait for the attached person to leave the mode before sending input."
             )));
         }
         let view = reporting(

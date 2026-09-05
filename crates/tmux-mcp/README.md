@@ -206,7 +206,7 @@ and a minimal tmux configuration.
 
 ## What it offers
 
-Forty-seven tools belong to the unordered `inspect`, `manage`, `execute`, and
+Forty-five tools belong to the unordered `inspect`, `manage`, `execute`, and
 `teardown` toolsets. Each native route carries one machine-readable capability
 record; registration, descriptions, annotations, selection, and
 `tmux://capabilities` all read that record. The
@@ -216,7 +216,7 @@ directly from that registry.
 | Toolset | Intent | Tools |
 |---|---|---|
 | `inspect` (18) | Read bounded tmux state and terminal output | `call_read_tools_batch`, `capture_pane`, `capture_since`, `find_pane_by_position`, `get_pane_info`, `get_server_info`, `get_session_info`, `get_tmux_variables`, `get_window_info`, `list_panes`, `list_sessions`, `list_windows`, `search_panes`, `show_environment`, `show_hooks`, `show_option`, `snapshot_pane`, `wait_for_text` |
-| `manage` (16) | Change tmux objects without starting a process | `enter_copy_mode`, `exit_copy_mode`, `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_history_limit`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
+| `manage` (14) | Change tmux objects without starting a process | `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_history_limit`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
 | `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
 | `teardown` (4) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window` |
 
@@ -353,8 +353,9 @@ now run in the client. Update existing client calls with this mapping:
 | `tmux://sessions/{name}`, `tmux://panes/{id}` | Use `get_session_info` and `get_pane_info`. |
 | `tmux://sessions/{name}/windows`, `tmux://sessions/{name}/windows/{index}` | Use `list_windows`, filter by `session_id`, then pass the returned stable id to `get_window_info`. |
 | `tmux://panes/{id}/content` | Use `capture_pane` or continue from a cursor with `capture_since`. |
+| `enter_copy_mode`, `exit_copy_mode` | Read with capture, snapshot, search, or cursor tools. The attached person owns pane modes. |
 | Prompt `run_and_wait` | Use one `run_shell_command`; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
-| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, call `exit_copy_mode`; otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`. Wait briefly and snapshot again. `keys: ["C-\\"]` is stronger; do not turn pane recovery into teardown. |
+| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`, then observe with `capture_since` or `wait_for_text`. `keys: ["C-\\"]` is stronger; do not turn pane recovery into teardown. |
 | Prompt `diagnose_pane` | Start with `snapshot_pane`; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with `capture_since`, and use `search_panes` if the target is uncertain. |
 
 ### Asking first

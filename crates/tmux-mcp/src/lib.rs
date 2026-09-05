@@ -1,6 +1,6 @@
 //! A Model Context Protocol server exposing tmux through `libtmux`.
 //!
-//! The server freezes one 47-tool surface at startup from the unordered
+//! The server freezes one 45-tool surface at startup from the unordered
 //! `inspect`, `manage`, `execute`, and `teardown` toolsets. Every native route
 //! carries its process reach, tmux effects, output classes, interpreter sinks,
 //! and whole-call annotations in one typed manifest. The effective manifest is

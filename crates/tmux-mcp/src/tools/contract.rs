@@ -716,42 +716,6 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Enter copy mode in one pane",
-        title = "Enter Copy Mode",
-        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxLookup]
-        })
-    )]
-    pub async fn enter_copy_mode(
-        &self,
-        Parameters(crate::PaneArgs { pane }): Parameters<crate::PaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
-        let pane = self.find_pane(&pane).await?;
-        pane.copy_mode().await.map_err(|error| tmux_error(&error))?;
-        let pane = self.find_pane(pane.id().as_ref()).await?;
-        let socket = self.socket().await;
-        Ok(Json(self.pane_view(&pane, socket)))
-    }
-
-    #[tool(
-        description = "Exit copy mode or another pane mode",
-        title = "Exit Copy Mode",
-        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxLookup]
-        })
-    )]
-    pub async fn exit_copy_mode(
-        &self,
-        Parameters(crate::PaneArgs { pane }): Parameters<crate::PaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
-        let pane = self.find_pane(&pane).await?;
-        pane.exit_mode().await.map_err(|error| tmux_error(&error))?;
-        let pane = self.find_pane(pane.id().as_ref()).await?;
-        let socket = self.socket().await;
-        Ok(Json(self.pane_view(&pane, socket)))
-    }
-
-    #[tool(
         description = "Set mouse handling for a session or the global session default",
         title = "Set Mouse Enabled",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {

@@ -3,7 +3,7 @@
 What this crate needed to be usable by an agent rather than merely to exercise
 `libtmux`. Each decision below was settled by running the alternatives against
 real tmux, not by reasoning about them. Names and surface decisions reflect the
-current 47-tool capability contract; rejected prototypes remain where their
+current 45-tool capability contract; rejected prototypes remain where their
 measurements are useful.
 
 ## Completion signalling
@@ -229,6 +229,28 @@ Server-side support in rmcp is not the constraint; client support is. Worth
 re-measuring with the same probe when a client ships the extension, rather
 than shipping a capability nothing asks for.
 
+## Modal terminal interfaces stay client-owned
+
+The core `libtmux` crate retains `Pane::copy_mode` and `Pane::exit_mode` for
+applications that own an attached interaction. The MCP omits both operations.
+Library parity is broader than a detached agent surface.
+
+Copy mode is pane-global state with a key table, selection, scroll position,
+mouse behaviour, and clipboard or pipe actions. An MCP client cannot know who
+entered it, and a later `exit-mode` can discard a person's selection or cancel
+a different pane mode. A paired enter/exit cleanup also stops being reliable
+when the client disconnects between calls.
+
+The retained observation tools cover the agent use case without taking over
+that interface. `capture_pane` reads the visible screen or retained history,
+`snapshot_pane` adds mode and cursor metadata, `search_panes` can include
+history, and `capture_since` follows later output with an opaque cursor.
+`run_shell_command` refuses a pane while a mode owns input and tells the caller
+to wait for the attached person to leave it.
+
+The `pane_unseen_changes` measurement below describes tmux's historical mode
+behaviour. It does not describe a callable MCP copy-mode route.
+
 ## What was left out
 
 **A `search_tools` meta-tool.** The Python server has one; it is for servers
@@ -312,7 +334,7 @@ a requested edge or direction without accepting a raw tmux format.
 exit status and bounded output in the same call. Background job handles,
 `job_status`, and `forget_job` were prototyped, but they created authority that
 outlived the call and a second retained-output lifecycle. They are not part of
-the 47-tool surface.
+the 45-tool surface.
 
 MCP can still run unrelated calls concurrently while a command waits. A caller
 that reaches its deadline gets an honest incomplete outcome rather than an
