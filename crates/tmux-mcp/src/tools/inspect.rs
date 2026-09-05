@@ -1,3 +1,8 @@
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "legacy direct-call shims are not part of the advertised MCP API"
+)]
+
 use std::path::{Path, PathBuf};
 
 use libtmux::query::QueryIteratorExt as _;
@@ -18,25 +23,6 @@ use crate::{
 use super::error::{bad_input, tmux_error};
 use super::{OptionScope, lossy, lossy_optional};
 
-/// Marks a tool a client should keep loaded rather than defer.
-///
-/// Claude Code stops sending MCP tool schemas to the model once they crowd the
-/// context, and this server's are around 19 KB. A deferred schema means a bare
-/// "what's in my pane" never reaches these tools at all.
-///
-/// Applied to three anchors only. Each one a client honours costs a fixed
-/// share of that budget, so widening the set makes the hint worth less to
-/// every tool that has it. Best-effort by design: a client that does not read
-/// the `anthropic` namespace simply ignores it.
-fn always_load() -> rmcp::model::MetaObject {
-    let mut meta = rmcp::model::MetaObject::new();
-    meta.0.insert(
-        "anthropic/alwaysLoad".to_owned(),
-        serde_json::Value::Bool(true),
-    );
-    meta
-}
-
 /// Separates the fields of a `snapshot_pane` format query.
 ///
 /// U+241E rather than an ASCII control byte because tmux copies valid UTF-8
@@ -56,12 +42,7 @@ impl TmuxTools {
     #[tool(
         description = "List every tmux session on the server",
         title = "List Sessions",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
     pub async fn list_sessions(&self) -> Result<Json<Sessions>, ErrorData> {
         let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
@@ -73,12 +54,7 @@ impl TmuxTools {
         description = "List every window on the server. A window linked into several sessions \
                        appears once per link, so an id can repeat with a different session_id.",
         title = "List Windows",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
     pub async fn list_windows(&self) -> Result<Json<Windows>, ErrorData> {
         let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
@@ -89,13 +65,7 @@ impl TmuxTools {
     #[tool(
         description = "List every pane on the server",
         title = "List Panes",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        meta = always_load()
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
     pub async fn list_panes(&self) -> Result<Json<Panes>, ErrorData> {
         let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
@@ -105,17 +75,12 @@ impl TmuxTools {
 
     /// Report the whole hierarchy in one call.
     #[tool(
+        name = "get_server_info",
         description = "Report every session with its windows and panes, in one call. \
                        Prefer this over calling the three listing tools separately: \
                        it costs tmux three commands rather than one per object.",
         title = "Describe Server",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        meta = always_load()
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
     pub async fn describe(&self) -> Result<Json<Tree>, ErrorData> {
         let tree = self.server.hierarchy().await.map_err(|e| tmux_error(&e))?;
@@ -152,16 +117,6 @@ impl TmuxTools {
     }
 
     /// List one session's windows.
-    #[tool(
-        description = "List the windows in one session, by session name",
-        title = "List Windows In Session",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
     pub async fn list_session_windows(
         &self,
         Parameters(SessionArgs { session }): Parameters<SessionArgs>,
@@ -173,16 +128,6 @@ impl TmuxTools {
     }
 
     /// List one window's panes.
-    #[tool(
-        description = "List the panes in one window, by window id",
-        title = "List Panes In Window",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
     pub async fn list_window_panes(
         &self,
         Parameters(WindowArgs { window }): Parameters<WindowArgs>,
@@ -194,26 +139,6 @@ impl TmuxTools {
     }
 
     /// Find panes matching a portable filter expression.
-    #[tool(
-        description = "Find panes with a libtmux filter expression. The envelope is \
-                       {\"version\": 1, \"target\": \"pane\", \"expr\": {...}} and field \
-                       names are tmux format names such as pane_current_command. \
-                       An expression names a pane's own fields only; pass session or \
-                       window to narrow which panes it is applied to. \
-                       Layout is queryable here rather than through a tool: \
-                       pane_at_top, pane_at_bottom, pane_at_left and pane_at_right are \
-                       booleans, and pane_left, pane_right, pane_top, pane_bottom, pane_x \
-                       and pane_y are coordinates, so the bottom-right pane is one \
-                       expression with two conjuncts. \
-                       Prefer this over listing everything and filtering yourself.",
-        title = "Find Panes By Expression",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
     pub async fn find_panes(
         &self,
         Parameters(FilterArgs {
@@ -248,12 +173,13 @@ impl TmuxTools {
                        usually what you want and is far shorter -- it needs tmux 3.7 and a \
                        shell that marks its prompts, and says so when it cannot.",
         title = "Read Pane Contents",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TerminalContent], true, true, {
+            "pane" => [TmuxArgument],
+            "history" => [None],
+            "last_command" => [None],
+            "start" => [TmuxArgument],
+            "end" => [TmuxArgument]
+        })
     )]
     pub async fn capture_pane(
         &self,
@@ -301,21 +227,6 @@ impl TmuxTools {
     }
 
     /// Find sessions by what they contain.
-    #[tool(
-        description = "Find sessions with a libtmux filter expression that can ask about \
-                       their windows and panes. The envelope is {\"version\": 1, \
-                       \"target\": \"session_tree\", \"expr\": {...}}, where windows is a \
-                       relation taking any, all, or none, and a window's panes is another. \
-                       Use this for questions find_panes cannot ask, such as which sessions \
-                       hold a window named build",
-        title = "Find Sessions By Expression",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
     pub async fn find_sessions(
         &self,
         Parameters(TreeFilterArgs { filter }): Parameters<TreeFilterArgs>,
@@ -348,13 +259,11 @@ impl TmuxTools {
                        at column zero on a fresh line is a shell waiting, and a pane in \
                        copy mode will not accept keys.",
         title = "Snapshot Pane State",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        ),
-        meta = always_load()
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
+            "pane" => [TmuxArgument],
+            "max_lines" => [None],
+            "history" => [None]
+        }; always_load)
     )]
     pub async fn snapshot_pane(
         &self,
@@ -435,12 +344,14 @@ impl TmuxTools {
                        panes one at a time. Searches the visible screen by default; set \
                        history to include scrollback.",
         title = "Search Pane Contents",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
+            "pattern" => [RegularExpression],
+            "regex" => [None],
+            "match_case" => [None],
+            "history" => [None],
+            "session" => [TmuxArgument],
+            "window" => [TmuxArgument]
+        })
     )]
     pub async fn search_panes(
         &self,
@@ -512,14 +423,25 @@ impl TmuxTools {
     #[tool(
         description = "Read a tmux option, such as history-limit or a user option like \
                        @theme. Name the scope the option lives in; global-session is what \
-                       tmux uses when a command names no target. tmux expands the option \
-                       name as a format, so #(command) can start a shell command.",
+                       tmux uses when a command names no target.",
         title = "Read tmux Option",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
+        meta = crate::capability_meta!(
+            Inspect, None,
+            effects = [Observe],
+            outputs = [TmuxMetadata],
+            secrets = true,
+            untrusted = true,
+            sinks = {
+                "name" => [TmuxFormat],
+                "scope" => [None],
+                "target" => [TmuxArgument],
+                "value" => [None]
+            },
+            literalized = ["name"],
+            validated = [],
+            nested = [],
+            self_bounded = false,
+            always_load = false,
         )
     )]
     pub async fn show_option(
@@ -534,13 +456,14 @@ impl TmuxTools {
         let scope = self
             .option_scope(scope.as_deref(), target.as_deref())
             .await?;
+        let literal_name = libtmux::escape_format(&name).to_string_lossy().into_owned();
         let value = match scope {
-            OptionScope::Server => self.server.get_option(&name).await,
-            OptionScope::GlobalSession => self.server.get_global_option(&name).await,
-            OptionScope::GlobalWindow => self.server.get_global_window_option(&name).await,
-            OptionScope::Session(session) => session.get_option(&name).await,
-            OptionScope::Window(window) => window.get_option(&name).await,
-            OptionScope::Pane(pane) => pane.get_option(&name).await,
+            OptionScope::Server => self.server.get_option(&literal_name).await,
+            OptionScope::GlobalSession => self.server.get_global_option(&literal_name).await,
+            OptionScope::GlobalWindow => self.server.get_global_window_option(&literal_name).await,
+            OptionScope::Session(session) => session.get_option(&literal_name).await,
+            OptionScope::Window(window) => window.get_option(&literal_name).await,
+            OptionScope::Pane(pane) => pane.get_option(&literal_name).await,
         }
         .map_err(|e| tmux_error(&e))?;
 
@@ -553,20 +476,6 @@ impl TmuxTools {
     }
 
     /// Find tmux servers in the known socket locations.
-    #[tool(
-        description = "Find tmux servers in the standard per-user socket directory and beside \
-                       the selected socket. Custom sockets elsewhere and other users' servers \
-                       are not included. These tools are bound to one server for their whole \
-                       life; acting on another means starting a server pointed at its socket. \
-                       A pane id means nothing across servers: %1 names a different pane on each.",
-        title = "List tmux Servers",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn list_servers(&self) -> Result<Json<ServerListings>, ErrorData> {
         let bound = self.socket().await.map(Path::to_path_buf);
 
@@ -669,21 +578,6 @@ impl TmuxTools {
     }
 
     /// Report which windows have produced output.
-    #[tool(
-        description = "Report which windows have written output, most recent first, and a \
-                       timestamp to pass back next time. This is the cheap way to re-orient \
-                       on a busy machine: one call instead of capturing every pane to find \
-                       out which one is doing something. It answers at window granularity, \
-                       so follow up with list_window_panes and capture_since. tmux stamps \
-                       this on every byte a pane writes, so it needs no tmux options set.",
-        title = "Report What Has Been Busy",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
     pub async fn what_changed(
         &self,
         Parameters(WhatChangedArgs { since }): Parameters<WhatChangedArgs>,
@@ -723,23 +617,6 @@ impl TmuxTools {
     }
 
     /// Expand a tmux format string.
-    #[tool(
-        description = "Expand a tmux format such as #{pane_unseen_changes} or \
-                       #{window_activity_flag} and return what it evaluates to. This reaches \
-                       every field tmux publishes, including ones no tool here has of its \
-                       own, so use it for questions the listings cannot answer. Name a pane \
-                       for anything pane, window or session shaped: tmux resolves the window \
-                       and session from it. A literal #(command), or a value expanded \
-                       recursively, can start a shell command asynchronously. Use only \
-                       simple, validated #{field} lookups when reading untrusted state.",
-        title = "Expand A tmux Format",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn expand_format(
         &self,
         Parameters(FormatArgs { format, pane }): Parameters<FormatArgs>,
@@ -768,12 +645,9 @@ impl TmuxTools {
                        or for one session. This is not the environment of anything already \
                        running: a pane started before a change keeps what it was given.",
         title = "Show tmux Environment",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe], [ProcessEnvironment], true, true, {
+            "session" => [TmuxArgument]
+        })
     )]
     pub async fn show_environment(
         &self,
@@ -808,12 +682,9 @@ impl TmuxTools {
                        persist them across server restarts. Reach for this when tmux does \
                        something no tool here asked for.",
         title = "Show tmux Hooks",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe], [ConfiguredCommand], true, true, {
+            "session" => [TmuxArgument]
+        })
     )]
     pub async fn show_hooks(
         &self,

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::missing_errors_doc,
+    reason = "legacy direct-call shims are not part of the advertised MCP API"
+)]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use libtmux::{
@@ -53,22 +58,12 @@ impl TmuxTools {
 #[tool_router(router = control_router, vis = "pub(super)")]
 impl TmuxTools {
     /// Create a window in one session.
-    #[tool(
-        description = "Create a window in a session, without selecting it",
-        title = "Create Window",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn new_window(
         &self,
         Parameters(NewWindowArgs { session, name }): Parameters<NewWindowArgs>,
     ) -> Result<Json<WindowView>, ErrorData> {
         let session = self.find_session(&session).await?;
-        let options = name.map_or_else(
+        let options = name.map(libtmux::escape_format).map_or_else(
             libtmux::NewWindowOptions::unnamed,
             libtmux::NewWindowOptions::new,
         );
@@ -84,12 +79,9 @@ impl TmuxTools {
     #[tool(
         description = "Kill a window, closing it in every session that links it",
         title = "Kill Window",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
+            "window" => [TmuxArgument]
+        })
     )]
     pub async fn kill_window(
         &self,
@@ -112,12 +104,9 @@ impl TmuxTools {
     #[tool(
         description = "Kill a pane. Killing a window's last pane closes the window",
         title = "Kill Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
+            "pane" => [TmuxArgument]
+        })
     )]
     pub async fn kill_pane(
         &self,
@@ -136,24 +125,16 @@ impl TmuxTools {
     }
 
     /// Rename a session or a window.
-    #[tool(
-        description = "Rename a session or a window. The target is a $-prefixed session id \
-                       or an @-prefixed window id.",
-        title = "Rename Session Or Window",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn rename(
         &self,
         Parameters(RenameArgs { target, name }): Parameters<RenameArgs>,
     ) -> Result<Json<Renamed>, ErrorData> {
         if target.starts_with('@') {
             let mut window = self.find_window(&target).await?;
-            window.rename(name).await.map_err(|e| tmux_error(&e))?;
+            window
+                .rename(libtmux::escape_format(name))
+                .await
+                .map_err(|e| tmux_error(&e))?;
 
             // tmux expands a name as a format before storing it, so what it
             // holds may not be what was asked for: `w#{pane_index}x` lands as
@@ -173,7 +154,10 @@ impl TmuxTools {
             .into_iter()
             .find(|session| session.id().to_string() == target)
             .ok_or_else(|| object_gone("session", &target))?;
-        session.rename(name).await.map_err(|e| tmux_error(&e))?;
+        session
+            .rename(libtmux::escape_format(name))
+            .await
+            .map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Renamed {
             id: session.id().to_string(),
@@ -185,11 +169,21 @@ impl TmuxTools {
     #[tool(
         description = "Create a new detached tmux session",
         title = "Create Session",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
+        meta = crate::capability_meta!(
+            Execute, ConfiguredProcess,
+            effects = [Change],
+            outputs = [TmuxMetadata],
+            secrets = true,
+            untrusted = true,
+            sinks = {
+                "name" => [TmuxFormat],
+                "start_directory" => [FilesystemPath, TmuxFormat]
+            },
+            literalized = ["name", "start_directory"],
+            validated = [],
+            nested = [],
+            self_bounded = false,
+            always_load = false,
         )
     )]
     pub async fn create_session(
@@ -199,9 +193,9 @@ impl TmuxTools {
             start_directory,
         }): Parameters<CreateSessionArgs>,
     ) -> Result<Json<SessionView>, ErrorData> {
-        let mut options = NewSessionOptions::new(name);
+        let mut options = NewSessionOptions::new(libtmux::escape_format(name));
         if let Some(directory) = start_directory {
-            options = options.start_directory(directory);
+            options = options.start_directory(libtmux::escape_format(directory));
         }
 
         let session = self
@@ -222,12 +216,9 @@ impl TmuxTools {
     #[tool(
         description = "Kill a tmux session and everything in it",
         title = "Kill Session",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
+            "session" => [TmuxArgument]
+        })
     )]
     pub async fn kill_session(
         &self,
@@ -247,16 +238,6 @@ impl TmuxTools {
     }
 
     /// Split the window holding a pane, creating another pane.
-    #[tool(
-        description = "Split a pane's window, creating a new pane beside it",
-        title = "Split Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn split_pane(
         &self,
         Parameters(SplitPaneArgs {
@@ -311,12 +292,11 @@ impl TmuxTools {
     #[tool(
         description = "Move one edge of a pane by a number of rows or columns",
         title = "Resize Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+            "pane" => [TmuxArgument],
+            "direction" => [None],
+            "cells" => [None]
+        })
     )]
     pub async fn resize_pane(
         &self,
@@ -358,12 +338,12 @@ impl TmuxTools {
                        command, Escape, Up, C-d -- which are tmux key names and are \
                        interpreted. Text is sent first, then keys, then Enter if asked.",
         title = "Send Keys To Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
+        meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
+            "pane" => [TmuxArgument],
+            "text" => [PaneInput],
+            "keys" => [PaneInput],
+            "enter" => [PaneInput]
+        })
     )]
     pub async fn send_keys(
         &self,
@@ -406,12 +386,10 @@ impl TmuxTools {
                        layout, last returns to the previously active pane, and next and \
                        previous step through the window in order.",
         title = "Select Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+            "pane" => [TmuxArgument],
+            "direction" => [None]
+        })
     )]
     pub async fn select_pane(
         &self,
@@ -495,12 +473,10 @@ impl TmuxTools {
                        through the session in index order, and last returns to the \
                        previously active window.",
         title = "Select Window",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+            "window" => [TmuxArgument],
+            "direction" => [None]
+        })
     )]
     pub async fn select_window(
         &self,
@@ -567,18 +543,6 @@ impl TmuxTools {
     }
 
     /// Write a tmux option.
-    #[tool(
-        description = "Set a tmux option at the scope you name. Setting an option changes \
-                       how tmux behaves for everything in that scope, so prefer the \
-                       narrowest one that works.",
-        title = "Set tmux Option",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn set_option(
         &self,
         Parameters(OptionArgs {
@@ -613,18 +577,6 @@ impl TmuxTools {
     }
 
     /// Kill the whole server.
-    #[tool(
-        description = "Kill the tmux server, ending every session on it. This destroys all \
-                       work in every pane and cannot be undone. Refused when this MCP server \
-                       runs on that tmux server.",
-        title = "Kill Server",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
     pub async fn kill_server(&self, asking: Asking) -> Result<Json<ServerKilled>, ErrorData> {
         // Nothing on this server survives, so the caller's pane need not be
         // looked up: being here at all is disqualifying.
@@ -649,17 +601,6 @@ impl TmuxTools {
     }
 
     /// Write a tmux environment variable.
-    #[tool(
-        description = "Set or remove a variable in the environment tmux hands to processes it \
-                       starts. Panes created afterwards see it; panes already running do not.",
-        title = "Set tmux Environment Variable",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
     pub async fn set_environment(
         &self,
         Parameters(SetEnvironmentArgs {
@@ -695,20 +636,6 @@ impl TmuxTools {
     }
 
     /// Send a pane's output to a command as it arrives.
-    #[tool(
-        description = "Feed everything a pane writes to a shell command, such as tee to a \
-                       file, until told to stop. tmux runs the command itself, so the pipe \
-                       outlives this server: one left on keeps writing after the agent has \
-                       gone. Prefer capture_since for reading a pane yourself; this is for \
-                       handing the stream to something else.",
-        title = "Pipe A Pane Elsewhere",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn pipe_pane(
         &self,
         Parameters(PipePaneArgs { pane, command }): Parameters<PipePaneArgs>,
@@ -729,12 +656,10 @@ impl TmuxTools {
                        string tmux gave you earlier. Use even-horizontal, even-vertical, \
                        main-horizontal, main-vertical or tiled.",
         title = "Arrange Window Panes",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+            "window" => [TmuxArgument],
+            "layout" => [TmuxArgument]
+        })
     )]
     pub async fn select_layout(
         &self,
@@ -768,17 +693,15 @@ impl TmuxTools {
 
     /// Empty a pane's scrollback.
     #[tool(
+        name = "clear_pane_scrollback",
         description = "Discard a pane's scrollback, so the next capture_pane returns only \
                        what happens next. Use this before running something whose output you \
                        want to read cleanly: it is far cheaper than reading past the old \
                        output every time. The visible screen is left alone.",
         title = "Clear Pane History",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
+            "pane" => [TmuxArgument]
+        })
     )]
     pub async fn clear_pane(
         &self,
@@ -793,19 +716,6 @@ impl TmuxTools {
     }
 
     /// Restart what a pane runs.
-    #[tool(
-        description = "Run a command in an existing pane again, keeping the pane and its \
-                       place in the layout. This is how a dead pane is brought back without \
-                       killing and re-splitting. A pane whose process is still alive is left \
-                       alone unless kill_first is set.",
-        title = "Restart A Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn respawn_pane(
         &self,
         Parameters(RespawnPaneArgs {
@@ -833,12 +743,10 @@ impl TmuxTools {
                        bracketed-paste aware program treats a paste as one block. The buffer \
                        is deleted afterwards.",
         title = "Paste Text Into Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
+        meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
+            "pane" => [TmuxArgument],
+            "text" => [PaneInput]
+        })
     )]
     pub async fn paste_text(
         &self,
@@ -872,12 +780,10 @@ impl TmuxTools {
                        no waiter, one signal is latched; signalling the same channel again \
                        clears that latch.",
         title = "Signal Channel",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+            "channel" => [TmuxArgument],
+            "seconds" => [None]
+        })
     )]
     pub async fn signal_channel(
         &self,

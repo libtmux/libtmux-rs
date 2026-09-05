@@ -10,13 +10,13 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 > `cargo install` will not pick a prerelease unless asked, so the install
 > command below names the version. Feedback welcome.
 
-Give an agent hands inside the terminal: create sessions, run commands and
-learn whether they worked, watch output as it arrives, and find which pane is
-showing the thing you are looking for.
+Give an agent typed operations inside the terminal: inspect tmux, arrange its
+objects, drive pane programs, and wait for observable outcomes.
 
 Reading a pane goes through tmux's control mode rather than screen captures,
-so output that scrolled past between calls is still seen, and `run_command`
-reports a real exit status instead of leaving an agent to guess from text.
+so output that scrolled past between calls is still seen, and
+`run_shell_command` reports a real exit status instead of leaving an agent to
+guess from text.
 
 ## Requirements
 
@@ -201,33 +201,22 @@ stdio server with command `tmux-mcp`.
 ### Anything else
 
 Any client that runs a stdio MCP server takes the same two pieces: the command
-`tmux-mcp`, and no arguments. Add `--safety destructive` to the arguments if
-you want the dedicated kill tools and destructive plan operations; see below.
+`tmux-mcp`, and no arguments. That default selects a dedicated product socket
+and a minimal tmux configuration.
 
 ## What it offers
 
-Forty-eight tools. Each publishes MCP hints for its direct operation, so a
-client can distinguish reads, additive changes, and potentially destructive
-effects. The hints describe effects; they do not decide which surface tier
-offers a route.
+Forty-seven tools belong to the unordered `inspect`, `manage`, `execute`, and
+`teardown` toolsets. Each native route carries one machine-readable capability
+record; registration, descriptions, annotations, selection, and
+`tmux://capabilities` all read that record.
 
-| | Tools |
-|---|---|
-| **Look** | `list_sessions`, `list_windows`, `list_panes`, `list_session_windows`, `list_window_panes`, `describe`, `list_servers`, `expand_format`, `what_changed` |
-| **Read a pane** | `capture_pane`, `snapshot_pane`, `capture_since`, `watch_pane`, `search_panes` |
-| **Find** | `find_panes`, `find_sessions` |
-| **Run and wait** | `run_command`, `send_keys`, `wait_for_text`, `wait_for_idle`, `wait_for_channel`, `signal_channel` |
-| **Run in the background** | `start_command`, `job_status`, `list_jobs`, `forget_job` |
-| **Arrange** | `create_session`, `new_window`, `split_pane`, `select_pane`, `select_window`, `resize_pane`, `rename`, `select_layout`, `respawn_pane` |
-| **Move text** | `paste_text`, `pipe_pane`, `clear_pane` |
-| **Configure** | `show_option`, `set_option`, `show_environment`, `set_environment`, `show_hooks` |
-| **Batch** | `run_plan` |
-| **Destroy** | `kill_pane`, `kill_window`, `kill_session`, `kill_server` |
-
-The mutating and destructive tiers also offer three prompts — `run_and_wait`,
-`interrupt_gracefully`, and `diagnose_pane` — for combinations that are easy
-to get wrong. Read-only offers `diagnose_pane` alone. Each prompt names only
-tools its tier offers.
+| Toolset | Intent | Tools |
+|---|---|---|
+| `inspect` (18) | Read bounded tmux state and terminal output | `call_read_tools_batch`, `capture_pane`, `capture_since`, `find_pane_by_position`, `get_pane_info`, `get_server_info`, `get_session_info`, `get_tmux_variables`, `get_window_info`, `list_panes`, `list_sessions`, `list_windows`, `search_panes`, `show_environment`, `show_hooks`, `show_option`, `snapshot_pane`, `wait_for_text` |
+| `manage` (16) | Change tmux objects without starting a process | `enter_copy_mode`, `exit_copy_mode`, `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_history_limit`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
+| `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
+| `teardown` (4) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window` |
 
 ## Resources
 
@@ -250,70 +239,85 @@ rather than something you ask an agent to go and fetch.
 Everything above is also reachable through a tool, so an agent loses nothing
 if its client does not support resources.
 
-## Surface tiers
+## Toolset selection
 
-`--safety` filters the tools advertised to a client. It is not a sandbox or an
-authorization boundary.
+The default dedicated socket gets all four toolsets only when `tmux-mcp` can
+establish minimal-configuration provenance. An existing dedicated socket, an
+explicit socket, or an explicit tmux configuration defaults to `inspect`,
+`manage`, and `execute`; select `teardown` explicitly there.
 
-The four dedicated kill tools are **not offered by default**. `run_plan` keeps
-one name at every tier, advertises that tier's ceiling, and checks every
-operation before it runs any of them.
+`LIBTMUX_TOOLSETS` replaces the default with a comma-separated unordered set.
+An empty string offers no toolsets. Empty tokens and unknown names stop startup.
 
 ```console
-$ tmux-mcp --safety destructive
+$ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp
 ```
 
-Three tiers, also settable with `TMUX_MCP_SAFETY`:
+`LIBTMUX_TOOLS` adds named tools after toolset expansion.
+`LIBTMUX_EXCLUDE_TOOLS` removes named tools last. Exclusions always win. Hidden
+tools are neither listed nor callable.
 
-| Tier | Offers |
+```console
+$ LIBTMUX_TOOLSETS=inspect \
+    LIBTMUX_TOOLS=send_keys \
+    LIBTMUX_EXCLUDE_TOOLS=capture_pane \
+    tmux-mcp
+```
+
+An excluded tool cannot be restored by naming it in `LIBTMUX_TOOLS`. Unknown
+tool names, unknown toolsets, and empty elements in any nonempty list fail
+before tmux is opened, so a typo never widens the surface.
+
+The retired `LIBTMUX_SAFETY` and `TMUX_MCP_SAFETY` settings stop startup with
+a migration error instead of silently widening or narrowing the surface.
+
+### Moving from an earlier alpha
+
+Retired names are not hidden aliases. No prompts are registered; their recipes
+now run in the client. Update existing client calls with this mapping:
+
+| Earlier surface | Current path |
 |---|---|
-| `readonly` | Read-only routes; plans accept read-only operations |
-| `mutating` | Default; dedicated kill tools and destructive plan operations are refused |
-| `destructive` | Everything |
-
-Tools above the tier are not advertised. This reduces the available choices;
-it does not constrain the effects of tools that remain. `run_command` and
-`start_command` run shell commands in a pane, `send_keys` can type and submit
-one, and `expand_format` can start a shell command through literal or recursive
-format expansion. A caller can use those paths to kill work without calling a dedicated kill
-tool. Treat the `mutating` and `destructive` tiers as shell-equivalent access.
-Use an isolated tmux server and operating-system permissions when effects need
-an authority boundary.
-
-The live-stream tools (`watch_pane`, `wait_for_text`, `wait_for_idle`, and
-`capture_since`) attach a tmux client without updating the session environment.
-That changes the session's attached-client state, and `capture_since` retains
-its client, so the `readonly` tier withholds them. Configured `client-attached`
-hooks remain an indirect tmux effect, as do configured `after-*` hooks on
-ordinary read commands.
+| `--safety`, `LIBTMUX_SAFETY`, `TMUX_MCP_SAFETY` | Select unordered `LIBTMUX_TOOLSETS`, then exact inclusions or exclusions. |
+| `list_session_windows`, `list_window_panes` | Use `list_windows` or `list_panes`, then filter the returned stable `session_id` or `window_id`. |
+| `describe` | Use `get_server_info`, `get_session_info`, `get_window_info`, or `get_pane_info`. |
+| `list_servers` or per-call socket selection | Run one MCP process per socket and use `get_server_info` for its pinned server. |
+| `expand_format` | Use `get_tmux_variables` for bounded literal text and `#{variable}` references; arbitrary or recursive tmux-format evaluation has no public replacement. |
+| `what_changed`, `watch_pane` | Follow a known pane with `capture_since` or wait with `wait_for_text`; there is no global activity feed or subscription. |
+| `find_panes`, `find_sessions` | Use `search_panes` for terminal content, `find_pane_by_position` for layout, or filter `list_panes` and `list_sessions` locally. |
+| `run_command` | Use `run_shell_command`. |
+| `wait_for_idle` | Use a concrete `wait_for_text` condition or inspect new output with `capture_since`; no idle heuristic remains. |
+| `start_command`, `job_status`, `list_jobs`, `forget_job` | No background handle remains. Use bounded `run_shell_command`, or drive a pane and observe it with `capture_since`. |
+| `new_window`, `split_pane` | Use `create_window` and `split_window`. |
+| `rename` | Use `rename_session`, `rename_window`, or `set_pane_title`. |
+| `pipe_pane` | No shell-command pipe route remains; read with `capture_pane` or `capture_since`. |
+| `clear_pane` | Use teardown tool `clear_pane_scrollback`. |
+| `set_option` | Use constrained tools such as `set_mouse_enabled`, `set_history_limit`, or `set_synchronize_panes`. |
+| `set_environment` | No generic caller-controlled environment route remains. |
+| `run_plan` | Use `call_read_tools_batch` for inspect-only batches; issue typed state-changing calls separately. |
+| `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
+| Prompt `run_and_wait` | Use one `run_shell_command`; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
+| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, call `exit_copy_mode`; otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`. Wait briefly and snapshot again. `keys: ["C-\\"]` is stronger; do not turn pane recovery into teardown. |
+| Prompt `diagnose_pane` | Start with `snapshot_pane`; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with `capture_since`, and use `search_panes` if the target is uncertain. |
 
 ### Asking first
 
-A tier is decided once, at launch. `--confirm` asks before dedicated kill tools
-and destructive plan operations:
+Tool selection is decided once, at launch. `--confirm` asks before teardown
+tools:
 
 ```console
-$ tmux-mcp --safety destructive --confirm
+$ tmux-mcp --confirm
 ```
 
-Those calls proceed only on a yes. They fail closed when the client cannot
-ask. Confirmation does not inspect command text or keys passed to open-ended
-tools, so indirect destructive effects do not ask. `TMUX_MCP_CONFIRM=1` does
-the same. `--confirm` and `--no-confirm` override that environment setting.
-Invalid safety values narrow the surface to `readonly`; invalid confirmation
-values enable the gate.
-
-When launched from tmux, the process inherits a pane ID and socket. Pane
-listings mark that pane `caller: "self"` only when the socket matches the
-selected server. Dedicated kill tools and destructive plan operations refuse
-confirmed or conservatively matched caller context. Open-ended command and
-terminal tools do not carry that guard. The comparison weighs the socket as
-well as the pane id, because `%1` names a different pane on every tmux server.
+Those calls proceed only on a yes and fail closed when the client cannot ask.
+Confirmation does not inspect command text or keys passed to open-ended tools,
+so indirect destructive effects do not ask. `TMUX_MCP_CONFIRM=1` does the same;
+`--confirm` and `--no-confirm` override that environment setting.
 
 ## Choosing a server
 
-Without arguments the server follows `$TMUX` when it was started inside tmux,
-and otherwise talks to tmux's default socket. To pick one:
+Without arguments the server selects the dedicated `libtmux-mcp` socket and a
+minimal tmux configuration. It does not follow `$TMUX`. To pick another socket:
 
 ```console
 $ tmux-mcp --socket /tmp/tmux-1000/work
@@ -323,14 +327,35 @@ $ tmux-mcp --socket /tmp/tmux-1000/work
 $ tmux-mcp --socket-name work
 ```
 
-`-S` and `-L` work too, spelled as tmux spells them. `tmux-mcp --help` lists
-everything.
+`-S` and `-L` work too. `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` provide the
+same startup choices. `LIBTMUX_TMUX_CONFIG` selects an explicit tmux
+configuration. Socket names and paths are mutually exclusive. `tmux-mcp
+--help` lists every flag.
+
+## Trust boundary
+
+One process stays bound to one tmux socket. That limits which tmux objects its
+structured tools can name; it does not confine filesystem, network, credential,
+or process access. Toolset filtering shapes discovery and direct calls. It is
+not authorization.
+
+Execute tools run with the tmux user's authority. `run_shell_command` accepts a
+pane command; `send_keys`, `send_keys_batch`, and `paste_text` deliver input to
+the pane program. Spawn tools start only the configured process and accept no
+command or environment payload. No public tool runs a caller-authored host
+command.
+
+Pane output and tmux metadata may contain sensitive or untrusted text.
+Environment values may contain secrets. Hooks may contain executable
+configuration. Existing aliases, hooks, plugins, status jobs, and pane
+processes can add effects to any call. Standard MCP annotations describe the
+whole call for client consent; they do not enforce authority.
 
 ## What it feels like
 
 > **You:** Run the API tests in the `api` session and tell me what broke.
 >
-> **Agent:** `run_command` in pane `%3` finished with exit status 1. Two
+> **Agent:** `run_shell_command` in pane `%3` finished with exit status 1. Two
 > failures, both in `test_auth.py` — `test_token_refresh` and
 > `test_expired_session`. Want me to open them?
 
@@ -338,31 +363,40 @@ The agent waited for the command, read its real exit status, and got the
 output the command actually wrote — no prompt, no echo, and nothing lost to
 scrollback.
 
+For a wider inventory pass, one batch call can list topology, snapshot a pane,
+and read an option without turning those independent reads into a state-changing
+plan:
+
+```json
+{
+  "operations": [
+    {"tool": "list_sessions", "arguments": {}},
+    {"tool": "snapshot_pane", "arguments": {"pane": "%3"}},
+    {"tool": "show_option", "arguments": {"name": "status"}}
+  ],
+  "continue_on_error": true
+}
+```
+
+Each row identifies its tool and index and keeps that child’s MCP result under
+`result`, so the client can decide from structured output instead of matching
+prose.
+
 ## When it earns its keep
 
 For a single `tmux send-keys`, it does not. It earns its keep the moment an
 agent has to wait, look, or avoid breaking the terminal it is working in.
 
-**Running something.** `run_command` sends the command, waits for it to
-finish, and answers with its exit status and the output the command wrote.
-Reaching the deadline ends the waiting, not the command, so the answer says
-`deadline` and includes a job id. Pass that id to `job_status` to keep
-following the same run, or to `forget_job` to stop collecting and forget its
-retained output. It leaves pane activity alone; use `send_keys` with
-`keys: ["C-c"]` to interrupt whatever that pane is running.
-
-**Running something slow.** `start_command` returns a job id immediately and
-collects the answer whether or not anyone is waiting, so a ten-minute build
-does not cost an agent its turn. `job_status` reports the exit status once
-there is one, and returns only what the command has written since the cursor
-it gave you last. Several can run at once, in different panes.
+**Running something.** `run_shell_command` sends the command, waits for it to
+finish, and answers with its exit status and output. Reaching the deadline ends
+the waiting, not the pane command. Inspect the pane before sending more input;
+use `send_keys` with `keys: ["C-c"]` only when pane-wide interruption is
+intended.
 
 **Waiting for something you did not start.** `wait_for_text` watches the
 pane's output stream for a pattern, with stop patterns for the failures you
 already know. Because it reads the stream rather than polling the screen, a
-line that scrolls past between looks is still seen. When you cannot name what
-success looks like -- a TUI settling, a prompt glyph you cannot predict --
-`wait_for_idle` waits for the pane to stop writing instead.
+line that scrolls past between looks is still seen.
 
 **Following a pane over several turns.** `capture_since` returns only what is
 new since the cursor it gave you last time, and says `missed: true` if
@@ -372,25 +406,12 @@ anything was dropped.
 once and reports the pane and line. The listing tools will not: they read
 names and commands, not what a terminal is showing.
 
-**Working out what to look at.** `what_changed` reports which windows have
-written since the timestamp it gave you last, most recent first. That is one
-call instead of capturing every pane to find the one that is doing something.
+**Asking about layout.** `find_pane_by_position` finds the pane touching a
+named window corner. `snapshot_pane` adds geometry, cursor, and mode state to
+the visible content.
 
-**Asking tmux something no tool covers.** `expand_format` evaluates any tmux
-format, so a field with no tool of its own — `#{pane_unseen_changes}`,
-`#{window_activity_flag}`, `#{client_termname}` — is one call away rather than
-unreachable. Literal command formats and recursively expanded values can start
-shell commands, so this tool is not offered by the `readonly` tier.
-
-**Asking about layout.** `find_panes` takes a filter expression over a pane's
-own tmux format fields, so "the bottom-right pane" is one call:
-
-```json
-{"version": 1, "target": "pane", "expr": {"op": "and", "args": [
-  {"op": "eq", "field": "pane_at_bottom", "value": true},
-  {"op": "eq", "field": "pane_at_right", "value": true}
-]}}
-```
+**Reading several things.** `call_read_tools_batch` runs a bounded serial batch
+of enabled inspect operations.
 
 ## Answers are typed
 
@@ -419,9 +440,9 @@ choosing another action.
 
 ## Using it from Rust
 
-The tool surface is a type, so you can build a server with a tier chosen in
-code rather than by whoever launched it, or serve it over a transport other
-than stdio. Two runnable examples ship with the crate:
+The tool surface is a type, so a program can freeze a `Selection` in code or
+serve it over a transport other than stdio. Three runnable examples ship with
+the crate:
 
 ```console
 $ cargo run --example readonly
@@ -431,8 +452,9 @@ $ cargo run --example readonly
 $ cargo run --example surface
 ```
 
-`readonly` serves the read-only routes; `surface` prints what each tier offers
-and what each tool answers with, without starting one.
+`readonly` serves the `inspect` toolset. `surface` prints selected toolsets,
+named inclusions and exclusions, controlled descriptions, schemas, and
+capability fields without starting a tmux server.
 
 ```console
 $ cargo run --example budget

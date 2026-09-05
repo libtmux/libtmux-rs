@@ -47,6 +47,12 @@ const TEXT: &str = "text/plain";
 pub fn listed() -> ListResourcesResult {
     let entries = [
         (
+            "tmux://capabilities",
+            "capabilities",
+            "The startup-frozen effective tool surface and each tool's direct authority.",
+            JSON,
+        ),
+        (
             "tmux://server",
             "tmux server",
             "The selected tmux server's socket and session count, plus the pane id \
@@ -136,6 +142,8 @@ pub fn templates() -> ListResourceTemplatesResult {
 /// buried in the middle of a lookup.
 #[derive(Debug, Eq, PartialEq)]
 pub enum Target {
+    /// `tmux://capabilities`
+    Capabilities,
     /// `tmux://server`
     Server,
     /// `tmux://sessions`
@@ -171,6 +179,7 @@ impl Target {
         let raw: Vec<&str> = rest.split('/').collect();
 
         match raw.as_slice() {
+            ["capabilities"] => Some(Self::Capabilities),
             ["server"] => Some(Self::Server),
             ["sessions"] => Some(Self::Sessions),
             ["windows"] => Some(Self::Windows),

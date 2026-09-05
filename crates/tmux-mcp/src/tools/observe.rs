@@ -1,3 +1,9 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::unused_async,
+    reason = "legacy direct-call shims keep their asynchronous test API"
+)]
+
 use std::time::Duration;
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -67,11 +73,10 @@ fn start_error(error: jobs::StartError) -> ErrorData {
             };
             ErrorData::internal_error(
                 format!(
-                    "tmux did not confirm whether it started {job}: {cause}; inspect it with \
-                     job_status and inspect the pane; retrying automatically is unsafe because \
-                     the command may be running. forget_job only discards retained output. To \
-                     interrupt, use pane-wide send_keys with keys=[\"C-c\"], which can discard \
-                     unrelated queued input"
+                    "tmux did not confirm whether it started {job}: {cause}; inspect the pane \
+                     before acting because the command may be running. Do not retry \
+                     automatically. To interrupt, use pane-wide send_keys with keys=[\"C-c\"], \
+                     which can discard unrelated queued input"
                 ),
                 Some(serde_json::json!({
                     "kind": "dispatch_unknown",
@@ -173,20 +178,6 @@ fn tail_snapshot_error(error: libtmux::Error, opened: bool) -> ErrorData {
 #[tool_router(router = observe_router, vis = "pub(super)")]
 impl TmuxTools {
     /// Watch a pane produce output, without polling.
-    #[tool(
-        description = "Watch a pane and report everything it writes for a bounded time. \
-                       Unlike capture_pane this misses nothing, including output that \
-                       scrolls past, but it blocks for the requested duration. The live \
-                       stream attaches a client for that duration, changing the session's \
-                       attached-client state.",
-        title = "Watch Pane Bytes",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
     pub async fn watch_pane(
         &self,
         Parameters(WatchPaneArgs {
@@ -239,21 +230,21 @@ impl TmuxTools {
 
     /// Run a command in a pane and report how it went.
     #[tool(
+        name = "run_shell_command",
         description = "Run a shell command in a pane, wait for it to finish, and report its \
                        exit status with everything it wrote. This is the tool for \"run this \
                        and tell me if it worked\". Output is read from the pane's live stream, \
                        so nothing is missed and the shell prompt is not included. The command \
                        runs in a subshell, so cd and export do not persist. \
                        Reaching the deadline or cancelling this request stops the waiting, not \
-                       the command. The result includes a job id: inspect it with job_status or \
-                       forget its retained output with forget_job.",
+                       the command; inspect the pane before sending more input.",
         title = "Run Command In Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
+        meta = crate::capability_meta!(Execute, PaneCommand, [Change], [TerminalContent], true, true, {
+            "pane" => [TmuxArgument],
+            "command" => [PaneCommand],
+            "seconds" => [None],
+            "suppress_history" => [None]
+        })
     )]
     pub async fn run_command(
         &self,
@@ -294,27 +285,6 @@ impl TmuxTools {
     }
 
     /// Start a command without waiting for it.
-    #[tool(
-        description = "Start a shell command in a pane and return at once with a job id, \
-                       instead of holding this call until it finishes. Use this for anything \
-                       slow -- a build, a test suite, a deploy -- and for running several at \
-                       once: the answer is collected whether or not you are waiting for it. \
-                       Poll with job_status, which returns only what is new. Prefer \
-                       run_command when the command is quick and you want its answer now. If \
-                       every job slot is active, this refuses before sending anything to the \
-                       pane. An unconfirmed send returns the retained job id in the error; \
-                       inspect it with job_status and inspect the pane, because retrying \
-                       automatically is unsafe. forget_job only discards retained output. To \
-                       interrupt the whole pane, use send_keys with keys: [\"C-c\"]; that can \
-                       discard unrelated queued input.",
-        title = "Start Command In Background",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
     pub async fn start_command(
         &self,
         Parameters(StartCommandArgs {
@@ -343,19 +313,6 @@ impl TmuxTools {
     }
 
     /// Report how a background command is getting on.
-    #[tool(
-        description = "Report a job's state, its exit status once finished, and what it has \
-                       written since the cursor you were given last. Pass that cursor back \
-                       to read only what is new. Give seconds to wait for it to finish, \
-                       which returns as soon as it does rather than at the deadline.",
-        title = "Check Background Command",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
     pub async fn job_status(
         &self,
         Parameters(JobStatusArgs {
@@ -375,20 +332,6 @@ impl TmuxTools {
     }
 
     /// List the background commands this server is holding.
-    #[tool(
-        description = "List every command this server still owns, including start_command \
-                       jobs, run_command calls that stopped waiting, and starts whose dispatch \
-                       was not confirmed. A finished job is kept so its answer can still be \
-                       collected. The least recently read finished job is forgotten when a new \
-                       job needs its slot; an active job is never forgotten.",
-        title = "List Background Commands",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
     pub async fn list_jobs(&self) -> Result<Json<JobList>, ErrorData> {
         Ok(Json(JobList {
             jobs: self.jobs.list(),
@@ -396,17 +339,6 @@ impl TmuxTools {
     }
 
     /// Stop collecting a background command and forget its retained output.
-    #[tool(
-        description = "Stop collecting and forget a job's retained output. This does not \
-                       interrupt the pane or change what it is running.",
-        title = "Forget Background Command",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
     pub async fn forget_job(
         &self,
         Parameters(ForgetJobArgs { job }): Parameters<ForgetJobArgs>,
@@ -417,22 +349,6 @@ impl TmuxTools {
     }
 
     /// Wait until a pane stops writing.
-    #[tool(
-        description = "Wait until a pane has written nothing for a few seconds. Use this when \
-                       you cannot name what success looks like: a TUI settling, an installer \
-                       finishing, a prompt whose glyph you cannot predict. Prefer run_command \
-                       for a command you sent yourself, and wait_for_text when you know the \
-                       text to look for -- both are exact, and this one infers. The live stream \
-                       attaches a client while waiting, changing the session's attached-client \
-                       state.",
-        title = "Wait For Pane To Go Quiet",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
     pub async fn wait_for_idle(
         &self,
         Parameters(WaitForIdleArgs {
@@ -464,18 +380,20 @@ impl TmuxTools {
     #[tool(
         description = "Wait until a pane writes matching text. Reads the pane's live output \
                        stream, so text that scrolls past between checks is still seen. Prefer \
-                       run_command for commands you are sending yourself: it reports an exit \
+                       run_shell_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
                        not author, such as a server logging that it is ready. The live stream \
                        attaches a client while waiting, changing the session's attached-client \
                        state.",
         title = "Wait For Pane Text",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe, Change], [TerminalContent], true, true, {
+            "pane" => [TmuxArgument],
+            "patterns" => [RegularExpression],
+            "stop" => [RegularExpression],
+            "regex" => [None],
+            "match_case" => [None],
+            "seconds" => [None]
+        })
     )]
     pub async fn wait_for_text(
         &self,
@@ -521,12 +439,10 @@ impl TmuxTools {
                        Starting a tail attaches a retained client, changing the session's \
                        attached-client state until the tail is evicted or the server stops.",
         title = "Read New Pane Output",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe, Change], [TerminalContent], true, true, {
+            "pane" => [TmuxArgument],
+            "cursor" => [None]
+        })
     )]
     pub async fn capture_since(
         &self,
@@ -573,12 +489,10 @@ impl TmuxTools {
                        `tmux wait-for -S <channel>` to synchronise with work this server \
                        did not start.",
         title = "Wait For Channel",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+            "channel" => [TmuxArgument],
+            "seconds" => [None]
+        })
     )]
     pub async fn wait_for_channel(
         &self,
@@ -631,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn an_uncertain_start_names_the_retained_job_and_safe_recovery() {
+    fn an_uncertain_start_names_safe_recovery() {
         let source = libtmux::Server::builder()
             .socket_name("conflicting")
             .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
@@ -648,11 +562,8 @@ mod tests {
         assert_eq!(data["retryable"], false);
         assert_eq!(data["stale"], false);
         assert_eq!(data["job"], "job-7");
-        assert!(error.message.contains("job_status"));
         assert!(error.message.contains("inspect the pane"));
-        assert!(error.message.contains("retrying automatically is unsafe"));
-        assert!(error.message.contains("forget_job"));
-        assert!(error.message.contains("only discards retained output"));
+        assert!(error.message.contains("Do not retry automatically"));
         assert!(error.message.contains("send_keys"));
     }
 

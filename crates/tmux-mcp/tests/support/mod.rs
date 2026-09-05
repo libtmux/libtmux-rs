@@ -7,7 +7,7 @@ use std::time::Duration;
 use libtmux::{Command, Server};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use serde_json::Value;
-use tmux_mcp::{Safety, TmuxTools};
+use tmux_mcp::{Selection, TmuxTools};
 
 /// Build tool arguments from JSON, as the protocol delivers them.
 pub(crate) fn args<T: serde::de::DeserializeOwned>(value: Value) -> Parameters<T> {
@@ -31,7 +31,9 @@ pub(crate) fn id<T: serde::Serialize>(answer: Json<T>) -> String {
 pub(crate) fn bare_tools(server: &Server) -> TmuxTools {
     TmuxTools::builder(server.clone())
         .caller(None)
-        .safety(Safety::default())
+        .selection(
+            Selection::parse(Some("inspect,manage,execute"), None, None).expect("test surface"),
+        )
         .confirm(false)
         .build()
 }

@@ -1,8 +1,8 @@
+mod contract;
 mod control;
 mod error;
 mod inspect;
 mod observe;
-mod plan;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -55,8 +55,8 @@ enum OptionScope {
 pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<TmuxTools> {
     TmuxTools::inspect_router()
         + TmuxTools::control_router()
+        + TmuxTools::contract_router()
         + TmuxTools::observe_router()
-        + TmuxTools::plan_router()
 }
 
 impl TmuxTools {
@@ -298,7 +298,7 @@ impl TmuxTools {
             .then_some(pane)
     }
 
-    /// The tools this server offers, after the tier has taken its cut.
+    /// The tools this server offers after startup selection.
     #[must_use]
     pub fn offered(&self) -> Vec<rmcp::model::Tool> {
         self.tool_router.list_all()
@@ -344,6 +344,7 @@ impl TmuxTools {
         use resources::Target;
 
         match target {
+            Target::Capabilities => resources::json(uri, self.capability_report.as_ref()),
             Target::Server => {
                 let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
                 resources::json(

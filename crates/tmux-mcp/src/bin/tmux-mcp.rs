@@ -1,5 +1,6 @@
 //! Serve tmux over MCP on stdio.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -7,7 +8,12 @@ use libtmux::{ControlClientLimits, DispatchLimits, OutputLimits, Server};
 use rmcp::ServiceExt as _;
 use rmcp::transport::stdio;
 use tmux_mcp::cli::{HELP, Options, Stop};
-use tmux_mcp::{Safety, TmuxTools};
+use tmux_mcp::{Selection, SocketProvenance, TmuxTools};
+
+const DEFAULT_SOCKET: &str = "libtmux-mcp";
+const SOCKET_ENV: &str = "LIBTMUX_SOCKET";
+const SOCKET_PATH_ENV: &str = "LIBTMUX_SOCKET_PATH";
+const TMUX_CONFIG_ENV: &str = "LIBTMUX_TMUX_CONFIG";
 
 /// How many tmux commands this server runs at once.
 ///
@@ -84,29 +90,72 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
                 .max_stdout_bytes(MAX_TOOL_STDOUT_BYTES)
                 .max_stderr_bytes(MAX_TOOL_STDERR_BYTES),
         );
-    if let Some(path) = options.socket_path {
-        builder = builder.socket_path(path);
+    let cli_selected = options.socket_path.is_some() || options.socket_name.is_some();
+    let env_path = (!cli_selected)
+        .then(|| std::env::var_os(SOCKET_PATH_ENV))
+        .flatten();
+    let env_name = (!cli_selected)
+        .then(|| std::env::var_os(SOCKET_ENV))
+        .flatten();
+    if env_path.is_some() && env_name.is_some() {
+        return Err(format!("set either {SOCKET_ENV} or {SOCKET_PATH_ENV}, not both").into());
     }
-    if let Some(name) = options.socket_name {
+    let socket_path = options.socket_path.or_else(|| env_path.map(PathBuf::from));
+    let socket_name = options.socket_name.or(env_name);
+    let default_socket = socket_path.is_none() && socket_name.is_none();
+    if let Some(path) = socket_path {
+        builder = builder.socket_path(path);
+    } else if let Some(name) = socket_name {
         builder = builder.socket_name(name);
+    } else {
+        builder = builder.socket_name(DEFAULT_SOCKET);
+    }
+
+    let configured_tmux = std::env::var_os(TMUX_CONFIG_ENV).map(PathBuf::from);
+    if configured_tmux
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        return Err(format!("{TMUX_CONFIG_ENV} must not be empty").into());
+    }
+    let default_config = default_socket && configured_tmux.is_none();
+    if let Some(path) = configured_tmux {
+        builder = builder.config_file(path);
+    } else if default_socket {
+        builder = builder.config_file("/dev/null");
     }
     let server = builder.build()?;
 
-    let safety = options.safety.unwrap_or_else(Safety::from_env);
+    let socket_exists = std::fs::metadata(server.socket_path())
+        .is_ok_and(|metadata| std::os::unix::fs::FileTypeExt::is_socket(&metadata.file_type()));
+    let provenance = if default_config && !socket_exists {
+        SocketProvenance::DedicatedMinimal
+    } else if default_config {
+        SocketProvenance::DedicatedExisting
+    } else {
+        SocketProvenance::UserConfigured
+    };
+    let selection = Selection::from_env(provenance.defaults_to_teardown())?;
     let confirm = options.confirm.unwrap_or_else(tmux_mcp::confirm_from_env);
     let tools = TmuxTools::builder(server)
-        .safety(safety)
+        .selection(selection)
+        .socket_provenance(provenance)
         .confirm(confirm)
-        .build();
+        .try_build()?;
 
     // One line, once, naming what a later question about this process will
     // want: which tmux it chose, how much it will do, and where it thinks it
     // is. Silence here is what makes a misconfigured server hard to explain.
     eprintln!(
-        "tmux-mcp {} serving {} tools at the {} tier{}",
+        "tmux-mcp {} serving {} tools on one {} socket{}",
         env!("CARGO_PKG_VERSION"),
         tools.offered().len(),
-        safety.name(),
+        match provenance {
+            SocketProvenance::DedicatedMinimal => "dedicated minimal",
+            SocketProvenance::DedicatedExisting => "existing dedicated",
+            SocketProvenance::UserConfigured => "user-configured",
+            SocketProvenance::Unknown => "unknown-provenance",
+        },
         tools
             .caller_pane()
             .map(|pane| format!(", from pane {pane}"))

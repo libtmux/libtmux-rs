@@ -1,7 +1,7 @@
-//! Serve tmux over MCP, offering only read-only routes.
+//! Serve tmux over MCP, offering only the inspect toolset.
 //!
-//! The shipped binary reads its tier from `--safety` or `TMUX_MCP_SAFETY`.
-//! Building the server yourself is how you decide it in code instead, which is
+//! The shipped binary reads `LIBTMUX_TOOLSETS` at startup. Building the server
+//! yourself is how you decide it in code instead, which is
 //! what you want when the surface is a property of the program rather than of
 //! how someone launched it.
 //!
@@ -14,16 +14,16 @@
 use libtmux::Server;
 use rmcp::ServiceExt as _;
 use rmcp::transport::stdio;
-use tmux_mcp::{Safety, TmuxTools};
+use tmux_mcp::{Selection, TmuxTools};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tools = TmuxTools::builder(Server::new()?)
-        .safety(Safety::ReadOnly)
+        .selection(Selection::parse(Some("inspect"), None, None)?)
         .build();
 
     // stdout carries the protocol, so this goes to stderr.
-    eprintln!("serving {} readonly-surface tools", tools.offered().len());
+    eprintln!("serving {} inspect tools", tools.offered().len());
 
     tools.serve(stdio()).await?.waiting().await?;
     Ok(())

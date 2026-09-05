@@ -4,16 +4,9 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use std::time::Duration as StdDuration;
-
-use libtmux::test::{TestServer, scaled};
-use libtmux::{NewSessionOptions as SessionOptions, PaneWait};
-use rmcp::ServiceExt as _;
+use libtmux::test::TestServer;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::CallToolRequestParams;
-use rmcp::serve_server;
 use serde_json::Value;
-use tmux_mcp::{Safety, TmuxTools};
 
 mod support;
 
@@ -157,85 +150,6 @@ async fn mutating_tools_change_what_the_listing_tools_report() {
         .expect("kill succeeds");
     assert!(rows(tools.list_sessions().await.expect("sessions")).is_empty());
 
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn the_server_advertises_its_tools_over_the_protocol() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    // The full surface, named explicitly: the default tier withholds the
-    // dedicated kill tools, and this test is about what is advertised.
-    let tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::Destructive)
-        .caller(None)
-        .confirm(false)
-        .build();
-
-    // Drive the real protocol over an in-memory duplex rather than trusting
-    // the handler methods alone: the tool schemas are what an agent sees.
-    let (client_transport, server_transport) = tokio::io::duplex(4096);
-    let server = tokio::spawn(async move {
-        let service = serve_server(tools, server_transport)
-            .await
-            .expect("server starts");
-        service.waiting().await
-    });
-
-    let client = ().serve(client_transport).await.expect("client connects");
-    let listed = client.list_all_tools().await.expect("tools are listed");
-    let names: Vec<_> = listed.iter().map(|tool| tool.name.as_ref()).collect();
-
-    for expected in [
-        "list_sessions",
-        "list_windows",
-        "list_panes",
-        "capture_pane",
-        "create_session",
-        "kill_session",
-        "split_pane",
-        "send_keys",
-        "find_panes",
-        "list_session_windows",
-        "list_window_panes",
-        "new_window",
-        "kill_window",
-        "kill_pane",
-        "rename",
-        "describe",
-        "watch_pane",
-        "resize_pane",
-        "find_sessions",
-    ] {
-        assert!(names.contains(&expected), "{expected} is advertised");
-    }
-
-    // CallToolRequestParams is #[non_exhaustive], so it is built from the
-    // default rather than named field by field.
-    let mut call = CallToolRequestParams::default();
-    call.name = "create_session".into();
-    call.arguments = serde_json::json!({"name": "over-the-wire"})
-        .as_object()
-        .cloned();
-    let created = client
-        .call_tool(call)
-        .await
-        .expect("the tool call succeeds");
-    assert_eq!(created.is_error, Some(false));
-
-    let mut call = CallToolRequestParams::default();
-    call.name = "list_sessions".into();
-    let listed = client
-        .call_tool(call)
-        .await
-        .expect("the tool call succeeds");
-    let payload = format!("{listed:?}");
-    assert!(
-        payload.contains("over-the-wire"),
-        "the session created over the protocol is visible over it too",
-    );
-
-    client.cancel().await.expect("client shuts down");
-    let _ = server.await;
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -735,362 +649,8 @@ async fn scoped_tools_narrow_to_one_parent() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A plan an agent could have written by hand, as JSON.
-fn plan_json(session: &str) -> Value {
-    let mut plan = libtmux::plan::Plan::new();
-    let created = plan.add(libtmux::plan::NewSession::new(session));
-    let window = plan.add(libtmux::plan::NewWindow::new(created).name("built").focus());
-    plan.add(
-        libtmux::plan::SendKeys::new(window.pane())
-            .text("# from a plan")
-            .enter(),
-    );
-    plan.add(libtmux::plan::CapturePane::new(window.pane()));
-    serde_json::to_value(&plan).expect("a plan serialises")
-}
-
-fn plan_args(plan: &libtmux::plan::Plan) -> Parameters<tmux_mcp::RunPlanArgs> {
-    Parameters(
-        serde_json::from_value(serde_json::json!({
-            "plan": serde_json::to_value(plan).expect("serialises")
-        }))
-        .expect("arguments deserialize"),
-    )
-}
-
 #[tokio::test]
-async fn run_plan_advertises_the_configured_safety_ceiling() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-
-    for (tier, read_only, destructive, idempotent, open_world) in [
-        (Safety::ReadOnly, true, false, true, false),
-        (Safety::Mutating, false, true, false, true),
-        (Safety::Destructive, false, true, false, true),
-    ] {
-        let tools = TmuxTools::builder(guard.server().clone())
-            .safety(tier)
-            .caller(None)
-            .confirm(false)
-            .build();
-        let plans: Vec<_> = tools
-            .offered()
-            .into_iter()
-            .filter(|tool| tool.name == "run_plan")
-            .collect();
-
-        assert_eq!(plans.len(), 1, "{tier:?} must offer one run_plan tool");
-        let hints = plans[0].annotations.as_ref().expect("annotations");
-        assert_eq!(hints.read_only_hint, Some(read_only), "{tier:?}");
-        assert_eq!(hints.destructive_hint, Some(destructive), "{tier:?}");
-        assert_eq!(hints.idempotent_hint, Some(idempotent), "{tier:?}");
-        assert_eq!(hints.open_world_hint, Some(open_world), "{tier:?}");
-    }
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_readonly_plan_returns_typed_capture_and_failure_evidence() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session(
-            SessionOptions::new("evidence").command("printf plan-evidence; exec sleep 300"),
-        )
-        .await
-        .expect("session is created");
-    let pane = session
-        .panes()
-        .await
-        .expect("panes list")
-        .into_iter()
-        .next()
-        .expect("one pane");
-    assert_eq!(
-        pane.wait_for_text("plan-evidence", scaled(StdDuration::from_secs(5)))
-            .await
-            .expect("the pane can be captured"),
-        PaneWait::Arrived,
-    );
-
-    let tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::ReadOnly)
-        .caller(None)
-        .confirm(false)
-        .build();
-    let mut plan = libtmux::plan::Plan::new();
-    plan.add(libtmux::plan::CapturePane::new(pane.id().clone()));
-    plan.add(libtmux::plan::CapturePane::new(
-        "%999999".parse::<libtmux::PaneId>().expect("a pane id"),
-    ));
-
-    let answer = tools
-        .run_plan(plan_args(&plan), tmux_mcp::Asking::nobody())
-        .await
-        .expect("tmux refusals are plan outcomes");
-    let view = json(answer);
-
-    assert_eq!(view["complete"], false, "{view}");
-    assert!(
-        view["operations"][0]["value"]["output"]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("plan-evidence")),
-        "the capture is returned: {view}",
-    );
-    assert_eq!(view["operations"][0]["value"]["output"]["truncated"], false,);
-    assert_eq!(view["failures"][0]["operations"], serde_json::json!([1]));
-    assert_eq!(view["failures"][0]["kind"], "object_gone");
-    assert!(
-        view["failures"][0]["stderr"]["text"]
-            .as_str()
-            .is_some_and(|text| !text.is_empty()),
-        "the tmux refusal is returned once: {view}",
-    );
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn sensitive_plan_failure_text_is_withheld() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = bare_tools(guard.server());
-    let secret = "sentinel-plan-bad-value";
-    let mut plan = libtmux::plan::Plan::new();
-    plan.add(libtmux::plan::SetOption::global(
-        "status-left-length",
-        secret,
-    ));
-
-    let answer = tools
-        .run_plan(plan_args(&plan), tmux_mcp::Asking::nobody())
-        .await
-        .expect("tmux refusals are plan outcomes");
-    let view = json(answer);
-
-    assert_eq!(view["complete"], false, "{view}");
-    assert_eq!(view["failures"][0]["stderr_withheld"], true, "{view}");
-    assert!(view["failures"][0]["stderr_bytes"].as_u64().unwrap() > 0);
-    assert!(view["failures"][0].get("stderr").is_none(), "{view}");
-    assert!(!view.to_string().contains(secret), "{view}");
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn destructive_plan_confirmation_happens_before_any_step() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::Destructive)
-        .caller(None)
-        .confirm(true)
-        .build();
-    let mut plan = libtmux::plan::Plan::new();
-    plan.add(libtmux::plan::NewSession::new("must-not-exist"));
-    plan.add(libtmux::plan::KillPane::new(
-        "%999999".parse::<libtmux::PaneId>().expect("a pane id"),
-    ));
-
-    let error = tools
-        .run_plan(plan_args(&plan), tmux_mcp::Asking::nobody())
-        .await
-        .map(|_| ())
-        .expect_err("an unattended destructive plan is refused");
-
-    let detail = error.data.expect("the refusal is classified");
-    assert_eq!(detail["kind"], "refused", "{detail}");
-    assert!(
-        guard
-            .server()
-            .sessions()
-            .await
-            .expect("sessions list")
-            .is_empty(),
-        "confirmation happens before the first operation",
-    );
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn destructive_plan_self_protection_happens_before_any_step() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let session = guard
-        .server()
-        .new_session(SessionOptions::new("own").command("sleep 300"))
-        .await
-        .expect("session is created");
-    let pane = session
-        .panes()
-        .await
-        .expect("panes list")
-        .into_iter()
-        .next()
-        .expect("one pane");
-    let own = pane.id().to_string();
-    let window = pane.window_id().clone();
-    let caller = tmux_mcp::CallerIdentity::from_values(
-        Some(format!("{},1,$0", guard.socket_path().display()).into()),
-        Some(own.clone().into()),
-    )
-    .expect("both identity values are present");
-    let tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::Destructive)
-        .caller(Some(caller))
-        .confirm(false)
-        .build();
-    let plans = [
-        {
-            let mut plan = libtmux::plan::Plan::new();
-            plan.add(libtmux::plan::NewSession::new("must-not-exist"));
-            plan.add(libtmux::plan::KillPane::new(pane.id().clone()));
-            plan
-        },
-        {
-            let mut plan = libtmux::plan::Plan::new();
-            plan.add(libtmux::plan::NewSession::new("must-not-exist"));
-            plan.add(libtmux::plan::KillWindow::new(window.clone()));
-            plan
-        },
-    ];
-    for plan in &plans {
-        let error = tools
-            .run_plan(plan_args(plan), tmux_mcp::Asking::nobody())
-            .await
-            .map(|_| ())
-            .expect_err("a plan cannot kill the pane or window holding its caller");
-        let detail = error.data.expect("the refusal is classified");
-        assert_eq!(detail["kind"], "self_protection", "{detail}");
-    }
-
-    let sessions = guard.server().sessions().await.expect("sessions list");
-    assert_eq!(sessions.len(), 1, "no earlier operation ran");
-    assert_eq!(sessions[0].name(), b"own".as_slice());
-    assert!(
-        guard
-            .server()
-            .windows()
-            .await
-            .expect("windows list")
-            .iter()
-            .any(|candidate| candidate.id() == &window),
-        "the caller's window survives",
-    );
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_plan_runs_as_one_call_instead_of_one_call_per_step() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = bare_tools(guard.server());
-
-    let answer = tools
-        .run_plan(
-            Parameters(
-                serde_json::from_value(serde_json::json!({
-                    "plan": plan_json("planned"),
-                    "grouping": "marked"
-                }))
-                .expect("arguments deserialize"),
-            ),
-            tmux_mcp::Asking::nobody(),
-        )
-        .await
-        .expect("the plan runs");
-    let view = json(answer);
-
-    assert_eq!(view["complete"], true, "{view}");
-    let operations = view["operations"]
-        .as_array()
-        .expect("operations is an array");
-    assert_eq!(operations.len(), 4);
-    assert_eq!(operations[0]["index"], 0);
-    assert_eq!(operations[0]["kind"], "new-session");
-    assert_eq!(operations[0]["value"]["kind"], "created_session");
-    assert!(
-        operations[0]["value"]["session"]
-            .as_str()
-            .expect("a session id")
-            .starts_with('$'),
-    );
-    assert_eq!(operations[1]["index"], 1);
-    assert_eq!(operations[1]["kind"], "new-window");
-    assert_eq!(operations[1]["attribution"], "merged");
-    assert_eq!(operations[1]["value"]["kind"], "created_window");
-    assert_eq!(operations[2]["value"]["kind"], "acknowledged");
-    assert_eq!(operations[3]["index"], 3);
-    assert_eq!(operations[3]["kind"], "capture-pane");
-    assert_eq!(operations[3]["value"]["kind"], "captured_pane");
-    assert_eq!(
-        operations[3]["value"]["output"]["rendered_bytes"],
-        operations[3]["value"]["output"]["bytes"],
-    );
-    assert_eq!(operations[3]["value"]["output"]["lossy"], false);
-    assert_eq!(operations[3]["value"]["output"]["truncated"], false);
-    assert_eq!(view["failures"], serde_json::json!([]));
-    // Four operations, but fewer tmux invocations: that is what the grouping
-    // is for, and it is reported rather than left to be guessed.
-    let dispatches = view["dispatches"].as_u64().expect("a dispatch count");
-    assert!(dispatches < 4, "the plan folded: {dispatches}");
-
-    let sessions = guard
-        .server()
-        .sessions()
-        .await
-        .expect("sessions list")
-        .len();
-    assert_eq!(sessions, 1, "the plan built exactly what it described");
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_plan_is_refused_per_operation_when_the_tier_does_not_offer_it() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::Mutating)
-        .caller(None)
-        .confirm(false)
-        .build();
-
-    // A tool annotation describes the tool. A plan is a bag of operations, so
-    // the destructive one inside it has to be caught on its own.
-    let mut plan = libtmux::plan::Plan::new();
-    plan.add(libtmux::plan::NewSession::new("gated"));
-    plan.add(libtmux::plan::KillWindow::new(
-        "@1".parse::<libtmux::WindowId>().expect("a window id"),
-    ));
-
-    let error = tools
-        .run_plan(plan_args(&plan), tmux_mcp::Asking::nobody())
-        .await
-        .map(|_| ())
-        .expect_err("a destructive step is refused at the mutating tier");
-
-    let message = error.message.to_string();
-    assert!(
-        message.contains("step 1"),
-        "the refusal names it: {message}"
-    );
-    assert!(message.contains("kill-window"), "{message}");
-
-    // Refused before anything ran, so the session the plan would have made
-    // does not exist.
-    assert!(
-        guard
-            .server()
-            .sessions()
-            .await
-            .expect("sessions list")
-            .is_empty(),
-        "a refused plan changes nothing",
-    );
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_rename_reports_the_name_tmux_stored_not_the_one_asked_for() {
+async fn a_rename_stores_format_syntax_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = bare_tools(guard.server());
 
@@ -1115,9 +675,7 @@ async fn a_rename_reports_the_name_tmux_stored_not_the_one_asked_for() {
     .and_then(|row| row["id"].as_str().map(str::to_owned))
     .expect("the session has a window");
 
-    // tmux expands a name as a format before storing it, so the caller's text
-    // and the window's name are not the same string. Answering with the
-    // request would name something that cannot be found again.
+    // Names are literalized before reaching tmux's format parser.
     let renamed = json(
         tools
             .rename(Parameters(
@@ -1130,7 +688,10 @@ async fn a_rename_reports_the_name_tmux_stored_not_the_one_asked_for() {
             .expect("the window is renamed"),
     );
 
-    assert_eq!(renamed["name"], "w0x", "the answer is what tmux stored");
+    assert_eq!(
+        renamed["name"], "w#{pane_index}x",
+        "the answer is the literal name tmux stored"
+    );
 
     let listed = rows(
         tools
@@ -1142,7 +703,10 @@ async fn a_rename_reports_the_name_tmux_stored_not_the_one_asked_for() {
             .expect("windows are listable"),
     );
     assert_eq!(
-        listed.iter().filter(|row| row["name"] == "w0x").count(),
+        listed
+            .iter()
+            .filter(|row| row["name"] == "w#{pane_index}x")
+            .count(),
         1,
         "the reported name is the one the server lists: {listed:?}",
     );
