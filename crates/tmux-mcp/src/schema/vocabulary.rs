@@ -57,16 +57,6 @@ pub(crate) enum OptionScopeSchema {
 }
 
 #[derive(JsonSchema)]
-pub(crate) enum WatchStopSchema {
-    #[schemars(rename = "deadline")]
-    Deadline,
-    #[schemars(rename = "pane closed")]
-    PaneClosed,
-    #[schemars(rename = "byte limit")]
-    ByteLimit,
-}
-
-#[derive(JsonSchema)]
 #[schemars(rename_all = "snake_case")]
 pub(crate) enum ChannelWaitOutcomeSchema {
     Signalled,

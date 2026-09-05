@@ -26,7 +26,7 @@ const MAX_TOTAL_PATTERN_BYTES: usize = 16_384;
 
 mod run;
 
-pub(crate) use run::{PreparedRun, RunDispatch, RunProgress, prepare_run, readable};
+pub(crate) use run::{RunDispatch, RunProgress, prepare_run, readable};
 #[cfg(test)]
 use run::{Scanner, find, finished};
 
@@ -80,20 +80,6 @@ pub enum WaitOutcome {
     Cancelled,
 }
 
-/// How a wait for quiet finished.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum IdleOutcome {
-    /// The pane went quiet for as long as the caller asked.
-    Idle,
-    /// The time the caller allowed ran out with the pane still writing.
-    Deadline,
-    /// The pane stopped writing for good.
-    PaneClosed,
-    /// The client withdrew the request while the wait was still running.
-    Cancelled,
-}
-
 /// What a command did.
 #[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 pub struct RunView {
@@ -133,24 +119,6 @@ pub struct WaitView {
     /// caller to wait out the deadline wondering.
     pub present_at_entry: bool,
     /// What the pane wrote, with escape sequences removed.
-    pub text: String,
-    /// How many bytes arrived, before filtering or truncation.
-    pub bytes: usize,
-}
-
-/// What a pane did while it was watched for quiet.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct IdleView {
-    /// The pane that was watched.
-    pub pane: String,
-    /// How the wait finished.
-    pub outcome: IdleOutcome,
-    /// How long the pane was quiet for, in seconds.
-    ///
-    /// Equal to what was asked for when the outcome is `idle`, and how long
-    /// the last gap was when the deadline arrived first.
-    pub quiet_seconds: u64,
-    /// What the pane wrote while waiting, with escape sequences removed.
     pub text: String,
     /// How many bytes arrived, before filtering or truncation.
     pub bytes: usize,
@@ -229,83 +197,6 @@ impl Patterns {
             .position(|pattern| pattern.is_match(haystack))
             .map(|index| (index, self.sources[index].as_str()))
     }
-}
-
-/// Watch a pane until it stops writing for `quiet`, or time runs out.
-///
-/// The complement of [`wait_for_text`], for the case where a caller cannot
-/// name what success looks like: a TUI finishing its redraw, an installer
-/// settling, a prompt whose glyph nobody can predict. Reads the same stream,
-/// so it measures what the program wrote rather than what the screen shows.
-///
-/// # Errors
-///
-/// Returns an error when the pane cannot be watched.
-pub(crate) async fn wait_for_idle(
-    pane: &Pane,
-    quiet: Duration,
-    timeout: Duration,
-    cancelled: &CancellationToken,
-) -> Result<IdleView, Error> {
-    let mut output = pane.stream_output().await?;
-
-    let mut filter = TextFilter::new();
-    let mut text: Vec<u8> = Vec::new();
-    let mut bytes = 0usize;
-    let mut outcome = IdleOutcome::Deadline;
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut last_wrote = tokio::time::Instant::now();
-
-    loop {
-        // Whichever comes first: the caller's deadline, or the pane having
-        // been quiet long enough.
-        let quiet_at = last_wrote + quiet;
-        let until = quiet_at.min(deadline);
-
-        let chunk = tokio::select! {
-            biased;
-            () = cancelled.cancelled() => {
-                outcome = IdleOutcome::Cancelled;
-                break;
-            }
-            chunk = tokio::time::timeout_at(until, output.next_chunk()) => chunk,
-        };
-        match chunk {
-            Ok(Some(chunk)) => {
-                bytes = bytes.saturating_add(chunk.len());
-                filter.push(&chunk, &mut text);
-                last_wrote = tokio::time::Instant::now();
-
-                if text.len() > OUTPUT_LIMIT {
-                    let excess = text.len() - OUTPUT_LIMIT;
-                    text.drain(..excess);
-                }
-            }
-            Ok(None) => {
-                outcome = IdleOutcome::PaneClosed;
-                break;
-            }
-            // Nothing arrived before `until`. Which deadline that was decides
-            // whether the pane went quiet or the caller ran out of time.
-            Err(_) => {
-                if quiet_at <= deadline {
-                    outcome = IdleOutcome::Idle;
-                }
-                break;
-            }
-        }
-    }
-
-    let view = IdleView {
-        pane: pane.id().to_string(),
-        outcome,
-        quiet_seconds: last_wrote.elapsed().as_secs(),
-        text: String::from_utf8_lossy(&text).into_owned(),
-        bytes,
-    };
-    output.shutdown().await?;
-
-    Ok(view)
 }
 
 /// Watch a pane until a pattern matches, a stop pattern matches, or time runs

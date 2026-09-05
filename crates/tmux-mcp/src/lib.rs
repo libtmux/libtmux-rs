@@ -39,11 +39,11 @@ pub mod resources;
 mod caller;
 mod exec;
 mod identity;
-mod jobs;
 mod manifest;
 mod model;
 mod policy;
 mod retained;
+mod run_request;
 mod schema;
 mod tail;
 mod text;
@@ -51,13 +51,12 @@ mod tools;
 mod views;
 
 pub use caller::{CallerIdentity, Relation};
-pub use exec::{IdleOutcome, IdleView, RunOutcome, RunView, WaitOutcome, WaitView};
+pub use exec::{RunOutcome, RunView, WaitOutcome, WaitView};
 pub use manifest::CapabilityReport;
 pub use model::*;
 pub use policy::{
-    Asking, Builder, CONFIRM_ENV, Confirmation, EXCLUDE_TOOLS_ENV, RETIRED_RUST_SAFETY_ENV,
-    RETIRED_SAFETY_ENV, Reporter, Selection, SocketProvenance, SurfaceError, TOOLS_ENV,
-    TOOLSETS_ENV, Toolset, confirm_from_env,
+    Builder, EXCLUDE_TOOLS_ENV, RETIRED_RUST_SAFETY_ENV, RETIRED_SAFETY_ENV, Reporter, Selection,
+    SocketProvenance, SurfaceError, TOOLS_ENV, TOOLSETS_ENV, Toolset,
 };
 pub use tail::Cursor;
 pub use views::*;
@@ -69,7 +68,6 @@ use libtmux::Server;
 use rmcp::model::{ErrorData, ServerCapabilities, ServerInfo};
 use rmcp::{ServerHandler, tool_handler};
 
-use jobs::Jobs;
 use tail::Tails;
 
 /// A tmux server presented as MCP tools.
@@ -80,8 +78,6 @@ pub struct TmuxTools {
     caller: Option<Arc<CallerIdentity>>,
     /// The startup-frozen authority behind the native tool router.
     capability_report: Arc<CapabilityReport>,
-    /// Whether teardown tools ask a person first.
-    confirm: bool,
     /// The server's own socket path, resolved once and kept.
     ///
     /// `Server::socket_path` reports what this crate was configured with,
@@ -90,14 +86,10 @@ pub struct TmuxTools {
     socket: Arc<OnceLock<Option<PathBuf>>>,
     /// Live per-pane output, for `capture_since`.
     tails: Arc<Tails>,
-    /// Bounded ownership for pane-command completion.
-    jobs: Arc<Jobs>,
-    /// The tools this server offers after startup selection.
-    ///
-    /// Named in the `tool_handler` attribute below. Without that the macro
-    /// defaults to `Self::tool_router()`, building a fresh router per request
-    /// and silently discarding whatever this held.
+    /// The startup-resolved router used for both listing and dispatch.
     tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
+    /// Aggregate-only child routes, retained without advertising direct calls.
+    nested_tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
 }
 
 // The resolved socket path stays out, as `ServerIdentity`'s own `Debug` keeps
@@ -112,14 +104,7 @@ impl std::fmt::Debug for TmuxTools {
     }
 }
 
-/// What the server tells a client before its first call.
-///
-/// Composed from named pieces so that adding one is a decision rather than a
-/// habit. Before adding a segment here, try the relevant tool's own
-/// description first: an agent meets that at the moment it is choosing, while
-/// this is read once and competes with everything else in the context. A
-/// segment earns its place only when the thing it says is *server*-shaped —
-/// true across tools, or about a tool that does not exist.
+/// Server-wide guidance supplied once during initialization.
 const INSTRUCTIONS: &str = concat!(
     "Inspect and drive one tmux server. The hierarchy is Server > Session > \
      Window > Pane. Prefer stable ids: $ for sessions, @ for windows, and % for panes.",
@@ -186,11 +171,6 @@ impl ServerHandler for TmuxTools {
              server advertises and accepts. Pane input and pane commands still run with the \
              tmux user's authority, and configured tmux behavior may add effects.",
         );
-        if self.confirm {
-            instructions.push_str(
-                "\n\nCONFIRMATION: teardown tools ask first. Pane commands and input do not.",
-            );
-        }
         // This is launch context, not a claim about the selected server. The
         // socket comparison that marks a listing as `self` happens later.
         if let Some(pane) = self.caller.as_ref().and_then(|caller| caller.pane_id()) {

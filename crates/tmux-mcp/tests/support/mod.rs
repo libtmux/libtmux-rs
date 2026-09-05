@@ -34,7 +34,6 @@ pub(crate) fn bare_tools(server: &Server) -> TmuxTools {
         .selection(
             Selection::parse(Some("inspect,manage,execute"), None, None).expect("test surface"),
         )
-        .confirm(false)
         .build()
 }
 

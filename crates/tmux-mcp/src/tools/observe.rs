@@ -1,97 +1,31 @@
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::unused_async,
-    reason = "legacy direct-call shims keep their asynchronous test API"
-)]
-
-use std::time::Duration;
-
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::exec::{self, Patterns};
-use crate::jobs;
 use crate::policy::reporting;
+use crate::run_request;
 use crate::tail::TailError;
 use crate::{
-    CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, ForgetJobArgs, IdleView, JobForgotten,
-    JobList, JobStatusArgs, Reporter, RunCommandArgs, RunView, Since, StartCommandArgs, TmuxTools,
-    WaitForIdleArgs, WaitForTextArgs, WaitView, Watch, WatchPaneArgs,
+    CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, Reporter, RunCommandArgs, RunView, Since,
+    TmuxTools, WaitForTextArgs, WaitView,
 };
 
-use super::error::{EffectBoundary, at_capacity, bad_input, tmux_error};
+use super::error::{EffectBoundary, bad_input, tmux_error};
 
-/// The most a single `watch_pane` call will return.
-///
-/// A pane can produce output faster than any consumer reads it, so the ceiling
-/// belongs here rather than in the caller's hands.
-const WATCH_BYTES: usize = 64 * 1024;
-
-/// Report a job id this server does not hold.
-///
-/// Classified `stale` rather than as bad input: a caller can explicitly
-/// forget a job, or one can age out, so listing again is what helps.
-fn unknown_job(job: &str) -> ErrorData {
-    let mut data = serde_json::Map::new();
-    data.insert("kind".into(), "object_gone".into());
-    data.insert("retryable".into(), false.into());
-    data.insert("stale".into(), true.into());
-
-    ErrorData::new(
-        rmcp::model::ErrorCode::INVALID_PARAMS,
-        format!("no job {job}; it was explicitly forgotten, aged out, or never existed"),
-        Some(serde_json::Value::Object(data)),
-    )
-}
-
-/// Translate a background-start failure at the protocol boundary.
-fn start_error(error: jobs::StartError) -> ErrorData {
+/// Translate a request-owned run failure at the protocol boundary.
+fn run_error(error: run_request::RunError) -> ErrorData {
     match error {
-        jobs::StartError::AtCapacity { limit } => at_capacity(limit),
-        jobs::StartError::IdentityUnavailable => ErrorData::internal_error(
-            "job identity is unavailable".to_owned(),
-            Some(serde_json::json!({
-                "kind": "unreachable",
-                "retryable": true,
-                "stale": false,
-            })),
-        ),
-        jobs::StartError::IdSpaceExhausted => ErrorData::internal_error(
-            "job id space is exhausted; restart tmux-mcp before starting another job".to_owned(),
-            Some(serde_json::json!({
-                "kind": "job_id_exhausted",
-                "retryable": false,
-                "stale": false,
-            })),
-        ),
-        jobs::StartError::Tmux(error) => tmux_error(&error),
-        jobs::StartError::DispatchUnknown { job, cause } => {
-            let cause = match cause {
-                jobs::DispatchFailure::Tmux(error) => error.to_string(),
-                jobs::DispatchFailure::WorkerStopped => "the startup worker stopped".to_owned(),
-            };
-            ErrorData::internal_error(
-                format!(
-                    "tmux did not confirm whether it started {job}: {cause}; inspect the pane \
+        run_request::RunError::Tmux(error) => tmux_error(&error),
+        run_request::RunError::DispatchUnknown(cause) => ErrorData::internal_error(
+            format!(
+                "tmux did not confirm whether it started the pane command: {cause}; inspect the pane \
                      before acting because the command may be running. Do not retry \
                      automatically. To interrupt, use pane-wide send_keys with keys=[\"C-c\"], \
                      which can discard unrelated queued input"
-                ),
-                Some(serde_json::json!({
-                    "kind": "dispatch_unknown",
-                    "retryable": false,
-                    "stale": false,
-                    "job": job,
-                })),
-            )
-        }
-        jobs::StartError::WorkerStopped => ErrorData::internal_error(
-            "background job startup stopped without a retained result; pane input may have been \
-             sent, so do not retry automatically"
-                .to_owned(),
+            ),
             Some(serde_json::json!({
-                "kind": "startup_stopped",
+                "kind": "dispatch_unknown",
                 "retryable": false,
                 "stale": false,
             })),
@@ -177,57 +111,6 @@ fn tail_snapshot_error(error: libtmux::Error, opened: bool) -> ErrorData {
 
 #[tool_router(router = observe_router, vis = "pub(super)")]
 impl TmuxTools {
-    /// Watch a pane produce output, without polling.
-    pub async fn watch_pane(
-        &self,
-        Parameters(WatchPaneArgs {
-            pane,
-            seconds,
-            max_bytes,
-        }): Parameters<WatchPaneArgs>,
-    ) -> Result<Json<Watch>, ErrorData> {
-        // An agent that asks for an hour gets a minute: this call holds a
-        // connection open and blocks its own response until it returns.
-        let window = Duration::from_secs(seconds.clamp(1, 60));
-        let budget = max_bytes.unwrap_or(WATCH_BYTES).clamp(1, WATCH_BYTES);
-
-        let pane = self.find_pane(&pane).await?;
-        let mut output = pane.stream_output().await.map_err(|e| tmux_error(&e))?;
-
-        let mut collected = Vec::new();
-        let mut stopped = "deadline";
-        let deadline = tokio::time::Instant::now() + window;
-
-        while collected.len() < budget {
-            match tokio::time::timeout_at(deadline, output.next_chunk()).await {
-                Ok(Some(chunk)) => collected.extend_from_slice(&chunk),
-                // The pane stopped writing for good, which is worth saying:
-                // it is the difference between a busy pane and a dead one.
-                Ok(None) => {
-                    stopped = "pane closed";
-                    break;
-                }
-                Err(_) => break,
-            }
-        }
-        if collected.len() >= budget {
-            collected.truncate(budget);
-            stopped = "byte limit";
-        }
-
-        let view = Watch {
-            pane: output.pane().to_string(),
-            bytes: collected.len(),
-            // A pane emits whatever bytes it likes, and JSON carries text.
-            output: String::from_utf8_lossy(&collected).into_owned(),
-            stopped: stopped.to_owned(),
-        };
-
-        output.shutdown().await.map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(view))
-    }
-
     /// Run a command in a pane and report how it went.
     #[tool(
         name = "run_shell_command",
@@ -239,9 +122,9 @@ impl TmuxTools {
                        Reaching the deadline or cancelling this request stops the waiting, not \
                        the command; inspect the pane before sending more input.",
         title = "Run Command In Pane",
-        meta = crate::capability_meta!(Execute, PaneCommand, [Change], [TerminalContent], true, true, {
-            "pane" => [TmuxArgument],
-            "command" => [PaneCommand],
+        meta = crate::capability_meta!(Execute, PaneCommand, [Change], [TmuxMetadata, TerminalContent], true, true, {
+            "pane" => [TmuxLookup],
+            "command" => [PaneInput, ShellCommand],
             "seconds" => [None],
             "suppress_history" => [None]
         })
@@ -270,7 +153,7 @@ impl TmuxTools {
         let view = reporting(
             reporter,
             "still running",
-            self.jobs.run(
+            run_request::run(
                 &target,
                 &command,
                 Self::budget(seconds),
@@ -279,99 +162,7 @@ impl TmuxTools {
             ),
         )
         .await
-        .map_err(start_error)?;
-
-        Ok(Json(view))
-    }
-
-    /// Start a command without waiting for it.
-    pub async fn start_command(
-        &self,
-        Parameters(StartCommandArgs {
-            pane,
-            command,
-            suppress_history,
-        }): Parameters<StartCommandArgs>,
-    ) -> Result<Json<jobs::JobView>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
-        // A pane in copy mode does not pass keys to the shell, so the command
-        // would be read as navigation and the job would never start.
-        if target.is_in_mode() {
-            return Err(bad_input(format!(
-                "pane {pane} is in copy mode, where keys move the cursor rather than \
-                     reaching the shell. Leave it first."
-            )));
-        }
-
-        let view = self
-            .jobs
-            .start(&target, &command, suppress_history)
-            .await
-            .map_err(start_error)?;
-
-        Ok(Json(view))
-    }
-
-    /// Report how a background command is getting on.
-    pub async fn job_status(
-        &self,
-        Parameters(JobStatusArgs {
-            job,
-            cursor,
-            seconds,
-        }): Parameters<JobStatusArgs>,
-    ) -> Result<Json<jobs::JobProgress>, ErrorData> {
-        if let Some(seconds) = seconds.filter(|seconds| *seconds > 0) {
-            self.jobs.wait(&job, Self::budget(Some(seconds))).await;
-        }
-
-        self.jobs
-            .read(&job, cursor)
-            .map(Json)
-            .ok_or_else(|| unknown_job(&job))
-    }
-
-    /// List the background commands this server is holding.
-    pub async fn list_jobs(&self) -> Result<Json<JobList>, ErrorData> {
-        Ok(Json(JobList {
-            jobs: self.jobs.list(),
-        }))
-    }
-
-    /// Stop collecting a background command and forget its retained output.
-    pub async fn forget_job(
-        &self,
-        Parameters(ForgetJobArgs { job }): Parameters<ForgetJobArgs>,
-    ) -> Result<Json<JobForgotten>, ErrorData> {
-        let pane = self.jobs.forget(&job).ok_or_else(|| unknown_job(&job))?;
-
-        Ok(Json(JobForgotten { job, pane }))
-    }
-
-    /// Wait until a pane stops writing.
-    pub async fn wait_for_idle(
-        &self,
-        Parameters(WaitForIdleArgs {
-            pane,
-            quiet_seconds,
-            seconds,
-        }): Parameters<WaitForIdleArgs>,
-        cancelled: tokio_util::sync::CancellationToken,
-        reporter: Reporter,
-    ) -> Result<Json<IdleView>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
-        // Clamped against the total, because quiet longer than the deadline
-        // could never be observed and would always answer `deadline`.
-        let budget = Self::budget(seconds);
-        let quiet = Duration::from_secs(quiet_seconds.unwrap_or(2).max(1)).min(budget);
-
-        let view = reporting(
-            reporter,
-            "still waiting for the pane to go quiet",
-            exec::wait_for_idle(&target, quiet, budget, &cancelled),
-        )
-        .await
-        .map_err(|e| tmux_error(&e))?;
+        .map_err(run_error)?;
 
         Ok(Json(view))
     }
@@ -387,14 +178,25 @@ impl TmuxTools {
                        state. Each list accepts at most 32 patterns, each at most 4,096 bytes, \
                        using Rust's linear-time regex engine.",
         title = "Wait For Pane Text",
-        meta = crate::capability_meta!(Inspect, None, [Observe, Change], [TerminalContent], true, true, {
-            "pane" => [TmuxArgument],
-            "patterns" => [RegularExpression],
-            "stop" => [RegularExpression],
-            "regex" => [None],
-            "match_case" => [None],
-            "seconds" => [None]
-        })
+        meta = crate::capability_meta!(
+            Inspect, None,
+            effects = [Observe, Change],
+            outputs = [TmuxMetadata, TerminalContent],
+            secrets = true,
+            untrusted = true,
+            sinks = {
+                "pane" => [TmuxLookup],
+                "patterns" => [Regex],
+                "stop" => [Regex],
+                "regex" => [None],
+                "match_case" => [None],
+                "seconds" => [None]
+            },
+            literalized = [],
+            nested = [],
+            self_bounded = true,
+            always_load = false,
+        )
     )]
     pub async fn wait_for_text(
         &self,
@@ -440,8 +242,8 @@ impl TmuxTools {
                        Starting a tail attaches a retained client, changing the session's \
                        attached-client state until the tail is evicted or the server stops.",
         title = "Read New Pane Output",
-        meta = crate::capability_meta!(Inspect, None, [Observe, Change], [TerminalContent], true, true, {
-            "pane" => [TmuxArgument],
+        meta = crate::capability_meta!(Inspect, None, [Observe, Change], [TmuxMetadata, TerminalContent], true, true, {
+            "pane" => [TmuxLookup],
             "cursor" => [None]
         })
     )]
@@ -491,7 +293,7 @@ impl TmuxTools {
                        did not start.",
         title = "Wait For Channel",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "channel" => [TmuxArgument],
+            "channel" => [TmuxState],
             "seconds" => [None]
         })
     )]
@@ -534,55 +336,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn job_capacity_is_retryable_without_stale_state() {
-        let error = start_error(jobs::StartError::AtCapacity { limit: 3 });
-        let data = error.data.expect("capacity carries metadata");
-
-        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
-        assert_eq!(data["kind"], "capacity");
-        assert_eq!(data["retryable"], true);
-        assert_eq!(data["stale"], false);
-        assert_eq!(data["capacity"], 3);
-    }
-
-    #[test]
-    fn an_uncertain_start_names_safe_recovery() {
+    fn an_uncertain_start_names_safe_recovery_without_an_unreachable_handle() {
         let source = libtmux::Server::builder()
             .socket_name("conflicting")
             .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
             .build()
             .expect_err("two socket selectors are refused");
-        let error = start_error(jobs::StartError::DispatchUnknown {
-            job: "job-7".to_owned(),
-            cause: jobs::DispatchFailure::Tmux(Box::new(source)),
-        });
+        let error = run_error(run_request::RunError::DispatchUnknown(Box::new(source)));
         let data = error.data.as_ref().expect("the failure carries metadata");
 
         assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
         assert_eq!(data["kind"], "dispatch_unknown");
         assert_eq!(data["retryable"], false);
         assert_eq!(data["stale"], false);
-        assert_eq!(data["job"], "job-7");
+        assert!(data.get("job").is_none());
+        assert!(!error.message.contains("job-7"));
         assert!(error.message.contains("inspect the pane"));
         assert!(error.message.contains("Do not retry automatically"));
         assert!(error.message.contains("send_keys"));
-    }
-
-    #[test]
-    fn an_explicitly_forgotten_job_is_stale() {
-        let error = unknown_job("job-7");
-
-        assert!(error.message.contains("explicitly forgotten"));
-    }
-
-    #[test]
-    fn a_stopped_start_does_not_claim_that_the_pane_was_untouched() {
-        let error = start_error(jobs::StartError::WorkerStopped);
-        let data = error.data.as_ref().expect("the failure carries metadata");
-
-        assert_eq!(data["kind"], "startup_stopped");
-        assert_eq!(data["retryable"], false);
-        assert!(error.message.contains("pane input may have been sent"));
     }
 
     #[test]

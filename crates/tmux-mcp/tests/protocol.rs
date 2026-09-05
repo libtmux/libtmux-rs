@@ -9,7 +9,7 @@ use rmcp::model::{CallToolRequestParams, ReadResourceRequestParams, ResourceCont
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
 use serde_json::{Value, json};
-use tmux_mcp::{Selection, TmuxTools};
+use tmux_mcp::{Selection, SocketProvenance, TmuxTools};
 
 struct Wire {
     client: RunningService<RoleClient, ()>,
@@ -50,7 +50,11 @@ fn selection(toolsets: &str) -> Selection {
 
 #[tokio::test]
 async fn client_sees_the_exact_cross_port_inventory() {
-    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+    let server = libtmux::Server::builder()
+        .socket_name("libtmux-mcp")
+        .build()
+        .expect("server config");
+    let tools = TmuxTools::builder(server)
         .selection(selection("inspect,manage,execute,teardown"))
         .build();
     let wire = Wire::connect(tools).await;
@@ -169,7 +173,7 @@ async fn read_batch_rejects_more_than_sixteen_operations() {
         .map(|_| json!({"tool": "list_sessions", "arguments": {}}))
         .collect();
 
-    let arguments = json!({"operations": operations, "continue_on_error": false});
+    let arguments = json!({"operations": operations, "on_error": "stop"});
     let request = CallToolRequestParams::new("call_read_tools_batch")
         .with_arguments(arguments.as_object().cloned().expect("object arguments"));
     let error = wire
@@ -180,6 +184,41 @@ async fn read_batch_rejects_more_than_sixteen_operations() {
 
     assert!(error.to_string().contains("1 through 16"), "{error}");
     wire.shutdown().await;
+}
+
+#[tokio::test]
+async fn read_batch_preserves_nested_protocol_errors() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+
+    let response = wire
+        .call(
+            "call_read_tools_batch",
+            json!({
+                "operations": [{
+                    "tool": "get_pane_info",
+                    "arguments": {"pane": "%999999"}
+                }],
+                "on_error": "stop"
+            }),
+        )
+        .await;
+    let structured = response
+        .structured_content
+        .expect("batch has structured content");
+    let error = &structured["results"][0]["error"];
+
+    assert_eq!(error["code"], -32602, "{error}");
+    assert_eq!(error["message"], "no pane %999999", "{error}");
+    assert_eq!(error["data"]["kind"], "object_gone", "{error}");
+    assert_eq!(error["data"]["retryable"], false, "{error}");
+    assert_eq!(error["data"]["stale"], true, "{error}");
+
+    wire.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
 #[tokio::test]
@@ -226,6 +265,7 @@ async fn capabilities_resource_reports_the_effective_surface() {
         panic!("capabilities must be text")
     };
     let report: Value = serde_json::from_str(text).expect("JSON report");
+    let listed = wire.client.list_all_tools().await.expect("tools list");
     let names: BTreeSet<_> = report["tools"]
         .as_array()
         .expect("tool rows")
@@ -246,6 +286,138 @@ async fn capabilities_resource_reports_the_effective_surface() {
 
     assert!(!names.contains("capture_pane"));
     assert!(!nested.contains("capture_pane"));
+    for tool in &listed {
+        let row = report["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == tool.name.as_ref())
+            .unwrap_or_else(|| panic!("{} report row", tool.name));
+        let metadata = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+            .unwrap_or_else(|| panic!("{} capability metadata", tool.name));
+        assert_eq!(metadata, row, "{} metadata/report", tool.name);
+        assert_eq!(row["description"].as_str(), tool.description.as_deref());
+        assert_eq!(
+            row["inputSchema"],
+            Value::Object((*tool.input_schema).clone()),
+            "{} input schema",
+            tool.name,
+        );
+        assert_eq!(
+            row["outputSchema"],
+            Value::Object((**tool.output_schema.as_ref().expect("typed output schema")).clone()),
+            "{} output schema",
+            tool.name,
+        );
+    }
+    wire.shutdown().await;
+}
+
+#[tokio::test]
+async fn aggregate_only_selection_dispatches_hidden_native_routes() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    guard
+        .server()
+        .new_session("nested-only")
+        .await
+        .expect("session");
+    let selected = Selection::parse(Some(""), Some("call_read_tools_batch"), None)
+        .expect("aggregate-only selection");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .selection(selected)
+        .build();
+    let wire = Wire::connect(tools).await;
+    let names: Vec<_> = wire
+        .client
+        .list_all_tools()
+        .await
+        .expect("tools list")
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
+        .collect();
+    assert_eq!(names, ["call_read_tools_batch"]);
+
+    let response = wire
+        .call(
+            "call_read_tools_batch",
+            json!({
+                "operations": [{"tool": "list_sessions", "arguments": {}}],
+                "on_error": "stop"
+            }),
+        )
+        .await;
+    let nested = &response
+        .structured_content
+        .expect("batch structured result")["results"][0];
+    assert_eq!(nested["success"], true, "{nested}");
+    assert_eq!(
+        nested["result"]["structuredContent"]["sessions"][0]["name"], "nested-only",
+        "{nested}",
+    );
+    wire.client
+        .call_tool(CallToolRequestParams::new("list_sessions"))
+        .await
+        .expect_err("hidden child is not directly callable");
+
+    wire.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn capability_report_uses_the_common_socket_and_boundary_shape() {
+    let server = libtmux::Server::builder()
+        .socket_name("libtmux-mcp")
+        .build()
+        .expect("server config");
+    let tools = TmuxTools::builder(server)
+        .selection(selection("inspect"))
+        .socket_provenance(SocketProvenance::DedicatedMinimal)
+        .build();
+    let wire = Wire::connect(tools).await;
+    let resource = wire
+        .client
+        .read_resource(ReadResourceRequestParams::new("tmux://capabilities"))
+        .await
+        .expect("capabilities resource");
+    let ResourceContents::TextResourceContents { text, .. } = &resource.contents[0] else {
+        panic!("capabilities must be text")
+    };
+    let report: Value = serde_json::from_str(text).expect("JSON report");
+
+    assert_eq!(report["hostCommandTools"], 0);
+    assert_eq!(
+        report["toolFilteringBoundary"],
+        "interface-shaping-not-authorization"
+    );
+    assert_eq!(report["executionAuthority"], "tmux-user");
+    assert_eq!(report["operatingSystemBoundary"], "none");
+    assert_eq!(report["boundary"]["oneSocketPerProcess"], true);
+    assert_eq!(report["boundary"]["perCallSocketSelection"], false);
+    assert_eq!(report["boundary"]["hostCommandExecution"], false);
+    assert_eq!(report["boundary"]["dynamicResources"], false);
+    assert_eq!(report["toolCount"], 18);
+    assert_eq!(report["toolsets"], json!(["inspect"]));
+    assert_eq!(report["socket"]["selector"], "name:libtmux-mcp");
+    assert_eq!(report["socket"]["selectionProvenance"], "default-dedicated");
+    assert_eq!(report["socket"]["serverState"], "created");
+    assert_eq!(report["socket"]["configurationProvenance"], "minimal");
+    assert_eq!(report["socket"]["namespaceBoundary"], "tmux-objects-only");
+    assert_eq!(report["connection"]["socketSelector"], "name:libtmux-mcp");
+    assert_eq!(
+        report["connection"]["socketProvenance"],
+        "default-dedicated"
+    );
+    assert_eq!(report["connection"]["serverState"], "created");
+    assert_eq!(report["connection"]["configurationProvenance"], "minimal");
+    assert!(report["connection"]["resolvedSocketPath"].is_string());
+    assert!(
+        report["connection"]["attachCommand"]
+            .as_str()
+            .is_some_and(|command| command.contains(" -N -S ") && command.ends_with(" attach"))
+    );
     wire.shutdown().await;
 }
 
@@ -255,7 +427,6 @@ async fn commandless_creation_runs_the_configured_process() {
     let tools = TmuxTools::builder(guard.server().clone())
         .selection(selection("inspect,execute,teardown"))
         .caller(None)
-        .confirm(false)
         .build();
     let wire = Wire::connect(tools).await;
 

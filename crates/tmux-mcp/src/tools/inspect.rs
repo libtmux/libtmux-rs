@@ -1,23 +1,15 @@
-#![allow(
-    clippy::missing_errors_doc,
-    reason = "legacy direct-call shims are not part of the advertised MCP API"
-)]
+use std::time::{Duration, Instant};
 
-use std::path::{Path, PathBuf};
-
-use libtmux::query::QueryIteratorExt as _;
-use libtmux::{CaptureOptions, Command, Server};
+use libtmux::{CaptureOptions, Command};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::exec::Patterns;
 use crate::{
-    Branch, BranchPane, BranchWindow, Busy, Capture, CapturePaneArgs, Changes, Environment,
-    EnvironmentEntry, FilterArgs, FormatArgs, Formatted, Hook, Hooks, Marks, MatchView, Matches,
-    OptionArgs, OptionValue, Panes, SearchPanesArgs, ServerListing, ServerListings, SessionArgs,
-    SessionView, Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs, TmuxTools,
-    Tree, TreeFilterArgs, WhatChangedArgs, WindowArgs, Windows,
+    Branch, BranchPane, BranchWindow, Capture, CapturePaneArgs, Environment, EnvironmentEntry,
+    Hook, Hooks, Marks, MatchView, Matches, OptionArgs, OptionValue, Panes, SearchPanesArgs,
+    Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs, TmuxTools, Tree, Windows,
 };
 
 use super::error::{bad_input, tmux_error};
@@ -36,28 +28,79 @@ const SEPARATOR: &str = "\u{241e}";
 /// asked for that wants a signal, not a transcript of the server.
 const SEARCH_MATCHES: usize = 200;
 const SEARCH_BYTES: usize = 1 << 20;
+const SEARCH_PANES: usize = 64;
+const SEARCH_LINES: usize = 8192;
+const SEARCH_MATCH_TIME: Duration = Duration::from_millis(250);
+const SEARCH_CAPTURE_TIME: Duration = Duration::from_secs(5);
 
 struct SearchBudget {
-    remaining: usize,
+    remaining_bytes: usize,
+    remaining_panes: usize,
+    remaining_lines: usize,
+    remaining_match_time: Duration,
+    remaining_capture_time: Duration,
     capped: bool,
 }
 
 impl SearchBudget {
     const fn new() -> Self {
         Self {
-            remaining: SEARCH_BYTES,
+            remaining_bytes: SEARCH_BYTES,
+            remaining_panes: SEARCH_PANES,
+            remaining_lines: SEARCH_LINES,
+            remaining_match_time: SEARCH_MATCH_TIME,
+            remaining_capture_time: SEARCH_CAPTURE_TIME,
             capped: false,
         }
     }
 
     fn take(&mut self, bytes: usize) -> bool {
-        if bytes > self.remaining {
+        if self.remaining_lines == 0 || bytes > self.remaining_bytes {
             self.capped = true;
             false
         } else {
-            self.remaining -= bytes;
+            self.remaining_lines -= 1;
+            self.remaining_bytes -= bytes;
             true
         }
+    }
+
+    fn begin_pane(&mut self) -> bool {
+        if self.remaining_panes == 0 {
+            self.capped = true;
+            false
+        } else {
+            self.remaining_panes -= 1;
+            true
+        }
+    }
+
+    fn capture_time(&mut self) -> Option<Duration> {
+        if self.remaining_capture_time.is_zero() {
+            self.capped = true;
+            None
+        } else {
+            Some(self.remaining_capture_time)
+        }
+    }
+
+    fn charge_capture(&mut self, elapsed: Duration) {
+        self.remaining_capture_time = self.remaining_capture_time.saturating_sub(elapsed);
+    }
+
+    fn charge_match(&mut self, elapsed: Duration) -> bool {
+        if elapsed >= self.remaining_match_time {
+            self.remaining_match_time = Duration::ZERO;
+            self.capped = true;
+            false
+        } else {
+            self.remaining_match_time -= elapsed;
+            true
+        }
+    }
+
+    fn cap(&mut self) {
+        self.capped = true;
     }
 }
 
@@ -141,55 +184,6 @@ impl TmuxTools {
         Ok(Json(Tree { sessions }))
     }
 
-    /// List one session's windows.
-    pub async fn list_session_windows(
-        &self,
-        Parameters(SessionArgs { session }): Parameters<SessionArgs>,
-    ) -> Result<Json<Windows>, ErrorData> {
-        let session = self.find_session(&session).await?;
-        let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(Self::render_windows(&windows)))
-    }
-
-    /// List one window's panes.
-    pub async fn list_window_panes(
-        &self,
-        Parameters(WindowArgs { window }): Parameters<WindowArgs>,
-    ) -> Result<Json<Panes>, ErrorData> {
-        let window = self.find_window(&window).await?;
-        let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(self.render_panes(&panes).await))
-    }
-
-    /// Find panes matching a portable filter expression.
-    pub async fn find_panes(
-        &self,
-        Parameters(FilterArgs {
-            filter,
-            session,
-            window,
-        }): Parameters<FilterArgs>,
-    ) -> Result<Json<Panes>, ErrorData> {
-        // The typed protocol boundary rejects unknown versions, fields, and
-        // operators before this route runs.
-        let expression = filter;
-
-        // Narrow with tmux's own scoping before matching, so a large server
-        // does not have every pane listed to answer a question about one
-        // window.
-        let panes = match (session.as_deref(), window.as_deref()) {
-            (_, Some(window)) => self.find_window(window).await?.panes().await,
-            (Some(session), None) => self.find_session(session).await?.panes().await,
-            (None, None) => self.server.panes().await,
-        };
-        let panes = panes.map_err(|e| tmux_error(&e))?;
-        let views: Vec<_> = panes.iter().matching(&expression).cloned().collect();
-
-        Ok(Json(self.render_panes(&views).await))
-    }
-
     /// Read one pane's contents.
     #[tool(
         description = "Read a pane's contents. Reads the visible screen by default; set history \
@@ -198,12 +192,12 @@ impl TmuxTools {
                        usually what you want and is far shorter -- it needs tmux 3.7 and a \
                        shell that marks its prompts, and says so when it cannot.",
         title = "Read Pane Contents",
-        meta = crate::capability_meta!(Inspect, None, [Observe], [TerminalContent], true, true, {
-            "pane" => [TmuxArgument],
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
+            "pane" => [TmuxLookup],
             "history" => [None],
             "last_command" => [None],
-            "start" => [TmuxArgument],
-            "end" => [TmuxArgument]
+            "start" => [TmuxState],
+            "end" => [TmuxState]
         })
     )]
     pub async fn capture_pane(
@@ -251,30 +245,6 @@ impl TmuxTools {
         }))
     }
 
-    /// Find sessions by what they contain.
-    pub async fn find_sessions(
-        &self,
-        Parameters(TreeFilterArgs { filter }): Parameters<TreeFilterArgs>,
-    ) -> Result<Json<Sessions>, ErrorData> {
-        let expression = filter;
-
-        // One gathering of the hierarchy, three tmux commands, and the
-        // expression decides among the branches locally.
-        let branches = self.server.hierarchy().await.map_err(|e| tmux_error(&e))?;
-        let sessions: Vec<_> = branches
-            .iter()
-            .matching(&expression)
-            .map(|branch| SessionView {
-                id: branch.session.id().to_string(),
-                name: lossy(branch.session.name()),
-                windows: branch.session.window_count(),
-                attached: branch.session.is_attached(),
-            })
-            .collect();
-
-        Ok(Json(Sessions { sessions }))
-    }
-
     /// Report everything about one pane in a single answer.
     #[tool(
         description = "Read a pane's whole state at once: what it is showing, plus the \
@@ -285,7 +255,7 @@ impl TmuxTools {
                        copy mode will not accept keys.",
         title = "Snapshot Pane State",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
-            "pane" => [TmuxArgument],
+            "pane" => [TmuxLookup],
             "max_lines" => [None],
             "history" => [None]
         }; always_load)
@@ -363,21 +333,22 @@ impl TmuxTools {
 
     /// Find which panes are showing something.
     #[tool(
-        description = "Search what panes are displaying with Rust's linear-time regex engine, \
-                       accepting at most 4,096 pattern bytes and matching at most 1 MiB. Report \
-                       the pane and line of \
+        description = "Search what panes are displaying with Rust's linear-time regex engine. \
+                       Accept at most 4,096 pattern bytes; search at most 64 panes, 8,192 lines, \
+                       and 1 MiB; spend at most 250 ms matching and five seconds capturing. \
+                       Report the pane and line of \
                        every match. Use this to find where something is -- which pane has \
                        the failing test, which one printed the error -- instead of capturing \
                        panes one at a time. Searches the visible screen by default; set \
                        history to include scrollback.",
         title = "Search Pane Contents",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
-            "pattern" => [RegularExpression],
+            "pattern" => [Regex],
             "regex" => [None],
             "match_case" => [None],
             "history" => [None],
-            "session" => [TmuxArgument],
-            "window" => [TmuxArgument]
+            "session" => [TmuxLookup],
+            "window" => [TmuxLookup]
         })
     )]
     pub async fn search_panes(
@@ -414,10 +385,24 @@ impl TmuxTools {
         let mut budget = SearchBudget::new();
         let mut panes_searched = 0;
         'panes: for pane in &panes {
+            if !budget.begin_pane() {
+                break;
+            }
+            let Some(capture_time) = budget.capture_time() else {
+                break;
+            };
             // A pane that cannot be read is not a reason to abandon the
             // search: it is usually one that closed while this ran.
-            let Ok(lines) = pane.capture_with(options).await else {
-                continue;
+            let capture_started = Instant::now();
+            let captured = tokio::time::timeout(capture_time, pane.capture_with(options)).await;
+            budget.charge_capture(capture_started.elapsed());
+            let lines = match captured {
+                Ok(Ok(lines)) => lines,
+                Ok(Err(_)) => continue,
+                Err(_) => {
+                    budget.cap();
+                    break;
+                }
             };
             panes_searched += 1;
             if found.len() >= SEARCH_MATCHES {
@@ -434,7 +419,12 @@ impl TmuxTools {
                 if !budget.take(line.as_bytes().len()) {
                     break 'panes;
                 }
-                if patterns.first_match(line.as_bytes()).is_some() {
+                let match_started = Instant::now();
+                let matched = patterns.first_match(line.as_bytes()).is_some();
+                if !budget.charge_match(match_started.elapsed()) {
+                    break 'panes;
+                }
+                if matched {
                     found.push(MatchView {
                         pane: pane.id().to_string(),
                         window_id: pane.window_id().to_string(),
@@ -467,13 +457,11 @@ impl TmuxTools {
             secrets = true,
             untrusted = true,
             sinks = {
-                "name" => [TmuxFormat],
+                "name" => [TmuxLookup],
                 "scope" => [None],
-                "target" => [TmuxArgument],
-                "value" => [None]
+                "target" => [TmuxLookup]
             },
-            literalized = ["name"],
-            validated = [],
+            literalized = [],
             nested = [],
             self_bounded = false,
             always_load = false,
@@ -510,170 +498,6 @@ impl TmuxTools {
         }))
     }
 
-    /// Find tmux servers in the known socket locations.
-    pub async fn list_servers(&self) -> Result<Json<ServerListings>, ErrorData> {
-        let bound = self.socket().await.map(Path::to_path_buf);
-
-        // tmux puts its sockets in `$TMUX_TMPDIR/tmux-<uid>`, defaulting to
-        // /tmp. The directory is per-user, so this never reaches another
-        // user's servers even when /tmp is shared. The uid comes from tmux
-        // rather than from this process, because it is tmux's own choice of
-        // directory that is being predicted.
-        let mut roots = Vec::new();
-        if let Ok(uid) = self.server.format(None, "#{uid}").await {
-            roots.push(
-                std::env::var_os("TMUX_TMPDIR")
-                    .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
-                    .join(format!("tmux-{}", lossy(&uid).trim())),
-            );
-        }
-        // A server reached through --socket sits wherever it was put, and its
-        // neighbours are worth finding too.
-        if let Some(parent) = bound.as_deref().and_then(Path::parent) {
-            let parent = parent.to_path_buf();
-            if !roots.contains(&parent) {
-                roots.push(parent);
-            }
-        }
-
-        // A `stat` per entry, on a directory whose size belongs to whoever
-        // else uses this machine: a shared /tmp held 836 sockets while this
-        // was written, which is close to two milliseconds with the cache warm
-        // and unbounded without it. That is work for a blocking thread rather
-        // than for the one driving every other request. One handoff covers the
-        // whole scan, where `tokio::fs` would take one per entry.
-        let (scanned, listed) = tokio::task::spawn_blocking(move || {
-            let mut searched = Vec::new();
-            let mut found: Vec<PathBuf> = Vec::new();
-            for root in roots {
-                searched.push(root.display().to_string());
-                let Ok(entries) = std::fs::read_dir(&root) else {
-                    continue;
-                };
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if std::fs::metadata(&path).is_ok_and(|meta| {
-                        std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type())
-                    }) {
-                        found.push(path);
-                    }
-                }
-            }
-            // Sorted to deduplicate, because two roots can name one socket and
-            // asking `contains` per entry compares every path against every
-            // path kept so far.
-            found.sort();
-            found.dedup();
-            (searched, found)
-        })
-        .await
-        .map_err(|error| {
-            ErrorData::internal_error(format!("the socket scan did not finish: {error}"), None)
-        })?;
-        let searched = scanned;
-        let mut found = listed;
-
-        // The bound server may sit outside that directory, which is exactly
-        // what --socket is for, so it is added rather than searched for.
-        if let Some(bound) = bound.as_ref()
-            && !found.contains(bound)
-        {
-            found.push(bound.clone());
-        }
-        found.sort();
-
-        let mut servers = Vec::with_capacity(found.len());
-        for socket in found {
-            let current = bound.as_ref() == Some(&socket);
-            let (sessions, unreachable) = match Server::builder()
-                .socket_path(&socket)
-                .build()
-                .map_err(|error| error.to_string())
-            {
-                Ok(server) => match server.sessions().await {
-                    Ok(sessions) => (u32::try_from(sessions.len()).ok(), None),
-                    Err(error) => (None, Some(error.to_string())),
-                },
-                Err(error) => (None, Some(error)),
-            };
-
-            servers.push(ServerListing {
-                name: socket
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned()),
-                socket: socket.display().to_string(),
-                sessions,
-                current,
-                unreachable,
-            });
-        }
-        servers.sort_by_key(|listing| !listing.current);
-
-        Ok(Json(ServerListings { servers, searched }))
-    }
-
-    /// Report which windows have produced output.
-    pub async fn what_changed(
-        &self,
-        Parameters(WhatChangedArgs { since }): Parameters<WhatChangedArgs>,
-    ) -> Result<Json<Changes>, ErrorData> {
-        let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
-        let checked = windows.len();
-
-        let mut busy: Vec<_> = windows
-            .iter()
-            .filter(|window| since.is_none_or(|since| window.last_activity() > since))
-            .map(|window| Busy {
-                id: window.id().to_string(),
-                session_id: window.session_id().to_string(),
-                name: lossy(window.name()),
-                activity: window.last_activity(),
-                panes: window.pane_count(),
-                active: window.is_active(),
-            })
-            .collect();
-        busy.sort_by_key(|window| std::cmp::Reverse(window.activity));
-
-        // The latest activity seen, rather than a clock reading. Comparing a
-        // caller's value against timestamps tmux wrote means both have to come
-        // from tmux, and this needs no second source to agree with.
-        let now = windows
-            .iter()
-            .map(libtmux::Window::last_activity)
-            .max()
-            .unwrap_or_default()
-            .max(since.unwrap_or_default());
-
-        Ok(Json(Changes {
-            windows: busy,
-            now,
-            windows_checked: checked,
-        }))
-    }
-
-    /// Expand a tmux format string.
-    pub async fn expand_format(
-        &self,
-        Parameters(FormatArgs { format, pane }): Parameters<FormatArgs>,
-    ) -> Result<Json<Formatted>, ErrorData> {
-        let target = match pane.as_deref() {
-            Some(pane) => Some(self.find_pane(pane).await?),
-            None => None,
-        };
-
-        let value = self
-            .server
-            .format(target.as_ref(), &format)
-            .await
-            .map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(Formatted {
-            format,
-            value: lossy(&value),
-            pane,
-        }))
-    }
-
     /// Read a tmux environment.
     #[tool(
         description = "Read the environment tmux hands to processes it starts, for the server \
@@ -681,7 +505,7 @@ impl TmuxTools {
                        running: a pane started before a change keeps what it was given.",
         title = "Show tmux Environment",
         meta = crate::capability_meta!(Inspect, None, [Observe], [ProcessEnvironment], true, true, {
-            "session" => [TmuxArgument]
+            "session" => [TmuxLookup]
         })
     )]
     pub async fn show_environment(
@@ -718,7 +542,7 @@ impl TmuxTools {
                        something no tool here asked for.",
         title = "Show tmux Hooks",
         meta = crate::capability_meta!(Inspect, None, [Observe], [ConfiguredCommand], true, true, {
-            "session" => [TmuxArgument]
+            "session" => [TmuxLookup]
         })
     )]
     pub async fn show_hooks(
@@ -753,13 +577,22 @@ mod tests {
 
     #[test]
     fn search_budget_refuses_bytes_beyond_the_limit() {
-        let mut budget = SearchBudget {
-            remaining: 3,
-            capped: false,
-        };
+        let mut budget = SearchBudget::new();
+        budget.remaining_bytes = 3;
 
         assert!(budget.take(2));
         assert!(!budget.take(2));
+        assert!(budget.capped);
+    }
+
+    #[test]
+    fn search_budget_counts_zero_byte_lines_as_work() {
+        let mut budget = SearchBudget::new();
+
+        for _ in 0..8192 {
+            assert!(budget.take(0));
+        }
+        assert!(!budget.take(0));
         assert!(budget.capped);
     }
 }

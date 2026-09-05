@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::router::tool::{ToolRoute, ToolRouter};
 use rmcp::model::{MetaObject, ToolAnnotations};
 use serde::{Deserialize, Serialize};
 
@@ -42,15 +42,65 @@ pub(crate) enum OutputClass {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum InputSink {
     None,
-    TmuxArgument,
+    TmuxLookup,
+    TmuxState,
     TmuxFormat,
     PaneInput,
-    PaneCommand,
-    HostCommand,
-    RegularExpression,
-    FilterExpression,
-    FilesystemPath,
+    ShellCommand,
+    ProcessArgv,
+    Regex,
     NestedTool,
+}
+
+#[cfg(test)]
+mod input_sink_tests {
+    use std::collections::BTreeSet;
+
+    use super::InputSink;
+
+    #[test]
+    fn wire_vocabulary_is_exact() {
+        let error = serde_json::from_str::<InputSink>(r#""not-a-sink""#)
+            .expect_err("the sentinel must not be a valid input sink")
+            .to_string();
+        let (_, expected) = error
+            .split_once("expected ")
+            .expect("serde lists the accepted wire variants");
+        let (expected, _) = expected
+            .split_once(" at line ")
+            .expect("serde reports the JSON location");
+        let actual: BTreeSet<_> = expected
+            .trim_start_matches("one of ")
+            .split(", ")
+            .map(|name| name.trim_matches('`'))
+            .collect();
+        let shared = BTreeSet::from([
+            "nested-tool",
+            "none",
+            "pane-input",
+            "process-argv",
+            "regex",
+            "shell-command",
+            "tmux-format",
+            "tmux-lookup",
+            "tmux-state",
+        ]);
+
+        assert_eq!(actual, shared);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum InputLiteralization {
+    DoubleHashOnce,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum TmuxFormatControl {
+    DoubleHashOnce,
+    ValidatedVariableName,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -100,11 +150,10 @@ pub(crate) struct Capability {
     pub(crate) may_return_untrusted_content: bool,
     pub(crate) annotations: Annotations,
     pub(crate) input_sinks: BTreeMap<String, BTreeSet<InputSink>>,
-    pub(crate) literalized_tmux_formats: BTreeSet<String>,
-    pub(crate) validated_tmux_formats: BTreeSet<String>,
+    pub(crate) input_literalization: BTreeMap<String, InputLiteralization>,
+    pub(crate) tmux_format_controls: BTreeMap<String, TmuxFormatControl>,
     pub(crate) nested_authority: BTreeSet<String>,
     pub(crate) amplifies_future_input: bool,
-    pub(crate) self_bounded: bool,
 }
 
 impl Capability {
@@ -184,9 +233,12 @@ fn capability(meta: Option<&MetaObject>, name: &str) -> Result<Capability, Surfa
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ReportTool {
     pub(crate) name: String,
-    pub(crate) title: Option<String>,
+    pub(crate) title: String,
+    pub(crate) description: String,
     #[serde(flatten)]
     pub(crate) capability: Capability,
+    pub(crate) input_schema: serde_json::Value,
+    pub(crate) output_schema: serde_json::Value,
 }
 
 #[cfg(test)]
@@ -200,19 +252,56 @@ impl ReportTool {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityReport {
-    pub(crate) contract_version: u8,
+    pub(crate) schema_version: u8,
     pub(crate) frozen: bool,
-    pub(crate) selected_toolsets: Vec<&'static str>,
+    pub(crate) boundary: BoundaryReport,
+    pub(crate) connection: ConnectionReport,
+    pub(crate) socket: SocketReport,
+    pub(crate) toolsets: Vec<&'static str>,
     pub(crate) included_tools: Vec<String>,
     pub(crate) excluded_tools: Vec<String>,
-    pub(crate) selected_socket: String,
-    pub(crate) socket_provenance: crate::policy::SocketProvenance,
-    pub(crate) minimal_config_provenance: bool,
+    pub(crate) tool_count: usize,
+    pub(crate) effective_tools: Vec<String>,
     pub(crate) tools: Vec<ReportTool>,
+    pub(crate) host_command_tools: u8,
+    pub(crate) tool_filtering_boundary: &'static str,
+    pub(crate) execution_authority: &'static str,
+    pub(crate) operating_system_boundary: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoundaryReport {
+    pub(crate) one_socket_per_process: bool,
+    pub(crate) per_call_socket_selection: bool,
+    pub(crate) host_command_execution: bool,
+    pub(crate) dynamic_resources: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConnectionReport {
+    pub(crate) socket_selector: String,
+    pub(crate) socket_provenance: &'static str,
+    pub(crate) resolved_socket_path: String,
+    pub(crate) server_state: &'static str,
+    pub(crate) configuration_provenance: &'static str,
+    pub(crate) attach_command: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SocketReport {
+    pub(crate) selector: String,
+    pub(crate) selection_provenance: &'static str,
+    pub(crate) server_state: &'static str,
+    pub(crate) configuration_provenance: &'static str,
+    pub(crate) namespace_boundary: &'static str,
 }
 
 pub(crate) struct Resolved {
     pub(crate) router: ToolRouter<TmuxTools>,
+    pub(crate) nested_router: ToolRouter<TmuxTools>,
     pub(crate) report: CapabilityReport,
 }
 
@@ -237,21 +326,10 @@ pub(crate) fn resolve(
         let input_schema = Arc::make_mut(&mut route.attr.input_schema);
         input_schema.insert("additionalProperties".to_owned(), false.into());
         validate(name, input_schema, &row, &known)?;
-        let opener = row.controlled_opener();
-        let remainder = route.attr.description.as_deref().unwrap_or("").trim();
-        route.attr.description = Some(
-            if remainder.starts_with(opener) {
-                remainder.to_owned()
-            } else if remainder.is_empty() {
-                opener.to_owned()
-            } else {
-                format!("{opener} {remainder}")
-            }
-            .into(),
-        );
-        route.attr.annotations = Some(row.annotations.render(route.attr.title.clone()));
         capabilities.insert(name.to_string(), row);
     }
+    let source_capabilities = capabilities.clone();
+    let mut nested_router = router.clone();
 
     let selected_toolsets: BTreeSet<_> = selection.toolsets().iter().copied().collect();
     let withheld: Vec<_> = capabilities
@@ -267,120 +345,286 @@ pub(crate) fn resolve(
         capabilities.remove(&name);
     }
 
-    let effective: BTreeSet<_> = capabilities.keys().cloned().collect();
     for row in capabilities.values_mut() {
-        row.nested_authority.retain(|name| effective.contains(name));
-    }
-    for (name, row) in &capabilities {
-        if row
-            .input_sinks
-            .values()
-            .any(|sinks| sinks.contains(&InputSink::NestedTool))
-        {
-            let route = router
-                .map
-                .get_mut(name.as_str())
-                .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no route")))?;
-            set_nested_tool_enum(
-                name,
-                Arc::make_mut(&mut route.attr.input_schema),
-                &row.nested_authority,
-            )?;
+        if !row.nested_authority.is_empty() {
+            row.nested_authority
+                .retain(|name| !selection.excludes(name));
+            recompute_aggregate(row, &source_capabilities)?;
         }
     }
-
-    let tools = capabilities
-        .into_iter()
-        .map(|(name, capability)| ReportTool {
-            title: router.get(&name).and_then(|tool| tool.title.clone()),
-            name,
-            capability,
-        })
+    let nested_authority: BTreeSet<_> = capabilities
+        .values()
+        .flat_map(|row| row.nested_authority.iter().cloned())
         .collect();
+    nested_router
+        .map
+        .retain(|name, _| nested_authority.contains(name.as_ref()));
+
+    let mut tools = Vec::with_capacity(capabilities.len());
+    for (name, row) in capabilities {
+        let route = router
+            .map
+            .get_mut(name.as_str())
+            .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no route")))?;
+        let report = finish_route(name.clone(), row, route, &nested_router)?;
+        refresh_metadata(route.attr.meta.as_mut(), name.as_str(), &report)?;
+        tools.push(report);
+    }
+
+    let effective_tools = tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect::<Vec<_>>();
     Ok(Resolved {
         router,
+        nested_router,
         report: CapabilityReport {
-            contract_version: 1,
+            schema_version: 1,
             frozen: true,
-            selected_toolsets: selection
+            boundary: BoundaryReport {
+                one_socket_per_process: true,
+                per_call_socket_selection: false,
+                host_command_execution: false,
+                dynamic_resources: false,
+            },
+            connection: ConnectionReport {
+                socket_selector: String::new(),
+                socket_provenance: "unknown",
+                resolved_socket_path: String::new(),
+                server_state: "unknown",
+                configuration_provenance: "unknown",
+                attach_command: String::new(),
+            },
+            socket: SocketReport {
+                selector: String::new(),
+                selection_provenance: "unknown",
+                server_state: "unknown",
+                configuration_provenance: "unknown",
+                namespace_boundary: "tmux-objects-only",
+            },
+            toolsets: selection
                 .toolsets()
                 .iter()
                 .map(|toolset| toolset.name())
                 .collect(),
             included_tools: selection.included_names().iter().cloned().collect(),
             excluded_tools: selection.excluded_names().iter().cloned().collect(),
-            selected_socket: String::new(),
-            socket_provenance: crate::policy::SocketProvenance::Unknown,
-            minimal_config_provenance: false,
+            tool_count: tools.len(),
+            effective_tools,
             tools,
+            host_command_tools: 0,
+            tool_filtering_boundary: "interface-shaping-not-authorization",
+            execution_authority: "tmux-user",
+            operating_system_boundary: "none",
         },
     })
 }
 
-fn set_nested_tool_enum(
+fn finish_route(
+    name: String,
+    row: Capability,
+    route: &mut ToolRoute<TmuxTools>,
+    nested_router: &ToolRouter<TmuxTools>,
+) -> Result<ReportTool, SurfaceError> {
+    let opener = row.controlled_opener();
+    let remainder = route.attr.description.as_deref().unwrap_or("").trim();
+    route.attr.description = Some(
+        if remainder.starts_with(opener) {
+            remainder.to_owned()
+        } else if remainder.is_empty() {
+            opener.to_owned()
+        } else {
+            format!("{opener} {remainder}")
+        }
+        .into(),
+    );
+    route.attr.annotations = Some(row.annotations.render(route.attr.title.clone()));
+    if row
+        .input_sinks
+        .values()
+        .any(|sinks| sinks.contains(&InputSink::NestedTool))
+    {
+        set_nested_operation_schemas(
+            &name,
+            Arc::make_mut(&mut route.attr.input_schema),
+            nested_router,
+        )?;
+    }
+    let title = route
+        .attr
+        .title
+        .as_deref()
+        .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no title")))?
+        .to_owned();
+    let description = route
+        .attr
+        .description
+        .as_deref()
+        .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no description")))?
+        .to_owned();
+    let output_schema = route
+        .attr
+        .output_schema
+        .as_ref()
+        .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no output schema")))?;
+    Ok(ReportTool {
+        name,
+        title,
+        description,
+        capability: row,
+        input_schema: serde_json::Value::Object((*route.attr.input_schema).clone()),
+        output_schema: serde_json::Value::Object((**output_schema).clone()),
+    })
+}
+
+fn recompute_aggregate(
+    aggregate: &mut Capability,
+    source: &BTreeMap<String, Capability>,
+) -> Result<(), SurfaceError> {
+    aggregate.tmux_effects.clear();
+    aggregate.output_classes.clear();
+    aggregate.may_expose_secrets = false;
+    aggregate.may_return_untrusted_content = false;
+    for name in &aggregate.nested_authority {
+        let nested = source
+            .get(name)
+            .ok_or_else(|| SurfaceError::new(format!("unknown nested tool {name:?}")))?;
+        aggregate
+            .tmux_effects
+            .extend(nested.tmux_effects.iter().copied());
+        aggregate
+            .output_classes
+            .extend(nested.output_classes.iter().copied());
+        aggregate.may_expose_secrets |= nested.may_expose_secrets;
+        aggregate.may_return_untrusted_content |= nested.may_return_untrusted_content;
+    }
+    if aggregate.nested_authority.is_empty() {
+        aggregate.tmux_effects.insert(TmuxEffect::Observe);
+    }
+    Ok(())
+}
+
+fn refresh_metadata(
+    meta: Option<&mut MetaObject>,
+    name: &str,
+    row: &ReportTool,
+) -> Result<(), SurfaceError> {
+    let meta = meta.ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no metadata")))?;
+    let value = serde_json::to_value(row).map_err(|error| {
+        SurfaceError::new(format!(
+            "tool {name:?} capability cannot serialize: {error}"
+        ))
+    })?;
+    meta.0.insert(CAPABILITY_KEY.to_owned(), value);
+    Ok(())
+}
+
+fn set_nested_operation_schemas(
     name: &str,
     schema: &mut serde_json::Map<String, serde_json::Value>,
-    nested: &BTreeSet<String>,
+    nested: &ToolRouter<TmuxTools>,
 ) -> Result<(), SurfaceError> {
-    fn visit(value: &mut serde_json::Value, nested: &BTreeSet<String>, changed: &mut usize) {
-        match value {
-            serde_json::Value::Object(object) => {
-                let operation = object
-                    .get("properties")
-                    .and_then(serde_json::Value::as_object)
-                    .is_some_and(|properties| {
-                        properties.contains_key("tool") && properties.contains_key("arguments")
-                    });
-                if operation
-                    && let Some(tool) = object
-                        .get_mut("properties")
-                        .and_then(serde_json::Value::as_object_mut)
-                        .and_then(|properties| properties.get_mut("tool"))
-                        .and_then(serde_json::Value::as_object_mut)
-                {
-                    if nested.is_empty() {
-                        tool.remove("enum");
-                        tool.insert(
-                            "not".to_owned(),
-                            serde_json::Value::Object(serde_json::Map::new()),
-                        );
-                    } else {
-                        tool.remove("not");
-                        tool.insert(
-                            "enum".to_owned(),
-                            serde_json::Value::Array(
-                                nested
-                                    .iter()
-                                    .cloned()
-                                    .map(serde_json::Value::from)
-                                    .collect(),
-                            ),
-                        );
-                    }
-                    *changed += 1;
-                }
-                object
-                    .values_mut()
-                    .for_each(|value| visit(value, nested, changed));
-            }
-            serde_json::Value::Array(values) => values
-                .iter_mut()
-                .for_each(|value| visit(value, nested, changed)),
-            _ => {}
+    let operations = schema
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|properties| properties.get_mut("operations"))
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no operations schema")))?;
+    let items = if nested.map.is_empty() {
+        serde_json::json!({"not": {}})
+    } else {
+        let mut names = nested
+            .map
+            .keys()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        names.sort();
+        let alternatives = names
+            .into_iter()
+            .map(|nested_name| {
+                let route = nested.map.get(nested_name.as_str()).ok_or_else(|| {
+                    SurfaceError::new(format!("unknown nested tool {nested_name:?}"))
+                })?;
+                let input = inline_local_references(serde_json::Value::Object(
+                    (*route.attr.input_schema).clone(),
+                ))?;
+                Ok(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "tool": {"type": "string", "const": nested_name},
+                        "arguments": input,
+                    },
+                    "required": ["tool"],
+                    "additionalProperties": false,
+                }))
+            })
+            .collect::<Result<Vec<_>, SurfaceError>>()?;
+        serde_json::json!({"oneOf": alternatives})
+    };
+    operations.insert("items".to_owned(), items);
+    if let Some(definitions) = schema
+        .get_mut("$defs")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        definitions.remove("ReadOperation");
+        if definitions.is_empty() {
+            schema.remove("$defs");
         }
     }
+    Ok(())
+}
 
-    let mut changed = 0;
-    schema
-        .values_mut()
-        .for_each(|value| visit(value, nested, &mut changed));
-    if changed == 1 {
-        Ok(())
-    } else {
-        Err(SurfaceError::new(format!(
-            "tool {name:?} has {changed} nested operation schemas, expected one"
-        )))
+fn inline_local_references(
+    mut schema: serde_json::Value,
+) -> Result<serde_json::Value, SurfaceError> {
+    let definitions = schema
+        .get("$defs")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("$defs");
     }
+    inline_references_in(&mut schema, &definitions, 0)?;
+    Ok(schema)
+}
+
+fn inline_references_in(
+    value: &mut serde_json::Value,
+    definitions: &serde_json::Map<String, serde_json::Value>,
+    depth: usize,
+) -> Result<(), SurfaceError> {
+    if depth > 32 {
+        return Err(SurfaceError::new(
+            "nested input schema reference depth exceeded",
+        ));
+    }
+    if let Some(reference) = value
+        .as_object()
+        .and_then(|object| object.get("$ref"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+    {
+        *value = definitions
+            .get(reference)
+            .cloned()
+            .ok_or_else(|| SurfaceError::new(format!("unknown schema reference {reference:?}")))?;
+        return inline_references_in(value, definitions, depth + 1);
+    }
+    match value {
+        serde_json::Value::Object(object) => {
+            for nested in object.values_mut() {
+                inline_references_in(nested, definitions, depth + 1)?;
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for nested in values {
+                inline_references_in(nested, definitions, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn validate(
@@ -416,19 +660,30 @@ fn validate(
                 "tool {name:?} input {input:?} combines none with another sink"
             )));
         }
-        if sinks.contains(&InputSink::HostCommand) {
-            return Err(SurfaceError::new(format!(
-                "tool {name:?} exposes prohibited host-command input {input:?}"
-            )));
-        }
-        if sinks.contains(&InputSink::TmuxFormat)
-            && !row.literalized_tmux_formats.contains(input)
-            && !row.validated_tmux_formats.contains(input)
-        {
-            return Err(SurfaceError::new(format!(
-                "tool {name:?} leaves tmux-format input {input:?} unrestricted"
-            )));
-        }
+    }
+    let format_inputs: BTreeSet<_> = row
+        .input_sinks
+        .iter()
+        .filter(|(_, sinks)| sinks.contains(&InputSink::TmuxFormat))
+        .map(|(input, _)| input.clone())
+        .collect();
+    let controlled_inputs: BTreeSet<_> = row.tmux_format_controls.keys().cloned().collect();
+    let literalized_inputs: BTreeSet<_> = row.input_literalization.keys().cloned().collect();
+    let double_hash_inputs: BTreeSet<_> = row
+        .tmux_format_controls
+        .iter()
+        .filter(|(_, control)| matches!(control, TmuxFormatControl::DoubleHashOnce))
+        .map(|(input, _)| input.clone())
+        .collect();
+    if format_inputs != controlled_inputs {
+        return Err(SurfaceError::new(format!(
+            "tool {name:?} tmux-format sinks do not equal tmux format control keys"
+        )));
+    }
+    if literalized_inputs != double_hash_inputs {
+        return Err(SurfaceError::new(format!(
+            "tool {name:?} input literalization does not equal double-hash tmux format controls"
+        )));
     }
     let has_pane_input = row
         .input_sinks
@@ -437,7 +692,11 @@ fn validate(
     let has_pane_command = row
         .input_sinks
         .values()
-        .any(|sinks| sinks.contains(&InputSink::PaneCommand));
+        .any(|sinks| sinks.contains(&InputSink::ShellCommand));
+    let has_nested_tool = row
+        .input_sinks
+        .values()
+        .any(|sinks| sinks.contains(&InputSink::NestedTool));
     match row.process_reach {
         ProcessReach::PaneInput if !has_pane_input => {
             return Err(SurfaceError::new(format!(
@@ -458,19 +717,39 @@ fn validate(
         }
         _ => {}
     }
-    if !row.literalized_tmux_formats.is_subset(&schema_keys) {
+    if !controlled_inputs.is_subset(&schema_keys) {
         return Err(SurfaceError::new(format!(
-            "tool {name:?} literalizes an input outside its schema"
+            "tool {name:?} controls a tmux-format input outside its schema"
         )));
     }
-    if !row.validated_tmux_formats.is_subset(&schema_keys) {
-        return Err(SurfaceError::new(format!(
-            "tool {name:?} validates an input outside its schema"
-        )));
-    }
+    validate_authority(name, row, known, has_nested_tool)?;
+    Ok(())
+}
+
+fn validate_authority(
+    name: &str,
+    row: &Capability,
+    known: &BTreeSet<String>,
+    has_nested_tool: bool,
+) -> Result<(), SurfaceError> {
     if !row.nested_authority.is_subset(known) {
         return Err(SurfaceError::new(format!(
             "tool {name:?} names unknown nested authority"
+        )));
+    }
+    if row.nested_authority.contains(name) {
+        return Err(SurfaceError::new(format!(
+            "tool {name:?} includes itself in nested authority"
+        )));
+    }
+    if has_nested_tool == row.nested_authority.is_empty() {
+        return Err(SurfaceError::new(format!(
+            "tool {name:?} must declare nested-tool sinks and nested authority together"
+        )));
+    }
+    if row.amplifies_future_input != (name == "set_synchronize_panes") {
+        return Err(SurfaceError::new(format!(
+            "tool {name:?} has an invalid future-input amplification declaration"
         )));
     }
     Ok(())
@@ -492,7 +771,7 @@ macro_rules! capability_meta {
             untrusted = $untrusted,
             sinks = {$($input => [$($sink),+]),*},
             literalized = [],
-            validated = [],
+            format_validated = [],
             nested = [],
             self_bounded = false,
             always_load = false,
@@ -512,7 +791,7 @@ macro_rules! capability_meta {
             untrusted = $untrusted,
             sinks = {$($input => [$($sink),+]),*},
             literalized = [],
-            validated = [],
+            format_validated = [],
             nested = [],
             self_bounded = false,
             always_load = true,
@@ -526,7 +805,7 @@ macro_rules! capability_meta {
         untrusted = $untrusted:expr,
         sinks = {$($input:literal => [$($sink:ident),+ $(,)?]),* $(,)?},
         literalized = [$($literalized:literal),* $(,)?],
-        validated = [$($validated:literal),* $(,)?],
+        $(format_validated = [$($validated:literal),* $(,)?],)?
         nested = [$($nested:literal),* $(,)?],
         self_bounded = $self_bounded:expr,
         always_load = $always_load:expr $(,)?
@@ -539,7 +818,7 @@ macro_rules! capability_meta {
             untrusted = $untrusted,
             sinks = {$($input => [$($sink),+]),*},
             literalized = [$($literalized),*],
-            validated = [$($validated),*],
+            format_validated = [$($($validated),*)?],
             nested = [$($nested),*],
             amplifies_future_input = false,
             self_bounded = $self_bounded,
@@ -554,7 +833,7 @@ macro_rules! capability_meta {
         untrusted = $untrusted:expr,
         sinks = {$($input:literal => [$($sink:ident),+ $(,)?]),* $(,)?},
         literalized = [$($literalized:literal),* $(,)?],
-        validated = [$($validated:literal),* $(,)?],
+        $(format_validated = [$($validated:literal),* $(,)?],)?
         nested = [$($nested:literal),* $(,)?],
         amplifies_future_input = $amplifies:expr,
         self_bounded = $self_bounded:expr,
@@ -583,17 +862,36 @@ macro_rules! capability_meta {
                 ),*]
                     .into_iter()
                     .collect(),
-                literalized_tmux_formats: [$($literalized.to_owned()),*]
+                input_literalization: [
+                    $(
+                        (
+                            $literalized.to_owned(),
+                            $crate::manifest::InputLiteralization::DoubleHashOnce,
+                        ),
+                    )*
+                ]
                     .into_iter()
                     .collect(),
-                validated_tmux_formats: [$($validated.to_owned()),*]
+                tmux_format_controls: [
+                    $(
+                        (
+                            $literalized.to_owned(),
+                            $crate::manifest::TmuxFormatControl::DoubleHashOnce,
+                        ),
+                    )*
+                    $($(
+                            (
+                                $validated.to_owned(),
+                                $crate::manifest::TmuxFormatControl::ValidatedVariableName,
+                            ),
+                    )*)?
+                ]
                     .into_iter()
                     .collect(),
                 nested_authority: [$($nested.to_owned()),*]
                     .into_iter()
                     .collect(),
                 amplifies_future_input: $amplifies,
-                self_bounded: $self_bounded,
             },
             $always_load,
         )

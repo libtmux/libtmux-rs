@@ -12,7 +12,7 @@
 use serde::Serialize;
 
 use crate::caller::Relation;
-use crate::schema::{ChannelWaitOutcomeSchema, OptionScopeSchema, WatchStopSchema};
+use crate::schema::ChannelWaitOutcomeSchema;
 
 /// One session, as the protocol sees it.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -130,20 +130,6 @@ pub struct Branch {
     pub windows: Vec<BranchWindow>,
 }
 
-/// The selected tmux server and inherited caller context.
-///
-/// Answered by the `tmux://server` resource. The inherited pane is launch
-/// context, not a claim that it belongs to the selected socket.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ServerView {
-    /// The socket this server talks to, as tmux reports it.
-    pub socket: Option<String>,
-    /// The pane id inherited at launch, without a selected-socket claim.
-    pub inherited_caller_pane: Option<String>,
-    /// How many sessions are on the server.
-    pub sessions: usize,
-}
-
 /// The whole hierarchy, in one answer.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Tree {
@@ -256,20 +242,6 @@ pub struct Since {
     pub first: bool,
 }
 
-/// What a pane produced while it was watched.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct Watch {
-    /// The pane that was watched.
-    pub pane: String,
-    /// What the pane wrote, with terminal escapes left in place.
-    pub output: String,
-    /// How many bytes arrived.
-    pub bytes: usize,
-    /// Why watching stopped.
-    #[schemars(with = "WatchStopSchema")]
-    pub stopped: String,
-}
-
 /// The value of one tmux option.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct OptionValue {
@@ -277,16 +249,6 @@ pub struct OptionValue {
     pub name: String,
     /// Its value, absent when it has never been set at that scope.
     pub value: Option<String>,
-}
-
-/// An option that was written.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct OptionSet {
-    /// The option name.
-    pub name: String,
-    /// The scope it was written at.
-    #[schemars(with = "OptionScopeSchema")]
-    pub scope: String,
 }
 
 /// How a wait on a channel finished.
@@ -326,78 +288,11 @@ pub struct Size {
     pub height: u32,
 }
 
-/// An object that was renamed.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct Renamed {
-    /// The id of what was renamed.
-    pub id: String,
-    /// Its new name.
-    pub name: String,
-}
-
 /// An object that was destroyed.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Killed {
     /// The id of what was destroyed.
     pub id: String,
-}
-
-/// A server that was stopped.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ServerKilled {
-    /// Always true; the call fails rather than reporting false.
-    pub killed: bool,
-}
-
-/// Every background command this server holds.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct JobList {
-    /// The jobs, newest first.
-    pub jobs: Vec<crate::jobs::JobView>,
-}
-
-/// A background command that is no longer retained.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct JobForgotten {
-    /// The job that was forgotten.
-    pub job: String,
-    /// The pane associated with the job.
-    pub pane: String,
-}
-
-/// One tmux server found on this machine.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ServerListing {
-    /// The socket path, which is what names the server.
-    pub socket: String,
-    /// The socket's bare name, as `-L` would take it.
-    pub name: Option<String>,
-    /// How many sessions it holds, when it answered.
-    pub sessions: Option<u32>,
-    /// Whether this is the server these tools are bound to.
-    pub current: bool,
-    /// Why the server could not be described, when it could not.
-    pub unreachable: Option<String>,
-}
-
-/// Every tmux server this machine appears to be running.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct ServerListings {
-    /// The servers, the bound one first.
-    pub servers: Vec<ServerListing>,
-    /// The directories that were searched.
-    pub searched: Vec<String>,
-}
-
-/// What a tmux format expanded to.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct Formatted {
-    /// The format as it was given.
-    pub format: String,
-    /// What tmux expanded it to.
-    pub value: String,
-    /// The pane it was expanded against, when one was named.
-    pub pane: Option<String>,
 }
 
 /// One tmux environment entry.
@@ -418,17 +313,6 @@ pub struct Environment {
     pub session: Option<String>,
 }
 
-/// A variable that was written.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct EnvironmentSet {
-    /// The variable name.
-    pub name: String,
-    /// The session it was written for, or absent for the server's.
-    pub session: Option<String>,
-    /// Whether the variable was removed rather than set.
-    pub removed: bool,
-}
-
 /// One tmux hook.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Hook {
@@ -445,15 +329,6 @@ pub struct Hook {
 pub struct Hooks {
     /// The hooks, in tmux's own order.
     pub hooks: Vec<Hook>,
-}
-
-/// A pane that is now being piped somewhere.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct Piped {
-    /// The pane that was piped.
-    pub pane: String,
-    /// Whether piping is now on.
-    pub piping: bool,
 }
 
 /// A window whose layout was set.
@@ -479,32 +354,4 @@ pub struct Pasted {
     pub pane: String,
     /// How many bytes were delivered.
     pub bytes: usize,
-}
-
-/// One window that has produced output.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct Busy {
-    /// The `@`-prefixed window identity.
-    pub id: String,
-    /// The session it was reached through.
-    pub session_id: String,
-    /// The window name.
-    pub name: String,
-    /// When it last wrote, in seconds since the Unix epoch.
-    pub activity: i64,
-    /// How many panes it holds.
-    pub panes: u32,
-    /// Whether it is its session's active window.
-    pub active: bool,
-}
-
-/// Which windows have written, and when to ask from next time.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-pub struct Changes {
-    /// The windows that wrote, most recent first.
-    pub windows: Vec<Busy>,
-    /// Pass this back as `since` to hear only about what happens next.
-    pub now: i64,
-    /// How many windows were considered.
-    pub windows_checked: usize,
 }

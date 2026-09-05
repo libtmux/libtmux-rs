@@ -1,6 +1,6 @@
 //! Reading the command line the binary was started with.
 //!
-//! Hand-written rather than reached for a parser crate. There are four
+//! Hand-written rather than reached for a parser crate. There are two
 //! options, and a server an agent runs is a server whose dependency list gets
 //! read: a tree pulled in to format one help text is a poor trade. The flags
 //! mirror tmux's own `-S` and `-L` so that someone who knows tmux already
@@ -16,8 +16,6 @@ pub struct Options {
     pub socket_path: Option<PathBuf>,
     /// The socket name to talk to, from `-L`.
     pub socket_name: Option<OsString>,
-    /// Command-line override for asking before teardown operations.
-    pub confirm: Option<bool>,
 }
 
 /// Why the binary is stopping before it serves anything.
@@ -42,10 +40,6 @@ pub const HELP: &str = concat!(
     "    -S, --socket <PATH>     Talk to the tmux server on this socket path\n",
     "    -L, --socket-name <NAME>\n",
     "                            Talk to the tmux server with this socket name\n",
-    "        --confirm           Ask before teardown tools. Command text is not\n",
-    "                            inspected.\n",
-    "        --no-confirm        Do not ask before those operations. Either flag\n",
-    "                            overrides TMUX_MCP_CONFIRM.\n",
     "    -h, --help              Print this help\n",
     "    -V, --version           Print the version\n",
     "\n",
@@ -99,18 +93,6 @@ impl Options {
                 }
                 "-L" | "--socket-name" => {
                     options.socket_name = Some(take("--socket-name")?);
-                }
-                "--confirm" | "--no-confirm" => {
-                    if inline.is_some() {
-                        return Err(Stop::Misuse(format!("{flag} does not take a value")));
-                    }
-                    let confirm = flag == "--confirm";
-                    if options.confirm.is_some_and(|current| current != confirm) {
-                        return Err(Stop::Misuse(
-                            "give either --confirm or --no-confirm, not both".to_owned(),
-                        ));
-                    }
-                    options.confirm = Some(confirm);
                 }
                 other => {
                     return Err(Stop::Misuse(format!("unrecognised argument {other}")));
@@ -168,36 +150,6 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_flags_state_an_explicit_opinion() {
-        assert_eq!(parse(&["--confirm"]).expect("valid").confirm, Some(true));
-        assert_eq!(
-            parse(&["--no-confirm"]).expect("valid").confirm,
-            Some(false)
-        );
-        assert_eq!(
-            parse(&["--no-confirm", "--no-confirm"])
-                .expect("repeating one opinion is harmless")
-                .confirm,
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn contradictory_confirmation_flags_are_refused() {
-        let refused =
-            parse(&["--confirm", "--no-confirm"]).expect_err("opposite flags are ambiguous");
-
-        assert!(matches!(refused, Stop::Misuse(reason) if reason.contains("not both")));
-    }
-
-    #[test]
-    fn confirmation_flags_do_not_accept_inline_values() {
-        let refused = parse(&["--confirm=false"]).expect_err("a boolean flag has no value");
-
-        assert!(matches!(refused, Stop::Misuse(reason) if reason.contains("does not take")));
-    }
-
-    #[test]
     fn a_flag_without_its_value_says_so() {
         let refused = parse(&["--socket"]).expect_err("refused");
 
@@ -228,8 +180,6 @@ mod tests {
             "--socket",
             "-L",
             "--socket-name",
-            "--confirm",
-            "--no-confirm",
             "-h",
             "--help",
             "-V",

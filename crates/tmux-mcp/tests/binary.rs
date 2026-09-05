@@ -3,6 +3,8 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::io::{BufRead as _, BufReader, Write as _};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
 
 use libtmux::test::TestServer;
@@ -114,7 +116,7 @@ fn base_command() -> Command {
         .env_remove("LIBTMUX_SOCKET")
         .env_remove("LIBTMUX_SOCKET_PATH")
         .env_remove("LIBTMUX_TMUX_CONFIG")
-        .env_remove("TMUX_MCP_CONFIRM")
+        .env_remove("TMUX_TMPDIR")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -152,7 +154,7 @@ fn explicit_existing_socket_defaults_without_teardown() {
         "binary",
     );
     let logged = process.finish();
-    assert!(logged.contains("user-configured socket"), "{logged}");
+    assert!(logged.contains("operator-selected socket"), "{logged}");
     runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
 }
 
@@ -231,12 +233,169 @@ fn configured_tmux_file_must_be_absolute() {
 }
 
 #[test]
+fn stale_default_socket_path_is_replaced_before_claiming_a_live_daemon() {
+    let root = PathBuf::from("/tmp/libtmux-rs-test")
+        .join(format!("mcp-provenance-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("fixture root");
+    let uid = std::fs::metadata(&root).expect("fixture metadata").uid();
+    let socket_dir = root.join(format!("tmux-{uid}"));
+    std::fs::create_dir(&socket_dir).expect("socket directory");
+    std::fs::set_permissions(&socket_dir, std::fs::Permissions::from_mode(0o700))
+        .expect("safe socket-directory permissions");
+    let socket = socket_dir.join("libtmux-mcp");
+    std::fs::write(&socket, b"stale, not a daemon").expect("stale socket fixture");
+
+    let mut process = Process::start(
+        &[],
+        &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
+    );
+    let response = process.request("resources/read", &json!({"uri": "tmux://capabilities"}));
+    let text = response["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("capability report text");
+    let report: Value = serde_json::from_str(text).expect("capability report JSON");
+
+    process.finish();
+    std::fs::remove_file(&socket).expect("socket link cleanup");
+    std::fs::remove_dir_all(&root).expect("fixture cleanup");
+
+    assert_eq!(report["socket"]["serverState"], "created");
+    assert_eq!(report["socket"]["configurationProvenance"], "minimal");
+    assert_eq!(report["toolCount"], 47);
+}
+
+#[test]
+fn default_startup_reports_dedicated_minimal_socket_provenance() {
+    let root = PathBuf::from("/tmp/libtmux-rs-test")
+        .join(format!("mcp-capabilities-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("fixture root");
+    let mut process = Process::start(
+        &[],
+        &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
+    );
+
+    let response = process.request("resources/read", &json!({"uri": "tmux://capabilities"}));
+    let text = response["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("capability report text");
+    let report: Value = serde_json::from_str(text).expect("capability report JSON");
+
+    assert_eq!(report["socket"]["selector"], "name:libtmux-mcp");
+    assert_eq!(report["socket"]["selectionProvenance"], "default-dedicated");
+    assert_eq!(report["socket"]["serverState"], "created");
+    assert_eq!(report["socket"]["configurationProvenance"], "minimal");
+    assert_eq!(report["connection"]["socketSelector"], "name:libtmux-mcp");
+    assert_eq!(
+        report["connection"]["socketProvenance"],
+        "default-dedicated"
+    );
+    assert_eq!(report["connection"]["serverState"], "created");
+    assert_eq!(report["connection"]["configurationProvenance"], "minimal");
+    assert!(report["connection"]["resolvedSocketPath"].is_string());
+    assert!(
+        report["connection"]["attachCommand"]
+            .as_str()
+            .is_some_and(|command| command.contains(" -N -S ") && command.ends_with(" attach"))
+    );
+    assert_eq!(report["boundary"]["oneSocketPerProcess"], true);
+    assert_eq!(report["boundary"]["perCallSocketSelection"], false);
+    assert_eq!(report["boundary"]["hostCommandExecution"], false);
+    assert_eq!(report["boundary"]["dynamicResources"], false);
+    assert_eq!(report["toolCount"], 47);
+
+    process.finish();
+    std::fs::remove_dir_all(root).expect("fixture cleanup");
+}
+
+#[test]
+fn only_the_process_whose_config_marker_loaded_claims_minimal_provenance() {
+    let root = PathBuf::from("/tmp/libtmux-rs-test")
+        .join(format!("mcp-launch-owner-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("fixture root");
+    let environment = [("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))];
+    let mut owner = Process::start(&[], &environment);
+    let owner_response = owner.request("resources/read", &json!({"uri": "tmux://capabilities"}));
+    let owner_report: Value = serde_json::from_str(
+        owner_response["result"]["contents"][0]["text"]
+            .as_str()
+            .expect("owner capability report"),
+    )
+    .expect("owner report JSON");
+
+    let mut follower = Process::start(&[], &environment);
+    let follower_response =
+        follower.request("resources/read", &json!({"uri": "tmux://capabilities"}));
+    let follower_report: Value = serde_json::from_str(
+        follower_response["result"]["contents"][0]["text"]
+            .as_str()
+            .expect("follower capability report"),
+    )
+    .expect("follower report JSON");
+
+    follower.finish();
+    owner.finish();
+    let socket_dir = root.join(format!(
+        "tmux-{}",
+        std::fs::metadata(&root).expect("fixture metadata").uid()
+    ));
+    let socket = socket_dir.join("libtmux-mcp");
+    if socket.exists() {
+        std::fs::remove_file(socket).expect("socket cleanup");
+    }
+    std::fs::remove_dir_all(root).expect("fixture cleanup");
+
+    assert_eq!(owner_report["socket"]["configurationProvenance"], "minimal");
+    assert_eq!(owner_report["toolCount"], 47);
+    assert_eq!(follower_report["socket"]["serverState"], "existing");
+    assert_eq!(
+        follower_report["socket"]["configurationProvenance"],
+        "unknown"
+    );
+    assert_eq!(follower_report["toolCount"], 43);
+}
+
+#[test]
+fn default_daemon_loads_the_shipped_minimal_configuration() {
+    let root = PathBuf::from("/tmp/libtmux-rs-test")
+        .join(format!("mcp-minimal-config-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("fixture root");
+    let mut process = Process::start(
+        &[],
+        &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
+    );
+
+    let created = process.request(
+        "tools/call",
+        &json!({"name": "create_session", "arguments": {"name": "minimal-config"}}),
+    );
+    assert_ne!(created["result"]["isError"], true, "{created}");
+    let status = process.request(
+        "tools/call",
+        &json!({
+            "name": "show_option",
+            "arguments": {"name": "status", "scope": "global-session"}
+        }),
+    );
+    assert_eq!(status["result"]["structuredContent"]["value"], "off");
+    let killed = process.request(
+        "tools/call",
+        &json!({"name": "kill_session", "arguments": {"session": "minimal-config"}}),
+    );
+    assert_ne!(killed["result"]["isError"], true, "{killed}");
+
+    process.finish();
+    std::fs::remove_dir_all(root).expect("fixture cleanup");
+}
+
+#[test]
 fn help_names_current_startup_controls_only() {
     let output = Command::new(BIN).arg("--help").output().expect("help runs");
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    for flag in ["--socket", "--socket-name", "--confirm", "--no-confirm"] {
+    for flag in ["--socket", "--socket-name"] {
         assert!(help.contains(flag), "{flag}");
     }
-    assert!(!help.contains("--safety"), "{help}");
+    for retired in ["--safety", "--confirm", "--no-confirm", "TMUX_MCP_CONFIRM"] {
+        assert!(!help.contains(retired), "{retired}: {help}");
+    }
 }

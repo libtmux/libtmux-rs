@@ -3,15 +3,16 @@
     reason = "native route descriptions are the protocol documentation"
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 use libtmux::{PaneSize, SplitDirection, SplitOptions};
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{CallToolRequestParams, ErrorData};
 use rmcp::schemars;
 use rmcp::service::RequestContext;
-use rmcp::{ServerHandler, tool, tool_router};
+use rmcp::{tool, tool_router};
 use serde::{Deserialize, Serialize};
 
 use crate::{PaneView, SessionView, TmuxTools, WindowView};
@@ -75,14 +76,18 @@ pub(crate) struct PositionArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct VariablesArgs {
-    pub(crate) pane: String,
-    pub(crate) format: String,
+pub struct VariablesArgs {
+    #[schemars(
+        length(min = 1, max = 32),
+        inner(regex(pattern = "^[A-Za-z][A-Za-z0-9_]*$"))
+    )]
+    pub names: Vec<String>,
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-pub(crate) struct VariablesValue {
-    pub(crate) value: String,
+pub struct VariablesValue {
+    pub values: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -151,48 +156,68 @@ pub(crate) struct SendOperation {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SendBatchArgs {
     pub(crate) operations: Vec<SendOperation>,
-    pub(crate) continue_on_error: bool,
+    #[serde(default)]
+    pub(crate) on_error: OnError,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BatchItem {
     pub(crate) index: usize,
     pub(crate) tool: String,
     pub(crate) success: bool,
     pub(crate) result: Option<serde_json::Value>,
-    pub(crate) error: Option<String>,
+    pub(crate) result_truncated: bool,
+    pub(crate) error: Option<ErrorData>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct BatchResult {
     pub(crate) results: Vec<BatchItem>,
     pub(crate) succeeded: usize,
     pub(crate) failed: usize,
+    pub(crate) stopped_at: Option<usize>,
     pub(crate) truncated: bool,
+    pub(crate) truncated_bytes: usize,
+    pub(crate) on_error: OnError,
 }
 
 impl BatchResult {
-    fn complete(results: Vec<BatchItem>) -> Self {
-        Self::from_results(results, false)
+    fn complete(results: Vec<BatchItem>, on_error: OnError, stopped_at: Option<usize>) -> Self {
+        Self::from_results(results, on_error, stopped_at, false, 0)
     }
 
-    fn from_results(results: Vec<BatchItem>, truncated: bool) -> Self {
+    fn from_results(
+        results: Vec<BatchItem>,
+        on_error: OnError,
+        stopped_at: Option<usize>,
+        truncated: bool,
+        truncated_bytes: usize,
+    ) -> Self {
         let succeeded = results.iter().filter(|item| item.success).count();
         Self {
             failed: results.len() - succeeded,
             succeeded,
             results,
+            stopped_at,
             truncated,
+            truncated_bytes,
+            on_error,
         }
     }
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BatchResultRef<'a> {
     results: &'a [BatchItem],
     succeeded: usize,
     failed: usize,
+    stopped_at: Option<usize>,
     truncated: bool,
+    truncated_bytes: usize,
+    on_error: OnError,
 }
 
 #[derive(Default)]
@@ -209,35 +234,111 @@ impl io::Write for ByteCounter {
     }
 }
 
-#[derive(Default)]
 struct ReadBatchAccumulator {
     results: Vec<BatchItem>,
     truncated: bool,
+    truncated_bytes: usize,
+    stopped_at: Option<usize>,
+    on_error: OnError,
+}
+
+impl Default for ReadBatchAccumulator {
+    fn default() -> Self {
+        Self::new(OnError::Stop)
+    }
 }
 
 impl ReadBatchAccumulator {
+    const fn new(on_error: OnError) -> Self {
+        Self {
+            results: Vec::new(),
+            truncated: false,
+            truncated_bytes: 0,
+            stopped_at: None,
+            on_error,
+        }
+    }
+
     fn push(&mut self, item: BatchItem) -> bool {
         self.results.push(item);
+        self.fit()
+    }
+
+    fn fit(&mut self) -> bool {
+        while self.response_bytes() > READ_BATCH_MAX_BYTES {
+            let Some(item) = self.results.iter_mut().find(|item| item.result.is_some()) else {
+                let removed = self.results.pop();
+                self.truncated_bytes = self.truncated_bytes.saturating_add(
+                    removed
+                        .as_ref()
+                        .and_then(|item| serde_json::to_vec(item).ok())
+                        .map_or(0, |encoded| encoded.len()),
+                );
+                self.truncated = true;
+                return false;
+            };
+            let removed = item
+                .result
+                .as_ref()
+                .and_then(|result| serde_json::to_vec(result).ok())
+                .map_or(0, |encoded| encoded.len().saturating_sub(4));
+            item.result = None;
+            item.result_truncated = true;
+            self.truncated_bytes = self.truncated_bytes.saturating_add(removed);
+            self.truncated = true;
+        }
+        true
+    }
+
+    fn response_bytes(&self) -> usize {
         let succeeded = self.results.iter().filter(|item| item.success).count();
         let view = BatchResultRef {
             failed: self.results.len() - succeeded,
             succeeded,
             results: &self.results,
-            truncated: false,
+            stopped_at: self.stopped_at,
+            truncated: self.truncated,
+            truncated_bytes: self.truncated_bytes,
+            on_error: self.on_error,
         };
+        let value = match serde_json::to_value(&view) {
+            Ok(value) => value,
+            Err(_) => return usize::MAX,
+        };
+        let response = rmcp::model::CallToolResult::structured(value);
         let mut bytes = ByteCounter::default();
-        let encoded = serde_json::to_writer(&mut bytes, &view).map_or(usize::MAX, |()| bytes.0);
-        if encoded <= READ_BATCH_MAX_BYTES {
-            true
-        } else {
-            self.results.pop();
-            self.truncated = true;
-            false
-        }
+        serde_json::to_writer(&mut bytes, &response).map_or(usize::MAX, |()| bytes.0)
+    }
+
+    fn stop_at(&mut self, index: usize) {
+        self.stopped_at = Some(index);
+        let _ = self.fit();
     }
 
     fn finish(self) -> BatchResult {
-        BatchResult::from_results(self.results, self.truncated)
+        BatchResult::from_results(
+            self.results,
+            self.on_error,
+            self.stopped_at,
+            self.truncated,
+            self.truncated_bytes,
+        )
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum OnError {
+    #[default]
+    Stop,
+    Continue,
+}
+
+impl OnError {
+    const fn stops(self) -> bool {
+        matches!(self, Self::Stop)
     }
 }
 
@@ -254,35 +355,14 @@ pub(crate) struct ReadOperation {
 pub(crate) struct ReadBatchArgs {
     #[schemars(length(min = 1, max = 16))]
     pub(crate) operations: Vec<ReadOperation>,
-    pub(crate) continue_on_error: bool,
+    #[serde(default)]
+    pub(crate) on_error: OnError,
 }
 
-fn format_variables_are_bounded(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] != b'#' {
-            at += 1;
-            continue;
-        }
-        if bytes.get(at + 1) != Some(&b'{') {
-            return false;
-        }
-        let Some(close) = bytes[at + 2..].iter().position(|byte| *byte == b'}') else {
-            return false;
-        };
-        let name = &bytes[at + 2..at + 2 + close];
-        if name.is_empty()
-            || !matches!(name[0], b'A'..=b'Z' | b'a'..=b'z' | b'_' | b'@')
-            || !name[1..]
-                .iter()
-                .all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
-        {
-            return false;
-        }
-        at += close + 3;
-    }
-    true
+fn is_variable_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 #[tool_router(router = contract_router, vis = "pub(super)")]
@@ -291,7 +371,7 @@ impl TmuxTools {
         description = "Return metadata for one session",
         title = "Get Session Info",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
-            "session" => [TmuxArgument]
+            "session" => [TmuxLookup]
         })
     )]
     pub async fn get_session_info(
@@ -311,7 +391,7 @@ impl TmuxTools {
         description = "Return metadata for one window",
         title = "Get Window Info",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument]
+            "window" => [TmuxLookup]
         })
     )]
     pub async fn get_window_info(
@@ -325,7 +405,7 @@ impl TmuxTools {
         description = "Return metadata for one pane",
         title = "Get Pane Info",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument]
+            "pane" => [TmuxLookup]
         })
     )]
     pub async fn get_pane_info(
@@ -341,8 +421,8 @@ impl TmuxTools {
         description = "Find the pane touching a named window corner",
         title = "Find Pane By Position",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument],
-            "corner" => [None]
+            "window" => [TmuxLookup],
+            "corner" => [TmuxLookup]
         })
     )]
     pub async fn find_pane_by_position(
@@ -389,32 +469,43 @@ impl TmuxTools {
             outputs = [TmuxMetadata, ConfiguredCommand],
             secrets = true,
             untrusted = true,
-            sinks = {"pane" => [TmuxArgument], "format" => [TmuxFormat]},
+            sinks = {"names" => [TmuxFormat], "pane" => [TmuxLookup]},
             literalized = [],
-            validated = ["format"],
+            format_validated = ["names"],
             nested = [],
-            self_bounded = true,
+            self_bounded = false,
             always_load = false,
         )
     )]
     pub async fn get_tmux_variables(
         &self,
-        Parameters(VariablesArgs { pane, format }): Parameters<VariablesArgs>,
+        Parameters(VariablesArgs { names, pane }): Parameters<VariablesArgs>,
     ) -> Result<Json<VariablesValue>, ErrorData> {
-        if !format_variables_are_bounded(&format) {
+        if !(1..=32).contains(&names.len()) {
             return Err(bad_input(
-                "format accepts literal text and #{variable} references only".to_owned(),
+                "names must contain between one and 32 tmux variables".to_owned(),
             ));
         }
-        let pane = self.find_pane(&pane).await?;
-        let value = self
-            .server
-            .format(Some(&pane), &format)
-            .await
-            .map_err(|error| tmux_error(&error))?;
-        Ok(Json(VariablesValue {
-            value: lossy(&value),
-        }))
+        let pane = match pane {
+            Some(target) => Some(self.find_pane(&target).await?),
+            None => None,
+        };
+        let mut values = BTreeMap::new();
+        for name in names {
+            if !is_variable_name(&name) {
+                return Err(bad_input(format!(
+                    "{name:?} is not a tmux variable name; use letters, digits, and underscores"
+                )));
+            }
+            let format = format!("#{{{name}}}");
+            let value = self
+                .server
+                .format(pane.as_ref(), &format)
+                .await
+                .map_err(|error| tmux_error(&error))?;
+            values.insert(name, lossy(&value));
+        }
+        Ok(Json(VariablesValue { values }))
     }
 
     #[tool(
@@ -423,8 +514,8 @@ impl TmuxTools {
         meta = crate::capability_meta!(
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
-            sinks = {"session" => [TmuxArgument], "name" => [TmuxFormat]},
-            literalized = ["name"], validated = [], nested = [], self_bounded = false,
+            sinks = {"session" => [TmuxLookup], "name" => [TmuxState, TmuxFormat]},
+            literalized = ["name"], nested = [], self_bounded = false,
             always_load = false,
         )
     )]
@@ -451,8 +542,8 @@ impl TmuxTools {
         meta = crate::capability_meta!(
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
-            sinks = {"window" => [TmuxArgument], "name" => [TmuxFormat]},
-            literalized = ["name"], validated = [], nested = [], self_bounded = false,
+            sinks = {"window" => [TmuxLookup], "name" => [TmuxState, TmuxFormat]},
+            literalized = ["name"], nested = [], self_bounded = false,
             always_load = false,
         )
     )]
@@ -472,7 +563,7 @@ impl TmuxTools {
         description = "Resize one window to exact cell dimensions",
         title = "Resize Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument], "width" => [None], "height" => [None]
+            "window" => [TmuxLookup], "width" => [TmuxState], "height" => [TmuxState]
         })
     )]
     pub async fn resize_window(
@@ -495,9 +586,9 @@ impl TmuxTools {
         description = "Move one window to a session and index",
         title = "Move Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument],
-            "destination_session" => [TmuxArgument],
-            "destination_index" => [None]
+            "window" => [TmuxLookup],
+            "destination_session" => [TmuxLookup],
+            "destination_index" => [TmuxState]
         })
     )]
     pub async fn move_window(
@@ -521,7 +612,7 @@ impl TmuxTools {
         description = "Swap the positions of two panes",
         title = "Swap Panes",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "source_pane" => [TmuxArgument], "target_pane" => [TmuxArgument]
+            "source_pane" => [TmuxLookup], "target_pane" => [TmuxLookup]
         })
     )]
     pub async fn swap_pane(
@@ -547,8 +638,8 @@ impl TmuxTools {
         meta = crate::capability_meta!(
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
-            sinks = {"pane" => [TmuxArgument], "title" => [TmuxFormat]},
-            literalized = ["title"], validated = [], nested = [], self_bounded = false,
+            sinks = {"pane" => [TmuxLookup], "title" => [TmuxState, TmuxFormat]},
+            literalized = ["title"], nested = [], self_bounded = false,
             always_load = false,
         )
     )]
@@ -568,7 +659,7 @@ impl TmuxTools {
         description = "Enter copy mode in one pane",
         title = "Enter Copy Mode",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument]
+            "pane" => [TmuxLookup]
         })
     )]
     pub async fn enter_copy_mode(
@@ -586,7 +677,7 @@ impl TmuxTools {
         description = "Exit copy mode or another pane mode",
         title = "Exit Copy Mode",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument]
+            "pane" => [TmuxLookup]
         })
     )]
     pub async fn exit_copy_mode(
@@ -604,7 +695,7 @@ impl TmuxTools {
         description = "Set mouse handling for a session or the global session default",
         title = "Set Mouse Enabled",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "session" => [TmuxArgument], "enabled" => [None]
+            "session" => [TmuxLookup], "enabled" => [TmuxState]
         })
     )]
     pub async fn set_mouse_enabled(
@@ -635,7 +726,7 @@ impl TmuxTools {
         description = "Set the scrollback history limit for a session or its global default",
         title = "Set History Limit",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "session" => [TmuxArgument], "limit" => [None]
+            "session" => [TmuxLookup], "limit" => [TmuxState]
         })
     )]
     pub async fn set_history_limit(
@@ -668,10 +759,10 @@ impl TmuxTools {
             Execute, ConfiguredProcess,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {
-                "session" => [TmuxArgument], "name" => [TmuxFormat],
-                "start_directory" => [FilesystemPath, TmuxFormat]
+                "session" => [TmuxLookup], "name" => [TmuxState, TmuxFormat],
+                "start_directory" => [TmuxState, TmuxFormat]
             },
-            literalized = ["name", "start_directory"], validated = [], nested = [],
+            literalized = ["name", "start_directory"], nested = [],
             self_bounded = false, always_load = false,
         )
     )]
@@ -705,10 +796,10 @@ impl TmuxTools {
             Execute, ConfiguredProcess,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {
-                "pane" => [TmuxArgument], "direction" => [None], "percent" => [None],
-                "start_directory" => [FilesystemPath, TmuxFormat]
+                "pane" => [TmuxLookup], "direction" => [TmuxState], "percent" => [TmuxState],
+                "start_directory" => [TmuxState, TmuxFormat]
             },
-            literalized = ["start_directory"], validated = [], nested = [],
+            literalized = ["start_directory"], nested = [],
             self_bounded = false, always_load = false,
         )
     )]
@@ -755,7 +846,7 @@ impl TmuxTools {
         description = "Restart a pane's configured process with no command payload",
         title = "Respawn Pane",
         meta = crate::capability_meta!(Execute, ConfiguredProcess, [Change, Delete], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument], "kill_first" => [None]
+            "pane" => [TmuxLookup], "kill_first" => [None]
         })
     )]
     pub async fn respawn_pane_configured(
@@ -779,8 +870,8 @@ impl TmuxTools {
         meta = crate::capability_meta!(
             Execute, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
-            sinks = {"window" => [TmuxArgument], "enabled" => [None]},
-            literalized = [], validated = [], nested = [],
+            sinks = {"window" => [TmuxLookup], "enabled" => [TmuxState]},
+            literalized = [], nested = [],
             amplifies_future_input = true,
             self_bounded = false, always_load = false,
         )
@@ -806,14 +897,14 @@ impl TmuxTools {
         description = "Send an ordered batch of input operations to panes",
         title = "Send Keys Batch",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
-            "operations" => [PaneInput], "continue_on_error" => [None]
+            "operations" => [TmuxLookup, PaneInput], "on_error" => [None]
         })
     )]
     pub async fn send_keys_batch(
         &self,
         Parameters(SendBatchArgs {
             operations,
-            continue_on_error,
+            on_error,
         }): Parameters<SendBatchArgs>,
     ) -> Result<Json<BatchResult>, ErrorData> {
         if operations.is_empty() || operations.len() > 64 {
@@ -838,6 +929,7 @@ impl TmuxTools {
                     tool,
                     success: true,
                     result: serde_json::to_value(value.0).ok(),
+                    result_truncated: false,
                     error: None,
                 }),
                 Err(error) => {
@@ -846,22 +938,29 @@ impl TmuxTools {
                         tool,
                         success: false,
                         result: None,
-                        error: Some(error.message.into_owned()),
+                        result_truncated: false,
+                        error: Some(error),
                     });
-                    if !continue_on_error {
+                    if on_error.stops() {
                         break;
                     }
                 }
             }
         }
-        Ok(Json(BatchResult::complete(results)))
+        let stopped_at = on_error
+            .stops()
+            .then(|| results.last())
+            .flatten()
+            .filter(|item| !item.success)
+            .map(|item| item.index);
+        Ok(Json(BatchResult::complete(results, on_error, stopped_at)))
     }
 
     #[tool(
         description = "Call a serial batch of at most sixteen enabled inspect tools. One \
                        approval for this batch covers every enabled nested name; inner tools do \
-                       not receive separate client approval. The structured result is capped at \
-                       1 MiB and reports truncated=true.",
+                       not receive separate client approval. The full serialized outer MCP \
+                       response is capped at 1 MiB; truncated rows and omitted bytes are explicit.",
         title = "Call Read Tools Batch",
         meta = crate::capability_meta!(
             Inspect, None,
@@ -869,9 +968,8 @@ impl TmuxTools {
             outputs = [TmuxMetadata, TerminalContent, ProcessEnvironment, ConfiguredCommand],
             secrets = true,
             untrusted = true,
-            sinks = {"operations" => [NestedTool], "continue_on_error" => [None]},
+            sinks = {"operations" => [NestedTool], "on_error" => [None]},
             literalized = [],
-            validated = [],
             nested = [
                 "list_sessions", "list_windows", "list_panes", "get_server_info",
                 "get_session_info", "get_window_info", "get_pane_info", "capture_pane",
@@ -886,7 +984,7 @@ impl TmuxTools {
         &self,
         Parameters(ReadBatchArgs {
             operations,
-            continue_on_error,
+            on_error,
         }): Parameters<ReadBatchArgs>,
         context: RequestContext<rmcp::RoleServer>,
     ) -> Result<Json<BatchResult>, ErrorData> {
@@ -903,30 +1001,34 @@ impl TmuxTools {
             .into_iter()
             .flat_map(|row| row.capability.nested_authority.iter().map(String::as_str))
             .collect();
-        let mut batch = ReadBatchAccumulator {
-            results: Vec::with_capacity(operations.len()),
-            truncated: false,
-        };
+        let mut batch = ReadBatchAccumulator::new(on_error);
+        batch.results.reserve(operations.len());
         for (index, operation) in operations.into_iter().enumerate() {
             let tool = operation.tool;
             if !allowed.contains(tool.as_str()) {
                 if !batch.push(BatchItem {
                     index,
-                    error: Some(format!("{tool} is not an enabled inspect tool")),
+                    error: Some(bad_input(format!("{tool} is not an enabled inspect tool"))),
                     tool,
                     success: false,
                     result: None,
+                    result_truncated: false,
                 }) {
                     break;
                 }
-                if !continue_on_error {
+                if on_error.stops() {
+                    batch.stop_at(index);
                     break;
                 }
                 continue;
             }
             let request =
                 CallToolRequestParams::new(tool.clone()).with_arguments(operation.arguments);
-            match ServerHandler::call_tool(self, request, context.clone()).await {
+            match self
+                .nested_tool_router
+                .call(ToolCallContext::new(self, request, context.clone()))
+                .await
+            {
                 Ok(rmcp::model::CallToolResponse::Complete(result)) => {
                     let failed = result.is_error == Some(true);
                     if !batch.push(BatchItem {
@@ -934,11 +1036,13 @@ impl TmuxTools {
                         tool,
                         success: !failed,
                         result: serde_json::to_value(result).ok(),
+                        result_truncated: false,
                         error: None,
                     }) {
                         break;
                     }
-                    if failed && !continue_on_error {
+                    if failed && on_error.stops() {
+                        batch.stop_at(index);
                         break;
                     }
                 }
@@ -948,11 +1052,20 @@ impl TmuxTools {
                         tool,
                         success: false,
                         result: None,
-                        error: Some("nested tool did not complete synchronously".to_owned()),
+                        result_truncated: false,
+                        error: Some(ErrorData::internal_error(
+                            "nested tool did not complete synchronously",
+                            Some(serde_json::json!({
+                                "kind": "internal",
+                                "retryable": false,
+                                "stale": false,
+                            })),
+                        )),
                     }) {
                         break;
                     }
-                    if !continue_on_error {
+                    if on_error.stops() {
+                        batch.stop_at(index);
                         break;
                     }
                 }
@@ -962,11 +1075,13 @@ impl TmuxTools {
                         tool,
                         success: false,
                         result: None,
-                        error: Some(error.message.into_owned()),
+                        result_truncated: false,
+                        error: Some(error),
                     }) {
                         break;
                     }
-                    if !continue_on_error {
+                    if on_error.stops() {
+                        batch.stop_at(index);
                         break;
                     }
                 }
@@ -981,24 +1096,41 @@ mod batch_tests {
     use super::*;
 
     #[test]
-    fn read_batch_truncates_before_its_structured_response_limit() {
-        let item = |index| BatchItem {
+    fn read_batch_caps_the_full_outer_response_and_marks_elided_rows() {
+        let item = |index, text: String| BatchItem {
             index,
             tool: "capture_pane".to_owned(),
             success: true,
             result: Some(serde_json::json!({
-                "structuredContent": {"text": "x".repeat(READ_BATCH_MAX_BYTES * 3 / 4)}
+                "structuredContent": {"text": text}
             })),
+            result_truncated: false,
             error: None,
         };
+        let empty =
+            BatchResult::from_results(vec![item(0, String::new())], OnError::Stop, None, false, 0);
+        let fixed_bytes = serde_json::to_vec(&empty)
+            .expect("empty batch serializes")
+            .len();
         let mut batch = ReadBatchAccumulator::default();
 
-        assert!(batch.push(item(0)));
-        assert!(!batch.push(item(1)));
+        assert!(batch.push(item(0, "x".repeat(READ_BATCH_MAX_BYTES - fixed_bytes),)));
         let result = batch.finish();
-        let encoded = serde_json::to_vec(&result).expect("batch result serializes");
+        let value = serde_json::to_value(&result).expect("batch result converts to JSON");
+        let envelope = rmcp::model::CallToolResult::structured(value);
+        let encoded = serde_json::to_vec(&envelope).expect("outer tool result serializes");
+        let report = serde_json::to_value(&result).expect("batch result converts to JSON");
 
-        assert!(result.truncated);
+        assert_eq!(report["truncated"], true);
+        assert!(
+            report["truncatedBytes"]
+                .as_u64()
+                .is_some_and(|bytes| bytes > 0)
+        );
+        assert_eq!(report["results"][0]["resultTruncated"], true);
+        assert_eq!(report["onError"], "stop");
+        assert!(report.get("truncated_bytes").is_none());
+        assert!(report["results"][0].get("result_truncated").is_none());
         assert_eq!(result.results.len(), 1);
         assert!(encoded.len() <= READ_BATCH_MAX_BYTES);
     }

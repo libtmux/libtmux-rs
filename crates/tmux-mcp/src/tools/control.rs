@@ -1,27 +1,18 @@
-#![allow(
-    clippy::missing_errors_doc,
-    reason = "legacy direct-call shims are not part of the advertised MCP API"
-)]
-
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libtmux::{
-    Command, Error, NewSessionOptions, PaneSize, ResizeDirection, SplitDirection, SplitOptions,
-};
+use libtmux::{Command, Error, NewSessionOptions, ResizeDirection};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::{
-    Asking, ChannelArgs, ChannelSignal, CreateSessionArgs, EnvironmentSet, Killed, Layout,
-    NewWindowArgs, OptionArgs, OptionSet, PaneArgs, PaneChanged, PaneView, PasteTextArgs, Pasted,
-    PipePaneArgs, Piped, RenameArgs, Renamed, ResizePaneArgs, RespawnPaneArgs, SelectLayoutArgs,
-    SelectPaneArgs, SelectWindowArgs, SendKeysArgs, Sent, ServerKilled, SessionArgs, SessionView,
-    SetEnvironmentArgs, Size, SplitPaneArgs, TmuxTools, WindowArgs, WindowView, Windows,
+    ChannelArgs, ChannelSignal, CreateSessionArgs, Killed, Layout, PaneArgs, PaneChanged, PaneView,
+    PasteTextArgs, Pasted, ResizePaneArgs, SelectLayoutArgs, SelectPaneArgs, SelectWindowArgs,
+    SendKeysArgs, Sent, SessionArgs, SessionView, Size, TmuxTools, WindowArgs, Windows,
 };
 
-use super::error::{EffectBoundary, bad_input, object_gone, tmux_error, vanished};
-use super::{OptionScope, lossy};
+use super::error::{EffectBoundary, bad_input, tmux_error, vanished};
+use super::lossy;
 
 /// Numbers temporary paste buffers so concurrent calls cannot share one.
 static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -57,44 +48,21 @@ impl TmuxTools {
 
 #[tool_router(router = control_router, vis = "pub(super)")]
 impl TmuxTools {
-    /// Create a window in one session.
-    pub async fn new_window(
-        &self,
-        Parameters(NewWindowArgs { session, name }): Parameters<NewWindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
-        let session = self.find_session(&session).await?;
-        let options = name.map(libtmux::escape_format).map_or_else(
-            libtmux::NewWindowOptions::unnamed,
-            libtmux::NewWindowOptions::new,
-        );
-        let window = session
-            .new_window(options)
-            .await
-            .map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(Self::one_window(&window)))
-    }
-
     /// Kill one window.
     #[tool(
         description = "Kill a window, closing it in every session that links it",
         title = "Kill Window",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument]
+            "window" => [TmuxLookup]
         })
     )]
     pub async fn kill_window(
         &self,
         Parameters(WindowArgs { window }): Parameters<WindowArgs>,
-        asking: Asking,
     ) -> Result<Json<Killed>, ErrorData> {
         let window = self.find_window(&window).await?;
         let id = window.id().to_string();
         self.protect_window_caller(&window).await?;
-        self.permitted(&asking, &format!("window {id}")).await?;
-        if self.confirm {
-            self.protect_window_caller(&window).await?;
-        }
         window.kill().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Killed { id }))
@@ -105,64 +73,21 @@ impl TmuxTools {
         description = "Kill a pane. Killing a window's last pane closes the window",
         title = "Kill Pane",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument]
+            "pane" => [TmuxLookup]
         })
     )]
     pub async fn kill_pane(
         &self,
         Parameters(PaneArgs { pane }): Parameters<PaneArgs>,
-        asking: Asking,
     ) -> Result<Json<Killed>, ErrorData> {
         let pane = self.find_pane(&pane).await?;
         let id = pane.id().to_string();
         if self.protected_pane().await == Some(id.as_str()) {
             return Err(Self::self_harm("pane", &id));
         }
-        self.permitted(&asking, &format!("pane {id}")).await?;
         pane.kill().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Killed { id }))
-    }
-
-    /// Rename a session or a window.
-    pub async fn rename(
-        &self,
-        Parameters(RenameArgs { target, name }): Parameters<RenameArgs>,
-    ) -> Result<Json<Renamed>, ErrorData> {
-        if target.starts_with('@') {
-            let mut window = self.find_window(&target).await?;
-            window
-                .rename(libtmux::escape_format(name))
-                .await
-                .map_err(|e| tmux_error(&e))?;
-
-            // tmux expands a name as a format before storing it, so what it
-            // holds may not be what was asked for: `w#{pane_index}x` lands as
-            // `w0x`. Reporting the request would hand back a name that targets
-            // nothing. `rename` refreshes the handle, so this is what tmux has.
-            return Ok(Json(Renamed {
-                id: window.id().to_string(),
-                name: window.name().to_string_lossy().into_owned(),
-            }));
-        }
-
-        let mut session = self
-            .server
-            .sessions()
-            .await
-            .map_err(|e| tmux_error(&e))?
-            .into_iter()
-            .find(|session| session.id().to_string() == target)
-            .ok_or_else(|| object_gone("session", &target))?;
-        session
-            .rename(libtmux::escape_format(name))
-            .await
-            .map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(Renamed {
-            id: session.id().to_string(),
-            name: session.name().to_string_lossy().into_owned(),
-        }))
     }
 
     /// Create a detached session.
@@ -176,11 +101,10 @@ impl TmuxTools {
             secrets = true,
             untrusted = true,
             sinks = {
-                "name" => [TmuxFormat],
-                "start_directory" => [FilesystemPath, TmuxFormat]
+                "name" => [TmuxState, TmuxFormat],
+                "start_directory" => [TmuxState, TmuxFormat]
             },
             literalized = ["name", "start_directory"],
-            validated = [],
             nested = [],
             self_bounded = false,
             always_load = false,
@@ -217,75 +141,19 @@ impl TmuxTools {
         description = "Kill a tmux session and everything in it",
         title = "Kill Session",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
-            "session" => [TmuxArgument]
+            "session" => [TmuxLookup]
         })
     )]
     pub async fn kill_session(
         &self,
         Parameters(SessionArgs { session }): Parameters<SessionArgs>,
-        asking: Asking,
     ) -> Result<Json<Killed>, ErrorData> {
         let target = self.find_session(&session).await?;
         let id = target.id().to_string();
         self.protect_session_caller(&target).await?;
-        self.permitted(&asking, &format!("session {id}")).await?;
-        if self.confirm {
-            self.protect_session_caller(&target).await?;
-        }
         target.kill().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Killed { id }))
-    }
-
-    /// Split the window holding a pane, creating another pane.
-    pub async fn split_pane(
-        &self,
-        Parameters(SplitPaneArgs {
-            pane,
-            direction,
-            percent,
-            command,
-        }): Parameters<SplitPaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
-        let direction = match direction.as_deref() {
-            None | Some("below") => SplitDirection::Below,
-            Some("above") => SplitDirection::Above,
-            Some("left") => SplitDirection::Left,
-            Some("right") => SplitDirection::Right,
-            Some(other) => {
-                return Err(bad_input(format!(
-                    "direction must be above, below, left, or right, not {other}"
-                )));
-            }
-        };
-
-        let mut options = SplitOptions::new(direction);
-        if let Some(percent) = percent {
-            // Checked here rather than left to tmux, which does not agree with
-            // itself: 3.7b refuses a percentage above 100 and 3.2a accepts it.
-            // An agent should get the same answer from the same call whatever
-            // tmux is underneath.
-            if !(1..=100).contains(&percent) {
-                return Err(bad_input(format!(
-                    "percent must be between 1 and 100, not {percent}"
-                )));
-            }
-            options = options.size(PaneSize::Percent(percent));
-        }
-        if let Some(command) = command {
-            options = options.command(command);
-        }
-
-        // Divide the pane that was named, not whichever one is active.
-        let created = self
-            .find_pane(&pane)
-            .await?
-            .split(options)
-            .await
-            .map_err(|e| tmux_error(&e))?;
-
-        let socket = self.socket().await;
-        Ok(Json(self.pane_view(&created, socket)))
     }
 
     /// Move one edge of a pane.
@@ -293,9 +161,9 @@ impl TmuxTools {
         description = "Move one edge of a pane by a number of rows or columns",
         title = "Resize Pane",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument],
-            "direction" => [None],
-            "cells" => [None]
+            "pane" => [TmuxLookup],
+            "direction" => [TmuxState],
+            "cells" => [TmuxState]
         })
     )]
     pub async fn resize_pane(
@@ -339,7 +207,7 @@ impl TmuxTools {
                        interpreted. Text is sent first, then keys, then Enter if asked.",
         title = "Send Keys To Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument],
+            "pane" => [TmuxLookup],
             "text" => [PaneInput],
             "keys" => [PaneInput],
             "enter" => [PaneInput]
@@ -406,8 +274,8 @@ impl TmuxTools {
                        previous step through the window in order.",
         title = "Select Pane",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument],
-            "direction" => [None]
+            "pane" => [TmuxLookup],
+            "direction" => [TmuxState]
         })
     )]
     pub async fn select_pane(
@@ -493,8 +361,8 @@ impl TmuxTools {
                        previously active window.",
         title = "Select Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument],
-            "direction" => [None]
+            "window" => [TmuxLookup],
+            "direction" => [TmuxState]
         })
     )]
     pub async fn select_window(
@@ -561,114 +429,6 @@ impl TmuxTools {
         Ok(Json(Self::render_windows(&[active])))
     }
 
-    /// Write a tmux option.
-    pub async fn set_option(
-        &self,
-        Parameters(OptionArgs {
-            name,
-            scope,
-            target,
-            value,
-        }): Parameters<OptionArgs>,
-    ) -> Result<Json<OptionSet>, ErrorData> {
-        let value = value.ok_or_else(|| {
-            bad_input("set_option needs a value; use show_option to read one".to_owned())
-        })?;
-        let value = value.to_string();
-
-        match self
-            .option_scope(scope.as_deref(), target.as_deref())
-            .await?
-        {
-            OptionScope::Server => self.server.set_option(&name, &value).await,
-            OptionScope::GlobalSession => self.server.set_global_option(&name, &value).await,
-            OptionScope::GlobalWindow => self.server.set_global_window_option(&name, &value).await,
-            OptionScope::Session(session) => session.set_option(&name, &value).await,
-            OptionScope::Window(window) => window.set_option(&name, &value).await,
-            OptionScope::Pane(pane) => pane.set_option(&name, &value).await,
-        }
-        .map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(OptionSet {
-            name,
-            scope: scope.unwrap_or_else(|| "global-session".to_owned()),
-        }))
-    }
-
-    /// Kill the whole server.
-    pub async fn kill_server(&self, asking: Asking) -> Result<Json<ServerKilled>, ErrorData> {
-        // Nothing on this server survives, so the caller's pane need not be
-        // looked up: being here at all is disqualifying.
-        if let Some(own) = self.protected_pane().await {
-            return Err(Self::self_harm("server", own));
-        }
-        self.permitted(&asking, "this tmux server and every session on it")
-            .await?;
-        // `Server::shutdown` closes this crate's own subprocess executor and
-        // leaves the daemon running, which is the opposite of what this tool
-        // promises.
-        let result = self
-            .server
-            .cmd(Command::new("kill-server"))
-            .await
-            .map_err(|e| tmux_error(&e))?;
-        if let Some(error) = result.refusal_for("kill-server") {
-            return Err(tmux_error(&error));
-        }
-
-        Ok(Json(ServerKilled { killed: true }))
-    }
-
-    /// Write a tmux environment variable.
-    pub async fn set_environment(
-        &self,
-        Parameters(SetEnvironmentArgs {
-            name,
-            value,
-            session,
-        }): Parameters<SetEnvironmentArgs>,
-    ) -> Result<Json<EnvironmentSet>, ErrorData> {
-        let removed = value.is_none();
-        match (session.as_deref(), value) {
-            (Some(target), Some(value)) => {
-                self.find_session(target)
-                    .await?
-                    .set_environment(&name, value)
-                    .await
-            }
-            (Some(target), None) => {
-                self.find_session(target)
-                    .await?
-                    .unset_environment(&name)
-                    .await
-            }
-            (None, Some(value)) => self.server.set_environment(&name, value).await,
-            (None, None) => self.server.unset_environment(&name).await,
-        }
-        .map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(EnvironmentSet {
-            name,
-            session,
-            removed,
-        }))
-    }
-
-    /// Send a pane's output to a command as it arrives.
-    pub async fn pipe_pane(
-        &self,
-        Parameters(PipePaneArgs { pane, command }): Parameters<PipePaneArgs>,
-    ) -> Result<Json<Piped>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
-        let piping = command.is_some();
-        target.pipe(command).await.map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(Piped {
-            pane: target.id().to_string(),
-            piping,
-        }))
-    }
-
     /// Arrange a window's panes.
     #[tool(
         description = "Rearrange a window's panes into a named layout, or into a layout \
@@ -676,8 +436,8 @@ impl TmuxTools {
                        main-horizontal, main-vertical or tiled.",
         title = "Arrange Window Panes",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "window" => [TmuxArgument],
-            "layout" => [TmuxArgument]
+            "window" => [TmuxLookup],
+            "layout" => [TmuxState]
         })
     )]
     pub async fn select_layout(
@@ -719,7 +479,7 @@ impl TmuxTools {
                        output every time. The visible screen is left alone.",
         title = "Clear Pane History",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument]
+            "pane" => [TmuxLookup]
         })
     )]
     pub async fn clear_pane(
@@ -728,26 +488,6 @@ impl TmuxTools {
     ) -> Result<Json<PaneChanged>, ErrorData> {
         let target = self.find_pane(&pane).await?;
         target.clear_history().await.map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(PaneChanged {
-            pane: target.id().to_string(),
-        }))
-    }
-
-    /// Restart what a pane runs.
-    pub async fn respawn_pane(
-        &self,
-        Parameters(RespawnPaneArgs {
-            pane,
-            command,
-            kill_first,
-        }): Parameters<RespawnPaneArgs>,
-    ) -> Result<Json<PaneChanged>, ErrorData> {
-        let mut target = self.find_pane(&pane).await?;
-        target
-            .respawn(command, kill_first)
-            .await
-            .map_err(|e| tmux_error(&e))?;
 
         Ok(Json(PaneChanged {
             pane: target.id().to_string(),
@@ -763,7 +503,7 @@ impl TmuxTools {
                        is deleted afterwards.",
         title = "Paste Text Into Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
-            "pane" => [TmuxArgument],
+            "pane" => [TmuxLookup],
             "text" => [PaneInput]
         })
     )]
@@ -800,7 +540,7 @@ impl TmuxTools {
                        clears that latch.",
         title = "Signal Channel",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
-            "channel" => [TmuxArgument],
+            "channel" => [TmuxState],
             "seconds" => [None]
         })
     )]
@@ -904,10 +644,7 @@ mod tests {
             .default_timeout(Duration::from_secs(2))
             .build()
             .expect("a bounded handle");
-        let tools = TmuxTools::builder(bounded.clone())
-            .caller(None)
-            .confirm(false)
-            .build();
+        let tools = TmuxTools::builder(bounded.clone()).caller(None).build();
 
         let result = tools
             .send_keys(Parameters(SendKeysArgs {

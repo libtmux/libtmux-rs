@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
 use std::future::Future;
@@ -7,10 +8,8 @@ use std::time::Duration;
 
 use libtmux::Server;
 use rmcp::model::ErrorData;
-use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::jobs::Jobs;
 use crate::tail::Tails;
 use crate::{CallerIdentity, TmuxTools, schema, tools};
 
@@ -28,9 +27,6 @@ pub const EXCLUDE_TOOLS_ENV: &str = "LIBTMUX_EXCLUDE_TOOLS";
 
 /// The retired ordered-safety setting, rejected rather than ignored.
 pub const RETIRED_SAFETY_ENV: &str = "LIBTMUX_SAFETY";
-
-/// The environment variable asking before teardown tools.
-pub const CONFIRM_ENV: &str = "TMUX_MCP_CONFIRM";
 
 /// One mechanical group in the advertised MCP tool inventory.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -239,8 +235,14 @@ pub enum SocketProvenance {
     DedicatedMinimal,
     /// The product socket already existed, so its configuration is unknown.
     DedicatedExisting,
-    /// The operator selected a socket or configuration.
+    /// The operator selected a socket, whose daemon configuration is unknown.
+    OperatorSelected,
+    /// The operator selected a socket where no daemon answered at startup.
+    OperatorSelectedAbsent,
+    /// The operator selected an explicit tmux configuration for an absent daemon.
     UserConfigured,
+    /// A daemon already answered, so an explicit config was not its provenance.
+    UserConfiguredExisting,
     /// A programmatic builder did not provide provenance.
     #[default]
     Unknown,
@@ -253,8 +255,51 @@ impl SocketProvenance {
         matches!(self, Self::DedicatedMinimal)
     }
 
-    const fn has_minimal_config(self) -> bool {
-        matches!(self, Self::DedicatedMinimal)
+    fn report(self, server: &Server) -> crate::manifest::SocketReport {
+        let selector = server.socket_name().map_or_else(
+            || format!("path:{}", server.socket_path().display()),
+            |name| format!("name:{}", name.to_string_lossy()),
+        );
+        let (selection_provenance, server_state, configuration_provenance) = match self {
+            Self::DedicatedMinimal => ("default-dedicated", "created", "minimal"),
+            Self::DedicatedExisting => ("default-dedicated", "existing", "unknown"),
+            Self::OperatorSelected => ("operator-current", "existing", "unknown"),
+            Self::OperatorSelectedAbsent => ("operator-current", "absent", "unknown"),
+            Self::UserConfigured => ("operator-current", "absent", "user-configured"),
+            Self::UserConfiguredExisting => ("operator-current", "existing", "unknown"),
+            Self::Unknown => ("unknown", "unknown", "unknown"),
+        };
+        crate::manifest::SocketReport {
+            selector,
+            selection_provenance,
+            server_state,
+            configuration_provenance,
+            namespace_boundary: "tmux-objects-only",
+        }
+    }
+}
+
+fn shell_quote(value: &OsStr) -> String {
+    let value = value.to_string_lossy();
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn connection_report(
+    socket: &crate::manifest::SocketReport,
+    server: &Server,
+) -> crate::manifest::ConnectionReport {
+    let path = server.socket_path().as_os_str();
+    crate::manifest::ConnectionReport {
+        socket_selector: socket.selector.clone(),
+        socket_provenance: socket.selection_provenance,
+        resolved_socket_path: server.socket_path().to_string_lossy().into_owned(),
+        server_state: socket.server_state,
+        configuration_provenance: socket.configuration_provenance,
+        attach_command: format!(
+            "{} -N -S {} attach",
+            shell_quote(server.tmux_executable()),
+            shell_quote(path),
+        ),
     }
 }
 
@@ -265,7 +310,6 @@ pub struct Builder {
     caller: Option<CallerIdentity>,
     selection: Selection,
     socket_provenance: SocketProvenance,
-    confirm: bool,
 }
 
 impl Builder {
@@ -287,13 +331,6 @@ impl Builder {
     #[must_use]
     pub const fn socket_provenance(mut self, provenance: SocketProvenance) -> Self {
         self.socket_provenance = provenance;
-        self
-    }
-
-    /// Ask before teardown tools.
-    #[must_use]
-    pub const fn confirm(mut self, confirm: bool) -> Self {
-        self.confirm = confirm;
         self
     }
 
@@ -327,19 +364,18 @@ impl Builder {
             }
         }
         let mut resolved = crate::manifest::resolve(router, &self.selection)?;
-        resolved.report.selected_socket = self.server.socket_path().display().to_string();
-        resolved.report.socket_provenance = self.socket_provenance;
-        resolved.report.minimal_config_provenance = self.socket_provenance.has_minimal_config();
+        let socket = self.socket_provenance.report(&self.server);
+        resolved.report.connection = connection_report(&socket, &self.server);
+        resolved.report.socket = socket;
         let router = resolved.router;
         Ok(TmuxTools {
             server: Arc::new(self.server),
             caller: self.caller.map(Arc::new),
             capability_report: Arc::new(resolved.report),
-            confirm: self.confirm,
             socket: Arc::new(OnceLock::new()),
-            tails: Arc::new(Tails::new(Arc::clone(&identity))),
-            jobs: Arc::new(Jobs::new(identity)),
+            tails: Arc::new(Tails::new(identity)),
             tool_router: router,
+            nested_tool_router: resolved.nested_router,
         })
     }
 }
@@ -444,122 +480,6 @@ pub(super) async fn reporting<T>(
 /// How often a long call says it is still going.
 const PROGRESS_EVERY: Duration = Duration::from_secs(5);
 
-/// What a person is asked before something irreversible happens.
-///
-/// One field, because the question is one question. A client renders this
-/// from the schema, so the doc comment below is what the person reads.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct Confirmation {
-    /// Destroy it?
-    pub confirmed: bool,
-}
-
-rmcp::elicit_safe!(Confirmation);
-
-/// Whoever can be asked before work is destroyed.
-///
-/// Extracted like [`Reporter`], and for the same reason: a tool declares that
-/// it asks by taking one, and an empty one can be built directly so these
-/// tools can still be driven without a live client.
-#[derive(Clone, Debug, Default)]
-pub struct Asking(Option<rmcp::service::Peer<rmcp::RoleServer>>);
-
-impl Asking {
-    /// A gate with nobody to ask.
-    #[must_use]
-    pub const fn nobody() -> Self {
-        Self(None)
-    }
-}
-
-impl<C> rmcp::handler::server::common::FromContextPart<C> for Asking
-where
-    C: rmcp::handler::server::common::AsRequestContext,
-{
-    fn from_context_part(context: &mut C) -> Result<Self, ErrorData> {
-        Ok(Self(Some(context.as_request_context().peer.clone())))
-    }
-}
-
-/// How long a person is given to answer before the question is withdrawn.
-///
-/// Generous, because the answer is a person leaving their terminal to read a
-/// prompt, and short enough that an abandoned client does not hold a tool
-/// call open indefinitely.
-const CONFIRM_WITHIN: Duration = Duration::from_secs(120);
-
-/// Read whether to ask before teardown tools.
-///
-/// An absent setting or an explicit no leaves it off. An unreadable or
-/// unrecognised setting enables it, so a typo cannot silently remove a gate
-/// the operator intended to use.
-#[must_use]
-pub fn confirm_from_env() -> bool {
-    confirm_from_value(std::env::var(CONFIRM_ENV))
-}
-
-fn confirm_from_value(value: Result<String, std::env::VarError>) -> bool {
-    match value {
-        Err(std::env::VarError::NotPresent) => false,
-        Err(std::env::VarError::NotUnicode(_)) => true,
-        Ok(value) => !matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "no" | "off"
-        ),
-    }
-}
-
-impl TmuxTools {
-    /// Ask before a teardown operation, when configured.
-    ///
-    /// Fails closed. A server told to confirm and given no way to ask has to
-    /// refuse: proceeding would be exactly the unattended destruction the
-    /// setting exists to prevent, and the operator would never learn the
-    /// question went unasked.
-    pub(super) async fn permitted(&self, asking: &Asking, what: &str) -> Result<(), ErrorData> {
-        if !self.confirm {
-            return Ok(());
-        }
-
-        let Some(peer) = asking.0.as_ref() else {
-            return Err(refused_without_asking(what, "there is no client to ask"));
-        };
-
-        match peer
-            .elicit_with_timeout::<Confirmation>(
-                format!("Destroy {what}? This cannot be undone."),
-                Some(CONFIRM_WITHIN),
-            )
-            .await
-        {
-            Ok(Some(answer)) if answer.confirmed => Ok(()),
-            Ok(Some(_)) => Err(refused_without_asking(what, "the request was declined")),
-            Ok(None) => Err(refused_without_asking(what, "the request was dismissed")),
-            Err(error) => Err(refused_without_asking(
-                what,
-                &format!("the client could not ask: {error}"),
-            )),
-        }
-    }
-}
-
-/// Report a destructive call that was not approved.
-///
-/// Classified `refused` rather than `object_gone`: nothing is stale, and the
-/// answer is not to look again but to get a person to agree.
-fn refused_without_asking(what: &str, why: &str) -> ErrorData {
-    let mut data = serde_json::Map::new();
-    data.insert("kind".into(), "refused".into());
-    data.insert("retryable".into(), false.into());
-    data.insert("stale".into(), false.into());
-
-    ErrorData::new(
-        rmcp::model::ErrorCode::INVALID_REQUEST,
-        format!("destroying {what} was not approved: {why}"),
-        Some(serde_json::Value::Object(data)),
-    )
-}
-
 impl TmuxTools {
     /// Expose one tmux server, locating this process within it.
     #[must_use]
@@ -584,20 +504,15 @@ impl TmuxTools {
                 exclude: BTreeSet::new(),
             },
             socket_provenance: SocketProvenance::Unknown,
-            confirm: confirm_from_env(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::env::VarError;
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt as _;
-
-    use super::{Selection, Toolset, confirm_from_value};
+    use super::{Selection, Toolset};
     use crate::manifest::OutputClass;
+    use std::collections::BTreeSet;
 
     #[test]
     fn toolset_selection_distinguishes_empty_from_empty_tokens() {
@@ -701,69 +616,6 @@ mod tests {
     }
 
     #[test]
-    fn native_surface_matches_the_cross_port_contract() {
-        let expected: BTreeSet<_> = [
-            "list_sessions",
-            "list_windows",
-            "list_panes",
-            "get_server_info",
-            "get_session_info",
-            "get_window_info",
-            "get_pane_info",
-            "capture_pane",
-            "capture_since",
-            "snapshot_pane",
-            "search_panes",
-            "find_pane_by_position",
-            "wait_for_text",
-            "get_tmux_variables",
-            "show_option",
-            "show_environment",
-            "show_hooks",
-            "call_read_tools_batch",
-            "rename_session",
-            "rename_window",
-            "select_window",
-            "select_pane",
-            "select_layout",
-            "resize_window",
-            "resize_pane",
-            "move_window",
-            "swap_pane",
-            "set_pane_title",
-            "enter_copy_mode",
-            "exit_copy_mode",
-            "wait_for_channel",
-            "signal_channel",
-            "set_mouse_enabled",
-            "set_history_limit",
-            "create_session",
-            "create_window",
-            "split_window",
-            "respawn_pane",
-            "run_shell_command",
-            "send_keys",
-            "send_keys_batch",
-            "paste_text",
-            "set_synchronize_panes",
-            "clear_pane_scrollback",
-            "kill_pane",
-            "kill_window",
-            "kill_session",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-        let actual: BTreeSet<_> = crate::tools::router()
-            .map
-            .keys()
-            .map(ToString::to_string)
-            .collect();
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
     fn unknown_provenance_defaults_without_teardown() {
         let selection = Selection::parse(None, None, None).expect("conservative default");
         assert_eq!(
@@ -812,37 +664,27 @@ mod tests {
     }
 
     #[test]
-    fn read_batch_has_exact_unbounded_inspect_authority() {
+    fn read_batch_covers_every_non_self_bounded_inspect_route() {
         let selection = Selection::parse(Some("inspect"), None, None).expect("selection");
         let resolved =
             crate::manifest::resolve(crate::tools::router(), &selection).expect("resolved surface");
+        let expected: BTreeSet<_> = resolved
+            .report
+            .tools
+            .iter()
+            .filter(|tool| {
+                tool.capability.toolset == Toolset::Inspect
+                    && tool.name != "call_read_tools_batch"
+                    && tool.name != "wait_for_text"
+            })
+            .map(|tool| tool.name.clone())
+            .collect();
         let batch = resolved
             .report
             .tools
             .iter()
             .find(|tool| tool.name == "call_read_tools_batch")
             .expect("batch route");
-        let expected = [
-            "list_sessions",
-            "list_windows",
-            "list_panes",
-            "get_server_info",
-            "get_session_info",
-            "get_window_info",
-            "get_pane_info",
-            "capture_pane",
-            "capture_since",
-            "snapshot_pane",
-            "search_panes",
-            "find_pane_by_position",
-            "get_tmux_variables",
-            "show_option",
-            "show_environment",
-            "show_hooks",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
 
         assert_eq!(batch.capability.nested_authority, expected);
         let description = resolved
@@ -856,15 +698,5 @@ mod tests {
             description.contains("inner tools do not receive separate client approval"),
             "{description}"
         );
-    }
-
-    #[test]
-    fn invalid_confirmation_configuration_enables_the_gate() {
-        assert!(!confirm_from_value(Err(VarError::NotPresent)));
-        assert!(!confirm_from_value(Ok("false".to_owned())));
-        assert!(confirm_from_value(Ok("ture".to_owned())));
-        assert!(confirm_from_value(Err(VarError::NotUnicode(
-            OsString::from_vec(vec![0xff]),
-        ))));
     }
 }

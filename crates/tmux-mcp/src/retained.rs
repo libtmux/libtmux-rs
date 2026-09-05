@@ -1,4 +1,4 @@
-//! Bounded byte storage shared by foreground and retained command readers.
+//! Bounded byte storage for pane-command output collectors.
 
 /// The most command output one operation retains.
 ///
@@ -19,14 +19,6 @@ pub(crate) struct RetainedBytes {
 impl RetainedBytes {
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_slice(bytes: &[u8]) -> Self {
-        Self {
-            bytes: bytes.to_vec(),
-            head: 0,
-        }
     }
 
     pub(crate) fn as_slice(&self) -> &[u8] {

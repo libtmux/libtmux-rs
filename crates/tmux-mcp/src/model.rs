@@ -1,9 +1,9 @@
 use rmcp::schemars;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::schema::{
     OptionScopeSchema, ResizeDirectionSchema, SelectPaneDirectionSchema,
-    SelectWindowDirectionSchema, SplitDirectionSchema,
+    SelectWindowDirectionSchema,
 };
 
 /// Arguments naming one session.
@@ -38,58 +38,6 @@ pub struct PaneArgs {
 pub struct WindowArgs {
     /// The `@`-prefixed window id, as `list_windows` reports it.
     pub window: String,
-}
-
-/// Arguments for creating a window in a session.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct NewWindowArgs {
-    /// The session name to create the window in.
-    pub session: String,
-    /// An optional name for the new window.
-    pub name: Option<String>,
-}
-
-/// Arguments for renaming an object.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RenameArgs {
-    /// The `$`-prefixed session id or `@`-prefixed window id to rename.
-    pub target: String,
-    /// The new name.
-    pub name: String,
-}
-
-/// Arguments carrying a portable filter expression, and what to apply it to.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FilterArgs {
-    /// A libtmux filter expression envelope.
-    ///
-    /// `{"version": 1, "target": "pane", "expr": {...}}`. The same grammar the
-    /// TypeScript port speaks, so an agent can build one expression and use it
-    /// against either.
-    pub filter: libtmux::query::FilterExpr<libtmux::Pane>,
-    /// Only consider panes in this session, by name.
-    ///
-    /// An expression names one object's own fields, so a pane cannot ask
-    /// about its session. Narrowing first is how that question is asked, and
-    /// it is what tmux itself does with a target.
-    pub session: Option<String>,
-    /// Only consider panes in this window, by `@`-prefixed id.
-    pub window: Option<String>,
-}
-
-/// Arguments carrying a portable filter over the whole hierarchy.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct TreeFilterArgs {
-    /// A libtmux filter expression envelope targeting `session_tree`.
-    ///
-    /// `{"version": 1, "target": "session_tree", "expr": {...}}`. A session's
-    /// own fields are named directly; `windows` is a relation taking `any`,
-    /// `all`, or `none`, and a window's `panes` is another.
-    pub filter: libtmux::query::FilterExpr<libtmux::SessionTree>,
 }
 
 /// Arguments for moving focus between panes.
@@ -128,89 +76,11 @@ pub struct RunCommandArgs {
     pub suppress_history: bool,
 }
 
-/// Arguments for starting a command that outlives this call.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct StartCommandArgs {
-    /// The `%`-prefixed pane to run in.
-    pub pane: String,
-    /// The shell command to run.
-    ///
-    /// It runs inside a subshell, so several lines are fine and a bare `exit`
-    /// does not end the pane's own shell.
-    pub command: String,
-    /// Whether to keep the command out of the shell's history.
-    #[serde(default)]
-    pub suppress_history: bool,
-}
-
-/// Arguments for asking how a background command is getting on.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct JobStatusArgs {
-    /// The job id `start_command` returned.
-    pub job: String,
-    /// The cursor from the previous call, to read only what is new.
-    ///
-    /// Omit it to read the command's output from the beginning.
-    pub cursor: Option<u64>,
-    /// Seconds to wait for the job to finish before answering.
-    ///
-    /// Omitted or zero answers immediately, which is the cheap poll. A value
-    /// here returns as soon as the job ends rather than at the deadline, so
-    /// waiting costs nothing when the job was already over.
-    pub seconds: Option<u64>,
-}
-
-/// Arguments for forgetting a background command.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ForgetJobArgs {
-    /// The job id `start_command` returned.
-    pub job: String,
-}
-
-/// Arguments for asking which windows have written lately.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WhatChangedArgs {
-    /// Report only windows that wrote after this time.
-    ///
-    /// Pass back the `now` from the previous call. Omit it to see every
-    /// window ordered by how recently it wrote.
-    pub since: Option<i64>,
-}
-
-/// Arguments for expanding a tmux format.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FormatArgs {
-    /// The tmux format to expand, such as `#{pane_unseen_changes}`.
-    pub format: String,
-    /// The `%`-prefixed pane to expand it against.
-    ///
-    /// Pane, window and session formats all need one, because tmux resolves
-    /// the window and session from the pane.
-    pub pane: Option<String>,
-}
-
 /// Arguments for reading a tmux environment.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShowEnvironmentArgs {
     /// The session whose environment to read. Omit for the server's own.
-    pub session: Option<String>,
-}
-
-/// Arguments for writing a tmux environment.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SetEnvironmentArgs {
-    /// The variable name.
-    pub name: String,
-    /// The value to store. Omit to mark the variable for removal.
-    pub value: Option<String>,
-    /// The session to write it for. Omit for the server's own.
     pub session: Option<String>,
 }
 
@@ -220,19 +90,6 @@ pub struct SetEnvironmentArgs {
 pub struct ShowHooksArgs {
     /// The session whose hooks to read. Omit for the server's own.
     pub session: Option<String>,
-}
-
-/// Arguments for piping a pane somewhere.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PipePaneArgs {
-    /// The `%`-prefixed pane to pipe.
-    pub pane: String,
-    /// The shell command to feed the pane's output to.
-    ///
-    /// Omit to stop piping. tmux runs this itself, so it outlives this
-    /// server: a pipe left on keeps writing after the agent has gone.
-    pub command: Option<String>,
 }
 
 /// Arguments for arranging a window's panes.
@@ -248,22 +105,6 @@ pub struct SelectLayoutArgs {
     pub layout: String,
 }
 
-/// Arguments for restarting what a pane runs.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RespawnPaneArgs {
-    /// The `%`-prefixed pane to restart.
-    pub pane: String,
-    /// The command to run in it. Omit to rerun the one it started with.
-    pub command: Option<String>,
-    /// Restart even when the pane's process is still alive.
-    ///
-    /// Without this a live pane is left alone, which is what keeps a
-    /// mistyped id from destroying work.
-    #[serde(default)]
-    pub kill_first: bool,
-}
-
 /// Arguments for putting text into a pane without typing it.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -272,18 +113,6 @@ pub struct PasteTextArgs {
     pub pane: String,
     /// The text to deliver.
     pub text: String,
-}
-
-/// Arguments for waiting until a pane goes quiet.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WaitForIdleArgs {
-    /// The `%`-prefixed pane to watch.
-    pub pane: String,
-    /// How many seconds of silence count as quiet. Defaults to 2.
-    pub quiet_seconds: Option<u64>,
-    /// How long to allow in total, in seconds. Defaults to 30, capped at 600.
-    pub seconds: Option<u64>,
 }
 
 /// Arguments for waiting until a pane says something.
@@ -358,7 +187,7 @@ pub struct SearchPanesArgs {
     pub window: Option<String>,
 }
 
-/// Arguments for reading or writing a tmux option.
+/// Arguments for reading a tmux option.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OptionArgs {
@@ -373,48 +202,6 @@ pub struct OptionArgs {
     pub scope: Option<String>,
     /// The `$`, `@` or `%`-prefixed id, for the scopes that need one.
     pub target: Option<String>,
-    /// The value to set. Omit to read the option instead.
-    ///
-    /// A number or boolean is accepted as well as a string, because tmux
-    /// stores every option as text and an agent setting `history-limit`
-    /// naturally writes `5000` rather than `"5000"`. Refusing that is a
-    /// deserialization error with no tmux in it, which is the least useful
-    /// kind of failure to hand back.
-    pub value: Option<OptionValueArg>,
-}
-
-/// A tmux option value as an agent is likely to write it.
-///
-/// tmux has one type on the wire -- text -- so a number or a boolean here is
-/// not a different kind of value, only a different spelling of one.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum OptionValueArg {
-    /// Written as a string, which is what tmux ultimately stores.
-    Text(String),
-    /// Written as a whole number, which every tmux size and limit is.
-    ///
-    /// Tried before the fractional form, so `5000` keeps its exact spelling
-    /// instead of arriving as a float and being rendered back.
-    Integer(i64),
-    /// Written with a fraction. tmux has no such option, so this exists to
-    /// carry the value through to tmux and let tmux reject it, rather than
-    /// failing here with an error that never reached a terminal.
-    Number(f64),
-    /// Written as a boolean, for the on/off options.
-    Flag(bool),
-}
-
-impl std::fmt::Display for OptionValueArg {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Text(text) => formatter.write_str(text),
-            Self::Integer(number) => write!(formatter, "{number}"),
-            Self::Number(number) => write!(formatter, "{number}"),
-            Self::Flag(true) => formatter.write_str("on"),
-            Self::Flag(false) => formatter.write_str("off"),
-        }
-    }
 }
 
 /// Arguments for reading a pane's whole state.
@@ -441,23 +228,6 @@ pub struct ChannelArgs {
     pub channel: String,
     /// How long to wait, in seconds. Defaults to 30, capped at 600.
     pub seconds: Option<u64>,
-}
-
-/// Arguments for splitting a pane.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SplitPaneArgs {
-    /// The `%`-prefixed pane id to divide.
-    pub pane: String,
-    /// Where the new pane goes: `above`, `below`, `left`, or `right`.
-    ///
-    /// Defaults to `below`.
-    #[schemars(with = "Option<SplitDirectionSchema>")]
-    pub direction: Option<String>,
-    /// How much of the divided space the new pane takes, as a percentage.
-    pub percent: Option<u32>,
-    /// A command to run instead of the default shell.
-    pub command: Option<String>,
 }
 
 /// Arguments for resizing a pane.
@@ -496,31 +266,6 @@ pub struct CapturePaneArgs {
     pub start: Option<i32>,
     /// End at this line.
     pub end: Option<i32>,
-}
-
-/// Arguments for watching a pane produce output.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WatchPaneArgs {
-    /// The `%`-prefixed pane id.
-    pub pane: String,
-    /// How long to watch, in seconds. Capped at one minute.
-    pub seconds: u64,
-    /// Stop early once this many bytes have arrived. Capped at 64 KiB.
-    pub max_bytes: Option<usize>,
-}
-
-/// What a pane produced while it was watched.
-#[derive(Debug, Serialize)]
-pub struct WatchView {
-    /// The pane that was watched.
-    pub pane: String,
-    /// What the pane wrote, with terminal escapes left in place.
-    pub output: String,
-    /// How many bytes arrived.
-    pub bytes: usize,
-    /// Why watching stopped.
-    pub stopped: &'static str,
 }
 
 /// Arguments for sending input to a pane.

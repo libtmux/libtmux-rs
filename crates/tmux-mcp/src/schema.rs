@@ -2,7 +2,7 @@ mod vocabulary;
 
 pub(super) use vocabulary::{
     ChannelWaitOutcomeSchema, OptionScopeSchema, ResizeDirectionSchema, SelectPaneDirectionSchema,
-    SelectWindowDirectionSchema, SplitDirectionSchema, WatchStopSchema,
+    SelectWindowDirectionSchema, SplitDirectionSchema,
 };
 
 /// Drop `format` keywords that are not part of JSON Schema.

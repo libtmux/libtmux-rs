@@ -223,10 +223,12 @@ record; registration, descriptions, annotations, selection, and
 `call_read_tools_batch` accepts at most 16 enabled inspect operations. Its one
 client approval covers every nested name in its schema; inner tools do not
 receive separate approval.
+`on_error` is either `stop` or `continue`.
 
 The capability row is not a second hand-maintained catalog. The same row a
 client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries
-process reach, effect and output sets, annotations, and any nested authority.
+the native input and output schemas, process reach, effect and output sets,
+annotations, and any nested authority.
 
 ## Resources
 
@@ -237,7 +239,29 @@ No dynamic resource templates are registered.
 
 | URI | Holds |
 |---|---|
-| `tmux://capabilities` | The frozen effective tool surface and connection provenance |
+| `tmux://capabilities` | The frozen effective tool surface, boundary, and connection provenance |
+
+The report also makes the outer boundary explicit. One process has one socket,
+no call can select another socket, no tool executes a host command, and the
+resource is static. Its connection object supplies the socket selector,
+resolved path, attach command, daemon state, and configuration provenance:
+
+```json
+{
+  "boundary": {
+    "oneSocketPerProcess": true,
+    "perCallSocketSelection": false,
+    "hostCommandExecution": false,
+    "dynamicResources": false
+  },
+  "connection": {
+    "socketSelector": "name:libtmux-mcp",
+    "socketProvenance": "default-dedicated",
+    "serverState": "created",
+    "configurationProvenance": "minimal"
+  }
+}
+```
 
 Read this resource when a client needs to explain its authority or cache the
 effective surface. Read tmux state through inspect tools; there are no live
@@ -297,10 +321,11 @@ now run in the client. Update existing client calls with this mapping:
 | Earlier surface | Current path |
 |---|---|
 | `--safety`, `LIBTMUX_SAFETY`, `TMUX_MCP_SAFETY` | Select unordered `LIBTMUX_TOOLSETS`, then exact inclusions or exclusions. |
+| `--confirm`, `--no-confirm`, `TMUX_MCP_CONFIRM` | Remove them. The server has no confirmation policy; clients decide approval from each tool's MCP annotations. |
 | `list_session_windows`, `list_window_panes` | Use `list_windows` or `list_panes`, then filter the returned stable `session_id` or `window_id`. |
 | `describe` | Use `get_server_info`, `get_session_info`, `get_window_info`, or `get_pane_info`. |
 | `list_servers` or per-call socket selection | Run one MCP process per socket and use `get_server_info` for its pinned server. |
-| `expand_format` | Use `get_tmux_variables` for bounded literal text and `#{variable}` references; arbitrary or recursive tmux-format evaluation has no public replacement. |
+| `expand_format` | Use `get_tmux_variables` for validated variable names; arbitrary tmux-format evaluation has no public replacement. |
 | `what_changed`, `watch_pane` | Follow a known pane with `capture_since` or wait with `wait_for_text`; there is no global activity feed or subscription. |
 | `find_panes`, `find_sessions` | Use `search_panes` for terminal content, `find_pane_by_position` for layout, or filter `list_panes` and `list_sessions` locally. |
 | `run_command` | Use `run_shell_command`. |
@@ -314,7 +339,7 @@ now run in the client. Update existing client calls with this mapping:
 | `set_environment` | No generic caller-controlled environment route remains. |
 | `run_plan` | Use `call_read_tools_batch` for inspect-only batches; issue typed state-changing calls separately. |
 | `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
-| `tmux://server` | Use `get_server_info`; `tmux://capabilities` reports the frozen socket provenance and tool selection. |
+| `tmux://server` | Use `get_server_info`; `tmux://capabilities` adds the frozen connection and selection boundary. |
 | `tmux://sessions`, `tmux://windows`, `tmux://panes` | Use `list_sessions`, `list_windows`, and `list_panes`. |
 | `tmux://sessions/{name}`, `tmux://panes/{id}` | Use `get_session_info` and `get_pane_info`. |
 | `tmux://sessions/{name}/windows`, `tmux://sessions/{name}/windows/{index}` | Use `list_windows`, filter by `session_id`, then pass the returned stable id to `get_window_info`. |
@@ -325,22 +350,24 @@ now run in the client. Update existing client calls with this mapping:
 
 ### Asking first
 
-Tool selection is decided once, at launch. `--confirm` asks before teardown
-tools:
+The server does not implement a separate confirmation or consent policy.
+Clients can use each tool's four MCP annotations to decide whether to ask a
+person before a whole call. Tool selection shapes the advertised interface; it
+does not reduce the tmux user's authority.
 
-```console
-$ tmux-mcp --confirm
-```
-
-Those calls proceed only on a yes and fail closed when the client cannot ask.
-Confirmation does not inspect command text or keys passed to open-ended tools,
-so indirect destructive effects do not ask. `TMUX_MCP_CONFIRM=1` does the same;
-`--confirm` and `--no-confirm` override that environment setting.
+When launched from tmux, the process inherits a pane ID and socket. Pane
+listings mark that pane `caller: "self"` only when the socket matches the
+selected server. Teardown tools refuse a target that may contain that caller.
+The comparison weighs the socket as well as the pane ID because `%1` names a
+different pane on every tmux server.
 
 ## Choosing a server
 
-Without arguments the server selects the dedicated `libtmux-mcp` socket and a
-minimal tmux configuration. It does not follow `$TMUX`. To pick another socket:
+Without arguments the server selects the `libtmux-mcp` socket, starts it with
+the shipped minimal configuration, and authenticates that this launch created
+the daemon before enabling teardown by default. An already-running daemon
+keeps its configuration and gets conservative provenance. The server does not
+follow `$TMUX`. Select another socket by path or name:
 
 ```console
 $ tmux-mcp --socket /tmp/tmux-1000/work
@@ -387,8 +414,7 @@ output the command actually wrote — no prompt, no echo, and nothing lost to
 scrollback.
 
 For a wider inventory pass, one batch call can list topology, snapshot a pane,
-and read an option without turning those independent reads into a state-changing
-plan:
+and read an option while keeping each child’s complete MCP envelope:
 
 ```json
 {
@@ -397,13 +423,12 @@ plan:
     {"tool": "snapshot_pane", "arguments": {"pane": "%3"}},
     {"tool": "show_option", "arguments": {"name": "status"}}
   ],
-  "continue_on_error": true
+  "on_error": "continue"
 }
 ```
 
-Each row identifies its tool and index and keeps that child’s MCP result under
-`result`, so the client can decide from structured output instead of matching
-prose.
+Each result row preserves `content`, `structuredContent`, `_meta`, and
+`isError`.
 
 ## When it earns its keep
 
@@ -434,8 +459,12 @@ named window corner. `snapshot_pane` adds geometry, cursor, and mode state to
 the visible content.
 
 **Reading several things.** `call_read_tools_batch` runs a bounded serial batch
-enabled inspect operations. Its nested authority shrinks when an operation is
+of enabled inspect operations. Its nested authority shrinks when an operation is
 excluded.
+
+**Reading tmux variables.** `get_tmux_variables` accepts one to 32 validated
+variable names and constructs bounded `#{variable}` references itself. It does
+not accept arbitrary or shell-command formats.
 
 ## Answers are typed
 
