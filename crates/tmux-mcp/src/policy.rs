@@ -748,6 +748,42 @@ mod tests {
     }
 
     #[test]
+    fn read_batch_has_exact_unbounded_inspect_authority() {
+        let selection = Selection::parse(Some("inspect"), None, None).expect("selection");
+        let resolved =
+            crate::manifest::resolve(crate::tools::router(), &selection).expect("resolved surface");
+        let batch = resolved
+            .report
+            .tools
+            .iter()
+            .find(|tool| tool.name == "call_read_tools_batch")
+            .expect("batch route");
+        let expected = [
+            "list_sessions",
+            "list_windows",
+            "list_panes",
+            "get_server_info",
+            "get_session_info",
+            "get_window_info",
+            "get_pane_info",
+            "capture_pane",
+            "capture_since",
+            "snapshot_pane",
+            "search_panes",
+            "find_pane_by_position",
+            "get_tmux_variables",
+            "show_option",
+            "show_environment",
+            "show_hooks",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+
+        assert_eq!(batch.capability.nested_authority, expected);
+    }
+
+    #[test]
     fn invalid_confirmation_configuration_enables_the_gate() {
         assert!(!confirm_from_value(Err(VarError::NotPresent)));
         assert!(!confirm_from_value(Ok("false".to_owned())));

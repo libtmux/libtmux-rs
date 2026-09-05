@@ -795,8 +795,7 @@ impl TmuxTools {
                 "list_sessions", "list_windows", "list_panes", "get_server_info",
                 "get_session_info", "get_window_info", "get_pane_info", "capture_pane",
                 "capture_since", "snapshot_pane", "search_panes", "find_pane_by_position",
-                "wait_for_text", "get_tmux_variables", "show_option", "show_environment",
-                "show_hooks"
+                "get_tmux_variables", "show_option", "show_environment", "show_hooks"
             ],
             self_bounded = true,
             always_load = false,
@@ -819,11 +818,9 @@ impl TmuxTools {
             .capability_report
             .tools
             .iter()
-            .filter(|row| {
-                row.name != "call_read_tools_batch"
-                    && row.capability.toolset == crate::Toolset::Inspect
-            })
-            .map(|row| row.name.as_str())
+            .find(|row| row.name == "call_read_tools_batch")
+            .into_iter()
+            .flat_map(|row| row.capability.nested_authority.iter().map(String::as_str))
             .collect();
         let mut results = Vec::with_capacity(operations.len());
         for (index, operation) in operations.into_iter().enumerate() {

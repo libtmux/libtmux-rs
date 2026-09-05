@@ -250,13 +250,24 @@ $ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp
 ```
 
 `LIBTMUX_TOOLS` adds named tools after toolset expansion.
-`LIBTMUX_EXCLUDE_TOOLS` removes named tools last. Exclusions always win. Hidden
-tools are neither listed nor callable.
+`LIBTMUX_EXCLUDE_TOOLS` removes named tools last, including aggregate nested
+authority. Exclusions always win. Hidden tools are neither listed nor callable.
 
 ```console
 $ LIBTMUX_TOOLSETS=inspect \
     LIBTMUX_TOOLS=send_keys \
     LIBTMUX_EXCLUDE_TOOLS=capture_pane \
+    tmux-mcp
+```
+
+Named inclusion also works with the zero-toolset subset. This exposes only the
+aggregate while retaining its 16 eligible inspect operations as nested
+authority; an exclusion removes the named operation from that authority:
+
+```console
+$ LIBTMUX_TOOLSETS='' \
+    LIBTMUX_TOOLS=call_read_tools_batch \
+    LIBTMUX_EXCLUDE_TOOLS=show_environment \
     tmux-mcp
 ```
 
@@ -412,7 +423,8 @@ named window corner. `snapshot_pane` adds geometry, cursor, and mode state to
 the visible content.
 
 **Reading several things.** `call_read_tools_batch` runs a bounded serial batch
-of enabled inspect operations.
+enabled inspect operations. Its nested authority shrinks when an operation is
+excluded.
 
 ## Answers are typed
 
