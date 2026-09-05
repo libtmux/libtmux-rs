@@ -4,6 +4,7 @@
 )]
 
 use std::collections::BTreeSet;
+use std::io;
 
 use libtmux::{PaneSize, SplitDirection, SplitOptions};
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -17,6 +18,9 @@ use crate::{PaneView, SessionView, TmuxTools, WindowView};
 
 use super::error::{bad_input, object_gone, tmux_error};
 use super::lossy;
+
+const READ_BATCH_MAX_OPERATIONS: usize = 16;
+const READ_BATCH_MAX_BYTES: usize = 1 << 20;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -164,6 +168,77 @@ pub(crate) struct BatchResult {
     pub(crate) results: Vec<BatchItem>,
     pub(crate) succeeded: usize,
     pub(crate) failed: usize,
+    pub(crate) truncated: bool,
+}
+
+impl BatchResult {
+    fn complete(results: Vec<BatchItem>) -> Self {
+        Self::from_results(results, false)
+    }
+
+    fn from_results(results: Vec<BatchItem>, truncated: bool) -> Self {
+        let succeeded = results.iter().filter(|item| item.success).count();
+        Self {
+            failed: results.len() - succeeded,
+            succeeded,
+            results,
+            truncated,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct BatchResultRef<'a> {
+    results: &'a [BatchItem],
+    succeeded: usize,
+    failed: usize,
+    truncated: bool,
+}
+
+#[derive(Default)]
+struct ByteCounter(usize);
+
+impl io::Write for ByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ReadBatchAccumulator {
+    results: Vec<BatchItem>,
+    truncated: bool,
+}
+
+impl ReadBatchAccumulator {
+    fn push(&mut self, item: BatchItem) -> bool {
+        self.results.push(item);
+        let succeeded = self.results.iter().filter(|item| item.success).count();
+        let view = BatchResultRef {
+            failed: self.results.len() - succeeded,
+            succeeded,
+            results: &self.results,
+            truncated: false,
+        };
+        let mut bytes = ByteCounter::default();
+        let encoded = serde_json::to_writer(&mut bytes, &view).map_or(usize::MAX, |()| bytes.0);
+        if encoded <= READ_BATCH_MAX_BYTES {
+            true
+        } else {
+            self.results.pop();
+            self.truncated = true;
+            false
+        }
+    }
+
+    fn finish(self) -> BatchResult {
+        BatchResult::from_results(self.results, self.truncated)
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -177,6 +252,7 @@ pub(crate) struct ReadOperation {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReadBatchArgs {
+    #[schemars(length(min = 1, max = 16))]
     pub(crate) operations: Vec<ReadOperation>,
     pub(crate) continue_on_error: bool,
 }
@@ -778,16 +854,14 @@ impl TmuxTools {
                 }
             }
         }
-        let succeeded = results.iter().filter(|item| item.success).count();
-        Ok(Json(BatchResult {
-            failed: results.len() - succeeded,
-            succeeded,
-            results,
-        }))
+        Ok(Json(BatchResult::complete(results)))
     }
 
     #[tool(
-        description = "Call a bounded serial batch of enabled inspect tools",
+        description = "Call a serial batch of at most sixteen enabled inspect tools. One \
+                       approval for this batch covers every enabled nested name; inner tools do \
+                       not receive separate client approval. The structured result is capped at \
+                       1 MiB and reports truncated=true.",
         title = "Call Read Tools Batch",
         meta = crate::capability_meta!(
             Inspect, None,
@@ -816,10 +890,10 @@ impl TmuxTools {
         }): Parameters<ReadBatchArgs>,
         context: RequestContext<rmcp::RoleServer>,
     ) -> Result<Json<BatchResult>, ErrorData> {
-        if operations.is_empty() || operations.len() > 32 {
-            return Err(bad_input(
-                "operations must contain 1 through 32 items".to_owned(),
-            ));
+        if operations.is_empty() || operations.len() > READ_BATCH_MAX_OPERATIONS {
+            return Err(bad_input(format!(
+                "operations must contain 1 through {READ_BATCH_MAX_OPERATIONS} items"
+            )));
         }
         let allowed: BTreeSet<_> = self
             .capability_report
@@ -829,17 +903,22 @@ impl TmuxTools {
             .into_iter()
             .flat_map(|row| row.capability.nested_authority.iter().map(String::as_str))
             .collect();
-        let mut results = Vec::with_capacity(operations.len());
+        let mut batch = ReadBatchAccumulator {
+            results: Vec::with_capacity(operations.len()),
+            truncated: false,
+        };
         for (index, operation) in operations.into_iter().enumerate() {
             let tool = operation.tool;
             if !allowed.contains(tool.as_str()) {
-                results.push(BatchItem {
+                if !batch.push(BatchItem {
                     index,
                     error: Some(format!("{tool} is not an enabled inspect tool")),
                     tool,
                     success: false,
                     result: None,
-                });
+                }) {
+                    break;
+                }
                 if !continue_on_error {
                     break;
                 }
@@ -850,48 +929,77 @@ impl TmuxTools {
             match ServerHandler::call_tool(self, request, context.clone()).await {
                 Ok(rmcp::model::CallToolResponse::Complete(result)) => {
                     let failed = result.is_error == Some(true);
-                    results.push(BatchItem {
+                    if !batch.push(BatchItem {
                         index,
                         tool,
                         success: !failed,
                         result: serde_json::to_value(result).ok(),
                         error: None,
-                    });
+                    }) {
+                        break;
+                    }
                     if failed && !continue_on_error {
                         break;
                     }
                 }
                 Ok(_) => {
-                    results.push(BatchItem {
+                    if !batch.push(BatchItem {
                         index,
                         tool,
                         success: false,
                         result: None,
                         error: Some("nested tool did not complete synchronously".to_owned()),
-                    });
+                    }) {
+                        break;
+                    }
                     if !continue_on_error {
                         break;
                     }
                 }
                 Err(error) => {
-                    results.push(BatchItem {
+                    if !batch.push(BatchItem {
                         index,
                         tool,
                         success: false,
                         result: None,
                         error: Some(error.message.into_owned()),
-                    });
+                    }) {
+                        break;
+                    }
                     if !continue_on_error {
                         break;
                     }
                 }
             }
         }
-        let succeeded = results.iter().filter(|item| item.success).count();
-        Ok(Json(BatchResult {
-            failed: results.len() - succeeded,
-            succeeded,
-            results,
-        }))
+        Ok(Json(batch.finish()))
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    #[test]
+    fn read_batch_truncates_before_its_structured_response_limit() {
+        let item = |index| BatchItem {
+            index,
+            tool: "capture_pane".to_owned(),
+            success: true,
+            result: Some(serde_json::json!({
+                "structuredContent": {"text": "x".repeat(READ_BATCH_MAX_BYTES * 3 / 4)}
+            })),
+            error: None,
+        };
+        let mut batch = ReadBatchAccumulator::default();
+
+        assert!(batch.push(item(0)));
+        assert!(!batch.push(item(1)));
+        let result = batch.finish();
+        let encoded = serde_json::to_vec(&result).expect("batch result serializes");
+
+        assert!(result.truncated);
+        assert_eq!(result.results.len(), 1);
+        assert!(encoded.len() <= READ_BATCH_MAX_BYTES);
     }
 }

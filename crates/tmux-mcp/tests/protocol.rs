@@ -160,6 +160,29 @@ async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
 }
 
 #[tokio::test]
+async fn read_batch_rejects_more_than_sixteen_operations() {
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let operations: Vec<_> = (0..17)
+        .map(|_| json!({"tool": "list_sessions", "arguments": {}}))
+        .collect();
+
+    let arguments = json!({"operations": operations, "continue_on_error": false});
+    let request = CallToolRequestParams::new("call_read_tools_batch")
+        .with_arguments(arguments.as_object().cloned().expect("object arguments"));
+    let error = wire
+        .client
+        .call_tool(request)
+        .await
+        .expect_err("seventeen operations exceed the batch limit");
+
+    assert!(error.to_string().contains("1 through 16"), "{error}");
+    wire.shutdown().await;
+}
+
+#[tokio::test]
 async fn withheld_tools_are_neither_listed_nor_callable() {
     let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
         .selection(selection("inspect"))

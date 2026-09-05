@@ -845,6 +845,17 @@ mod tests {
         .collect();
 
         assert_eq!(batch.capability.nested_authority, expected);
+        let description = resolved
+            .router
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "call_read_tools_batch")
+            .and_then(|tool| tool.description.map(std::borrow::Cow::into_owned))
+            .expect("batch description");
+        assert!(
+            description.contains("inner tools do not receive separate client approval"),
+            "{description}"
+        );
     }
 
     #[test]

@@ -192,3 +192,56 @@ fn choice_vocabularies_reject_unknown_values() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
+    let eligible: Vec<_> = INSPECT
+        .iter()
+        .copied()
+        .filter(|name| !matches!(*name, "wait_for_text" | "call_read_tools_batch"))
+        .collect();
+    let mut expected: BTreeSet<_> = eligible.iter().copied().collect();
+    expected.remove("capture_pane");
+    let selected = Selection::parse(Some("inspect"), None, Some("capture_pane"))?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let batch = tools
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "call_read_tools_batch")
+        .expect("batch route");
+    let schema = serde_json::Value::Object((*batch.input_schema).clone());
+    let operations = &schema["properties"]["operations"];
+    assert_eq!(operations["minItems"], 1);
+    assert_eq!(operations["maxItems"], 16);
+    let names: BTreeSet<_> = schema["$defs"]["ReadOperation"]["properties"]["tool"]["enum"]
+        .as_array()
+        .unwrap_or_else(|| panic!("nested tool enum: {schema}"))
+        .iter()
+        .map(|name| name.as_str().expect("tool name"))
+        .collect();
+
+    assert!(!names.contains("capture_pane"));
+    assert_eq!(names, expected);
+
+    let exclusions = eligible.join(",");
+    let selected = Selection::parse(Some("inspect"), None, Some(&exclusions))?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let batch = tools
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "call_read_tools_batch")
+        .expect("batch route");
+    let schema = serde_json::Value::Object((*batch.input_schema).clone());
+    jsonschema::draft202012::meta::validate(&schema)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let validator = jsonschema::draft202012::new(&schema)?;
+    assert!(!validator.is_valid(&json!({
+        "operations": [{"tool": "list_sessions", "arguments": {}}],
+        "continue_on_error": false
+    })));
+    Ok(())
+}

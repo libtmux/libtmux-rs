@@ -271,6 +271,23 @@ pub(crate) fn resolve(
     for row in capabilities.values_mut() {
         row.nested_authority.retain(|name| effective.contains(name));
     }
+    for (name, row) in &capabilities {
+        if row
+            .input_sinks
+            .values()
+            .any(|sinks| sinks.contains(&InputSink::NestedTool))
+        {
+            let route = router
+                .map
+                .get_mut(name.as_str())
+                .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no route")))?;
+            set_nested_tool_enum(
+                name,
+                Arc::make_mut(&mut route.attr.input_schema),
+                &row.nested_authority,
+            )?;
+        }
+    }
 
     let tools = capabilities
         .into_iter()
@@ -298,6 +315,72 @@ pub(crate) fn resolve(
             tools,
         },
     })
+}
+
+fn set_nested_tool_enum(
+    name: &str,
+    schema: &mut serde_json::Map<String, serde_json::Value>,
+    nested: &BTreeSet<String>,
+) -> Result<(), SurfaceError> {
+    fn visit(value: &mut serde_json::Value, nested: &BTreeSet<String>, changed: &mut usize) {
+        match value {
+            serde_json::Value::Object(object) => {
+                let operation = object
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|properties| {
+                        properties.contains_key("tool") && properties.contains_key("arguments")
+                    });
+                if operation
+                    && let Some(tool) = object
+                        .get_mut("properties")
+                        .and_then(serde_json::Value::as_object_mut)
+                        .and_then(|properties| properties.get_mut("tool"))
+                        .and_then(serde_json::Value::as_object_mut)
+                {
+                    if nested.is_empty() {
+                        tool.remove("enum");
+                        tool.insert(
+                            "not".to_owned(),
+                            serde_json::Value::Object(serde_json::Map::new()),
+                        );
+                    } else {
+                        tool.remove("not");
+                        tool.insert(
+                            "enum".to_owned(),
+                            serde_json::Value::Array(
+                                nested
+                                    .iter()
+                                    .cloned()
+                                    .map(serde_json::Value::from)
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    *changed += 1;
+                }
+                object
+                    .values_mut()
+                    .for_each(|value| visit(value, nested, changed));
+            }
+            serde_json::Value::Array(values) => values
+                .iter_mut()
+                .for_each(|value| visit(value, nested, changed)),
+            _ => {}
+        }
+    }
+
+    let mut changed = 0;
+    schema
+        .values_mut()
+        .for_each(|value| visit(value, nested, &mut changed));
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err(SurfaceError::new(format!(
+            "tool {name:?} has {changed} nested operation schemas, expected one"
+        )))
+    }
 }
 
 fn validate(

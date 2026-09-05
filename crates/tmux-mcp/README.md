@@ -220,6 +220,9 @@ record; registration, descriptions, annotations, selection, and
 
 `set_synchronize_panes` expands later pane input to every pane in its window.
 `send_keys` and `send_keys_batch` report every pane that received the input.
+`call_read_tools_batch` accepts at most 16 enabled inspect operations. Its one
+client approval covers every nested name in its schema; inner tools do not
+receive separate approval.
 
 The capability row is not a second hand-maintained catalog. The same row a
 client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries
@@ -269,7 +272,8 @@ $ LIBTMUX_TOOLSETS=inspect \
 
 Named inclusion also works with the zero-toolset subset. This exposes only the
 aggregate while retaining its 16 eligible inspect operations as nested
-authority; an exclusion removes the named operation from that authority:
+authority; an exclusion removes the named operation from both authority and
+the generated `oneOf` schema:
 
 ```console
 $ LIBTMUX_TOOLSETS='' \
@@ -474,7 +478,12 @@ $ cargo run --example surface
 
 `readonly` serves the `inspect` toolset. `surface` prints selected toolsets,
 named inclusions and exclusions, controlled descriptions, schemas, and
-capability fields without starting a tmux server.
+capability fields without starting a tmux server. This prints an aggregate-only
+surface with one nested operation excluded:
+
+```console
+$ cargo run --example surface -- '' call_read_tools_batch show_environment
+```
 
 ```console
 $ cargo run --example budget
