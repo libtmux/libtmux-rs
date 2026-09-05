@@ -1885,14 +1885,15 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("trailing").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
-
-    // Three spaces a program printed, which is what tmux strips.
-    pane.send_keys("printf 'AB   \\n'")
+    // Printing is the pane's initial command; prompt readiness is not part of
+    // this capture assertion.
+    let session = server
+        .new_session(
+            libtmux::NewSessionOptions::new("trailing").command("printf 'AB   \\n'; exec /bin/sh"),
+        )
         .await
-        .expect("keys are sent");
-    pane.send_key_names(["Enter"]).await.expect("the line runs");
+        .expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
 
     retry_until(Duration::from_secs(10), async || {
         pane.capture()
