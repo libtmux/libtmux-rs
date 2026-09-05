@@ -79,6 +79,22 @@ async fn identity_for(server: &Server, pane: &str) -> CallerIdentity {
     .expect("caller identity")
 }
 
+async fn client_count(server: &Server) -> usize {
+    server.clients().await.map_or(0, |clients| clients.len())
+}
+
+async fn clients_settle(server: &Server, wanted: usize) -> usize {
+    let mut seen = client_count(server).await;
+    for _ in 0..200 {
+        if seen == wanted {
+            return seen;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        seen = client_count(server).await;
+    }
+    seen
+}
+
 #[tokio::test]
 async fn send_keys_reports_synchronized_target_expansion() {
     let (guard, tools) = fixture("synchronized-targets").await;
@@ -147,6 +163,7 @@ async fn teardown_refuses_the_inherited_caller_pane() {
 #[tokio::test]
 async fn run_shell_command_reports_output_status_and_cancellation() {
     let (guard, tools, pane) = typing_fixture("run").await;
+    let baseline_clients = client_count(guard.server()).await;
     let finished = json(
         tools
             .run_command(
@@ -189,10 +206,25 @@ async fn run_shell_command_reports_output_status_and_cancellation() {
                 .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        clients_settle(guard.server(), baseline_clients + 1).await,
+        baseline_clients + 1,
+        "the request owns one live output client while the command runs"
+    );
     cancelled.cancel();
     let stopped = json(request.await.expect("request joins").expect("run answers"));
     assert_eq!(stopped["outcome"], "cancelled");
+    assert_eq!(
+        clients_settle(guard.server(), baseline_clients).await,
+        baseline_clients,
+        "cancellation must close the request-owned output client"
+    );
+    assert!(
+        !json(tools.list_panes().await.expect("server still answers"))["panes"]
+            .as_array()
+            .expect("pane list")
+            .is_empty()
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -368,6 +400,15 @@ async fn selection_paste_and_channel_handlers_change_tmux() {
     })
     .await
     .expect("pasted text reaches the pane");
+    assert!(
+        guard
+            .server()
+            .buffer_names()
+            .await
+            .expect("temporary buffers are listed")
+            .is_empty(),
+        "paste_text must delete its temporary buffer"
+    );
 
     let waiting = tokio::spawn({
         let tools = tools.clone();

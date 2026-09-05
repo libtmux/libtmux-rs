@@ -4,8 +4,9 @@
 
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
+use std::time::Duration;
 
 use libtmux::test::TestServer;
 use serde_json::{Value, json};
@@ -129,6 +130,41 @@ fn failed_start(environment: &[(&str, &str)]) -> Output {
         command.env(name, value);
     }
     command.stdin(Stdio::null()).output().expect("binary runs")
+}
+
+fn daemon_is_alive(socket: &Path) -> bool {
+    Command::new("tmux")
+        .arg("-S")
+        .arg(socket)
+        .arg("display-message")
+        .arg("-p")
+        .arg("alive")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn daemon_stops(socket: &Path) -> bool {
+    for _ in 0..200 {
+        if !daemon_is_alive(socket) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    false
+}
+
+fn stop_daemon(socket: &Path) {
+    let _ = Command::new("tmux")
+        .arg("-S")
+        .arg(socket)
+        .arg("kill-server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 #[test]
@@ -305,6 +341,33 @@ fn default_startup_reports_dedicated_minimal_socket_provenance() {
 
     process.finish();
     std::fs::remove_dir_all(root).expect("fixture cleanup");
+}
+
+#[test]
+fn default_owner_stops_its_dedicated_daemon_when_stdio_closes() {
+    let root = PathBuf::from("/tmp/libtmux-rs-test")
+        .join(format!("mcp-owner-shutdown-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("fixture root");
+    let socket = root.join(format!(
+        "tmux-{}/libtmux-mcp",
+        std::fs::metadata(&root).expect("fixture metadata").uid()
+    ));
+    let process = Process::start(
+        &[],
+        &[("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))],
+    );
+
+    process.finish();
+    let stopped = daemon_stops(&socket);
+    if !stopped {
+        stop_daemon(&socket);
+    }
+    std::fs::remove_dir_all(root).expect("fixture cleanup");
+
+    assert!(
+        stopped,
+        "the process left its dedicated tmux daemon running"
+    );
 }
 
 #[test]

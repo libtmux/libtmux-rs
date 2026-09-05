@@ -220,7 +220,9 @@ record; registration, descriptions, annotations, selection, and
 
 `set_synchronize_panes` expands later pane input to every pane in its window.
 `send_keys` and `send_keys_batch` report every pane that received the input.
-`call_read_tools_batch` accepts at most 16 enabled inspect operations. Its one
+`call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
+its serialized MCP tool result at 1,000,000 bytes. Truncated payloads and
+omitted bytes are explicit, and every executed row remains present. Its one
 client approval covers every nested name in its schema; inner tools do not
 receive separate approval.
 `on_error` is either `stop` or `continue`.
@@ -228,14 +230,19 @@ receive separate approval.
 The capability row is not a second hand-maintained catalog. The same row a
 client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries
 the native input and output schemas, process reach, effect and output sets,
-annotations, and any nested authority.
+schema-keyed input literalization, annotations, and any nested authority. The
+native definition also classifies every input sink, but that validation detail
+is not duplicated on the wire. For example, `get_tmux_variables.names` is
+reported as `validated-variable-name`; it is not falsely described as escaped
+literal text.
 
 ## Resources
 
 `tmux://capabilities` reports the startup-frozen effective surface, selected
 socket, socket provenance, direct process reach, tmux effects, output classes,
-future-input amplification, nested authority, and whole-call MCP annotations.
-No dynamic resource templates are registered.
+schema-keyed input literalization, future-input amplification, nested
+authority, and whole-call MCP annotations. No dynamic resource templates are
+registered.
 
 | URI | Holds |
 |---|---|
@@ -365,9 +372,10 @@ different pane on every tmux server.
 
 Without arguments the server selects the `libtmux-mcp` socket, starts it with
 the shipped minimal configuration, and authenticates that this launch created
-the daemon before enabling teardown by default. An already-running daemon
-keeps its configuration and gets conservative provenance. The server does not
-follow `$TMUX`. Select another socket by path or name:
+the daemon before enabling teardown by default. The owning process stops that
+daemon at shutdown. An already-running daemon keeps its configuration and gets
+conservative provenance. The server does not follow `$TMUX`. Select another
+socket by path or name:
 
 ```console
 $ tmux-mcp --socket /tmp/tmux-1000/work
@@ -463,8 +471,9 @@ of enabled inspect operations. Its nested authority shrinks when an operation is
 excluded.
 
 **Reading tmux variables.** `get_tmux_variables` accepts one to 32 validated
-variable names and constructs bounded `#{variable}` references itself. It does
-not accept arbitrary or shell-command formats.
+variable names and constructs bounded `#{variable}` references itself. The
+manifest records `validated-variable-name` under `inputLiteralization`. It
+does not accept arbitrary or shell-command formats.
 
 ## Answers are typed
 

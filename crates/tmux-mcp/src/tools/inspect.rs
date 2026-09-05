@@ -457,11 +457,11 @@ impl TmuxTools {
             secrets = true,
             untrusted = true,
             sinks = {
-                "name" => [TmuxLookup],
+                "name" => [TmuxLookup, TmuxFormat],
                 "scope" => [None],
                 "target" => [TmuxLookup]
             },
-            literalized = [],
+            literalized = ["name"],
             nested = [],
             self_bounded = false,
             always_load = false,

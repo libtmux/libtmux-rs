@@ -70,6 +70,10 @@ async fn main() -> ExitCode {
 }
 
 /// Build the server the options describe, and run it until stdin closes.
+#[allow(
+    clippy::too_many_lines,
+    reason = "startup freezes socket, provenance, and tool selection in one auditable flow"
+)]
 async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     // Bound concurrency and core reads before the tool layer truncates replies.
     let mut builder = Server::builder()
@@ -206,8 +210,10 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => Err(Box::new(error)),
     };
     if created_dedicated {
+        let killed = server.kill().await;
         let shutdown = server.shutdown().await;
         result?;
+        killed?;
         shutdown?;
     } else {
         result?;

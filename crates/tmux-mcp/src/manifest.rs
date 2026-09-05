@@ -11,6 +11,7 @@ use crate::TmuxTools;
 use crate::policy::{Selection, SurfaceError, Toolset};
 
 pub(crate) const CAPABILITY_KEY: &str = "com.git-pull.libtmux-mcp/capability";
+const DEFINITION_KEY: &str = "com.git-pull.libtmux-mcp/internal-definition";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -94,12 +95,6 @@ mod input_sink_tests {
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum InputLiteralization {
     DoubleHashOnce,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum TmuxFormatControl {
-    DoubleHashOnce,
     ValidatedVariableName,
 }
 
@@ -151,50 +146,83 @@ pub(crate) struct Capability {
     pub(crate) annotations: Annotations,
     pub(crate) input_sinks: BTreeMap<String, BTreeSet<InputSink>>,
     pub(crate) input_literalization: BTreeMap<String, InputLiteralization>,
-    pub(crate) tmux_format_controls: BTreeMap<String, TmuxFormatControl>,
     pub(crate) nested_authority: BTreeSet<String>,
     pub(crate) amplifies_future_input: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the public capability contract carries independent boolean facts"
+)]
+pub(crate) struct PublishedCapability {
+    pub(crate) toolset: Toolset,
+    pub(crate) process_reach: ProcessReach,
+    pub(crate) tmux_effects: BTreeSet<TmuxEffect>,
+    pub(crate) output_classes: BTreeSet<OutputClass>,
+    pub(crate) may_expose_secrets: bool,
+    pub(crate) may_return_untrusted_content: bool,
+    pub(crate) annotations: Annotations,
+    pub(crate) input_literalization: BTreeMap<String, InputLiteralization>,
+    pub(crate) nested_authority: BTreeSet<String>,
+    pub(crate) amplifies_future_input: bool,
+}
+
+impl From<&Capability> for PublishedCapability {
+    fn from(definition: &Capability) -> Self {
+        Self {
+            toolset: definition.toolset,
+            process_reach: definition.process_reach,
+            tmux_effects: definition.tmux_effects.clone(),
+            output_classes: definition.output_classes.clone(),
+            may_expose_secrets: definition.may_expose_secrets,
+            may_return_untrusted_content: definition.may_return_untrusted_content,
+            annotations: definition.annotations,
+            input_literalization: definition.input_literalization.clone(),
+            nested_authority: definition.nested_authority.clone(),
+            amplifies_future_input: definition.amplifies_future_input,
+        }
+    }
+}
+
 impl Capability {
     pub(crate) fn controlled_opener(&self) -> &'static str {
-        match self.process_reach {
-            ProcessReach::ConfiguredProcess => {
-                "Start a pane's configured process; accepts no command payload."
-            }
-            ProcessReach::PaneInput => {
-                "Send input to a pane's program; a shell that receives it runs it with your user's permissions."
-            }
-            ProcessReach::PaneCommand => {
-                "Run a shell command in a pane with your user's permissions."
-            }
-            ProcessReach::None => match self.toolset {
-                Toolset::Manage | Toolset::Execute => {
-                    "Change tmux state; no client-supplied executable input."
-                }
-                Toolset::Teardown => "Delete tmux state; accepts no command payload.",
-                Toolset::Inspect if self.output_classes.contains(&OutputClass::TerminalContent) => {
-                    "Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted."
-                }
-                Toolset::Inspect
-                    if self
-                        .output_classes
-                        .contains(&OutputClass::ProcessEnvironment) =>
-                {
-                    "Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets."
-                }
-                Toolset::Inspect
-                    if self
-                        .output_classes
-                        .contains(&OutputClass::ConfiguredCommand) =>
-                {
-                    "Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration."
-                }
-                Toolset::Inspect => {
-                    "Inspect tmux metadata; accepts no client-supplied executable input."
-                }
-            },
+        controlled_opener(self.toolset, self.process_reach, &self.output_classes)
+    }
+}
+
+fn controlled_opener(
+    toolset: Toolset,
+    process_reach: ProcessReach,
+    output_classes: &BTreeSet<OutputClass>,
+) -> &'static str {
+    match process_reach {
+        ProcessReach::ConfiguredProcess => {
+            "Start a pane's configured process; accepts no command payload."
         }
+        ProcessReach::PaneInput => {
+            "Send input to a pane's program; a shell that receives it runs it with your user's permissions."
+        }
+        ProcessReach::PaneCommand => "Run a shell command in a pane with your user's permissions.",
+        ProcessReach::None => match toolset {
+            Toolset::Manage | Toolset::Execute => {
+                "Change tmux state; no client-supplied executable input."
+            }
+            Toolset::Teardown => "Delete tmux state; accepts no command payload.",
+            Toolset::Inspect if output_classes.contains(&OutputClass::TerminalContent) => {
+                "Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted."
+            }
+            Toolset::Inspect if output_classes.contains(&OutputClass::ProcessEnvironment) => {
+                "Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets."
+            }
+            Toolset::Inspect if output_classes.contains(&OutputClass::ConfiguredCommand) => {
+                "Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration."
+            }
+            Toolset::Inspect => {
+                "Inspect tmux metadata; accepts no client-supplied executable input."
+            }
+        },
     }
 }
 
@@ -206,7 +234,7 @@ impl Capability {
 pub(crate) fn metadata(capability: Capability, always_load: bool) -> MetaObject {
     let mut meta = MetaObject::new();
     meta.0.insert(
-        CAPABILITY_KEY.to_owned(),
+        DEFINITION_KEY.to_owned(),
         serde_json::to_value(capability).expect("capability metadata serializes"),
     );
     if always_load {
@@ -220,7 +248,7 @@ pub(crate) fn metadata(capability: Capability, always_load: bool) -> MetaObject 
 
 fn capability(meta: Option<&MetaObject>, name: &str) -> Result<Capability, SurfaceError> {
     let value = meta
-        .and_then(|meta| meta.0.get(CAPABILITY_KEY))
+        .and_then(|meta| meta.0.get(DEFINITION_KEY))
         .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no capability manifest")))?;
     serde_json::from_value(value.clone()).map_err(|error| {
         SurfaceError::new(format!(
@@ -236,7 +264,7 @@ pub(crate) struct ReportTool {
     pub(crate) title: String,
     pub(crate) description: String,
     #[serde(flatten)]
-    pub(crate) capability: Capability,
+    pub(crate) capability: PublishedCapability,
     pub(crate) input_schema: serde_json::Value,
     pub(crate) output_schema: serde_json::Value,
 }
@@ -244,7 +272,11 @@ pub(crate) struct ReportTool {
 #[cfg(test)]
 impl ReportTool {
     pub(crate) fn controlled_opener(&self) -> &'static str {
-        self.capability.controlled_opener()
+        controlled_opener(
+            self.capability.toolset,
+            self.capability.process_reach,
+            &self.capability.output_classes,
+        )
     }
 }
 
@@ -271,6 +303,10 @@ pub struct CapabilityReport {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the report carries four independent MCP boundary facts"
+)]
 pub(crate) struct BoundaryReport {
     pub(crate) one_socket_per_process: bool,
     pub(crate) per_call_socket_selection: bool,
@@ -366,15 +402,11 @@ pub(crate) fn resolve(
             .map
             .get_mut(name.as_str())
             .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no route")))?;
-        let report = finish_route(name.clone(), row, route, &nested_router)?;
+        let report = finish_route(name.clone(), &row, route, &nested_router)?;
         refresh_metadata(route.attr.meta.as_mut(), name.as_str(), &report)?;
         tools.push(report);
     }
 
-    let effective_tools = tools
-        .iter()
-        .map(|tool| tool.name.clone())
-        .collect::<Vec<_>>();
     Ok(Resolved {
         router,
         nested_router,
@@ -410,7 +442,7 @@ pub(crate) fn resolve(
             included_tools: selection.included_names().iter().cloned().collect(),
             excluded_tools: selection.excluded_names().iter().cloned().collect(),
             tool_count: tools.len(),
-            effective_tools,
+            effective_tools: tools.iter().map(|tool| tool.name.clone()).collect(),
             tools,
             host_command_tools: 0,
             tool_filtering_boundary: "interface-shaping-not-authorization",
@@ -422,7 +454,7 @@ pub(crate) fn resolve(
 
 fn finish_route(
     name: String,
-    row: Capability,
+    row: &Capability,
     route: &mut ToolRoute<TmuxTools>,
     nested_router: &ToolRouter<TmuxTools>,
 ) -> Result<ReportTool, SurfaceError> {
@@ -467,11 +499,12 @@ fn finish_route(
         .output_schema
         .as_ref()
         .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no output schema")))?;
+    let capability = PublishedCapability::from(row);
     Ok(ReportTool {
         name,
         title,
         description,
-        capability: row,
+        capability,
         input_schema: serde_json::Value::Object((*route.attr.input_schema).clone()),
         output_schema: serde_json::Value::Object((**output_schema).clone()),
     })
@@ -515,6 +548,7 @@ fn refresh_metadata(
             "tool {name:?} capability cannot serialize: {error}"
         ))
     })?;
+    meta.0.remove(DEFINITION_KEY);
     meta.0.insert(CAPABILITY_KEY.to_owned(), value);
     Ok(())
 }
@@ -667,22 +701,10 @@ fn validate(
         .filter(|(_, sinks)| sinks.contains(&InputSink::TmuxFormat))
         .map(|(input, _)| input.clone())
         .collect();
-    let controlled_inputs: BTreeSet<_> = row.tmux_format_controls.keys().cloned().collect();
-    let literalized_inputs: BTreeSet<_> = row.input_literalization.keys().cloned().collect();
-    let double_hash_inputs: BTreeSet<_> = row
-        .tmux_format_controls
-        .iter()
-        .filter(|(_, control)| matches!(control, TmuxFormatControl::DoubleHashOnce))
-        .map(|(input, _)| input.clone())
-        .collect();
+    let controlled_inputs: BTreeSet<_> = row.input_literalization.keys().cloned().collect();
     if format_inputs != controlled_inputs {
         return Err(SurfaceError::new(format!(
-            "tool {name:?} tmux-format sinks do not equal tmux format control keys"
-        )));
-    }
-    if literalized_inputs != double_hash_inputs {
-        return Err(SurfaceError::new(format!(
-            "tool {name:?} input literalization does not equal double-hash tmux format controls"
+            "tool {name:?} tmux-format sinks do not equal input literalization keys"
         )));
     }
     let has_pane_input = row
@@ -716,11 +738,6 @@ fn validate(
             )));
         }
         _ => {}
-    }
-    if !controlled_inputs.is_subset(&schema_keys) {
-        return Err(SurfaceError::new(format!(
-            "tool {name:?} controls a tmux-format input outside its schema"
-        )));
     }
     validate_authority(name, row, known, has_nested_tool)?;
     Ok(())
@@ -869,20 +886,10 @@ macro_rules! capability_meta {
                             $crate::manifest::InputLiteralization::DoubleHashOnce,
                         ),
                     )*
-                ]
-                    .into_iter()
-                    .collect(),
-                tmux_format_controls: [
-                    $(
-                        (
-                            $literalized.to_owned(),
-                            $crate::manifest::TmuxFormatControl::DoubleHashOnce,
-                        ),
-                    )*
                     $($(
                             (
                                 $validated.to_owned(),
-                                $crate::manifest::TmuxFormatControl::ValidatedVariableName,
+                                $crate::manifest::InputLiteralization::ValidatedVariableName,
                             ),
                     )*)?
                 ]

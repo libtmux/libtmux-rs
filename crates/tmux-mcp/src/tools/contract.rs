@@ -21,7 +21,9 @@ use super::error::{bad_input, object_gone, tmux_error};
 use super::lossy;
 
 const READ_BATCH_MAX_OPERATIONS: usize = 16;
-const READ_BATCH_MAX_BYTES: usize = 1 << 20;
+const READ_BATCH_MAX_BYTES: usize = 1_000_000;
+const READ_BATCH_TRUNCATED_ERROR: &str =
+    "nested tool error was truncated to fit the batch response";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -266,26 +268,37 @@ impl ReadBatchAccumulator {
 
     fn fit(&mut self) -> bool {
         while self.response_bytes() > READ_BATCH_MAX_BYTES {
-            let Some(item) = self.results.iter_mut().find(|item| item.result.is_some()) else {
-                let removed = self.results.pop();
-                self.truncated_bytes = self.truncated_bytes.saturating_add(
-                    removed
-                        .as_ref()
-                        .and_then(|item| serde_json::to_vec(item).ok())
-                        .map_or(0, |encoded| encoded.len()),
-                );
+            if let Some(item) = self.results.iter_mut().find(|item| item.result.is_some()) {
+                let removed = item
+                    .result
+                    .as_ref()
+                    .and_then(|result| serde_json::to_vec(result).ok())
+                    .map_or(0, |encoded| encoded.len());
+                item.result = None;
+                item.result_truncated = true;
+                self.truncated_bytes = self.truncated_bytes.saturating_add(removed);
                 self.truncated = true;
-                return false;
-            };
-            let removed = item
-                .result
-                .as_ref()
-                .and_then(|result| serde_json::to_vec(result).ok())
-                .map_or(0, |encoded| encoded.len().saturating_sub(4));
-            item.result = None;
-            item.result_truncated = true;
-            self.truncated_bytes = self.truncated_bytes.saturating_add(removed);
-            self.truncated = true;
+                continue;
+            }
+            if let Some(item) = self.results.iter_mut().find(|item| {
+                item.error
+                    .as_ref()
+                    .is_some_and(|error| error.message != READ_BATCH_TRUNCATED_ERROR)
+            }) {
+                let Some(error) = item.error.as_mut() else {
+                    return false;
+                };
+                let before = serde_json::to_vec(error).map_or(0, |encoded| encoded.len());
+                *error = ErrorData::new(error.code, READ_BATCH_TRUNCATED_ERROR, None);
+                let after = serde_json::to_vec(error).map_or(0, |encoded| encoded.len());
+                item.result_truncated = true;
+                self.truncated_bytes = self
+                    .truncated_bytes
+                    .saturating_add(before.saturating_sub(after));
+                self.truncated = true;
+                continue;
+            }
+            return false;
         }
         true
     }
@@ -301,9 +314,8 @@ impl ReadBatchAccumulator {
             truncated_bytes: self.truncated_bytes,
             on_error: self.on_error,
         };
-        let value = match serde_json::to_value(&view) {
-            Ok(value) => value,
-            Err(_) => return usize::MAX,
+        let Ok(value) = serde_json::to_value(&view) else {
+            return usize::MAX;
         };
         let response = rmcp::model::CallToolResult::structured(value);
         let mut bytes = ByteCounter::default();
@@ -960,7 +972,8 @@ impl TmuxTools {
         description = "Call a serial batch of at most sixteen enabled inspect tools. One \
                        approval for this batch covers every enabled nested name; inner tools do \
                        not receive separate client approval. The full serialized outer MCP \
-                       response is capped at 1 MiB; truncated rows and omitted bytes are explicit.",
+                       response is capped at 1,000,000 bytes; truncated payloads and omitted \
+                       bytes are explicit.",
         title = "Call Read Tools Batch",
         meta = crate::capability_meta!(
             Inspect, None,
@@ -1096,7 +1109,7 @@ mod batch_tests {
     use super::*;
 
     #[test]
-    fn read_batch_caps_the_full_outer_response_and_marks_elided_rows() {
+    fn read_batch_caps_the_full_outer_response_at_one_million_bytes() {
         let item = |index, text: String| BatchItem {
             index,
             tool: "capture_pane".to_owned(),
@@ -1107,14 +1120,9 @@ mod batch_tests {
             result_truncated: false,
             error: None,
         };
-        let empty =
-            BatchResult::from_results(vec![item(0, String::new())], OnError::Stop, None, false, 0);
-        let fixed_bytes = serde_json::to_vec(&empty)
-            .expect("empty batch serializes")
-            .len();
         let mut batch = ReadBatchAccumulator::default();
 
-        assert!(batch.push(item(0, "x".repeat(READ_BATCH_MAX_BYTES - fixed_bytes),)));
+        assert!(batch.push(item(0, "x".repeat(510_000))));
         let result = batch.finish();
         let value = serde_json::to_value(&result).expect("batch result converts to JSON");
         let envelope = rmcp::model::CallToolResult::structured(value);
@@ -1132,6 +1140,44 @@ mod batch_tests {
         assert!(report.get("truncated_bytes").is_none());
         assert!(report["results"][0].get("result_truncated").is_none());
         assert_eq!(result.results.len(), 1);
-        assert!(encoded.len() <= READ_BATCH_MAX_BYTES);
+        assert!(encoded.len() <= 1_000_000, "{} bytes", encoded.len());
+    }
+
+    #[test]
+    fn read_batch_preserves_every_executed_error_row_when_it_truncates() {
+        let mut batch = ReadBatchAccumulator::new(OnError::Continue);
+
+        for index in 0..READ_BATCH_MAX_OPERATIONS {
+            assert!(batch.push(BatchItem {
+                index,
+                tool: "get_pane_info".to_owned(),
+                success: false,
+                result: None,
+                result_truncated: false,
+                error: Some(ErrorData::invalid_params("x".repeat(70_000), None)),
+            }));
+        }
+
+        let result = batch.finish();
+        let envelope = rmcp::model::CallToolResult::structured(
+            serde_json::to_value(&result).expect("batch result converts to JSON"),
+        );
+        let encoded = serde_json::to_vec(&envelope).expect("outer tool result serializes");
+
+        assert_eq!(result.results.len(), READ_BATCH_MAX_OPERATIONS);
+        assert_eq!(result.failed, READ_BATCH_MAX_OPERATIONS);
+        assert_eq!(result.succeeded, 0);
+        assert!(result.truncated);
+        assert!(result.truncated_bytes > 0);
+        assert!(result.results.iter().all(|item| item.error.is_some()));
+        assert_eq!(
+            result
+                .results
+                .iter()
+                .map(|item| item.index)
+                .collect::<Vec<_>>(),
+            (0..READ_BATCH_MAX_OPERATIONS).collect::<Vec<_>>()
+        );
+        assert!(encoded.len() <= 1_000_000, "{} bytes", encoded.len());
     }
 }

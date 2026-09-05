@@ -148,8 +148,8 @@ impl Selection {
         )
     }
 
-    #[must_use]
     /// The startup-frozen toolsets in deterministic order.
+    #[must_use]
     pub fn toolsets(&self) -> &[Toolset] {
         &self.toolsets
     }
@@ -263,10 +263,11 @@ impl SocketProvenance {
         let (selection_provenance, server_state, configuration_provenance) = match self {
             Self::DedicatedMinimal => ("default-dedicated", "created", "minimal"),
             Self::DedicatedExisting => ("default-dedicated", "existing", "unknown"),
-            Self::OperatorSelected => ("operator-current", "existing", "unknown"),
+            Self::OperatorSelected | Self::UserConfiguredExisting => {
+                ("operator-current", "existing", "unknown")
+            }
             Self::OperatorSelectedAbsent => ("operator-current", "absent", "unknown"),
             Self::UserConfigured => ("operator-current", "absent", "user-configured"),
-            Self::UserConfiguredExisting => ("operator-current", "existing", "unknown"),
             Self::Unknown => ("unknown", "unknown", "unknown"),
         };
         crate::manifest::SocketReport {

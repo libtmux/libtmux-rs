@@ -360,93 +360,69 @@ fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
 }
 
 #[test]
-fn capability_rows_use_the_shared_sink_and_literalization_vocabulary() -> TestResult {
+fn capability_rows_publish_only_schema_keyed_literalization_controls() -> TestResult {
     let all_tools = tools("inspect,manage,execute,teardown")?;
-    let allowed: BTreeSet<_> = [
-        "none",
-        "tmux-lookup",
-        "tmux-state",
-        "tmux-format",
-        "pane-input",
-        "shell-command",
-        "process-argv",
-        "regex",
-        "nested-tool",
-    ]
-    .into_iter()
-    .collect();
 
     for tool in all_tools.offered() {
-        let capability = tool
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+        let meta = tool.meta.as_ref().expect("tool metadata");
+        assert!(
+            meta.0.keys().all(|key| !key.contains("internal")),
+            "{}: {:?}",
+            tool.name,
+            meta.0.keys().collect::<Vec<_>>(),
+        );
+        let capability = meta
+            .0
+            .get("com.git-pull.libtmux-mcp/capability")
             .expect("capability row");
-        let sinks = capability["inputSinks"].as_object().expect("input sinks");
         let literalization = capability["inputLiteralization"]
             .as_object()
             .expect("input literalization");
-        let format_controls = capability["tmuxFormatControls"]
+        let schema_keys = tool.input_schema["properties"]
             .as_object()
-            .expect("tmux format controls");
-        let format_inputs: BTreeSet<_> = sinks
-            .iter()
-            .filter(|(_, values)| {
-                values
-                    .as_array()
-                    .is_some_and(|values| values.iter().any(|value| value == "tmux-format"))
-            })
-            .map(|(name, _)| name.as_str())
-            .collect();
-        let controlled_inputs: BTreeSet<_> = format_controls.keys().map(String::as_str).collect();
-        let literalized_inputs: BTreeSet<_> = format_controls
-            .iter()
-            .filter(|(_, control)| *control == "double-hash-once")
-            .map(|(name, _)| name.as_str())
-            .collect();
+            .expect("schema properties");
 
-        for values in sinks.values() {
-            for sink in values.as_array().expect("sink set") {
-                let sink = sink.as_str().expect("sink name");
-                assert!(allowed.contains(sink), "{}: {sink}", tool.name);
-            }
-        }
-        assert_eq!(controlled_inputs, format_inputs, "{}", tool.name);
-        assert_eq!(
-            literalization
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>(),
-            literalized_inputs,
+        assert!(capability.get("inputSinks").is_none(), "{}", tool.name);
+        assert!(
+            capability.get("tmuxFormatControls").is_none(),
             "{}",
             tool.name,
         );
         assert!(
-            format_controls.values().all(|strategy| matches!(
+            literalization.values().all(|strategy| matches!(
                 strategy.as_str(),
                 Some("double-hash-once" | "validated-variable-name")
             )),
-            "{}: {format_controls:?}",
+            "{}: {literalization:?}",
+            tool.name,
+        );
+        assert!(
+            literalization
+                .keys()
+                .all(|name| schema_keys.contains_key(name)),
+            "{}: {literalization:?}",
             tool.name,
         );
     }
 
-    let variables = tools("inspect")?
-        .offered()
-        .into_iter()
-        .find(|tool| tool.name == "get_tmux_variables")
-        .expect("variable tool");
-    let capability = variables
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
-        .expect("capability row");
-    assert_eq!(capability["inputSinks"]["names"], json!(["tmux-format"]));
+    let controls = |name: &str| {
+        let tool = tools("inspect")?
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .ok_or_else(|| format!("missing tool {name}"))?;
+        let capability = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+            .ok_or_else(|| format!("missing capability row for {name}"))?;
+        Ok::<_, Box<dyn Error>>(capability["inputLiteralization"].clone())
+    };
     assert_eq!(
-        capability["tmuxFormatControls"]["names"],
+        controls("get_tmux_variables")?["names"],
         "validated-variable-name"
     );
-    assert!(capability["inputLiteralization"].get("names").is_none());
+    assert_eq!(controls("show_option")?["name"], "double-hash-once");
     Ok(())
 }
 
