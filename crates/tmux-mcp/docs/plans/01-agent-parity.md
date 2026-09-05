@@ -30,17 +30,20 @@ change in the caller's window, and `capture-pane` on the dead pane includes
 tmux's own `Pane is dead (status 42, ...)` banner. Kept in reserve; it is the
 only option that survives a pane whose foreground process is not a shell.
 
-**Invisible APC sentinels on the output stream — chosen.** The pane shell uses
-the resolved tmux executable and exact socket to ask synchronous `run-shell`
-clients to emit APC strings, which terminals discard. Each inherited-xtrace
-and inherited-errexit branch has this variable-free shape:
+**Printable completion records on the output stream — chosen.** The pane shell
+uses the resolved tmux executable and exact socket to ask `display-message -p`
+clients to emit an empty separator, a 128-bit nonce opening line, and a closing
+line carrying the status. Each inherited-xtrace and inherited-errexit branch
+has this variable-free shape:
 
 ```
 \set +e
-if ( \exec '<resolved-tmux>' -S '<socket>' run-shell "printf '\\033_<nonce>s\\033\\\\'" ); then
+if ( \exec '<resolved-tmux>' -N -S '<socket>' display-message -p '' ) &&
+   ( \exec '<resolved-tmux>' -N -S '<socket>' display-message -p '__LIBTMUX_MCP_DONE_''<nonce>''__:BEGIN' ); then
   ( \set -e; \eval '<one quoted command operand>' )
   \set -- "$?"
-  ( \exec '<resolved-tmux>' -S '<socket>' run-shell "printf '\\033_<nonce>e;$1\\033\\\\'" )
+  ( \exec '<resolved-tmux>' -N -S '<socket>' display-message -p '' )
+  ( \exec '<resolved-tmux>' -N -S '<socket>' display-message -p '__LIBTMUX_MCP_DONE_''<nonce>''__:'"$1" )
 fi
 ```
 
@@ -50,24 +53,26 @@ newline, so caller commands retain tracing without exposing frame bookkeeping.
 The opening client gates the command; a failed opening marker cannot run it.
 
 `ControlMode` is attached before the keys are sent, so the reply arrives on a
-byte stream that began earlier than the command. Everything between the two
-sentinels is the command's true output, stdout and stderr interleaved in the
-order the program wrote them, with nothing scrolled past and no screen
-rendering in the way.
+byte stream that began earlier than the command. Everything between the exact
+opening and closing physical lines is the command's true output, stdout and
+stderr interleaved in the order the program wrote them, with nothing scrolled
+past and no screen rendering in the way.
 
-The echo of the typed line cannot be mistaken for a sentinel. A shell echoes
-the *source* text, in which `\033` is four characters; the escape byte `0x1b`
-appears only when `printf` runs. Matching the raw byte sequence is therefore
-unambiguous, which is what lets this replace the regex-over-`capture-pane`
-scrubbing the Python server needs.
+The echo of the typed line cannot be mistaken for a completion record because
+the marker is split across adjacent quoted fragments in the source. The
+scanner accepts only an exact complete physical line; prefixes, lookalikes,
+and incomplete closing lines remain ordinary or unfinished output. Frame
+generation retries the negligible case where a random marker occurs in the
+caller command.
 
 The complete command is one quoted `eval` operand inside a subshell. Invalid
 syntax closes with a nonzero status; trailing comments, `cd`, exports, traps,
 functions, and bare `exit` cannot consume or mutate the outer frame or parent
-shell. No fixed variable or pane-side `printf` name is trusted. Direct
-`display-message`, background or targeted `run-shell`, and bare,
-`command`-qualified, or fixed-path pane `printf` were rejected because they
-changed effects, lost ordering, or remained shadowable or nonportable.
+shell. No fixed variable or pane-side `printf` name is trusted. Synchronous
+`run-shell` records were rejected because tmux 3.3 through 3.4 send their
+output to the pane's copy-mode buffer rather than the exact client. APC records
+and bare, `command`-qualified, or fixed-path pane `printf` were rejected because
+they made transport version-dependent or remained shadowable or nonportable.
 
 The pane shell is trusted to preserve POSIX meanings for `case`, `set`, `eval`,
 and `exec`; the tmux server and configuration, including command aliases, are
