@@ -118,6 +118,12 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err(format!("{TMUX_CONFIG_ENV} must not be empty").into());
     }
+    if configured_tmux
+        .as_ref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err(format!("{TMUX_CONFIG_ENV} must be an absolute path").into());
+    }
     let default_config = default_socket && configured_tmux.is_none();
     if let Some(path) = configured_tmux {
         builder = builder.config_file(path);

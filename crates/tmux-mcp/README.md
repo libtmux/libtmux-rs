@@ -352,8 +352,8 @@ $ tmux-mcp --socket-name work
 
 `-S` and `-L` work too. `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` provide the
 same startup choices. `LIBTMUX_TMUX_CONFIG` selects an explicit tmux
-configuration. Socket names and paths are mutually exclusive. `tmux-mcp
---help` lists every flag.
+configuration at an absolute path. Socket names and paths are mutually
+exclusive. `tmux-mcp --help` lists every flag.
 
 ## Trust boundary
 

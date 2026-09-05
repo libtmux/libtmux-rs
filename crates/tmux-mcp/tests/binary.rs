@@ -221,6 +221,16 @@ fn malformed_or_unknown_selection_is_fatal() {
 }
 
 #[test]
+fn configured_tmux_file_must_be_absolute() {
+    let output = failed_start(&[("LIBTMUX_TMUX_CONFIG", "relative.conf")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(stderr.contains("LIBTMUX_TMUX_CONFIG"), "{stderr}");
+    assert!(stderr.contains("absolute"), "{stderr}");
+}
+
+#[test]
 fn help_names_current_startup_controls_only() {
     let output = Command::new(BIN).arg("--help").output().expect("help runs");
     let help = String::from_utf8_lossy(&output.stdout);
