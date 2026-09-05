@@ -208,9 +208,13 @@ mod linux {
         let started = Instant::now();
         let mut frozen = FrozenProcesses::default();
         loop {
-            let Ok(observed) = scanner(marker) else {
-                return Err(SweepFailure::DiscoveryScan);
-            };
+            let observed = scan_until_clean(
+                marker,
+                &started,
+                timeout,
+                SweepFailure::DiscoveryScan,
+                &mut scanner,
+            )?;
             let mut discovered = false;
             for process in observed {
                 if frozen.contains(&process.identity) {
@@ -252,14 +256,13 @@ mod linux {
                 frozen.remove(&identity);
             }
 
-            // Every process still frozen here has already been killed, so a
-            // scan that cannot classify a candidate is not evidence that one
-            // escaped: a process being torn down turns opaque, and the scan
-            // cannot tell that apart from one hiding. Treating it as "nothing
-            // new this pass" keeps the sweep honest, because the loop only
-            // returns once every frozen process is terminal and the deadline
-            // below still fails closed if that never happens.
-            let observed = scanner(marker).unwrap_or_default();
+            let observed = scan_until_clean(
+                marker,
+                &started,
+                timeout,
+                SweepFailure::TerminationDeadline,
+                &mut scanner,
+            )?;
             for process in observed {
                 if frozen.contains(&process.identity) {
                     continue;
@@ -275,6 +278,26 @@ mod linux {
             }
             if timed_out(started, timeout) {
                 return Err(SweepFailure::TerminationDeadline);
+            }
+            std::thread::sleep(crate::test::CLEANUP_POLL_INTERVAL);
+        }
+    }
+
+    fn scan_until_clean(
+        marker: &OsStr,
+        started: &Instant,
+        timeout: Duration,
+        failure: SweepFailure,
+        scanner: &mut impl FnMut(&OsStr) -> Result<Vec<AdmittedProcess>, ()>,
+    ) -> Result<Vec<AdmittedProcess>, SweepFailure> {
+        let mut retrying = false;
+        loop {
+            if retrying && timed_out(*started, timeout) {
+                return Err(failure);
+            }
+            match scanner(marker) {
+                Ok(observed) => return Ok(observed),
+                Err(()) => retrying = true,
             }
             std::thread::sleep(crate::test::CLEANUP_POLL_INTERVAL);
         }
@@ -459,8 +482,9 @@ mod linux {
         use rustix::process::getuid;
 
         use super::{
-            environment_entry, environment_matches, read_process, revalidated_candidate, scan,
-            scan_process_paths, terminate_all, terminate_all_with_scanner,
+            SweepFailure, environment_entry, environment_matches, read_process,
+            revalidated_candidate, scan, scan_process_paths, terminate_all,
+            terminate_all_with_scanner,
         };
         use crate::test::containment::OwnerContainment;
 
@@ -527,6 +551,22 @@ mod linux {
             environment.extend_from_slice(marker.as_encoded_bytes());
             environment.push(0);
             fs::write(path.join("environ"), environment).expect("fixture environment is written");
+        }
+
+        fn run_empty_scan_script(
+            timeout: Duration,
+            mut fails: impl FnMut(u8) -> bool,
+        ) -> (Result<(), SweepFailure>, u8) {
+            let mut scans = 0_u8;
+            let result = terminate_all_with_scanner(OsStr::new("scripted"), timeout, |_| {
+                scans += 1;
+                if fails(scans) {
+                    Err(())
+                } else {
+                    Ok(Vec::new())
+                }
+            });
+            (result, scans)
         }
 
         #[test]
@@ -646,6 +686,28 @@ mod linux {
         }
 
         #[test]
+        fn scan_errors_require_a_clean_rescan_before_deadline() {
+            assert_eq!(
+                run_empty_scan_script(Duration::from_secs(1), |scan| scan == 1),
+                (Ok(()), 3),
+                "discovery uncertainty requires two later clean scans",
+            );
+            assert_eq!(
+                run_empty_scan_script(Duration::from_secs(1), |scan| scan == 2),
+                (Ok(()), 3),
+                "termination uncertainty requires a later clean scan",
+            );
+            assert_eq!(
+                run_empty_scan_script(Duration::ZERO, |_| true),
+                (Err(SweepFailure::DiscoveryScan), 1),
+            );
+            assert_eq!(
+                run_empty_scan_script(Duration::ZERO, |scan| scan > 1),
+                (Err(SweepFailure::TerminationDeadline), 2),
+            );
+        }
+
+        #[test]
         fn timeout_after_freeze_kills_all_previously_frozen_pidfds() {
             let containment = OwnerContainment::new(OsStr::new("timeout-after-freeze"));
             let mut first = spawn_marked_process(&containment);
@@ -672,13 +734,11 @@ mod linux {
             let containment = OwnerContainment::new(OsStr::new("scan-error-after-freeze"));
             let mut first = spawn_marked_process(&containment);
             let mut second = spawn_marked_process(&containment);
-            let mut scans = 0_u8;
+            let mut scans = 0_u32;
+            let timeout = Duration::from_millis(50);
 
-            // Which branch catches it depends on how many discovery passes ran
-            // before the scanner started failing, which is a race. The
-            // contract under test is that the sweep fails at all.
             assert!(
-                terminate_all_with_scanner(&containment.marker, Duration::from_secs(5), |marker| {
+                terminate_all_with_scanner(&containment.marker, timeout, |marker| {
                     scans += 1;
                     if scans == 1 { scan(marker) } else { Err(()) }
                 })
