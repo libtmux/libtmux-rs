@@ -421,6 +421,21 @@ mod tests {
             .expect("dead transition is observable");
     }
 
+    async fn caller_peer_identity(
+        pane: &libtmux::Pane,
+        server: &libtmux::Server,
+    ) -> crate::CallerIdentity {
+        let peer = pane
+            .split(libtmux::SplitOptions::new(libtmux::SplitDirection::Below))
+            .await
+            .expect("caller peer is created");
+        crate::CallerIdentity::from_values(
+            Some(format!("{},1,$0", server.socket_path().display()).into()),
+            Some(peer.id().to_string().into()),
+        )
+        .expect("caller identity is complete")
+    }
+
     async fn transition_then_preflight(
         transition: &str,
         pane: &mut libtmux::Pane,
@@ -429,37 +444,48 @@ mod tests {
         source: &str,
         foreground: &libtmux::TmuxText,
     ) -> Result<(), ErrorData> {
-        let command = match transition {
-            "dead" => "exit 0",
-            "foreground" => "exec sleep 30",
-            _ => unreachable!(),
-        };
-        let pane_id = pane.id().clone();
-        pane.respawn(Some(command), true)
-            .await
-            .expect("pane begins its final transition");
-        match transition {
-            "dead" => assert_eq!(
-                server
-                    .wait_for_channel("mcp-final-pane-died", Duration::from_secs(2))
-                    .await
-                    .expect("pane-died notification answers"),
-                libtmux::ChannelWait::Signalled
-            ),
-            "foreground" => libtmux::test::retry_until(Duration::from_secs(2), async || {
-                server
-                    .pane_by_id(&pane_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some_and(|pane| {
-                        pane.current_command()
-                            .is_some_and(|value| value.as_str() == Ok("sleep"))
-                    })
-            })
-            .await
-            .expect("selected socket reports the foreground transition"),
-            _ => unreachable!(),
+        if transition == "caller" {
+            server
+                .window_by_id(pane.window_id())
+                .await
+                .expect("window lookup")
+                .expect("source window exists")
+                .set_option("synchronize-panes", "on")
+                .await
+                .expect("caller peer enters the configured cohort");
+        } else {
+            let command = if transition == "dead" {
+                "exit 0"
+            } else {
+                "exec sleep 30"
+            };
+            let pane_id = pane.id().clone();
+            pane.respawn(Some(command), true)
+                .await
+                .expect("pane begins its final transition");
+            if transition == "dead" {
+                assert_eq!(
+                    server
+                        .wait_for_channel("mcp-final-pane-died", Duration::from_secs(2))
+                        .await
+                        .expect("pane-died notification answers"),
+                    libtmux::ChannelWait::Signalled
+                );
+            } else {
+                libtmux::test::retry_until(Duration::from_secs(2), async || {
+                    server
+                        .pane_by_id(&pane_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|pane| {
+                            pane.current_command()
+                                .is_some_and(|value| value.as_str() == Ok("sleep"))
+                        })
+                })
+                .await
+                .expect("selected socket reports the foreground transition");
+            }
         }
         let final_plan = tools
             .preflight_pane_input(
@@ -499,9 +525,10 @@ mod tests {
 
     #[tokio::test]
     async fn real_tmux_compat_final_preflight_observes_transition_before_dispatch() {
-        for (transition, expected_refusal) in [
-            ("dead", "is dead"),
-            ("foreground", "changed foreground command"),
+        for (transition, expected_refusal, expected_kind) in [
+            ("dead", "is dead", "invalid_input"),
+            ("foreground", "changed foreground command", "invalid_input"),
+            ("caller", "refusing to send input", "self_protection"),
         ] {
             let guard = TestServer::builder().start().await.expect("tmux starts");
             let server = guard.server();
@@ -513,15 +540,12 @@ mod tests {
             if transition == "dead" {
                 configure_dead_transition(&pane).await;
             }
-            server
-                .set_hook(
-                    "after-display-message",
-                    "set-option -g @mcp-final-display-message seen",
-                )
-                .await
-                .expect("display transport is observable");
-
-            let tools = TmuxTools::builder(server.clone()).caller(None).build();
+            let caller = if transition == "caller" {
+                Some(caller_peer_identity(&pane, server).await)
+            } else {
+                None
+            };
+            let tools = TmuxTools::builder(server.clone()).caller(caller).build();
             let source = pane.id().to_string();
             let initial = tools
                 .preflight_pane_input(
@@ -536,6 +560,13 @@ mod tests {
                 .current_command()
                 .cloned()
                 .expect("initial pane reports its foreground command");
+            server
+                .set_hook(
+                    "after-display-message",
+                    "set-option -g @mcp-final-display-message seen",
+                )
+                .await
+                .expect("display transport is observable");
             let executable = server
                 .resolved_tmux_executable()
                 .expect("fixture tmux resolves");
@@ -578,7 +609,7 @@ mod tests {
             assert!(error.message.contains(expected_refusal), "{transition}");
             assert_eq!(
                 error.data.expect("final refusal is classified")["kind"],
-                "invalid_input",
+                expected_kind,
                 "{transition}"
             );
             assert_eq!(

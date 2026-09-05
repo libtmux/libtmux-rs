@@ -158,6 +158,21 @@ async fn identity_for(server: &Server, pane: &str) -> CallerIdentity {
     .expect("caller identity")
 }
 
+async fn caller_tools(server: &Server, pane: &str) -> TmuxTools {
+    TmuxTools::builder(server.clone())
+        .caller(Some(identity_for(server, pane).await))
+        .build()
+}
+
+fn assert_self_protection(error: rmcp::model::ErrorData, pane: &str) {
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert!(error.message.contains(pane), "{}", error.message);
+    assert_eq!(
+        error.data.expect("typed refusal")["kind"],
+        "self_protection"
+    );
+}
+
 async fn client_count(server: &Server) -> usize {
     server.clients().await.map_or(0, |clients| clients.len())
 }
@@ -230,7 +245,12 @@ async fn pane_screen(tools: &TmuxTools, pane: &str) -> String {
         .to_owned()
 }
 
-async fn assert_paste_refused_unchanged(tools: &TmuxTools, server: &Server, pane: &str) {
+async fn assert_paste_refused_unchanged(
+    tools: &TmuxTools,
+    server: &Server,
+    pane: &str,
+    kind: &str,
+) {
     let buffers = server.buffer_names().await.expect("buffers list");
     let screen = pane_screen(tools, pane).await;
     let error = tools
@@ -238,7 +258,7 @@ async fn assert_paste_refused_unchanged(tools: &TmuxTools, server: &Server, pane
         .await
         .err()
         .expect("paste is refused");
-    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert_eq!(error.data.expect("typed refusal")["kind"], kind);
     assert_eq!(server.buffer_names().await.expect("buffers list"), buffers);
     assert_eq!(pane_screen(tools, pane).await, screen);
 }
@@ -465,8 +485,91 @@ async fn an_unsynchronized_source_ignores_unreached_modal_peers() {
 }
 
 #[tokio::test]
+async fn pane_input_and_batch_protect_only_reached_caller_panes() {
+    let (guard, _, source) = typing_fixture("input-caller").await;
+    let direct = caller_tools(guard.server(), &source).await;
+    let direct_channel = "mcp-input-direct-caller";
+    let error = direct
+        .send_keys(args(serde_json::json!({
+            "pane": source,
+            "text": format!("tmux wait-for -S {direct_channel}"),
+            "enter": true
+        })))
+        .await
+        .err()
+        .expect("direct caller input is refused");
+    assert_self_protection(error, &source);
+    assert_channel_quiet(guard.server(), direct_channel).await;
+
+    let peer = split(guard.server(), &source).await;
+    prompt_ready(guard.server(), &peer).await;
+    set_window_synchronized(guard.server(), &source, true).await;
+    let peer_caller = caller_tools(guard.server(), &peer).await;
+    let peer_channel = "mcp-input-synchronized-caller";
+    let error = peer_caller
+        .send_keys(args(serde_json::json!({
+            "pane": source,
+            "text": format!("tmux wait-for -S {peer_channel}"),
+            "enter": true
+        })))
+        .await
+        .err()
+        .expect("a synchronized caller peer refuses the whole input");
+    assert_self_protection(error, &peer);
+    assert_channel_quiet(guard.server(), peer_channel).await;
+
+    pane_handle(guard.server(), &source)
+        .await
+        .set_option("synchronize-panes", "off")
+        .await
+        .expect("source opts out");
+    send_and_wait(
+        &peer_caller,
+        guard.server(),
+        &source,
+        "true",
+        "mcp-input-unreached-caller",
+    )
+    .await;
+
+    let batch_channel = "mcp-input-batch-caller";
+    let response = call_tool(
+        peer_caller,
+        "send_keys_batch",
+        serde_json::json!({
+            "operations": [
+                {"pane": source, "keys": ["C-l"], "enter": false},
+                {
+                    "pane": peer,
+                    "text": format!("tmux wait-for -S {batch_channel}"),
+                    "enter": true
+                },
+                {"pane": source, "keys": ["C-l"], "enter": false}
+            ],
+            "on_error": "continue"
+        }),
+    )
+    .await;
+    let result = response
+        .structured_content
+        .as_ref()
+        .unwrap_or_else(|| panic!("batch has structured content: {response:?}"));
+    assert_eq!(result["succeeded"], 2, "{result}");
+    assert_eq!(result["failed"], 1, "{result}");
+    assert_eq!(result["results"][0]["success"], true, "{result}");
+    assert_eq!(
+        result["results"][1]["error"]["data"]["kind"], "self_protection",
+        "{result}"
+    );
+    assert_eq!(result["results"][2]["success"], true, "{result}");
+    assert_channel_quiet(guard.server(), batch_channel).await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
-    let (guard, tools, source, peer) = synchronized_fixture("paste-preflight").await;
+    let (guard, _, source, peer) = synchronized_fixture("paste-preflight").await;
+    let tools = caller_tools(guard.server(), &peer).await;
     let peer_screen = pane_screen(&tools, &peer).await;
     tools
         .paste_text(args(serde_json::json!({
@@ -487,7 +590,7 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
         .copy_mode()
         .await
         .expect("fixture enters copy mode");
-    assert_paste_refused_unchanged(&tools, guard.server(), &source).await;
+    assert_paste_refused_unchanged(&tools, guard.server(), &source, "invalid_input").await;
 
     source_handle
         .exit_mode()
@@ -506,7 +609,8 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
     })
     .await
     .expect("source becomes dead");
-    assert_paste_refused_unchanged(&tools, guard.server(), &source).await;
+    assert_paste_refused_unchanged(&tools, guard.server(), &source, "invalid_input").await;
+    assert_paste_refused_unchanged(&tools, guard.server(), &peer, "self_protection").await;
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -676,34 +780,51 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
 }
 
 #[tokio::test]
-async fn run_refuses_synchronized_input_before_watcher_setup() {
-    let (guard, tools, source, _) = synchronized_fixture("run-initial-guard").await;
-    guard
-        .server()
-        .set_hook(
-            "client-attached",
-            "set-option -g @mcp-initial-watcher attached",
-        )
-        .await
-        .expect("watcher hook is installed");
-    let baseline_clients = client_count(guard.server()).await;
-    let channel = "mcp-initial-run-refusal";
-
-    let error = run_error(&tools, &source, &format!("tmux wait-for -S {channel}")).await;
-
-    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
-    assert_eq!(client_count(guard.server()).await, baseline_clients);
-    assert_eq!(
+async fn run_refuses_initial_input_before_watcher_setup() {
+    for boundary in ["cohort", "caller"] {
+        let (guard, bare, source) = typing_fixture(&format!("run-initial-{boundary}")).await;
+        let (tools, expected_kind) = if boundary == "cohort" {
+            let peer = split(guard.server(), &source).await;
+            prompt_ready(guard.server(), &peer).await;
+            set_window_synchronized(guard.server(), &source, true).await;
+            (bare, "invalid_input")
+        } else {
+            (
+                caller_tools(guard.server(), &source).await,
+                "self_protection",
+            )
+        };
         guard
             .server()
-            .get_global_option("@mcp-initial-watcher")
+            .set_hook(
+                "client-attached",
+                "set-option -g @mcp-initial-watcher attached",
+            )
             .await
-            .expect("hook record is read"),
-        None,
-        "the initial guard runs before watcher attachment"
-    );
-    assert_channel_quiet(guard.server(), channel).await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
+            .expect("watcher hook is installed");
+        let baseline_clients = client_count(guard.server()).await;
+        let channel = format!("mcp-initial-run-{boundary}");
+
+        let error = run_error(&tools, &source, &format!("tmux wait-for -S {channel}")).await;
+
+        assert_eq!(
+            error.data.expect("typed refusal")["kind"],
+            expected_kind,
+            "{boundary}"
+        );
+        assert_eq!(client_count(guard.server()).await, baseline_clients);
+        assert_eq!(
+            guard
+                .server()
+                .get_global_option("@mcp-initial-watcher")
+                .await
+                .expect("hook record is read"),
+            None,
+            "{boundary}: the initial guard runs before watcher attachment"
+        );
+        assert_channel_quiet(guard.server(), &channel).await;
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
 }
 
 #[tokio::test]

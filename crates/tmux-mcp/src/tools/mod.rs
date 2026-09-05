@@ -313,14 +313,10 @@ impl TmuxTools {
         self.caller.as_ref().and_then(|caller| caller.pane_id())
     }
 
-    /// Refuse a command that may destroy the pane this process talks through.
-    pub(super) fn self_harm(what: &str, own: &str) -> ErrorData {
+    /// Classify a refusal that protects the pane this process talks through.
+    pub(super) fn self_protection(message: String) -> ErrorData {
         ErrorData::invalid_params(
-            format!(
-                "refusing to kill this {what}: pane {own} matches this MCP server's inherited \
-                 caller context, so killing it may end this conversation. Run the command in \
-                 a terminal if that is what you meant."
-            ),
+            message,
             // Its own kind, because this is the server declining rather than
             // tmux: an agent that reads `refused` might reasonably try a
             // different argument, and no argument gets past this one.
@@ -330,6 +326,15 @@ impl TmuxTools {
                 "stale": false,
             })),
         )
+    }
+
+    /// Refuse a command that may destroy the pane this process talks through.
+    pub(super) fn self_harm(what: &str, own: &str) -> ErrorData {
+        Self::self_protection(format!(
+            "refusing to kill this {what}: pane {own} matches this MCP server's inherited \
+             caller context, so killing it may end this conversation. Run the command in \
+             a terminal if that is what you meant."
+        ))
     }
 
     /// Resolve a window id, reporting an unknown one as invalid input.
