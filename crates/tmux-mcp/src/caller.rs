@@ -1,9 +1,9 @@
-//! Where this server is running, and what it must therefore not destroy.
+//! Where this server is running, and what it must not disrupt or destroy.
 //!
 //! tmux sets `TMUX` and `TMUX_PANE` in every process it starts, so an MCP
 //! server launched from a pane can say which pane that is. Two things are
-//! built on that: pane listings say which pane is the caller's own, and direct
-//! teardown tools refuse it.
+//! built on that: pane listings say which pane is the caller's own, pane input
+//! refuses to reach it, and teardown tools refuse to destroy it.
 //!
 //! A pane id is only unique within one tmux server. `%1` on the socket this
 //! process was started from and `%1` on the socket it was asked about are

@@ -222,11 +222,12 @@ directly from that registry.
 
 `set_synchronize_panes` changes the window default; individual pane overrides
 determine the effective configured recipient cohort. `send_keys` observes that
-cohort before input and refuses the whole call if a configured pane is dead or
-in a tmux mode. `send_keys_batch` repeats the check for each executed row.
+cohort before input and refuses the whole call if a configured pane is dead, in
+a tmux mode, or may be the inherited caller. `send_keys_batch` repeats the
+check for each executed row.
 Returned pane IDs describe configured membership and do not prove delivery.
-`paste_text` refuses a dead or mode-owned target before buffer creation and,
-even with synchronized input enabled, targets only the named pane.
+`paste_text` refuses a dead, mode-owned, or possible caller target before buffer
+creation and, even with synchronized input enabled, targets only the named pane.
 `call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
 the complete JSON-RPC response line, including its request ID and newline, at
 1,000,000 bytes. Truncated payloads and omitted bytes are explicit, and every
@@ -372,9 +373,10 @@ does not reduce the tmux user's authority.
 
 When launched from tmux, the process inherits a pane ID and socket. Pane
 listings mark that pane `caller: "self"` only when the socket matches the
-selected server. Teardown tools refuse a target that may contain that caller.
-The comparison weighs the socket as well as the pane ID because `%1` names a
-different pane on every tmux server.
+selected server. Pane-input tools refuse any configured recipient that may be
+that caller; target-only paste checks only its named pane. Teardown tools refuse
+a target that may contain the caller. The comparison weighs the socket as well
+as the pane ID because `%1` names a different pane on every tmux server.
 
 ## Choosing a server
 
@@ -413,8 +415,10 @@ command.
 
 `run_shell_command` requires a trusted POSIX-compatible pane shell whose
 reserved words and special builtins retain their standard meanings. The tmux
-server and configuration are trusted too: command aliases and hooks are
-executable configuration, not a sandbox boundary.
+server and configuration are trusted too. Its resolved tmux executable and
+socket path must contain no ASCII terminal-control bytes; the tool rejects such
+routes before attaching its watcher. Command aliases and hooks are executable
+configuration, not a sandbox boundary.
 
 Pane output and tmux metadata may contain sensitive or untrusted text.
 Environment values may contain secrets. Hooks may contain executable
@@ -464,9 +468,10 @@ finish, and answers with its exit status and output. Reaching the deadline ends
 the waiting, not the pane command. Inspect the pane before sending more input;
 use `send_keys` with `keys: ["C-c"]` only when pane-wide interruption is
 intended. The tool requires one configured input recipient and observes its
-cohort, mode, liveness, and foreground command before watcher setup and again
-before dispatch. Invalid syntax completes with a nonzero shell status. These
-checks do not lock the pane; state can change before tmux processes the input.
+cohort, mode, liveness, inherited-caller relation, and foreground command before
+watcher setup and again before dispatch. Invalid syntax completes with a
+nonzero shell status. These checks do not lock the pane; state can change before
+tmux processes the input.
 
 **Waiting for something you did not start.** `wait_for_text` watches the
 pane's output stream for a pattern, with stop patterns for the failures you

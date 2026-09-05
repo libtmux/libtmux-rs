@@ -37,13 +37,15 @@ fn generated_reference() -> TestResult<String> {
         "ownership when a client disconnects, and cancelling can discard a person's\n",
         "selection or close a different mode than the caller assumed.\n\n",
         "Keep observing with capture, snapshot, search, `capture_since`, or\n",
-        "`wait_for_text`. Pane-input tools refuse dead or mode-owned configured\n",
+        "`wait_for_text`. Pane-input tools refuse dead, mode-owned, or possible caller\n",
         "recipients. `send_keys_batch` repeats that check for each executed row, while\n",
-        "`paste_text` targets only the named pane and checks before buffer creation.\n\n",
+        "`paste_text` checks only its named target before buffer creation.\n\n",
         "`run_shell_command` requires one configured recipient and checks its cohort,\n",
-        "mode, liveness, and foreground command before watcher setup and before\n",
-        "dispatch. These are observations, not locks: state can still change before\n",
-        "tmux processes input, and returned pane IDs do not confirm delivery.\n\n",
+        "mode, liveness, inherited-caller relation, and foreground command before\n",
+        "watcher setup and before dispatch. Its resolved tmux executable and socket\n",
+        "path must contain no ASCII terminal-control bytes. These are observations,\n",
+        "not locks: state can still change before tmux processes input, and returned\n",
+        "pane IDs do not confirm delivery.\n\n",
         "The `libtmux` crate retains `Pane::copy_mode` and `Pane::exit_mode` for\n",
         "applications that own the complete interaction. Library parity does not require\n",
         "the detached MCP surface to expose modal human-client operations.\n",
@@ -146,6 +148,7 @@ fn readme_links_to_the_generated_reference_without_copying_the_inventory() -> Te
     assert!(!readme.contains("**Inspect (18):**"));
     assert!(readme.contains("configured recipient cohort"));
     assert!(readme.contains("trusted POSIX-compatible pane shell"));
+    assert!(readme.contains("may be the inherited caller"));
     assert!(readme.contains("do not prove delivery"));
     Ok(())
 }

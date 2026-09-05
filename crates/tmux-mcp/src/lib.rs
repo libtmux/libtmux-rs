@@ -29,7 +29,8 @@
 //!
 //! An inherited `TMUX` and `TMUX_PANE` identify the caller only after socket
 //! provenance matches. Pane listings report `self`, `other`, or `unknown`, and
-//! teardown routes fail closed when the target may contain the caller.
+//! pane-input and teardown routes fail closed when their reach may contain the
+//! caller.
 
 #![forbid(unsafe_code)]
 
@@ -178,7 +179,8 @@ impl ServerHandler for TmuxTools {
             instructions.push_str(pane);
             instructions.push_str(
                 " from tmux. If its socket matches the selected server, pane listings \
-                 mark it caller=self. Teardown tools use a conservative caller guard.",
+                 mark it caller=self. Pane-input and teardown tools use a conservative \
+                 caller guard.",
             );
         }
         info.instructions = Some(instructions);
