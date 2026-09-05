@@ -228,6 +228,11 @@ async fn send_and_wait(
     command: &str,
     channel: &str,
 ) {
+    let foreground = pane_handle(server, pane)
+        .await
+        .current_command()
+        .cloned()
+        .expect("fixture shell reports its foreground command");
     tools
         .send_keys(args(serde_json::json!({
             "pane": pane,
@@ -243,6 +248,11 @@ async fn send_and_wait(
             .expect("fixture signal is observed"),
         libtmux::ChannelWait::Signalled
     );
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        pane_handle(server, pane).await.current_command() == Some(&foreground)
+    })
+    .await
+    .expect("fixture shell regains the foreground after signalling");
 }
 
 #[tokio::test]
