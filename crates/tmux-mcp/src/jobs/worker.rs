@@ -110,7 +110,6 @@ impl Progress {
             output,
             bytes: self.bytes,
             truncated: self.truncated,
-            job: None,
         }
     }
 
@@ -119,11 +118,11 @@ impl Progress {
         &self,
         pane: String,
         stopped: Option<RunOutcome>,
-    ) -> Option<(RunView, bool)> {
+    ) -> Option<RunView> {
         if let Some(terminal) = &self.terminal {
-            return Some((terminal.clone(), false));
+            return Some(terminal.clone());
         }
-        stopped.map(|outcome| (self.unfinished(pane, outcome), true))
+        stopped.map(|outcome| self.unfinished(pane, outcome))
     }
 }
 

@@ -109,12 +109,6 @@ pub struct RunView {
     pub bytes: usize,
     /// Whether the output was truncated from the front.
     pub truncated: bool,
-    /// The background job retaining this run after waiting stopped.
-    ///
-    /// Absent once the command has a terminal outcome. Pass this to
-    /// `job_status` or `forget_job` instead of retrying the command.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub job: Option<String>,
 }
 
 /// What a pane said while it was watched for a pattern.

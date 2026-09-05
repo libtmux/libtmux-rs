@@ -151,16 +151,14 @@ fn a_terminal_result_wins_a_simultaneous_foreground_stop() {
         output: "finished\n".to_owned(),
         bytes: 10,
         truncated: false,
-        job: None,
     });
 
-    let (view, retain) = held
+    let view = held
         .foreground_view("%0".to_owned(), Some(RunOutcome::Cancelled))
         .expect("the terminal result is available");
 
     assert_eq!(view.outcome, RunOutcome::Completed);
     assert_eq!(view.exit_status, Some(0));
-    assert!(!retain, "terminal work needs no recovery job");
 }
 
 #[test]

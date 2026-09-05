@@ -147,6 +147,20 @@ fn configured_process_routes_have_no_executable_payload() -> TestResult {
 }
 
 #[test]
+fn foreground_commands_expose_no_retired_job_handle() -> TestResult {
+    let tool = tools("execute")?
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "run_shell_command")
+        .expect("pane-command route");
+    let output = tool.output_schema.expect("typed output");
+    let properties = output["properties"].as_object().expect("object properties");
+
+    assert!(!properties.contains_key("job"));
+    Ok(())
+}
+
+#[test]
 fn choice_vocabularies_reject_unknown_values() -> TestResult {
     let tools = tools("manage,execute")?;
     for (name, valid, invalid) in [

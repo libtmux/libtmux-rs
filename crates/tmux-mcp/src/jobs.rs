@@ -1,10 +1,4 @@
-//! Commands that outlive the call that started them.
-//!
-//! `run_command` waits on the same owned reader a background job uses. A
-//! deadline or withdrawn request stops that wait but leaves the job available
-//! to inspect with `job_status`. `forget_job` only discards retained output;
-//! use `send_keys` with `keys: ["C-c"]` to interrupt the whole pane, which
-//! can discard unrelated queued input.
+//! Owned command readers used by foreground execution and legacy direct calls.
 //!
 //! A job is the same sentinel-bracketed run, reading in a task of its own. The
 //! call that starts it returns an id, and the answer is collected whether or
@@ -167,6 +161,36 @@ pub(crate) struct Jobs {
     inner: Mutex<JobTable>,
 }
 
+struct JobLease<'a> {
+    jobs: &'a Jobs,
+    id: String,
+    armed: bool,
+}
+
+impl JobLease<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for JobLease<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.jobs.forget(&self.id);
+        }
+    }
+}
+
+struct Started<'a> {
+    view: JobView,
+    lease: JobLease<'a>,
+}
+
+enum BeginError<'a> {
+    Plain(StartError),
+    Retained(StartError, JobLease<'a>),
+}
+
 impl Jobs {
     /// Hold no jobs yet.
     #[must_use]
@@ -198,20 +222,13 @@ impl Jobs {
         })
     }
 
-    /// Start a command in a pane and return once it is under way.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the server identity cannot be generated, every
-    /// job slot is active, or the pane cannot be watched. A send that tmux
-    /// does not confirm returns the retained job id.
-    pub(crate) async fn start(
+    async fn begin(
         &self,
         pane: &Pane,
         command: &str,
         suppress_history: bool,
-    ) -> Result<JobView, StartError> {
-        let reservation = self.reserve()?;
+    ) -> Result<Started<'_>, BeginError<'_>> {
+        let reservation = self.reserve().map_err(BeginError::Plain)?;
         let id = reservation.id().to_owned();
         let pane_id = pane.id().to_string();
         let command = command.to_owned();
@@ -220,7 +237,10 @@ impl Jobs {
 
         // Setup is still request-owned because it has not touched the pane.
         // Publication gates the worker immediately before its line dispatch.
-        let prepared = exec::prepare_run(pane, &command, suppress_history).await?;
+        let prepared = exec::prepare_run(pane, &command, suppress_history)
+            .await
+            .map_err(StartError::from)
+            .map_err(BeginError::Plain)?;
         let (publish, published) = oneshot::channel();
         let (report, reported) = oneshot::channel();
         let worker_progress = Arc::clone(&progress);
@@ -241,48 +261,86 @@ impl Jobs {
             reader,
             last_read: started,
         });
+        let lease = JobLease {
+            jobs: self,
+            id: id.clone(),
+            armed: true,
+        };
 
         if publish.send(()).is_err() {
-            self.forget(&id);
-            return Err(StartError::WorkerStopped);
+            return Err(BeginError::Plain(StartError::WorkerStopped));
         }
 
         match reported.await {
-            Ok(DispatchReport::Confirmed) => Ok(JobView {
-                job: id,
-                pane: pane_id,
-                command,
-                state: JobState::Running,
-                exit_status: None,
-                age_seconds: 0,
+            Ok(DispatchReport::Confirmed) => Ok(Started {
+                view: JobView {
+                    job: id,
+                    pane: pane_id,
+                    command,
+                    state: JobState::Running,
+                    exit_status: None,
+                    age_seconds: 0,
+                },
+                lease,
             }),
             Ok(DispatchReport::NotDispatched(error)) => {
-                self.forget(&id);
-                Err(StartError::Tmux(error))
+                Err(BeginError::Plain(StartError::Tmux(error)))
             }
             Ok(DispatchReport::Unknown(error)) => {
                 if !self.holds(&id) {
-                    return Err(StartError::WorkerStopped);
+                    return Err(BeginError::Plain(StartError::WorkerStopped));
                 }
-                Err(StartError::DispatchUnknown {
-                    job: id,
-                    cause: DispatchFailure::Tmux(Box::new(error)),
-                })
+                Err(BeginError::Retained(
+                    StartError::DispatchUnknown {
+                        job: id,
+                        cause: DispatchFailure::Tmux(Box::new(error)),
+                    },
+                    lease,
+                ))
             }
             Err(_) => {
                 if !self.holds(&id) {
-                    return Err(StartError::WorkerStopped);
+                    return Err(BeginError::Plain(StartError::WorkerStopped));
                 }
                 hold(&progress).state = JobState::DispatchUnknown;
-                Err(StartError::DispatchUnknown {
-                    job: id,
-                    cause: DispatchFailure::WorkerStopped,
-                })
+                Err(BeginError::Retained(
+                    StartError::DispatchUnknown {
+                        job: id,
+                        cause: DispatchFailure::WorkerStopped,
+                    },
+                    lease,
+                ))
             }
         }
     }
 
-    /// Run a command while keeping ownership if this caller stops waiting.
+    /// Start a command in a pane and return once it is under way.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the server identity cannot be generated, every
+    /// job slot is active, or the pane cannot be watched. A send that tmux
+    /// does not confirm returns the retained job id.
+    pub(crate) async fn start(
+        &self,
+        pane: &Pane,
+        command: &str,
+        suppress_history: bool,
+    ) -> Result<JobView, StartError> {
+        match self.begin(pane, command, suppress_history).await {
+            Ok(Started { view, mut lease }) => {
+                lease.disarm();
+                Ok(view)
+            }
+            Err(BeginError::Retained(error, mut lease)) => {
+                lease.disarm();
+                Err(error)
+            }
+            Err(BeginError::Plain(error)) => Err(error),
+        }
+    }
+
+    /// Run a command while the request owns its bounded reader.
     ///
     /// # Errors
     ///
@@ -295,7 +353,13 @@ impl Jobs {
         suppress_history: bool,
         cancelled: &tokio_util::sync::CancellationToken,
     ) -> Result<RunView, StartError> {
-        let started = self.start(pane, command, suppress_history).await?;
+        let Started {
+            view: started,
+            lease: _lease,
+        } = match self.begin(pane, command, suppress_history).await {
+            Ok(started) => started,
+            Err(BeginError::Plain(error) | BeginError::Retained(error, _)) => return Err(error),
+        };
         let id = started.job;
         let pane = started.pane;
         let Some((finished, progress)) = self.awaitable(&id) else {
@@ -320,14 +384,9 @@ impl Jobs {
             None
         };
 
-        let (mut view, retain) = hold(&progress)
+        let view = hold(&progress)
             .foreground_view(pane, stopped)
             .ok_or(StartError::WorkerStopped)?;
-        if retain {
-            view.job = Some(id);
-        } else {
-            self.forget(&id);
-        }
         Ok(view)
     }
 

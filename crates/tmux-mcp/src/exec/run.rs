@@ -287,7 +287,6 @@ impl Scanner {
             output,
             bytes: self.bytes,
             truncated: self.truncated,
-            job: None,
         })
     }
 
@@ -345,7 +344,6 @@ impl Scanner {
             output,
             bytes: self.bytes,
             truncated: self.truncated,
-            job: None,
         }
     }
 }
@@ -384,7 +382,6 @@ pub(super) fn finished(
         output: readable(body),
         bytes: 0,
         truncated: false,
-        job: None,
     })
 }
 

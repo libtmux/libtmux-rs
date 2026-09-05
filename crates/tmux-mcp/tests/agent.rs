@@ -1501,7 +1501,7 @@ async fn abandoning_a_wait_closes_the_connection_it_opened() {
 }
 
 #[tokio::test]
-async fn abandoning_a_run_keeps_one_owned_connection() {
+async fn abandoning_a_run_closes_its_owned_connection() {
     let (guard, tools, pane) = typing_fixture("work").await;
     let server = guard.server();
     let baseline = client_count(server).await;
@@ -1545,31 +1545,14 @@ async fn abandoning_a_run_keeps_one_owned_connection() {
     running.abort();
 
     assert_eq!(
-        clients_settle(server, baseline + 1).await,
-        baseline + 1,
-        "the owned reader must outlive its cancelled request"
+        clients_settle(server, baseline).await,
+        baseline,
+        "a cancelled public command must not retain an unreachable reader"
     );
-    let jobs = json(tools.list_jobs().await.expect("jobs list"));
-    let job = jobs["jobs"]
-        .as_array()
-        .expect("jobs is an array")
-        .first()
-        .and_then(|job| job["job"].as_str())
-        .expect("the reader has a discoverable owner")
-        .to_owned();
-    tools
-        .forget_job(args(serde_json::json!({"job": job})))
-        .await
-        .expect("the owner can be forgotten");
     server
         .signal_channel(release)
         .await
         .expect("the command gate is released");
-    assert_eq!(
-        clients_settle(server, baseline).await,
-        baseline,
-        "forgetting the owner closes its control-mode connection"
-    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
