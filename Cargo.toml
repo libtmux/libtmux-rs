@@ -1,8 +1,8 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "tools/mcp-swap"]
 # Nightly-only and needs a sanitizer linker flag, so it is not a member.
 exclude = ["fuzz"]
-default-members = ["crates/*"]
+default-members = ["crates/*", "tools/mcp-swap"]
 resolver = "3"
 
 [workspace.package]

@@ -1,0 +1,27 @@
+[package]
+name = "mcp-swap"
+version = "0.0.0"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Repository-internal MCP client configuration switcher"
+publish = false
+repository.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+rustix = { version = "1", features = ["fs", "process"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+toml_edit = "0.25"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
