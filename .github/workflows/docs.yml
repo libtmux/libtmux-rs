@@ -15,7 +15,12 @@ name: docs
 # index until the shape is proven.
 on:
   push:
-    branches: [master]
+    # DO NOT MERGE: `docs-site` is here so this branch can publish
+    # /en/rs/latest/ before anything merges — that tree 403s on the live site
+    # today and this is what fills it. Remove this branch from the list in the
+    # same change that merges to master; leaving it means an unreviewed commit
+    # on a docs branch can overwrite the published tree.
+    branches: [master, docs-site]
   workflow_dispatch:
 
 # Workflow level, so a second push queues behind the first rather than racing
