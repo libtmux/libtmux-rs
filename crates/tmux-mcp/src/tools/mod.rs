@@ -5,10 +5,10 @@ mod inspect;
 mod observe;
 mod pane_input;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
-use libtmux::{CaptureOptions, Command, TmuxText};
+use libtmux::{CaptureOptions, TmuxText};
 use rmcp::handler::server::wrapper::Json;
 use rmcp::model::ErrorData;
 
@@ -227,8 +227,8 @@ impl TmuxTools {
     }
 
     /// Render panes as the protocol sees them, saying which one is our own.
-    pub(super) async fn render_panes(&self, panes: &[libtmux::Pane]) -> Panes {
-        let socket = self.socket().await;
+    pub(super) fn render_panes(&self, panes: &[libtmux::Pane]) -> Panes {
+        let socket = self.socket();
         let panes: Vec<_> = panes
             .iter()
             .map(|pane| self.pane_view(pane, socket))
@@ -253,36 +253,22 @@ impl TmuxTools {
         }
     }
 
-    /// The socket path tmux itself reports for this server.
+    /// The socket path this process connects through.
+    ///
+    /// Taken from this crate's configuration rather than from
+    /// `#{socket_path}`, for the reasons `pane_input_endpoint` records: tmux
+    /// stores a non-printable byte in the path as an octal escape and
+    /// releases disagree about it, and reading the answer back as lossy UTF-8
+    /// replaced any non-UTF-8 byte regardless of version. Both produced a
+    /// path that matched nothing, which for a caller comparison means failing
+    /// to recognize the caller's own pane.
     ///
     /// Resolved once. Two calls racing compute the same answer, so the loser
     /// discarding its own is harmless.
-    pub(super) async fn socket(&self) -> Option<&Path> {
-        if let Some(cached) = self.socket.get() {
-            return cached.as_deref();
-        }
-
-        let resolved = self
-            .server
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("#{socket_path}"),
-            )
-            .await
-            .ok()
-            .map(|result| result.stdout_lossy().trim().to_owned())
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from);
-
-        // Only a real answer is kept. tmux cannot report a socket before it
-        // has a session, and caching that emptiness would leave every later
-        // caller comparison guessing for the life of the process.
-        if resolved.is_some() {
-            let _ = self.socket.set(resolved);
-            return self.socket.get().and_then(Option::as_deref);
-        }
-        None
+    pub(super) fn socket(&self) -> Option<&Path> {
+        self.socket
+            .get_or_init(|| Some(self.server.socket_path().to_path_buf()))
+            .as_deref()
     }
 
     /// The pane protected as the inherited caller on this server.
@@ -295,7 +281,7 @@ impl TmuxTools {
         }
         let generation = self.server.generation().await.map_err(|e| tmux_error(&e))?;
         let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
-        let socket = self.socket().await.ok_or_else(|| {
+        let socket = self.socket().ok_or_else(|| {
             Self::caller_context_refusal("tmux did not report its selected socket")
         })?;
         self.server

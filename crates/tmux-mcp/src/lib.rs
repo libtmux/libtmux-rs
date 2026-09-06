@@ -81,9 +81,10 @@ pub struct TmuxTools {
     capability_report: Arc<CapabilityReport>,
     /// The server's own socket path, resolved once and kept.
     ///
-    /// `Server::socket_path` reports what this crate was configured with,
-    /// which for a named socket is a reconstruction. tmux knows the real one,
-    /// and every caller comparison rests on it.
+    /// What this crate was configured with, which is byte-exact. Asking tmux
+    /// for `#{socket_path}` looked more authoritative and is not: tmux stores
+    /// a non-printable byte in the path as an octal escape, and 3.4 and 3.7
+    /// disagree about reporting it.
     socket: Arc<OnceLock<Option<PathBuf>>>,
     /// Live per-pane output, for `capture_since`.
     tails: Arc<Tails>,

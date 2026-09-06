@@ -138,7 +138,7 @@ impl TmuxTools {
     pub async fn list_panes(&self) -> Result<Json<Panes>, ErrorData> {
         let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
 
-        Ok(Json(self.render_panes(&panes).await))
+        Ok(Json(self.render_panes(&panes)))
     }
 
     /// Report the whole hierarchy in one call.
@@ -313,7 +313,7 @@ impl TmuxTools {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(Snapshot {
             pane: self.pane_view(&target, socket),
             width: target.width(),

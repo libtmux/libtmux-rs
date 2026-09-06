@@ -428,7 +428,7 @@ impl TmuxTools {
             }
         };
 
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(self.pane_view(&selected, socket)))
     }
 

@@ -473,7 +473,7 @@ impl TmuxTools {
         Parameters(crate::PaneArgs { pane }): Parameters<crate::PaneArgs>,
     ) -> Result<Json<PaneView>, ErrorData> {
         let pane = self.find_pane(&pane).await?;
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(self.pane_view(&pane, socket)))
     }
 
@@ -516,7 +516,7 @@ impl TmuxTools {
                     ))
                 }
             })?;
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(self.pane_view(&pane, socket)))
     }
 
@@ -688,7 +688,7 @@ impl TmuxTools {
             .swap_with(&target)
             .await
             .map_err(|error| tmux_error(&error))?;
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(self.pane_view(&source, socket)))
     }
 
@@ -711,7 +711,7 @@ impl TmuxTools {
         pane.set_title(libtmux::escape_format(title))
             .await
             .map_err(|error| tmux_error(&error))?;
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(self.pane_view(&pane, socket)))
     }
 
@@ -861,7 +861,7 @@ impl TmuxTools {
             .split(options)
             .await
             .map_err(|error| tmux_error(&error))?;
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(self.pane_view(&created, socket)))
     }
 
@@ -881,7 +881,7 @@ impl TmuxTools {
         pane.respawn(None::<String>, kill_first)
             .await
             .map_err(|error| tmux_error(&error))?;
-        let socket = self.socket().await;
+        let socket = self.socket();
         Ok(Json(self.pane_view(&pane, socket)))
     }
 
