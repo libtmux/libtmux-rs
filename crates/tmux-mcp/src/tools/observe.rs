@@ -203,7 +203,9 @@ impl TmuxTools {
                        and tell me if it worked\". Output is read from the pane's live stream, \
                        so nothing is missed and the shell prompt is not included. The command \
                        runs in a subshell, so cd and export do not persist and invalid syntax \
-                       completes with a nonzero status. It requires one configured input \
+                       completes with a nonzero status. Valid inherited Bash and zsh ERR and \
+                       DEBUG traps remain visible to the command while parent-shell traps and \
+                       options remain unchanged. It requires one configured input \
                        recipient and observes its mode, liveness, input-off state, attended-client \
                        state, cohort, inherited-caller relation, known POSIX shell, and resolved \
                        route before watcher setup and again before dispatch. A process-wide \
@@ -303,7 +305,12 @@ impl TmuxTools {
                 Self::budget(seconds),
                 suppress_history,
                 &cancelled,
-                (route.executable.as_os_str(), &route.endpoint, lease),
+                (
+                    route.executable.as_os_str(),
+                    &route.endpoint,
+                    foreground.as_bytes(),
+                    lease,
+                ),
                 final_check,
             ),
         ))
@@ -709,7 +716,12 @@ mod tests {
                 Duration::from_secs(2),
                 false,
                 &cancelled,
-                (executable.as_os_str(), &socket, lease),
+                (
+                    executable.as_os_str(),
+                    &socket,
+                    foreground.as_bytes(),
+                    lease,
+                ),
                 final_check,
             )
             .await;

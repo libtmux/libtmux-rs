@@ -1986,6 +1986,180 @@ async fn run_frame_preserves_inherited_xtrace_without_frame_trace() {
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one shell must retain traps and options across every command outcome"
+)]
+async fn run_frame_preserves_inherited_error_and_debug_traps() {
+    for (shell, flags) in [("/bin/bash", "--noprofile --norc"), ("/bin/zsh", "-f")] {
+        if !std::path::Path::new(shell).is_file() {
+            continue;
+        }
+        let shell_name = shell.rsplit('/').next().expect("shell basename");
+        let (guard, tools, pane) = typing_fixture(&format!("run-frame-traps-{shell_name}")).await;
+        pane_handle(guard.server(), &pane)
+            .await
+            .respawn(Some(&format!("exec {shell} {flags}")), true)
+            .await
+            .expect("fixture pane changes shell");
+        libtmux::test::retry_until(Duration::from_secs(2), async || {
+            pane_handle(guard.server(), &pane)
+                .await
+                .current_command()
+                .is_some_and(|command| command.as_bytes() == shell_name.as_bytes())
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{shell_name} becomes the foreground shell"));
+        prompt_ready(guard.server(), &pane).await;
+
+        let debug_action = r#"
+if ( : >&8 ) 2>/dev/null; then
+    /usr/bin/printf 'MCP-CAPTURE-DEBUG-OUT\n'
+    /usr/bin/printf 'MCP-CAPTURE-DEBUG-ERR\n' >&2
+fi
+/usr/bin/printf 'MCP-DEBUG-OUT:%s:"quoted"\n' "$MCP_TRAP_PHASE"
+/usr/bin/printf "MCP-DEBUG-ERR:%s:'quoted'\n" "$MCP_TRAP_PHASE" >&2
+"#;
+        let error_action = r#"
+/usr/bin/printf 'MCP-ERR-OUT:%s:"quoted"\n' "$MCP_TRAP_PHASE"
+/usr/bin/printf "MCP-ERR-ERR:%s:'quoted'\n" "$MCP_TRAP_PHASE" >&2
+"#;
+        let exit_channel = format!("mcp-frame-traps-{shell_name}-exit");
+        let exit_action = format!(
+            "/usr/bin/printf 'MCP-PARENT-EXIT:{shell_name}\\n'; tmux wait-for -S {exit_channel}"
+        );
+        send_and_wait(
+            &tools,
+            guard.server(),
+            &pane,
+            &format!(
+                "MCP_TRAP_PHASE=run; trap {} DEBUG; trap {} ERR; trap {} EXIT; set -e; set -x; set -f",
+                shell_quote(OsStr::new(debug_action)),
+                shell_quote(OsStr::new(error_action)),
+                shell_quote(OsStr::new(&exit_action)),
+            ),
+            &format!("mcp-frame-traps-{shell_name}-ready"),
+        )
+        .await;
+
+        for (case, command, expected_status) in [
+            (
+                "success",
+                "if ( : >&8 ) 2>/dev/null || ( : <&9 ) 2>/dev/null; then /usr/bin/printf 'MCP-FD-LEAK\\n'; fi; /usr/bin/printf 'MCP-COMMAND-SUCCESS\\n'",
+                Some(0),
+            ),
+            (
+                "failure",
+                "false; /usr/bin/printf 'MCP-UNREACHABLE\\n'",
+                None,
+            ),
+            ("syntax", "if then", None),
+            ("exit", "exit 23", Some(23)),
+        ] {
+            let result = run_view(&tools, &pane, command).await;
+            let output = result["output"].as_str().expect("run output");
+            if let Some(status) = expected_status {
+                assert_eq!(result["exit_status"], status, "{shell_name}/{case}");
+            } else {
+                assert_ne!(result["exit_status"], 0, "{shell_name}/{case}");
+            }
+            if case == "success" {
+                for marker in [
+                    "MCP-DEBUG-OUT:run:\"quoted\"",
+                    "MCP-DEBUG-ERR:run:'quoted'",
+                    "MCP-COMMAND-SUCCESS",
+                ] {
+                    assert!(
+                        output.contains(marker),
+                        "{shell_name}: {marker}: {output:?}"
+                    );
+                }
+                assert!(!output.contains("MCP-FD-LEAK"), "{shell_name}: {output:?}");
+            }
+            if case == "failure" {
+                for marker in ["MCP-ERR-OUT:run:\"quoted\"", "MCP-ERR-ERR:run:'quoted'"] {
+                    assert!(
+                        output.contains(marker),
+                        "{shell_name}: {marker}: {output:?}"
+                    );
+                }
+                assert!(
+                    !output.contains("MCP-UNREACHABLE"),
+                    "{shell_name}: {output:?}"
+                );
+            }
+            assert!(
+                !output.contains("MCP-PARENT-EXIT"),
+                "{shell_name}/{case}: parent EXIT leaked into child: {output:?}"
+            );
+            for capture_only in [
+                "MCP-CAPTURE-DEBUG-OUT",
+                "MCP-CAPTURE-DEBUG-ERR",
+                "libtmux-mcp-traps-",
+            ] {
+                assert!(
+                    !output.contains(capture_only),
+                    "{shell_name}/{case}: capture output leaked: {output:?}"
+                );
+            }
+            assert_channel_quiet(guard.server(), &exit_channel).await;
+
+            let flags = run_view(
+                &tools,
+                &pane,
+                "case $- in *e*) :;; *) exit 90;; esac; case $- in *x*) :;; *) exit 91;; esac; case $- in *f*) :;; *) exit 92;; esac",
+            )
+            .await;
+            assert_eq!(flags["exit_status"], 0, "{shell_name}/{case}: {flags}");
+        }
+
+        let opened = json(
+            tools
+                .capture_since(args(serde_json::json!({"pane": pane})))
+                .await
+                .expect("parent-trap tail opens"),
+        );
+        let cursor = opened["cursor"].as_str().expect("tail cursor").to_owned();
+        send_and_wait(
+            &tools,
+            guard.server(),
+            &pane,
+            "MCP_TRAP_PHASE=parent; set +e; false; set -e",
+            &format!("mcp-frame-traps-{shell_name}-parent"),
+        )
+        .await;
+        let parent = json(
+            tools
+                .capture_since(args(serde_json::json!({"pane": pane, "cursor": cursor})))
+                .await
+                .expect("parent-trap tail reads"),
+        );
+        let parent = parent["text"].as_str().expect("parent-trap text");
+        for marker in [
+            "MCP-DEBUG-OUT:parent:\"quoted\"",
+            "MCP-DEBUG-ERR:parent:'quoted'",
+            "MCP-ERR-OUT:parent:\"quoted\"",
+            "MCP-ERR-ERR:parent:'quoted'",
+        ] {
+            assert!(
+                parent.contains(marker),
+                "{shell_name}: parent trap lost {marker}: {parent:?}"
+            );
+        }
+        tools
+            .send_keys(args(serde_json::json!({
+                "pane": pane,
+                "text": "exit",
+                "enter": true
+            })))
+            .await
+            .expect("the parent shell exits");
+        await_channel(guard.server(), &exit_channel).await;
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+}
+
+#[tokio::test]
 async fn wait_and_cursor_tools_observe_live_output() {
     let (guard, tools, pane) = typing_fixture("observe").await;
     let opened = json(

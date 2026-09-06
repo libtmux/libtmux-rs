@@ -208,11 +208,12 @@ pub(crate) async fn run(
     timeout: Duration,
     suppress_history: bool,
     cancelled: &CancellationToken,
-    transport: (&OsStr, &Path, RunLease),
+    transport: (&OsStr, &Path, &[u8], RunLease),
     final_check: impl Future<Output = Result<(), ErrorData>>,
 ) -> Result<RunView, RunError> {
-    let (executable, endpoint, lease) = transport;
-    let prepared = exec::prepare_run(pane, command, suppress_history, executable, endpoint).await?;
+    let (executable, endpoint, shell, lease) = transport;
+    let prepared =
+        exec::prepare_run(pane, command, suppress_history, executable, endpoint, shell).await?;
     if let Err(error) = final_check.await {
         let _ = prepared.shutdown().await;
         return Err(RunError::Guard(error));
@@ -312,7 +313,12 @@ mod tests {
             Duration::from_secs(2),
             false,
             &CancellationToken::new(),
-            (executable.as_os_str(), guard.server().socket_path(), lease),
+            (
+                executable.as_os_str(),
+                guard.server().socket_path(),
+                b"sh",
+                lease,
+            ),
             async { Err(refusal) },
         )
         .await;

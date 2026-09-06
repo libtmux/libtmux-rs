@@ -67,7 +67,9 @@ pub struct RunCommandArgs {
     /// Shell reserved words and special builtins must retain their standard
     /// meanings. The command runs inside a subshell, so several lines are fine
     /// and a bare `exit` does not end the pane's own shell. Invalid syntax is
-    /// contained and completes with the shell's nonzero status.
+    /// contained and completes with the shell's nonzero status. Valid inherited
+    /// Bash and zsh `ERR` and `DEBUG` traps remain visible to the command while
+    /// the pane's parent-shell traps and options remain unchanged.
     pub command: String,
     /// How long to allow, in seconds. Defaults to 30, capped at 600.
     pub seconds: Option<u64>,

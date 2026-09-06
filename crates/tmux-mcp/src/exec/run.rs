@@ -1,6 +1,7 @@
 //! Sentinel-bracketed command dispatch and stream scanning.
 
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::ops::Range;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::Path;
@@ -17,6 +18,7 @@ use super::{OUTPUT_LIMIT, RunOutcome, RunView};
 
 const MARKER_PREFIX: &str = "__LIBTMUX_MCP_DONE_";
 const NONCE_ATTEMPTS: usize = 32;
+pub(super) const TRAP_DECLARATION_LIMIT: usize = 64 * 1024;
 
 #[cfg(test)]
 static PREPARED_SHUTDOWN_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
@@ -128,6 +130,114 @@ pub(super) struct Frame {
     pub(super) payload: OsString,
     pub(super) opened: Vec<u8>,
     pub(super) closed: Vec<u8>,
+}
+
+pub(super) struct TrapCapture {
+    pub(super) setup: Vec<u8>,
+    declarations: String,
+    errexit: String,
+    pub(super) status: String,
+    xtrace: String,
+}
+
+fn shell_basename(shell: &[u8]) -> &[u8] {
+    let basename = shell
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or_default();
+    basename.strip_prefix(b"-").unwrap_or(basename)
+}
+
+pub(super) fn inherited_trap_capture(shell: &[u8], nonce: &str) -> Option<TrapCapture> {
+    let shell = shell_basename(shell);
+    if shell != b"bash" && shell != b"zsh" {
+        return None;
+    }
+
+    let declarations = format!("__libtmux_mcp_traps_{nonce}");
+    let errexit = format!("__libtmux_mcp_trap_errexit_{nonce}");
+    let status = format!("__libtmux_mcp_trap_status_{nonce}");
+    let xtrace = format!("__libtmux_mcp_trap_xtrace_{nonce}");
+    let file = format!("__libtmux_mcp_trap_file_{nonce}");
+    let read_owned = format!("__libtmux_mcp_trap_read_owned_{nonce}");
+    let write_owned = format!("__libtmux_mcp_trap_write_owned_{nonce}");
+    let prefix = format!("/tmp/libtmux-mcp-traps-{nonce}");
+    let template = format!("{prefix}.XXXXXX");
+    let template = quote_shell_word(OsStr::new(&template));
+    let prefix = quote_shell_word(OsStr::new(&prefix));
+
+    let mut setup = format!(
+        "{declarations}=; {errexit}=0; {status}=125; {xtrace}=0; \
+         case $- in *e*) {errexit}=1;; esac; \
+         case $- in *x*) {xtrace}=1; \\set +x;; esac; \
+         {file}=; {read_owned}=0; {write_owned}=0; "
+    );
+    if shell == b"bash" {
+        let files = format!("__libtmux_mcp_trap_files_{nonce}");
+        let _ = write!(
+            setup,
+            "{files}=(); if /usr/bin/mktemp {} >/dev/null; then ",
+            template.to_string_lossy()
+        );
+        let discover = format!("{files}=({}.??????)", prefix.to_string_lossy());
+        setup.push_str("case $- in *f*) \\set +f; ");
+        setup.push_str(&discover);
+        setup.push_str("; \\set -f ;; *) ");
+        setup.push_str(&discover);
+        setup.push_str(" ;; esac; if [ \"${#");
+        setup.push_str(&files);
+        setup.push_str("[@]}\" -eq 1 ]; then ");
+        setup.push_str(&file);
+        setup.push_str("=\"${");
+        setup.push_str(&files);
+        setup.push_str("[0]}\"; elif ! /bin/rm -f \"${");
+        setup.push_str(&files);
+        setup.push_str("[@]}\"; then ");
+        setup.push_str(&status);
+        setup.push_str("=125; fi; fi; ");
+    } else {
+        let _ = write!(
+            setup,
+            "if /usr/bin/mktemp {} | IFS= \\read -r {file}; then :; else {file}=; fi; ",
+            template.to_string_lossy()
+        );
+    }
+    let _ = write!(
+        setup,
+        "if [ -n \"${file}\" ] && [ -f \"${file}\" ] && [ -O \"${file}\" ] \
+         && ! ( : >&8 ) 2>/dev/null && ! ( : <&8 ) 2>/dev/null \\
+         && ! ( : >&9 ) 2>/dev/null && ! ( : <&9 ) 2>/dev/null \\
+         && \\exec 8<> \"${file}\" && {write_owned}=1 \\
+         && \\exec 9< \"${file}\" && {read_owned}=1 \\
+         && /bin/rm -f \"${file}\" && {file}=; then "
+    );
+    if shell == b"bash" {
+        setup.push_str("if \\trap -p ERR DEBUG >&8; then ");
+    } else {
+        setup.push_str("if \\trap - $signals[1,-3]; then if \\trap >&8; then ");
+    }
+    let capture_close = if shell == b"zsh" { "fi; " } else { "" };
+    let _ = write!(
+        setup,
+        "{status}=0; fi; {capture_close}fi; if ! \\trap - ERR DEBUG; then {status}=125; fi; \\
+         if [ \"${write_owned}\" -eq 1 ]; then \\
+         if ! \\exec 8>&-; then {status}=125; fi; {write_owned}=0; fi; \\
+         if [ \"${status}\" -eq 0 ] && [ \"${read_owned}\" -eq 1 ]; then \\
+         if {declarations}=$(LC_ALL=C /usr/bin/head -c {TRAP_DECLARATION_LIMIT} <&9) \\
+         && [ \"$(LC_ALL=C /usr/bin/head -c 1 <&9 | /usr/bin/wc -c)\" -eq 0 ]; then :; \\
+         else {declarations}=; {status}=125; fi; fi; \\
+         if [ \"${read_owned}\" -eq 1 ]; then \\
+         if ! \\exec 9<&-; then {status}=125; fi; {read_owned}=0; fi; \\
+         if [ -n \"${file}\" ] && ! /bin/rm -f \"${file}\"; then {status}=125; fi\n"
+    );
+
+    Some(TrapCapture {
+        setup: setup.into_bytes(),
+        declarations,
+        errexit,
+        status,
+        xtrace,
+    })
 }
 
 /// Whether tmux confirmed the line dispatch that starts a watched run.
@@ -270,16 +380,67 @@ fn append_command_branch(
     payload.extend_from_slice(b"\nfi\n;;\n");
 }
 
+fn render_trapped_payload(
+    command: &OsStr,
+    suppress_history: bool,
+    capture: &TrapCapture,
+    separator: &[u8],
+    opening: &[u8],
+    closing: &[u8],
+) -> OsString {
+    let mut payload = Vec::new();
+    if suppress_history {
+        payload.push(b' ');
+    }
+    payload.extend_from_slice(b"(\n");
+    payload.extend_from_slice(&capture.setup);
+    payload.extend_from_slice(b"\\set +e\nif ");
+    payload.extend_from_slice(separator);
+    payload.extend_from_slice(b" && ");
+    payload.extend_from_slice(opening);
+    payload.extend_from_slice(b"; then\nif [ \"$");
+    payload.extend_from_slice(capture.status.as_bytes());
+    payload.extend_from_slice(b"\" -eq 0 ]; then\n( case \"$");
+    payload.extend_from_slice(capture.errexit.as_bytes());
+    payload.extend_from_slice(b"\" in 1) \\set -e;; *) \\set +e;; esac\n\\eval \"");
+    payload.push(b'$');
+    payload.extend_from_slice(capture.declarations.as_bytes());
+    payload.extend_from_slice(b"\n\"");
+    let mut operand = OsString::from("case \"$");
+    operand.push(&capture.xtrace);
+    operand.push("\" in 1) \\set -x;; esac\n");
+    operand.push(command);
+    payload.extend_from_slice(quote_shell_word(&operand).as_bytes());
+    payload.extend_from_slice(b" )\n\\set -- \"$?\"\nelse\n\\set -- 125\nfi\n");
+    payload.extend_from_slice(separator);
+    payload.push(b'\n');
+    payload.extend_from_slice(closing);
+    payload.extend_from_slice(b"\nfi\n)");
+    OsString::from_vec(payload)
+}
+
 pub(super) fn render_payload(
     executable: &OsStr,
     socket: &Path,
     nonce: &str,
+    shell: &[u8],
     command: &OsStr,
     suppress_history: bool,
 ) -> OsString {
     let separator = display_client(executable, socket, b"''");
     let opening = display_client(executable, socket, &marker_message(nonce, false));
     let closing = display_client(executable, socket, &marker_message(nonce, true));
+    let trap_capture = inherited_trap_capture(shell, nonce);
+    if let Some(capture) = trap_capture.as_ref() {
+        return render_trapped_payload(
+            command,
+            suppress_history,
+            capture,
+            &separator,
+            &opening,
+            &closing,
+        );
+    }
     let mut payload = Vec::new();
     if suppress_history {
         payload.push(b' ');
@@ -330,11 +491,12 @@ fn frame_with_nonce(
     executable: &OsStr,
     socket: &Path,
     nonce: &str,
+    shell: &[u8],
     command: &OsStr,
     suppress_history: bool,
 ) -> Option<Frame> {
     let marker = format!("{MARKER_PREFIX}{nonce}__").into_bytes();
-    let payload = render_payload(executable, socket, nonce, command, suppress_history);
+    let payload = render_payload(executable, socket, nonce, shell, command, suppress_history);
     if find(payload.as_bytes(), &marker).is_some() {
         return None;
     }
@@ -352,6 +514,7 @@ fn frame_with_nonce(
 pub(super) fn frame_with_random(
     executable: &OsStr,
     socket: &Path,
+    shell: &[u8],
     command: &OsStr,
     suppress_history: bool,
     mut fill: impl FnMut(&mut [u8]) -> Result<(), getrandom::Error>,
@@ -363,7 +526,8 @@ pub(super) fn frame_with_random(
         let mut random = [0_u8; 16];
         fill(&mut random).map_err(|_| FrameError::Entropy)?;
         let nonce = format!("{:032x}", u128::from_be_bytes(random));
-        if let Some(frame) = frame_with_nonce(executable, socket, &nonce, command, suppress_history)
+        if let Some(frame) =
+            frame_with_nonce(executable, socket, &nonce, shell, command, suppress_history)
         {
             return Ok(frame);
         }
@@ -382,6 +546,7 @@ pub(crate) async fn prepare_run(
     suppress_history: bool,
     executable: &OsStr,
     socket: &Path,
+    shell: &[u8],
 ) -> Result<PreparedRun, PrepareRunError> {
     let Frame {
         payload,
@@ -390,6 +555,7 @@ pub(crate) async fn prepare_run(
     } = frame_with_random(
         executable,
         socket,
+        shell,
         OsStr::new(command),
         suppress_history,
         getrandom::fill,

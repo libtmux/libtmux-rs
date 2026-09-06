@@ -1,6 +1,7 @@
 use super::*;
 
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::Path;
@@ -57,6 +58,7 @@ fn terminal_control_routes_fail_before_entropy() {
         let error = frame_with_random(
             &executable,
             Path::new(&socket),
+            b"sh",
             OsStr::new("true"),
             false,
             |bytes| {
@@ -81,6 +83,7 @@ fn rendered_frame_is_raw_variable_free_and_posix_syntax() {
         &executable,
         Path::new(&socket),
         "nonce",
+        b"sh",
         OsStr::new("printf body # trailing comment"),
         false,
     );
@@ -146,6 +149,7 @@ fn rendered_frame_matches_the_exact_four_branch_snapshot() {
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
         "nonce",
+        b"sh",
         OsStr::new("printf body # trailing comment"),
         false,
     );
@@ -207,6 +211,96 @@ esac
     );
 
     assert_eq!(actual.as_bytes(), expected.as_bytes());
+    assert_eq!(
+        actual,
+        render_payload(
+            OsStr::new("/tmp/tmux"),
+            Path::new("/tmp/socket"),
+            "nonce",
+            b"dash",
+            OsStr::new("printf body # trailing comment"),
+            false,
+        ),
+        "dash retains the original POSIX frame"
+    );
+}
+
+#[test]
+fn trap_capture_is_bounded_and_preserves_foreign_descriptors() {
+    for (shell, flags) in [
+        ("/bin/bash", ["--noprofile", "--norc"].as_slice()),
+        ("/bin/zsh", ["-f"].as_slice()),
+    ] {
+        if !Path::new(shell).is_file() {
+            continue;
+        }
+        let shell_name = shell.rsplit('/').next().unwrap_or("shell");
+        for (index, (case, action, expected_status, fd8_open)) in [
+            ("ordinary", ": # quoted\n:".to_owned(), 0, false),
+            (
+                "oversized",
+                format!(
+                    "__libtmux_mcp_large='{}'",
+                    "x".repeat(TRAP_DECLARATION_LIMIT + 16)
+                ),
+                125,
+                false,
+            ),
+            ("occupied", ": # occupied".to_owned(), 125, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let nonce = format!("unit{}{}{}", std::process::id(), shell_name, index);
+            let capture = inherited_trap_capture(shell_name.as_bytes(), &nonce)
+                .unwrap_or_else(|| unreachable!("tested shells capture traps"));
+            let mut script = String::new();
+            if fd8_open {
+                script.push_str("exec 8>/dev/null; ");
+            }
+            script.push_str("trap ");
+            script.push_str(&quote_shell_word(OsStr::new(&action)).to_string_lossy());
+            script.push_str(" DEBUG; ");
+            script.push_str(std::str::from_utf8(&capture.setup).expect("capture setup is ASCII"));
+            let _ = write!(
+                script,
+                "[ \"${}\" -eq {expected_status} ] || exit 80; ",
+                capture.status
+            );
+            script.push_str(if fd8_open {
+                "( : >&8 ) 2>/dev/null || exit 81; "
+            } else {
+                "! ( : >&8 ) 2>/dev/null || exit 81; "
+            });
+            script
+                .push_str("! ( : <&9 ) 2>/dev/null || exit 82; ! ( : >&9 ) 2>/dev/null || exit 83");
+
+            let output = Command::new(shell)
+                .args(flags)
+                .arg("-c")
+                .arg(script)
+                .output()
+                .unwrap_or_else(|error| panic!("{shell_name}/{case} starts: {error}"));
+            assert!(
+                output.status.success(),
+                "{shell_name}/{case}: status={:?}, stdout={:?}, stderr={:?}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let prefix = format!("libtmux-mcp-traps-{nonce}.");
+            assert!(
+                std::fs::read_dir("/tmp")
+                    .expect("temporary directory is readable")
+                    .all(|entry| !entry
+                        .expect("temporary entry is readable")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(&prefix)),
+                "{shell_name}/{case} left a trap-capture file"
+            );
+        }
+    }
 }
 
 #[test]
@@ -216,6 +310,7 @@ fn random_frames_retry_source_collisions_with_128_bit_nonces() {
     let frame = frame_with_random(
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
+        b"sh",
         OsStr::new(&collision),
         false,
         |bytes| {
@@ -240,6 +335,7 @@ fn random_frame_entropy_failure_is_preflight_failure() {
     let error = frame_with_random(
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
+        b"sh",
         OsStr::new("true"),
         false,
         |_| Err(getrandom::Error::UNSUPPORTED),
@@ -257,6 +353,7 @@ fn repeated_random_marker_collisions_are_bounded() {
     let error = frame_with_random(
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
+        b"sh",
         OsStr::new(&collision),
         false,
         |bytes| {
