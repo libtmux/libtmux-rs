@@ -287,6 +287,12 @@ impl Pane {
         *self.projection.pane().pane_dead()
     }
 
+    /// Report whether tmux has disabled input for this pane.
+    #[must_use]
+    pub fn is_input_disabled(&self) -> bool {
+        *self.projection.pane().pane_input_off()
+    }
+
     /// Report whether this pane has synchronized input enabled.
     #[must_use]
     pub fn is_synchronized(&self) -> bool {

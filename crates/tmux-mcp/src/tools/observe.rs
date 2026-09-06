@@ -131,9 +131,10 @@ impl TmuxTools {
                        so nothing is missed and the shell prompt is not included. The command \
                        runs in a subshell, so cd and export do not persist and invalid syntax \
                        completes with a nonzero status. It requires one configured input \
-                       recipient and observes its mode, liveness, cohort, inherited-caller \
-                       relation, and foreground command before watcher setup and again before \
-                       dispatch. The resolved tmux executable and socket path must contain no \
+                       recipient and observes its mode, liveness, input-off state, attended-client \
+                       state, cohort, inherited-caller relation, and foreground command before \
+                       watcher setup and again before dispatch. The resolved tmux executable and \
+                       socket path must contain no \
                        ASCII terminal-control bytes. These checks do not lock the pane and can \
                        race with tmux processing the input. The pane must run a trusted \
                        POSIX-compatible shell whose reserved words and special builtins retain \

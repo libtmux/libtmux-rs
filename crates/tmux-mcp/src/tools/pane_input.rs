@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use libtmux::Command;
 use rmcp::model::ErrorData;
 
 use crate::TmuxTools;
@@ -21,6 +22,72 @@ pub(crate) enum MissingSource {
 pub(crate) struct PaneInputPlan {
     pub(crate) target: libtmux::Pane,
     pub(crate) configured: Vec<String>,
+}
+
+const CLIENT_ATTENTION_FORMAT: &str = "#{client_control_mode}|#{pane_id}|#{window_zoomed_flag}";
+
+fn client_attention_error(detail: &str) -> ErrorData {
+    ErrorData::internal_error(
+        format!("tmux returned malformed client attention state: {detail}"),
+        Some(serde_json::json!({
+            "kind": "decode",
+            "retryable": false,
+            "stale": false,
+        })),
+    )
+}
+
+fn parse_flag(value: &[u8]) -> Result<bool, &'static str> {
+    match value {
+        b"0" => Ok(false),
+        b"1" => Ok(true),
+        _ => Err("a client flag was not exactly 0 or 1"),
+    }
+}
+
+fn parse_pane_id(value: &[u8]) -> Result<String, &'static str> {
+    let text = std::str::from_utf8(value).map_err(|_| "a client pane ID was not UTF-8")?;
+    let parsed = text
+        .parse::<libtmux::PaneId>()
+        .map_err(|_| "a client pane ID was invalid")?;
+    if parsed.to_string() != text {
+        return Err("a client pane ID was not canonical");
+    }
+    Ok(text.to_owned())
+}
+
+fn parse_attended_panes(
+    stdout: &[u8],
+    window_panes: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, &'static str> {
+    if stdout.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let rows = stdout
+        .strip_suffix(b"\n")
+        .ok_or("the client listing ended without a row terminator")?;
+    let mut attended = BTreeSet::new();
+    for row in rows.split(|byte| *byte == b'\n') {
+        if row.is_empty() {
+            return Err("the client listing contained an empty row");
+        }
+        let mut fields = row.split(|byte| *byte == b'|');
+        let control = parse_flag(fields.next().ok_or("a client row had too few fields")?)?;
+        let active = parse_pane_id(fields.next().ok_or("a client row had too few fields")?)?;
+        let zoomed = parse_flag(fields.next().ok_or("a client row had too few fields")?)?;
+        if fields.next().is_some() {
+            return Err("a client row had too many fields");
+        }
+        if control || !window_panes.contains(&active) {
+            continue;
+        }
+        if zoomed {
+            attended.insert(active);
+        } else {
+            attended.extend(window_panes.iter().cloned());
+        }
+    }
+    Ok(attended)
 }
 
 impl TmuxTools {
@@ -49,14 +116,20 @@ impl TmuxTools {
         let mut selected = BTreeMap::new();
         selected.insert(source.id().to_string(), source.clone());
         if matches!(reach, PaneInputReach::Synchronized) && source.is_synchronized() {
-            for candidate in panes {
+            for candidate in &panes {
                 if candidate.window_id() == source.window_id() && candidate.is_synchronized() {
                     selected
                         .entry(candidate.id().to_string())
-                        .or_insert(candidate);
+                        .or_insert_with(|| candidate.clone());
                 }
             }
         }
+
+        let window_panes = panes
+            .iter()
+            .filter(|candidate| candidate.window_id() == source.window_id())
+            .map(|candidate| candidate.id().to_string())
+            .collect();
 
         if let Some(own) = self.protected_pane().await
             && selected.contains_key(own)
@@ -68,10 +141,35 @@ impl TmuxTools {
             )));
         }
 
+        let client_result = self
+            .server
+            .cmd(
+                Command::new("list-clients")
+                    .arg("-F")
+                    .arg(CLIENT_ATTENTION_FORMAT),
+            )
+            .await
+            .map_err(|error| tmux_error(&error))?;
+        if let Some(error) = client_result.refusal_for("list-clients") {
+            return Err(tmux_error(&error));
+        }
+        let attended = parse_attended_panes(client_result.stdout(), &window_panes)
+            .map_err(client_attention_error)?;
+
         for (id, candidate) in &selected {
+            if attended.contains(id) {
+                return Err(bad_input(format!(
+                    "pane {id} is visible to an attached terminal client; pane input is reserved for unattended panes"
+                )));
+            }
             if candidate.is_dead() {
                 return Err(bad_input(format!(
                     "pane {id} is dead; pane input requires every configured recipient to be alive"
+                )));
+            }
+            if candidate.is_input_disabled() {
+                return Err(bad_input(format!(
+                    "pane {id} has input disabled; pane input requires every configured recipient to accept input"
                 )));
             }
             if candidate.is_in_mode() {
@@ -85,5 +183,62 @@ impl TmuxTools {
             target: source,
             configured: selected.into_keys().collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::parse_attended_panes;
+
+    fn window_panes() -> BTreeSet<String> {
+        ["%0", "%1"].into_iter().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn terminal_attention_follows_visibility() {
+        let panes = window_panes();
+        assert_eq!(
+            parse_attended_panes(b"0|%1|1\n", &panes).expect("zoomed row"),
+            ["%1"].into_iter().map(str::to_owned).collect()
+        );
+        assert_eq!(
+            parse_attended_panes(b"0|%1|0\n", &panes).expect("visible window row"),
+            panes
+        );
+    }
+
+    #[test]
+    fn control_and_other_window_clients_are_not_attended() {
+        let panes = window_panes();
+        assert!(
+            parse_attended_panes(b"1|%0|0\n0|%9|0\n", &panes)
+                .expect("valid unrelated rows")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn malformed_client_attention_fails_closed() {
+        let panes = window_panes();
+        for stdout in [
+            b"0|%0|0".as_slice(),
+            b"|%0|0\n",
+            b"on|%0|0\n",
+            b"0||0\n",
+            b"0|%01|0\n",
+            b"0|%0|\n",
+            b"0|%0|on\n",
+            b"0|%0\n",
+            b"0|%0|0|tail\n",
+            b"0|%0|0\n\n",
+            b"0|\xff|0\n",
+        ] {
+            assert!(
+                parse_attended_panes(stdout, &panes).is_err(),
+                "malformed row was accepted: {stdout:?}"
+            );
+        }
     }
 }

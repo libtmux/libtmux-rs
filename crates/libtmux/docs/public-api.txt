@@ -420,6 +420,7 @@ function libtmux::Pane::is_at_right: fn(&self) -> bool
 function libtmux::Pane::is_at_top: fn(&self) -> bool
 function libtmux::Pane::is_dead: fn(&self) -> bool
 function libtmux::Pane::is_in_mode: fn(&self) -> bool
+function libtmux::Pane::is_input_disabled: fn(&self) -> bool
 function libtmux::Pane::is_piped: fn(&self) -> bool
 function libtmux::Pane::is_synchronized: fn(&self) -> bool
 function libtmux::Pane::join_into: async fn(self, beside: &Self, options: libtmux::JoinOptions) -> Result<Self, libtmux::Error>

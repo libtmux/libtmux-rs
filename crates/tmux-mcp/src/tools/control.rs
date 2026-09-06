@@ -248,8 +248,9 @@ impl TmuxTools {
                        command, Escape, Up, C-d -- which are tmux key names and are \
                        interpreted. Text is sent first, then keys, then Enter if asked. Before \
                        input, the configured synchronized-pane cohort is observed; a dead, \
-                       mode-owned, or inherited-caller member refuses the whole call. Returned \
-                       pane IDs describe configured membership, not confirmed delivery. The \
+                       input-disabled, mode-owned, terminal-attended, or inherited-caller member \
+                       refuses the whole call. Returned pane IDs describe configured membership, \
+                       not confirmed delivery. The \
                        observation can race with tmux processing the input.",
         title = "Send Keys To Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
@@ -501,9 +502,9 @@ impl TmuxTools {
                        text, so a shell reading it can react to each character, and a \
                        bracketed-paste aware program treats a paste as one block. The buffer \
                        is deleted afterwards. Paste targets only the named pane, even when \
-                       synchronized input is enabled. A dead, mode-owned, or inherited-caller \
-                       target is refused before buffer creation; that observation can still race \
-                       with tmux.",
+                       synchronized input is enabled. A dead, input-disabled, mode-owned, \
+                       terminal-attended, or inherited-caller target is refused before buffer \
+                       creation; that observation can still race with tmux.",
         title = "Paste Text Into Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],

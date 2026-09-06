@@ -3,11 +3,12 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
+use std::process::{Child, Stdio};
 use std::time::Duration;
 
 use libtmux::test::TestServer;
@@ -201,6 +202,81 @@ async fn set_window_synchronized(server: &Server, pane: &str, enabled: bool) {
         .set_option("synchronize-panes", if enabled { "on" } else { "off" })
         .await
         .expect("window synchronization changes");
+}
+
+async fn set_pane_input(server: &Server, pane: &str, enabled: bool) {
+    let result = server
+        .cmd(
+            Command::new("select-pane")
+                .arg(if enabled { "-e" } else { "-d" })
+                .arg("-t")
+                .arg(pane),
+        )
+        .await
+        .expect("pane input setting command runs");
+    assert!(result.success(), "pane input setting changes");
+}
+
+struct TerminalClient(Child);
+
+impl Drop for TerminalClient {
+    fn drop(&mut self) {
+        drop(self.0.kill());
+        drop(self.0.wait());
+    }
+}
+
+fn shell_quote(value: &OsStr) -> String {
+    format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+async fn attach_terminal_client(server: &Server, pane: &str) -> TerminalClient {
+    let pane = pane_handle(server, pane).await;
+    let executable = server
+        .resolved_tmux_executable()
+        .expect("fixture tmux resolves");
+    let command = format!(
+        "{} -S {} attach-session -t {}",
+        shell_quote(executable.as_os_str()),
+        shell_quote(server.socket_path().as_os_str()),
+        shell_quote(OsStr::new(&pane.session_id().to_string())),
+    );
+    let child = std::process::Command::new("script")
+        .arg("-q")
+        .arg("-c")
+        .arg(command)
+        .arg("/dev/null")
+        .env("TERM", "xterm")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("terminal client starts");
+    libtmux::test::retry_until(Duration::from_secs(10), async || {
+        server
+            .clients()
+            .await
+            .is_ok_and(|clients| clients.iter().any(|client| !client.is_control_mode()))
+    })
+    .await
+    .expect("terminal client attaches");
+    TerminalClient(child)
+}
+
+async fn detach_terminal_clients(server: &Server) {
+    for client in server.clients().await.expect("clients list") {
+        if !client.is_control_mode() {
+            client.detach().await.expect("terminal client detaches");
+        }
+    }
+    libtmux::test::retry_until(Duration::from_secs(10), async || {
+        server
+            .clients()
+            .await
+            .is_ok_and(|clients| clients.iter().all(libtmux::Client::is_control_mode))
+    })
+    .await
+    .expect("terminal client leaves the listing");
 }
 
 async fn synchronized_fixture(name: &str) -> (TestServer, TmuxTools, String, String) {
@@ -532,6 +608,121 @@ async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
         .err()
         .expect("a dead configured peer refuses the whole input");
     assert_channel_quiet(guard.server(), dead_channel).await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn pane_input_refuses_input_disabled_configured_members() {
+    let (guard, tools, source, peer) = synchronized_fixture("input-disabled").await;
+
+    set_pane_input(guard.server(), &peer, false).await;
+    assert!(pane_handle(guard.server(), &peer).await.is_input_disabled());
+    let channel = "mcp-input-disabled-peer";
+    let error = tools
+        .send_keys(args(serde_json::json!({
+            "pane": source,
+            "text": format!("tmux wait-for -S {channel}"),
+            "enter": true
+        })))
+        .await
+        .err()
+        .expect("an input-disabled configured peer refuses the whole input");
+    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert_channel_quiet(guard.server(), channel).await;
+
+    set_pane_input(guard.server(), &peer, true).await;
+    assert!(!pane_handle(guard.server(), &peer).await.is_input_disabled());
+    set_pane_input(guard.server(), &source, false).await;
+    assert_paste_refused_unchanged(&tools, guard.server(), &source, "invalid_input").await;
+    set_pane_input(guard.server(), &source, true).await;
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
+    let (guard, tools, source, peer) = synchronized_fixture("attended-input").await;
+    let mut source_handle = pane_handle(guard.server(), &source).await;
+    source_handle
+        .select()
+        .await
+        .expect("source pane becomes active");
+    source_handle
+        .toggle_zoom()
+        .await
+        .expect("source window zooms");
+    let terminal = attach_terminal_client(guard.server(), &source).await;
+
+    let source_channel = "mcp-attended-source";
+    let error = tools
+        .send_keys(args(serde_json::json!({
+            "pane": source,
+            "text": format!("tmux wait-for -S {source_channel}"),
+            "enter": true
+        })))
+        .await
+        .err()
+        .expect("the attended active pane refuses input");
+    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert_channel_quiet(guard.server(), source_channel).await;
+    assert_paste_refused_unchanged(&tools, guard.server(), &source, "invalid_input").await;
+
+    let caller = caller_tools(guard.server(), &source).await;
+    let error = caller
+        .send_keys(args(serde_json::json!({"pane": source, "keys": ["C-l"]})))
+        .await
+        .err()
+        .expect("caller protection still takes precedence");
+    assert_self_protection(error, &source);
+
+    pane_handle(guard.server(), &source)
+        .await
+        .set_option("synchronize-panes", "off")
+        .await
+        .expect("active source opts out");
+    send_and_wait(
+        &tools,
+        guard.server(),
+        &peer,
+        "true",
+        "mcp-zoom-hidden-peer",
+    )
+    .await;
+
+    source_handle
+        .toggle_zoom()
+        .await
+        .expect("source window unzooms");
+    let peer_channel = "mcp-attended-visible-peer";
+    let error = tools
+        .send_keys(args(serde_json::json!({
+            "pane": peer,
+            "text": format!("tmux wait-for -S {peer_channel}"),
+            "enter": true
+        })))
+        .await
+        .err()
+        .expect("every pane visible to a terminal client refuses input");
+    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert_channel_quiet(guard.server(), peer_channel).await;
+
+    detach_terminal_clients(guard.server()).await;
+    drop(terminal);
+    let control = libtmux::control::ControlMode::attach(
+        guard.server(),
+        pane_handle(guard.server(), &source).await.session_id(),
+    )
+    .await
+    .expect("control-mode client attaches");
+    tools
+        .send_keys(args(serde_json::json!({"pane": source, "keys": ["C-l"]})))
+        .await
+        .expect("control-mode clients do not make a pane attended");
+    control
+        .shutdown()
+        .await
+        .expect("control-mode client shuts down");
+
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

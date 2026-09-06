@@ -33,16 +33,17 @@ ownership when a client disconnects, and cancelling can discard a person's
 selection or close a different mode than the caller assumed.
 
 Keep observing with capture, snapshot, search, `capture_since`, or
-`wait_for_text`. Pane-input tools refuse dead, mode-owned, or possible caller
-recipients. `send_keys_batch` repeats that check for each executed row, while
-`paste_text` checks only its named target before buffer creation.
+`wait_for_text`. Pane-input tools refuse dead, input-disabled, mode-owned,
+terminal-attended, or possible caller recipients. `send_keys_batch` repeats
+that check for each executed row, while `paste_text` checks only its named
+target before buffer creation.
 
 `run_shell_command` requires one configured recipient and checks its cohort,
-mode, liveness, inherited-caller relation, and foreground command before
-watcher setup and before dispatch. Its resolved tmux executable and socket
-path must contain no ASCII terminal-control bytes. These are observations,
-not locks: state can still change before tmux processes input, and returned
-pane IDs do not confirm delivery.
+mode, liveness, input-off state, terminal attention, inherited-caller relation,
+and foreground command before watcher setup and before dispatch. Its resolved
+tmux executable and socket path must contain no ASCII terminal-control bytes.
+These are observations, not locks: state can still change before tmux processes
+input, and returned pane IDs do not confirm delivery.
 
 The `libtmux` crate retains `Pane::copy_mode` and `Pane::exit_mode` for
 applications that own the complete interaction. Library parity does not require
@@ -335,7 +336,7 @@ Change tmux state; no client-supplied executable input. Move one window to a ses
 
 ## `paste_text`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Put text into a pane through a tmux paste buffer instead of typing it key by key. Use this for anything long or awkward: send_keys types the text, so a shell reading it can react to each character, and a bracketed-paste aware program treats a paste as one block. The buffer is deleted afterwards. Paste targets only the named pane, even when synchronized input is enabled. A dead, mode-owned, or inherited-caller target is refused before buffer creation; that observation can still race with tmux.
+Send input to a pane's program; a shell that receives it runs it with your user's permissions. Put text into a pane through a tmux paste buffer instead of typing it key by key. Use this for anything long or awkward: send_keys types the text, so a shell reading it can react to each character, and a bracketed-paste aware program treats a paste as one block. The buffer is deleted afterwards. Paste targets only the named pane, even when synchronized input is enabled. A dead, input-disabled, mode-owned, terminal-attended, or inherited-caller target is refused before buffer creation; that observation can still race with tmux.
 
 - Toolset: `execute`
 - Process reach: `pane-input`
@@ -425,7 +426,7 @@ Start a pane's configured process; accepts no command payload. Restart a pane's 
 
 ## `run_shell_command`
 
-Run a shell command in a pane with your user's permissions. Run a shell command in a pane, wait for it to finish, and report its exit status with everything it wrote. This is the tool for "run this and tell me if it worked". Output is read from the pane's live stream, so nothing is missed and the shell prompt is not included. The command runs in a subshell, so cd and export do not persist and invalid syntax completes with a nonzero status. It requires one configured input recipient and observes its mode, liveness, cohort, inherited-caller relation, and foreground command before watcher setup and again before dispatch. The resolved tmux executable and socket path must contain no ASCII terminal-control bytes. These checks do not lock the pane and can race with tmux processing the input. The pane must run a trusted POSIX-compatible shell whose reserved words and special builtins retain their meanings, against a trusted tmux server and configuration. Reaching the deadline or cancelling this request stops the waiting, not the command; inspect the pane before sending more input.
+Run a shell command in a pane with your user's permissions. Run a shell command in a pane, wait for it to finish, and report its exit status with everything it wrote. This is the tool for "run this and tell me if it worked". Output is read from the pane's live stream, so nothing is missed and the shell prompt is not included. The command runs in a subshell, so cd and export do not persist and invalid syntax completes with a nonzero status. It requires one configured input recipient and observes its mode, liveness, input-off state, attended-client state, cohort, inherited-caller relation, and foreground command before watcher setup and again before dispatch. The resolved tmux executable and socket path must contain no ASCII terminal-control bytes. These checks do not lock the pane and can race with tmux processing the input. The pane must run a trusted POSIX-compatible shell whose reserved words and special builtins retain their meanings, against a trusted tmux server and configuration. Reaching the deadline or cancelling this request stops the waiting, not the command; inspect the pane before sending more input.
 
 - Toolset: `execute`
 - Process reach: `pane-command`
@@ -500,7 +501,7 @@ Change tmux state; no client-supplied executable input. Select a window, making 
 
 ## `send_keys`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Type text into a pane, press named keys in it, or both. `text` is sent literally, so C-c in it types those three characters. Use `keys` for anything without a character of its own -- C-c to interrupt a running command, Escape, Up, C-d -- which are tmux key names and are interpreted. Text is sent first, then keys, then Enter if asked. Before input, the configured synchronized-pane cohort is observed; a dead, mode-owned, or inherited-caller member refuses the whole call. Returned pane IDs describe configured membership, not confirmed delivery. The observation can race with tmux processing the input.
+Send input to a pane's program; a shell that receives it runs it with your user's permissions. Type text into a pane, press named keys in it, or both. `text` is sent literally, so C-c in it types those three characters. Use `keys` for anything without a character of its own -- C-c to interrupt a running command, Escape, Up, C-d -- which are tmux key names and are interpreted. Text is sent first, then keys, then Enter if asked. Before input, the configured synchronized-pane cohort is observed; a dead, input-disabled, mode-owned, terminal-attended, or inherited-caller member refuses the whole call. Returned pane IDs describe configured membership, not confirmed delivery. The observation can race with tmux processing the input.
 
 - Toolset: `execute`
 - Process reach: `pane-input`
@@ -515,7 +516,7 @@ Send input to a pane's program; a shell that receives it runs it with your user'
 
 ## `send_keys_batch`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Send an ordered batch of input operations to panes. Each executed row repeats send_keys' effective synchronized-cohort, dead-pane, pane-mode, and inherited-caller preflight immediately before that row. These observations can race with tmux processing the input.
+Send input to a pane's program; a shell that receives it runs it with your user's permissions. Send an ordered batch of input operations to panes. Each executed row repeats send_keys' effective synchronized-cohort, dead-pane, input-off, pane-mode, attended-client, and inherited-caller preflight immediately before that row. These observations can race with tmux processing the input.
 
 - Toolset: `execute`
 - Process reach: `pane-input`
