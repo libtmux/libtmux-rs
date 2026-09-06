@@ -27,7 +27,7 @@ const MAX_TOTAL_PATTERN_BYTES: usize = 16_384;
 mod run;
 
 #[cfg(test)]
-pub(crate) use run::prepared_shutdown_completions;
+pub(crate) use run::observing_prepared_shutdowns;
 #[cfg(test)]
 use run::{
     FrameError, Scanner, TRAP_DECLARATION_LIMIT, find, frame_with_random, inherited_trap_capture,

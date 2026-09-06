@@ -24,7 +24,13 @@ const PROOF_RETRY_MAX_DELAY: Duration = Duration::from_secs(1);
 pub(super) const TRAP_DECLARATION_LIMIT: usize = 64 * 1024;
 
 #[cfg(test)]
-static PREPARED_SHUTDOWN_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
+tokio::task_local! {
+    /// Prepared shutdowns completed inside one [`observing_prepared_shutdowns`]
+    /// scope. Task-local rather than global: several tests drive the guard
+    /// refusal path concurrently, and a process-wide counter made every
+    /// observation depend on which of them happened to be running.
+    static PREPARED_SHUTDOWNS: std::sync::Arc<AtomicU64>;
+}
 
 /// A pane stream and the sentinels for one command.
 pub(crate) struct Run {
@@ -331,14 +337,22 @@ impl PreparedRun {
         let Run { output, .. } = run;
         let result = output.shutdown().await;
         #[cfg(test)]
-        PREPARED_SHUTDOWN_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+        let _ = PREPARED_SHUTDOWNS.try_with(|count| count.fetch_add(1, Ordering::Relaxed));
         result
     }
 }
 
+/// Run `future`, reporting how many prepared shutdowns completed inside it.
+///
+/// The count covers this task alone, so a concurrent test driving the same
+/// refusal path cannot inflate it.
 #[cfg(test)]
-pub(crate) fn prepared_shutdown_completions() -> u64 {
-    PREPARED_SHUTDOWN_COMPLETIONS.load(Ordering::Relaxed)
+pub(crate) async fn observing_prepared_shutdowns<F: Future>(future: F) -> (F::Output, u64) {
+    let count = std::sync::Arc::new(AtomicU64::new(0));
+    let output = PREPARED_SHUTDOWNS
+        .scope(std::sync::Arc::clone(&count), future)
+        .await;
+    (output, count.load(Ordering::Relaxed))
 }
 
 pub(super) fn quote_shell_word(value: &OsStr) -> OsString {

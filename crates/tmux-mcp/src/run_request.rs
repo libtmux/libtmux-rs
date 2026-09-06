@@ -396,7 +396,7 @@ mod tests {
     #[tokio::test]
     #[allow(
         clippy::await_holding_invalid_type,
-        reason = "the guard serializes the test-only global counter"
+        reason = "the guard serializes the process-wide reservation registry"
     )]
     async fn final_guard_awaits_prepared_shutdown_before_return() {
         let _serial = CLEANUP_TEST.lock().await;
@@ -414,7 +414,6 @@ mod tests {
             .server()
             .resolved_tmux_executable()
             .expect("fixture tmux resolves");
-        let before = exec::prepared_shutdown_completions();
         let refusal = ErrorData::invalid_params("refused".to_owned(), None);
         let generation = guard
             .server()
@@ -425,7 +424,9 @@ mod tests {
         let lease = reserve(generation, guard.server().socket_path(), &panes)
             .expect("the fixture pane is unreserved");
 
-        let result = run(
+        // The count is read after `run` returns, so a shutdown that had not
+        // completed first would report zero.
+        let (result, shutdowns) = exec::observing_prepared_shutdowns(run(
             &pane,
             "printf should-not-run",
             Duration::from_secs(2),
@@ -440,11 +441,11 @@ mod tests {
                 lease,
             },
             async { Err(refusal) },
-        )
+        ))
         .await;
 
         assert!(matches!(result, Err(RunError::Guard(_))));
-        assert_eq!(exec::prepared_shutdown_completions(), before + 1);
+        assert_eq!(shutdowns, 1, "the refused run shuts its watcher down once");
         assert!(
             reserve(generation, guard.server().socket_path(), &panes).is_some(),
             "final refusal releases its reservation after watcher shutdown"
