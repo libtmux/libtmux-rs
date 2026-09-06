@@ -521,6 +521,14 @@ pub fn resolve_config_route(path: &Path, limit: usize) -> Result<ConfigRoute, Fs
 /// Returns [`FsError`] when the file is a symlink, non-regular, too large, or
 /// changes while being read.
 pub fn stable_snapshot(path: &Path, limit: usize) -> Result<FileSnapshot, FsError> {
+    stable_snapshot_with_hook(path, limit, &mut || Ok(()))
+}
+
+fn stable_snapshot_with_hook(
+    path: &Path,
+    limit: usize,
+    hook: &mut dyn FnMut() -> Result<(), FsError>,
+) -> Result<FileSnapshot, FsError> {
     let descriptor = open(
         path,
         OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
@@ -555,11 +563,16 @@ pub fn stable_snapshot(path: &Path, limit: usize) -> Result<FileSnapshot, FsErro
             path.display()
         )));
     }
+    hook()?;
     let after = file
         .metadata()
         .map_err(|error| FsError::new(format!("reinspect {}: {error}", path.display())))?;
     let file_identity = identity(&before, &bytes);
-    if identity(&after, &bytes) != file_identity {
+    let timestamps_match = before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
+        && before.ctime() == after.ctime()
+        && before.ctime_nsec() == after.ctime_nsec();
+    if identity(&after, &bytes) != file_identity || !timestamps_match {
         return Err(FsError::new(format!(
             "file changed while reading: {}",
             path.display()
@@ -907,7 +920,21 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{FsError, remove_exact_with_hook, stable_snapshot};
+    use super::{FsError, remove_exact_with_hook, stable_snapshot, stable_snapshot_with_hook};
+
+    #[test]
+    fn stable_snapshot_rejects_a_same_size_in_place_write() {
+        let root = tempdir().expect("temporary directory");
+        let path = root.path().join("artifact");
+        fs::write(&path, b"owned").expect("owned file");
+        let mut hook = || {
+            fs::write(&path, b"human").map_err(|error| FsError::new(error.to_string()))?;
+            Ok(())
+        };
+
+        stable_snapshot_with_hook(&path, 1024, &mut hook)
+            .expect_err("same-size write must invalidate snapshot");
+    }
 
     #[test]
     fn exact_removal_restores_a_replacement_that_arrives_after_authentication() {
