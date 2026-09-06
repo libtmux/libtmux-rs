@@ -111,6 +111,7 @@ fn parse_pane_id(value: &[u8]) -> Result<String, &'static str> {
 
 fn parse_attended_panes(
     stdout: &[u8],
+    all_panes: &BTreeSet<String>,
     window_panes: &BTreeSet<String>,
 ) -> Result<BTreeSet<String>, &'static str> {
     if stdout.is_empty() {
@@ -131,7 +132,13 @@ fn parse_attended_panes(
         if fields.next().is_some() {
             return Err("a client row had too many fields");
         }
-        if control || !window_panes.contains(&active) {
+        if control {
+            continue;
+        }
+        if !all_panes.contains(&active) {
+            return Err("a terminal client pane was absent from the pane snapshot");
+        }
+        if !window_panes.contains(&active) {
             continue;
         }
         if zoomed {
@@ -141,6 +148,22 @@ fn parse_attended_panes(
         }
     }
     Ok(attended)
+}
+
+fn pane_id_sets(
+    panes: &[libtmux::Pane],
+    source: &libtmux::Pane,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let all = panes
+        .iter()
+        .map(|candidate| candidate.id().to_string())
+        .collect();
+    let window = panes
+        .iter()
+        .filter(|candidate| candidate.window_id() == source.window_id())
+        .map(|candidate| candidate.id().to_string())
+        .collect();
+    (all, window)
 }
 
 impl TmuxTools {
@@ -231,11 +254,7 @@ impl TmuxTools {
             }
         }
 
-        let window_panes = panes
-            .iter()
-            .filter(|candidate| candidate.window_id() == source.window_id())
-            .map(|candidate| candidate.id().to_string())
-            .collect();
+        let (all_panes, window_panes) = pane_id_sets(&panes, &source);
 
         let client_result = self
             .server
@@ -249,7 +268,7 @@ impl TmuxTools {
         if let Some(error) = client_result.refusal_for("list-clients") {
             return Err(tmux_error(&error));
         }
-        let attended = parse_attended_panes(client_result.stdout(), &window_panes)
+        let attended = parse_attended_panes(client_result.stdout(), &all_panes, &window_panes)
             .map_err(client_attention_error)?;
         let endpoint = self.pane_input_endpoint().await?;
         self.server
@@ -311,15 +330,19 @@ mod tests {
         ["%0", "%1"].into_iter().map(str::to_owned).collect()
     }
 
+    fn all_panes() -> BTreeSet<String> {
+        ["%0", "%1", "%9"].into_iter().map(str::to_owned).collect()
+    }
+
     #[test]
     fn terminal_attention_follows_visibility() {
         let panes = window_panes();
         assert_eq!(
-            parse_attended_panes(b"0|%1|1\n", &panes).expect("zoomed row"),
+            parse_attended_panes(b"0|%1|1\n", &all_panes(), &panes).expect("zoomed row"),
             ["%1"].into_iter().map(str::to_owned).collect()
         );
         assert_eq!(
-            parse_attended_panes(b"0|%1|0\n", &panes).expect("visible window row"),
+            parse_attended_panes(b"0|%1|0\n", &all_panes(), &panes).expect("visible window row"),
             panes
         );
     }
@@ -328,10 +351,15 @@ mod tests {
     fn control_and_other_window_clients_are_not_attended() {
         let panes = window_panes();
         assert!(
-            parse_attended_panes(b"1|%0|0\n0|%9|0\n", &panes)
+            parse_attended_panes(b"1|%0|0\n0|%9|0\n", &all_panes(), &panes)
                 .expect("valid unrelated rows")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_terminal_client_pane_missing_from_the_snapshot_fails_closed() {
+        assert!(parse_attended_panes(b"0|%8|0\n", &all_panes(), &window_panes()).is_err());
     }
 
     #[test]
@@ -351,7 +379,7 @@ mod tests {
             b"0|\xff|0\n",
         ] {
             assert!(
-                parse_attended_panes(stdout, &panes).is_err(),
+                parse_attended_panes(stdout, &all_panes(), &panes).is_err(),
                 "malformed row was accepted: {stdout:?}"
             );
         }
