@@ -725,6 +725,8 @@ fn marker_lookalikes_are_command_output() {
     stream.extend_from_slice(MARKER);
     stream.extend_from_slice(b":not-a-status\n\n");
     stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":00\nafter-lookalike\n");
+    stream.extend_from_slice(MARKER);
     stream.extend_from_slice(b":0\n");
 
     let view = scanner
@@ -734,5 +736,6 @@ fn marker_lookalikes_are_command_output() {
     assert!(view.output.starts_with("x__LIBTMUX_MCP_DONE_"));
     assert!(view.output.contains(":BEGIN suffix\n"));
     assert!(view.output.contains(":256\n"));
+    assert!(view.output.contains(":00\n"));
     assert_eq!(view.exit_status, Some(0));
 }

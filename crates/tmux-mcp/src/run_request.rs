@@ -183,6 +183,15 @@ fn retain_lease_until(proof: impl Future<Output = ()> + Send + 'static, lease: P
     });
 }
 
+pub(crate) struct RunTransport<'a> {
+    pub(crate) server: &'a libtmux::Server,
+    pub(crate) generation: ServerGeneration,
+    pub(crate) executable: &'a OsStr,
+    pub(crate) endpoint: &'a Path,
+    pub(crate) shell: &'a [u8],
+    pub(crate) lease: PaneReservation,
+}
+
 /// Why a request-owned pane command could not establish a result.
 #[derive(Debug)]
 pub(crate) enum RunError {
@@ -284,10 +293,17 @@ pub(crate) async fn run(
     timeout: Duration,
     suppress_history: bool,
     cancelled: &CancellationToken,
-    transport: (&OsStr, &Path, &[u8], PaneReservation),
+    transport: RunTransport<'_>,
     final_check: impl Future<Output = Result<(), ErrorData>>,
 ) -> Result<RunView, RunError> {
-    let (executable, endpoint, shell, lease) = transport;
+    let RunTransport {
+        server,
+        generation,
+        executable,
+        endpoint,
+        shell,
+        lease,
+    } = transport;
     let prepared =
         exec::prepare_run(pane, command, suppress_history, executable, endpoint, shell).await?;
     if let Err(error) = final_check.await {
@@ -298,9 +314,17 @@ pub(crate) async fn run(
         exec::RunDispatch::Confirmed(run) => run,
         exec::RunDispatch::NotDispatched(error) => return Err(RunError::Tmux(error)),
         exec::RunDispatch::Unknown { run, error } => {
+            let proof = run.proof(server.clone(), generation);
+            let server = server.clone();
             retain_lease_until(
                 async move {
-                    run.collect(|_| {}).await.finish_proof().await;
+                    let collection = run.collect(server, generation, |_| {});
+                    tokio::pin!(collection);
+                    tokio::select! {
+                        biased;
+                        collected = &mut collection => collected.finish_proof().await,
+                        () = proof.wait() => {}
+                    }
                 },
                 lease,
             );
@@ -311,8 +335,11 @@ pub(crate) async fn run(
     let pane_id = pane.id().to_string();
     let progress = Arc::new(Mutex::new(Progress::new()));
     let update = Arc::clone(&progress);
+    let proof = run.proof(server.clone(), generation);
     let result = {
-        let mut collected = Box::pin(run.collect(move |delta| hold(&update).apply(delta)));
+        let mut collected = Box::pin(run.collect(server.clone(), generation, move |delta| {
+            hold(&update).apply(delta);
+        }));
         tokio::select! {
             biased;
             view = &mut collected => Ok(view),
@@ -334,7 +361,16 @@ pub(crate) async fn run(
         }
         Err((outcome, collected)) => {
             let view = hold(&progress).interrupted(pane_id, outcome);
-            retain_lease_until(async move { collected.await.finish_proof().await }, lease);
+            retain_lease_until(
+                async move {
+                    tokio::select! {
+                        biased;
+                        collection = collected => collection.finish_proof().await,
+                        () = proof.wait() => {}
+                    }
+                },
+                lease,
+            );
             Ok(view)
         }
     }
@@ -395,12 +431,14 @@ mod tests {
             Duration::from_secs(2),
             false,
             &CancellationToken::new(),
-            (
-                executable.as_os_str(),
-                guard.server().socket_path(),
-                b"sh",
+            RunTransport {
+                server: guard.server(),
+                generation,
+                executable: executable.as_os_str(),
+                endpoint: guard.server().socket_path(),
+                shell: b"sh",
                 lease,
-            ),
+            },
             async { Err(refusal) },
         )
         .await;
@@ -476,12 +514,9 @@ mod tests {
             .to_string();
         let second_generation = replacement.generation().await.expect("second generation");
         let second_panes = vec![second_pane.clone()];
-        let replacement_lease = reserve(
-            second_generation,
-            replacement.socket_path(),
-            &second_panes,
-        )
-        .expect("the replacement generation reserves its pane");
+        let replacement_lease =
+            reserve(second_generation, replacement.socket_path(), &second_panes)
+                .expect("the replacement generation reserves its pane");
         let replacement_still_owned = owns(
             &replacement_lease,
             second_generation,

@@ -1557,6 +1557,64 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
 }
 
 #[tokio::test]
+async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
+    let (guard, tools, pane) = typing_fixture("run-dead-settlement").await;
+    let baseline_clients = client_count(guard.server()).await;
+    let configured = guard
+        .server()
+        .cmd(
+            Command::new("set-option")
+                .arg("-p")
+                .arg("-t")
+                .arg(&pane)
+                .arg("remain-on-exit")
+                .arg("on"),
+        )
+        .await
+        .expect("remain-on-exit setting runs");
+    assert!(configured.success(), "remain-on-exit is enabled");
+
+    let stopped = json(
+        tools
+            .run_command(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "command": "kill -KILL $$",
+                    "seconds": 1
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("the interrupted run answers"),
+    );
+    assert_eq!(stopped["outcome"], "deadline");
+    libtmux::test::retry_until(Duration::from_secs(3), async || {
+        pane_handle(guard.server(), &pane).await.is_dead()
+    })
+    .await
+    .expect("the retained pane reports its dead process");
+
+    libtmux::test::retry_until(Duration::from_secs(3), async || {
+        tools
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .err()
+            .and_then(|error| error.data)
+            .is_some_and(|data| data["kind"] == "invalid_input")
+    })
+    .await
+    .expect("dead-pane proof releases the active-run reservation");
+    assert_eq!(
+        clients_settle(guard.server(), baseline_clients).await,
+        baseline_clients,
+        "dead-pane proof drops the stalled watcher"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn run_requires_a_known_posix_shell_before_watcher_setup() {
     let (guard, tools, pane) = typing_fixture("run-known-shell").await;
     let mut target = pane_handle(guard.server(), &pane).await;

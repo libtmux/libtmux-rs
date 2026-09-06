@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use libtmux::{CaptureOptions, Error, ErrorKind, Pane};
+use libtmux::{CaptureOptions, Error, Pane, Server, ServerGeneration};
 
 use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
@@ -18,6 +18,9 @@ use super::{OUTPUT_LIMIT, RunOutcome, RunView};
 
 const MARKER_PREFIX: &str = "__LIBTMUX_MCP_DONE_";
 const NONCE_ATTEMPTS: usize = 32;
+const PROOF_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const PROOF_RETRY_DELAY: Duration = Duration::from_millis(50);
+const PROOF_RETRY_MAX_DELAY: Duration = Duration::from_secs(1);
 pub(super) const TRAP_DECLARATION_LIMIT: usize = 64 * 1024;
 
 #[cfg(test)]
@@ -62,31 +65,73 @@ impl RunCollection {
 /// Evidence retained after a watcher transport closes without a marker.
 pub(crate) struct RunProof {
     pane: Pane,
+    server: Server,
+    generation: ServerGeneration,
     closing: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum GenerationState {
+    Current,
+    Ended,
+    Ambiguous,
+}
+
 impl RunProof {
-    pub(crate) async fn wait(self) {
-        loop {
-            match self
-                .pane
-                .capture_with(CaptureOptions::history().join_wrapped())
-                .await
-            {
-                Ok(lines)
-                    if lines.iter().any(|line| {
-                        completion_status(line.as_bytes(), &self.closing).is_some()
-                    }) =>
-                {
-                    return;
-                }
-                Err(error)
-                    if matches!(error.kind(), ErrorKind::ObjectGone | ErrorKind::ServerGone) =>
-                {
-                    return;
-                }
-                Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+    async fn generation_state(&self) -> GenerationState {
+        match tokio::time::timeout(
+            PROOF_PROBE_TIMEOUT,
+            self.server.require_generation(self.generation),
+        )
+        .await
+        {
+            Ok(Ok(())) => GenerationState::Current,
+            Ok(Err(Error::ServerGenerationChanged { .. } | Error::ServerGone { .. })) => {
+                GenerationState::Ended
             }
+            Ok(Err(_)) | Err(_) => GenerationState::Ambiguous,
+        }
+    }
+
+    async fn settled(&self) -> bool {
+        match self.generation_state().await {
+            GenerationState::Ended => return true,
+            GenerationState::Ambiguous => return false,
+            GenerationState::Current => {}
+        }
+
+        let (capture, refreshed) = tokio::join!(
+            tokio::time::timeout(
+                PROOF_PROBE_TIMEOUT,
+                self.pane
+                    .capture_with(CaptureOptions::history().join_wrapped()),
+            ),
+            tokio::time::timeout(PROOF_PROBE_TIMEOUT, self.pane.refreshed()),
+        );
+
+        match self.generation_state().await {
+            GenerationState::Ended => return true,
+            GenerationState::Ambiguous => return false,
+            GenerationState::Current => {}
+        }
+
+        let marker = matches!(&capture, Ok(Ok(lines)) if lines.iter().any(|line| {
+            completion_status(line.as_bytes(), &self.closing).is_some()
+        }));
+        let pane_ended = matches!(&refreshed, Ok(Ok(pane)) if pane.is_dead())
+            || matches!(&refreshed, Ok(Err(Error::ObjectGone { .. })))
+            || matches!(&capture, Ok(Err(Error::ObjectGone { .. })));
+        marker || pane_ended
+    }
+
+    pub(crate) async fn wait(self) {
+        let mut delay = PROOF_RETRY_DELAY;
+        loop {
+            if self.settled().await {
+                return;
+            }
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2).min(PROOF_RETRY_MAX_DELAY);
         }
     }
 }
@@ -577,6 +622,15 @@ pub(crate) async fn prepare_run(
 }
 
 impl Run {
+    pub(crate) fn proof(&self, server: Server, generation: ServerGeneration) -> RunProof {
+        RunProof {
+            pane: self.pane.clone(),
+            server,
+            generation,
+            closing: self.scanner.closed.clone(),
+        }
+    }
+
     /// Read until the command ends or the pane closes, publishing as it goes.
     ///
     /// `publish` receives only bytes added to the retained window and how much
@@ -584,6 +638,8 @@ impl Run {
     /// without copying the whole window for every pane-stream chunk.
     pub(crate) async fn collect(
         mut self,
+        server: Server,
+        generation: ServerGeneration,
         mut publish: impl FnMut(RunProgress<'_>),
     ) -> RunCollection {
         while let Some(chunk) = self.output.next_chunk().await {
@@ -602,6 +658,8 @@ impl Run {
             .unfinished(RunOutcome::PaneClosed, self.pane.id().to_string());
         let proof = RunProof {
             pane: self.pane,
+            server,
+            generation,
             closing: self.scanner.closed,
         };
         let _ = self.output.shutdown().await;
@@ -847,8 +905,8 @@ fn completion_status(line: &[u8], closed: &[u8]) -> Option<i32> {
     if digits.is_empty() || digits.len() > 3 || !digits.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    let status = std::str::from_utf8(digits).ok()?.parse::<i32>().ok()?;
-    (status <= 255).then_some(status)
+    let status = std::str::from_utf8(digits).ok()?.parse::<u8>().ok()?;
+    (status.to_string().as_bytes() == digits).then_some(i32::from(status))
 }
 
 /// Render collected bytes as text, with escape sequences removed.

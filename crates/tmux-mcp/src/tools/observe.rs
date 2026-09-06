@@ -311,12 +311,14 @@ impl TmuxTools {
                 Self::budget(seconds),
                 suppress_history,
                 &cancelled,
-                (
-                    route.executable.as_os_str(),
-                    &route.endpoint,
-                    foreground.as_bytes(),
+                run_request::RunTransport {
+                    server: &self.server,
+                    generation: initial.generation,
+                    executable: route.executable.as_os_str(),
+                    endpoint: &route.endpoint,
+                    shell: foreground.as_bytes(),
                     lease,
-                ),
+                },
                 final_check,
             ),
         ))
@@ -734,12 +736,14 @@ mod tests {
                 Duration::from_secs(2),
                 false,
                 &cancelled,
-                (
-                    executable.as_os_str(),
-                    &socket,
-                    foreground.as_bytes(),
+                run_request::RunTransport {
+                    server,
+                    generation: initial.generation,
+                    executable: executable.as_os_str(),
+                    endpoint: &socket,
+                    shell: foreground.as_bytes(),
                     lease,
-                ),
+                },
                 final_check,
             )
             .await;
