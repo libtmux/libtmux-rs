@@ -83,6 +83,25 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
 
+      # TEMPORARY diagnostics: what shells this runner actually has, and one
+      # failing run frame in full. Removed once the macOS failures are fixed.
+      - name: Shell diagnostics
+        run: |
+          set +e
+          sw_vers
+          echo "SHELL=$SHELL"
+          for s in /bin/sh /bin/bash /bin/zsh /usr/bin/env; do
+            printf '%s -> ' "$s"; "$s" --version 2>&1 | head -1
+          done
+          command -v bash sh zsh mktemp
+          /usr/bin/mktemp '/tmp/diag-XXXXXX' && echo "mktemp ok"
+      - name: One failing frame in full
+        run: |
+          set +e
+          cargo test --locked -p tmux-mcp --all-features --test agent \
+            run_framing_preserves_parent_shell_state_and_status -- --nocapture 2>&1 | tail -120
+          exit 0
+
       # `--no-fail-fast` because this lane runs only on master and bills at ten
       # times a Linux runner. Stopping at the first failing test binary hides
       # every later one, so a platform difference costs one full run per
