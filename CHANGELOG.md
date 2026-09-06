@@ -16,6 +16,140 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `LIBTMUX_TOOLSETS`, `LIBTMUX_TOOLS`, and `LIBTMUX_EXCLUDE_TOOLS` freeze an
+  exact tool surface at startup. An unknown name or an empty comma-list token
+  stops startup rather than being ignored, and an exclusion wins over
+  toolsets, named inclusions, and aggregate nested authority.
+
+- `tmux://capabilities` reports the surface a client actually received: the
+  effective tools, the selected socket and how it was chosen, direct process
+  reach, tmux effects, output classes, schema-keyed input literalization,
+  future-input amplification, nested authority, and whole-call MCP
+  annotations.
+
+- `Pane::is_input_disabled`, `Pane::is_synchronized`, and `Pane::window_index`
+  report whether a pane refuses input, whether its keystrokes reach the whole
+  synchronized group, and which window index holds it.
+
+- `Server::resolved_tmux_executable` answers the path the configured
+  executable resolves to on the captured `PATH`, and `None` when it resolves
+  to nothing. `None` is how a caller tells "tmux is missing" from "tmux
+  failed".
+
+### Changed
+
+- **Breaking.** The MCP surface is 45 tools in the unordered `inspect`,
+  `manage`, `execute`, and `teardown` toolsets. Registration, descriptions,
+  schemas, selection, and capability reporting come from one typed native
+  manifest, so a tool cannot be advertised with a description that no longer
+  describes it.
+
+- **Breaking.** The binary defaults to the dedicated `libtmux-mcp` socket and
+  a minimal tmux configuration. A newly created default daemon enables all
+  four toolsets; an existing or explicitly configured daemon requires an
+  explicit selection before `teardown` is enabled.
+
+- **Breaking.** `LIBTMUX_TMUX_CONFIG` accepts only a nonempty absolute path,
+  and rejects anything else before tmux is opened. A relative path changed
+  meaning with the launch directory.
+
+- **Breaking.** Spawn tools start only their configured pane process and
+  accept no command or environment payload. A caller that sent one now has it
+  refused rather than run.
+
+- The authenticated creator stops its dedicated daemon when stdio closes, so a
+  client that exits leaves no server behind.
+
+- `run_shell_command` stays request-owned through completion, timeout,
+  cancellation, or a dropped request, and exposes no background-job handle.
+
+- `set_synchronize_panes` advertises that its input reaches every pane in the
+  group, so a client can ask before amplifying a keystroke.
+
+- Pane input fails closed when an effective configured recipient is dead, in a
+  human-owned mode, or may be the inherited MCP caller.
+
+- `paste_text` remains target-only, and `run_shell_command` requires exactly
+  one recipient at both pre-dispatch checks.
+
+- `run_shell_command` rejects ASCII terminal-control bytes in its exact
+  executable or socket route before any watcher is set up.
+
+- `call_read_tools_batch` exposes an exclusion-pruned 16-name schema and caps
+  its complete JSON-RPC response line, request ID and newline included, at
+  1,000,000 bytes without dropping an executed row. Truncation stays explicit,
+  and a serialized request ID over 512 KiB fails before dispatch.
+
+- `capture_since`, and a read batch holding only that operation, report
+  observe-only effects. Retaining a cursor does not change tmux state.
+
+- `search_panes` uses the linear-time regex engine with a 1 MiB matching
+  budget, and pane searches and waits reject oversized pattern sets.
+
+- The configuration swapper is `tools/mcp-swap`, a Rust binary, in place of
+  `scripts/mcp_swap.py`. It authenticates every selected config and recovery
+  artifact before building or writing, rejects path and inode aliases, and
+  commits `use` or `revert` as one rollback-safe transaction; versioned state
+  binds config and backup bytes, modes, identities, and topology, so `revert`
+  refuses a file a human edited or replaced. A dry run performs the same
+  read-only plan without building, launching a server, or writing.
+
+### Removed
+
+- **Breaking.** `enter_copy_mode` and `exit_copy_mode` are no longer MCP
+  tools. Capture, snapshot, search, and cursor tools observe pane output
+  without taking ownership of a human-controlled mode; `Pane::copy_mode` and
+  `Pane::exit_mode` remain for an application that owns the whole interaction.
+
+- **Breaking.** `--safety`, `LIBTMUX_SAFETY`, and `TMUX_MCP_SAFETY` no longer
+  select ordered tiers. Either retired environment setting stops startup with
+  a migration error rather than being ignored.
+
+- **Breaking.** `--confirm`, `--no-confirm`, and `TMUX_MCP_CONFIRM` no longer
+  configure server-side approval. Remove them; a client decides whether to ask
+  from each tool's MCP annotations.
+
+- Prompts, generic plan execution, background-job tools, server-wide tools,
+  generic mutating tools, and dynamic resource templates are no longer part of
+  the public MCP surface.
+
+### Security
+
+- Tool descriptions and the capability report separate socket-scoped object
+  selection, pane-process authority, output sensitivity, direct effects, and
+  conservative whole-call annotations. Neither tool filtering nor an MCP
+  annotation is described as authorization or operating-system confinement,
+  because neither is one.
+
+### Fixed
+
+- A caller-supplied value beginning with a dash is no longer read as a tmux
+  flag. Option terminators now cover pane input, buffers, renames, layouts and
+  channels, and the four builders that construct their own command and so
+  inherited nothing from that guard: `pipe-pane`, `respawn-pane`,
+  `respawn-window` and `source-file`. A `pipe-pane` command starting with a
+  dash could not be set at all.
+
+- Caller and pane-input checks read the configured socket path instead of
+  asking tmux for `#{socket_path}`. tmux escapes a non-printable byte in the
+  path when it stores it, and releases disagree about reporting it, so the
+  answer named a file that does not exist: a pane read as busy told an agent
+  to wait, `retryable: true`, for a `run_shell_command` that was never
+  running, and a path carrying an ASCII terminal-control byte arrived as four
+  printable characters and passed a check written to refuse it. A path that is
+  not valid UTF-8 also came back with replacement characters on every release.
+
+- Pane input and teardown treat inherited `TMUX` and `TMUX_PANE` as one
+  canonical identity, resolve a same-daemon caller in its claimed session, and
+  fail closed on partial, stale, or inconsistent selected-daemon context. A
+  complete identity on another physical socket stays foreign.
+
+- `run_shell_command` completes normally on tmux 3.3 through 3.4, returning
+  output and exit status when the command ends instead of waiting until the
+  request deadline.
+
 ## 0.1.0-alpha.9 - 2026-08-31
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.9;
