@@ -324,6 +324,15 @@ format-coverage source:
 doc-blocks:
     python3 scripts/check-doc-blocks.py crates
 
+# A block of program output pasted into prose is a copy, and a copy drifts:
+# the example grows a column, the prose keeps rendering, and the reader is
+# shown a table no command produces. This runs the example each block names
+# and compares every column but the clock.
+[group: 'docs']
+example-tables:
+    python3 -m unittest scripts/test_check_example_tables.py
+    python3 scripts/check-example-tables.py README.md
+
 # rustdoc supplies a doctest's `fn main`, so a block whose body is only a
 # hidden function definition compiles it and then runs an empty main. Every
 # assertion inside is dead, and nothing says so: it renders like any other
@@ -351,6 +360,11 @@ serve-docs port='8971': docs-full
 bench *args:
     cargo bench --features test-support --bench hierarchy -- {{ args }}
 
+# Run the pane-wait benchmark against real tmux, both wait paths
+[group: 'bench']
+bench-waits *args:
+    cargo bench --features test-support,control-mode --bench waits -- {{ args }}
+
 # Build the crates that get published, and verify what they contain
 #
 # --allow-dirty so this stays runnable mid-change; `cargo publish` does its
@@ -377,7 +391,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test doctest examples fixture-root docs doc-blocks doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test doctest examples example-tables fixture-root docs doc-blocks doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

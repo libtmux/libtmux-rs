@@ -471,7 +471,9 @@ $ git log --max-count=10 --graph --oneline
   as a space in a file and as a line break in a comment, so a wrapped comment
   body arrives as ragged stubs.
 - Directive comments are not prose and are never reformatted: `#![cfg_attr]`,
-  `#[allow]`, and the `docs:` region markers a generator reads.
+  `#[allow]`, the `region:` markers the documentation site slices an example
+  between, and the `<!-- example-output: -->` markers `just example-tables`
+  runs.
 
 ## Slop prevention
 

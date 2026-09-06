@@ -188,18 +188,29 @@ a CLI, a config file, or an MCP tool call can carry one.
 ## Pick how commands reach tmux
 
 Three switches, each a Cargo feature, none of them the default. The same
-workload under each — this is `cargo run --example matrix --all-features`,
-verbatim:
+workload under each, printed by `cargo run --example matrix --all-features`.
+Every column but `wall` is exact and checked against this block by
+`just example-tables`; the timings are one run on one developer machine:
+
+<!-- example-output: matrix --all-features -->
 
 ```text
-mode                     feature            dispatches processes    wall  attribution
-blocking/sequential      plan                        6         6   168ms  per-command
-async/sequential         plan                        6         6   189ms  per-command
-async/folded             plan                        3         3    59ms  merged
-async/marked-fold        plan                        3         3    57ms  merged
-control-mode/streaming   plan,control-mode           6         1     8ms  per-command
+mode                     feature            dispatches processes      wall  attribution  query output
+----------------------------------------------------------------------------------------------------------------------
+blocking/sequential      plan                        6         6     16ms  per-command  2 panes, 2 windows, 2 active
+async/sequential         plan                        6         6     16ms  per-command  2 panes, 2 windows, 2 active
+async/folded             plan                        3         3      9ms  merged       2 panes, 2 windows, 2 active
+async/marked-fold        plan                        3         3     10ms  merged       2 panes, 2 windows, 2 active
+control-mode/streaming   plan,control-mode           6         1      6ms  per-command  2 panes, 2 windows, 2 active
 
 every mode built the same thing: true
+dispatches ranged 3..6, processes ranged 1..6
+
+the same failure, dispatched two ways:
+  Sequential   1 dispatch(es) -> [Failed, Skipped]
+  Folding      1 dispatch(es) -> [Unknown, Unknown]
+  Sequential names the failing operation; Folding cannot, because tmux
+  reports one status for the group whichever member failed.
 ```
 
 Same result, different cost — and different *evidence*. Folding a chain into

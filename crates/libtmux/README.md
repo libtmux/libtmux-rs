@@ -189,8 +189,10 @@ Three things that are not obvious:
   `default_timeout`, 30 seconds unless you change it, so a hung tmux ends the
   call rather than the loop. The deadline above is for the *condition*, not the
   transport.
-- **Polling costs a tmux process per tick.** With `control-mode` you can
-  subscribe to a format instead and be told when it changes -- see
+- **Polling costs a tmux process per tick, and a tick is 120ms.** One
+  `capture-pane` each, so a wait stays under ten dispatches a second and
+  answers within an interval of the text appearing. With `control-mode` you
+  can subscribe to a format instead and be told when it changes -- see
   `ControlSender::subscribe`. tmux coalesces those reports to at most once a
   second, so a subscription says what a value became, not every step it took.
 
