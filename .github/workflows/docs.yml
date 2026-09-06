@@ -1,0 +1,95 @@
+name: docs
+
+# Publishes this port's prose tree to libtmux.org under its own prefix.
+#
+# The tree is built by libtmux/docs's assembly, not by anything in this repo:
+# scripts/build-site.sh renders the shared prose with this port's code fences,
+# reading THIS checkout for the examples those pages quote. That is why the job
+# checks out both repositories and points LIBTMUX_DOCS_CHECKOUT_RS at this
+# one — without it the build resolves a developer's home directory, finds
+# nothing, and fails every inlined example.
+#
+# Temporary and deliberately minimal: no port has published through this
+# workflow yet. It publishes trunk to <locale>/rs/latest with is-default
+# false, so the tree is reachable and linkable but stays out of the search
+# index until the shape is proven.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Workflow level, so a second push queues behind the first rather than racing
+# it into the same prefix.
+concurrency:
+  group: docs-deploy-${{ github.repository }}
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: port
+
+      # A full-length SHA, not a tag. This repository runs that repository's
+      # build script, and a tag can be repointed — the release name is the
+      # trailing comment. Bump this and the `uses:` below together: they must
+      # name the same commit, or the build script and the publish contract
+      # drift apart.
+      - uses: actions/checkout@v7
+        with:
+          repository: libtmux/docs
+          ref: e30bcba4ca470e49ba798255ca4e3d36d58f95bf # v0.1.0-alpha.1
+          path: docs
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: docs
+
+      - name: Build this port's tree
+        working-directory: docs
+        env:
+          LIBTMUX_DOCS_CHECKOUT_RS: ${{ github.workspace }}/port
+        run: ./scripts/build-site.sh --ports rs --skip-refs --skip-pagefind
+
+      # The directory itself, not its parent: its contents become the contents
+      # of <locale>/rs/latest. Uploading docs/_site/en/rs would nest the
+      # tree one level deeper than the prefix already implies.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-dist
+          path: docs/_site/en/rs/latest
+          retention-days: 1
+
+  publish:
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@e30bcba4ca470e49ba798255ca4e3d36d58f95bf # v0.1.0-alpha.1
+    with:
+      # Unprefixed by locale — reusable-deploy prepends <locale>/ itself when
+      # `port` is set, so this becomes en/rs/latest.
+      path-prefix: rs/latest
+      artifact: docs-dist
+      version-kind: trunk
+      port: rs
+      version: latest
+      # False while proving the shape: it publishes and stays reachable, but
+      # robotsFor() keeps it noindex and defaultVersion stays unset, so the
+      # bare port root still falls through to the landing page.
+      is-default: false
+      environment: docs
+    secrets:
+      role-arn: ${{ secrets.LIBTMUX_DOCS_ROLE_ARN }}
+      bucket: ${{ secrets.LIBTMUX_DOCS_BUCKET }}
+      distribution: ${{ secrets.LIBTMUX_DOCS_DISTRIBUTION }}
