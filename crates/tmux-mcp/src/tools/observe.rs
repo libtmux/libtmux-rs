@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
@@ -12,7 +14,78 @@ use crate::{
 };
 
 use super::error::{EffectBoundary, bad_input, tmux_error};
-use super::pane_input::{MissingSource, PaneInputReach};
+use super::pane_input::{MissingSource, PaneInputPlan, PaneInputReach, active_run_error};
+
+#[derive(Clone, Eq, PartialEq)]
+struct RunRoute {
+    executable: PathBuf,
+    endpoint: PathBuf,
+    pane: String,
+}
+
+fn known_posix_shell(command: &libtmux::TmuxText) -> bool {
+    let basename = command
+        .as_bytes()
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or_default();
+    let basename = basename.strip_prefix(b"-").unwrap_or(basename);
+    [
+        b"ash".as_slice(),
+        b"bash",
+        b"dash",
+        b"ksh",
+        b"ksh93",
+        b"mksh",
+        b"pdksh",
+        b"sh",
+        b"zsh",
+    ]
+    .contains(&basename)
+}
+
+fn require_known_shell(
+    plan: &PaneInputPlan,
+    checkpoint: &str,
+) -> Result<libtmux::TmuxText, ErrorData> {
+    let pane = plan.target.id();
+    let Some(command) = plan
+        .target
+        .current_command()
+        .filter(|command| known_posix_shell(command))
+    else {
+        return Err(bad_input(format!(
+            "pane {pane} must run a known POSIX-compatible foreground shell at the {checkpoint} run checkpoint"
+        )));
+    };
+    Ok(command.clone())
+}
+
+fn resolved_executable(server: &libtmux::Server) -> Result<PathBuf, ErrorData> {
+    server.resolved_tmux_executable().ok_or_else(|| {
+        ErrorData::internal_error(
+            "the configured tmux executable cannot be resolved from its captured launch context"
+                .to_owned(),
+            Some(serde_json::json!({
+                "kind": "unreachable",
+                "retryable": false,
+                "stale": false,
+            })),
+        )
+    })
+}
+
+fn run_route(server: &libtmux::Server, plan: &PaneInputPlan) -> Result<RunRoute, ErrorData> {
+    let executable = resolved_executable(server)?;
+    if !exec::route_is_terminal_safe(executable.as_os_str(), &plan.endpoint) {
+        return Err(run_error(run_request::RunError::Frame));
+    }
+    Ok(RunRoute {
+        executable,
+        endpoint: plan.endpoint.clone(),
+        pane: plan.target.id().to_string(),
+    })
+}
 
 /// Translate a request-owned run failure at the protocol boundary.
 fn run_error(error: run_request::RunError) -> ErrorData {
@@ -132,15 +205,16 @@ impl TmuxTools {
                        runs in a subshell, so cd and export do not persist and invalid syntax \
                        completes with a nonzero status. It requires one configured input \
                        recipient and observes its mode, liveness, input-off state, attended-client \
-                       state, cohort, inherited-caller relation, and foreground command before \
-                       watcher setup and again before dispatch. The resolved tmux executable and \
-                       socket path must contain no \
-                       ASCII terminal-control bytes. These checks do not lock the pane and can \
-                       race with tmux processing the input. The pane must run a trusted \
-                       POSIX-compatible shell whose reserved words and special builtins retain \
-                       their meanings, against a trusted tmux server and configuration. Reaching \
-                       the deadline or cancelling this request stops the waiting, not the \
-                       command; inspect the pane before sending more input.",
+                       state, cohort, inherited-caller relation, known POSIX shell, and resolved \
+                       route before watcher setup and again before dispatch. A process-wide \
+                       endpoint-and-pane reservation blocks other MCP pane input until the \
+                       completion marker or pane closure is proved. The resolved tmux executable \
+                       and socket path must contain no ASCII terminal-control bytes. The \
+                       reservation serializes this MCP's input, but tmux observations can still \
+                       race with dispatch. The pane shell, tmux server, and configuration must be \
+                       trusted. Reaching the deadline, cancelling, or an uncertain dispatch stops \
+                       this request while its watcher keeps the reservation until completion is \
+                       proved.",
         title = "Run Command In Pane",
         meta = crate::capability_meta!(Execute, PaneCommand, [Change], [TmuxMetadata, TerminalContent], true, true, {
             "pane" => [TmuxLookup],
@@ -163,19 +237,11 @@ impl TmuxTools {
         if command.as_bytes().contains(&0) {
             return Err(bad_input("command must not contain a NUL byte".to_owned()));
         }
-        let executable = self.server.resolved_tmux_executable().ok_or_else(|| {
-            ErrorData::internal_error(
-                "the configured tmux executable cannot be resolved from its captured launch context"
-                    .to_owned(),
-                Some(serde_json::json!({
-                    "kind": "unreachable",
-                    "retryable": false,
-                    "stale": false,
-                })),
-            )
-        })?;
-        let socket = self.server.socket_path().to_path_buf();
-        if !exec::route_is_terminal_safe(executable.as_os_str(), &socket) {
+        let configured_executable = resolved_executable(&self.server)?;
+        if !exec::route_is_terminal_safe(
+            configured_executable.as_os_str(),
+            self.server.socket_path(),
+        ) {
             return Err(run_error(run_request::RunError::Frame));
         }
         let initial = self
@@ -191,18 +257,20 @@ impl TmuxTools {
                 initial.configured.len()
             )));
         }
-        let foreground = initial
-            .target
-            .current_command()
-            .cloned()
-            .ok_or_else(|| bad_input(format!("pane {pane} reported no foreground command")))?;
+        let foreground = require_known_shell(&initial, "initial")?;
+        let route = run_route(&self.server, &initial)?;
+        let lease = run_request::reserve(&route.endpoint, &route.pane)
+            .ok_or_else(|| active_run_error(&route.pane))?;
         let checkpoint_pane = initial.target.id().to_string();
+        let expected_route = route.clone();
+        let final_lease = lease.clone();
         let final_check = async {
             let final_plan = self
-                .preflight_pane_input(
+                .preflight_pane_input_for_run(
                     &checkpoint_pane,
                     PaneInputReach::Synchronized,
                     MissingSource::ObservedTransition,
+                    &final_lease,
                 )
                 .await?;
             if final_plan.configured.len() != 1 {
@@ -210,19 +278,23 @@ impl TmuxTools {
                     "pane {checkpoint_pane} gained synchronized recipients between run checkpoints"
                 )));
             }
-            let final_foreground = final_plan.target.current_command().ok_or_else(|| {
-                bad_input(format!(
-                    "pane {checkpoint_pane} reported no foreground command at the final checkpoint"
-                ))
-            })?;
-            if final_foreground != &foreground {
+            let final_foreground = require_known_shell(&final_plan, "final")?;
+            if final_foreground != foreground {
                 return Err(bad_input(format!(
-                    "pane {checkpoint_pane} changed foreground command between run checkpoints"
+                    "pane {checkpoint_pane} changed its POSIX-compatible foreground shell between run checkpoints"
+                )));
+            }
+            let final_route = run_route(&self.server, &final_plan)?;
+            if final_route != expected_route
+                || !run_request::owns(&final_lease, &final_route.endpoint, &final_route.pane)
+            {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} changed its tmux route or active-run reservation between run checkpoints"
                 )));
             }
             Ok(())
         };
-        let view = reporting(
+        let view = Box::pin(reporting(
             reporter,
             "still running",
             run_request::run(
@@ -231,10 +303,10 @@ impl TmuxTools {
                 Self::budget(seconds),
                 suppress_history,
                 &cancelled,
-                (executable.as_os_str(), &socket),
+                (route.executable.as_os_str(), &route.endpoint, lease),
                 final_check,
             ),
-        )
+        ))
         .await
         .map_err(run_error)?;
 
@@ -418,6 +490,37 @@ mod tests {
         server.clients().await.map_or(0, |clients| clients.len())
     }
 
+    #[test]
+    fn run_shell_allowlist_is_exact() {
+        for shell in [
+            "ash",
+            "bash",
+            "dash",
+            "ksh",
+            "ksh93",
+            "mksh",
+            "pdksh",
+            "sh",
+            "zsh",
+            "/bin/bash",
+            "-zsh",
+        ] {
+            assert!(
+                known_posix_shell(&libtmux::TmuxText::from(shell)),
+                "{shell}"
+            );
+        }
+        for program in ["", "cat", "fish", "nu", "pwsh", "BASH"] {
+            assert!(
+                !known_posix_shell(&libtmux::TmuxText::from(program)),
+                "{program}"
+            );
+        }
+        assert!(!known_posix_shell(&libtmux::TmuxText::from_bytes([
+            b'b', 0xff
+        ])));
+    }
+
     async fn configure_dead_transition(pane: &libtmux::Pane) {
         pane.set_option("remain-on-exit", "on")
             .await
@@ -449,6 +552,7 @@ mod tests {
         tools: &TmuxTools,
         source: &str,
         foreground: &libtmux::TmuxText,
+        lease: &run_request::RunLease,
     ) -> Result<(), ErrorData> {
         if transition == "caller" {
             server
@@ -494,10 +598,11 @@ mod tests {
             }
         }
         let final_plan = tools
-            .preflight_pane_input(
+            .preflight_pane_input_for_run(
                 source,
                 PaneInputReach::Synchronized,
                 MissingSource::ObservedTransition,
+                lease,
             )
             .await?;
         if transition == "foreground" && final_plan.target.current_command() != Some(foreground) {
@@ -530,6 +635,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one watcher must span each guarded final transition"
+    )]
     async fn real_tmux_compat_final_preflight_observes_transition_before_dispatch() {
         for (transition, expected_refusal, expected_kind) in [
             ("dead", "is dead", "invalid_input"),
@@ -566,17 +675,13 @@ mod tests {
                 .current_command()
                 .cloned()
                 .expect("initial pane reports its foreground command");
-            server
-                .set_hook(
-                    "after-display-message",
-                    "set-option -g @mcp-final-display-message seen",
-                )
-                .await
-                .expect("display transport is observable");
             let executable = server
                 .resolved_tmux_executable()
                 .expect("fixture tmux resolves");
-            let socket = server.socket_path().to_path_buf();
+            let socket = initial.endpoint.clone();
+            let lease =
+                run_request::reserve(&socket, &source).expect("the fixture pane is unreserved");
+            let final_lease = lease.clone();
             let baseline_clients = client_count(server).await;
             let mut transition_pane = pane.clone();
             let final_check = async {
@@ -592,6 +697,7 @@ mod tests {
                     &tools,
                     &source,
                     &foreground,
+                    &final_lease,
                 )
                 .await
             };
@@ -603,7 +709,7 @@ mod tests {
                 Duration::from_secs(2),
                 false,
                 &cancelled,
-                (executable.as_os_str(), &socket),
+                (executable.as_os_str(), &socket, lease),
                 final_check,
             )
             .await;
@@ -618,13 +724,13 @@ mod tests {
                 expected_kind,
                 "{transition}"
             );
-            assert_eq!(
-                server
-                    .get_global_option("@mcp-final-display-message")
-                    .await
-                    .expect("display marker is read"),
-                None,
-                "{transition}: no completion-record display command ran before refusal"
+            let screen = pane.capture().await.expect("refused pane remains readable");
+            assert!(
+                screen.iter().all(|line| !line
+                    .as_bytes()
+                    .windows(b"should-not-run".len())
+                    .any(|part| part == b"should-not-run")),
+                "{transition}: no command payload reached the pane"
             );
             assert_eq!(
                 client_count(server).await,

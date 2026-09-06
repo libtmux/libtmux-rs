@@ -6,8 +6,9 @@ use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::Path;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-use libtmux::{Error, Pane};
+use libtmux::{CaptureOptions, Error, ErrorKind, Pane};
 
 use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
@@ -24,7 +25,7 @@ static PREPARED_SHUTDOWN_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct Run {
     output: libtmux::control::PaneOutput,
     scanner: Scanner,
-    pane: String,
+    pane: Pane,
 }
 
 /// One immutable delta from a run's collector.
@@ -36,6 +37,56 @@ pub(crate) struct RunProgress<'a> {
     pub(crate) body_checkpoint: &'a TextFilter,
     pub(crate) bytes: usize,
     pub(crate) truncated: bool,
+}
+
+/// A collected view and any proof still needed after its watcher closed.
+pub(crate) struct RunCollection {
+    view: RunView,
+    proof: Option<RunProof>,
+}
+
+impl RunCollection {
+    pub(crate) fn into_parts(self) -> (RunView, Option<RunProof>) {
+        (self.view, self.proof)
+    }
+
+    pub(crate) async fn finish_proof(self) {
+        if let Some(proof) = self.proof {
+            proof.wait().await;
+        }
+    }
+}
+
+/// Evidence retained after a watcher transport closes without a marker.
+pub(crate) struct RunProof {
+    pane: Pane,
+    closing: Vec<u8>,
+}
+
+impl RunProof {
+    pub(crate) async fn wait(self) {
+        loop {
+            match self
+                .pane
+                .capture_with(CaptureOptions::history().join_wrapped())
+                .await
+            {
+                Ok(lines)
+                    if lines.iter().any(|line| {
+                        completion_status(line.as_bytes(), &self.closing).is_some()
+                    }) =>
+                {
+                    return;
+                }
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::ObjectGone | ErrorKind::ServerGone) =>
+                {
+                    return;
+                }
+                Ok(_) | Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -354,7 +405,7 @@ pub(crate) async fn prepare_run(
         run: Run {
             output,
             scanner: Scanner::new(opened, closed),
-            pane: pane.id().to_string(),
+            pane: pane.clone(),
         },
     })
 }
@@ -365,23 +416,33 @@ impl Run {
     /// `publish` receives only bytes added to the retained window and how much
     /// of its preceding front to discard. A poller therefore sees progress
     /// without copying the whole window for every pane-stream chunk.
-    pub(crate) async fn collect(mut self, mut publish: impl FnMut(RunProgress<'_>)) -> RunView {
+    pub(crate) async fn collect(
+        mut self,
+        mut publish: impl FnMut(RunProgress<'_>),
+    ) -> RunCollection {
         while let Some(chunk) = self.output.next_chunk().await {
             let finished = self.scanner.push(&chunk);
             publish(self.scanner.progress());
 
             if let Some(mut view) = finished {
-                view.pane = self.pane.clone();
+                view.pane = self.pane.id().to_string();
                 let _ = self.output.shutdown().await;
-                return view;
+                return RunCollection { view, proof: None };
             }
         }
 
         let view = self
             .scanner
-            .unfinished(RunOutcome::PaneClosed, self.pane.clone());
+            .unfinished(RunOutcome::PaneClosed, self.pane.id().to_string());
+        let proof = RunProof {
+            pane: self.pane,
+            closing: self.scanner.closed,
+        };
         let _ = self.output.shutdown().await;
-        view
+        RunCollection {
+            view,
+            proof: Some(proof),
+        }
     }
 }
 

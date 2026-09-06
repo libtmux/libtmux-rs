@@ -1,9 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt as _;
+use std::path::PathBuf;
 
 use libtmux::Command;
 use rmcp::model::ErrorData;
 
 use crate::TmuxTools;
+use crate::run_request::{self, RunLease};
 
 use super::error::{bad_input, object_gone, tmux_error, vanished};
 
@@ -23,6 +27,7 @@ pub(crate) enum MissingSource {
 pub(crate) struct PaneInputPlan {
     pub(crate) target: libtmux::Pane,
     pub(crate) configured: Vec<String>,
+    pub(crate) endpoint: PathBuf,
 }
 
 const CLIENT_ATTENTION_FORMAT: &str = "#{client_control_mode}|#{pane_id}|#{window_zoomed_flag}";
@@ -33,6 +38,30 @@ fn client_attention_error(detail: &str) -> ErrorData {
         Some(serde_json::json!({
             "kind": "decode",
             "retryable": false,
+            "stale": false,
+        })),
+    )
+}
+
+fn endpoint_error(message: impl Into<String>) -> ErrorData {
+    ErrorData::internal_error(
+        message.into(),
+        Some(serde_json::json!({
+            "kind": "decode",
+            "retryable": false,
+            "stale": false,
+        })),
+    )
+}
+
+pub(crate) fn active_run_error(pane: &str) -> ErrorData {
+    ErrorData::internal_error(
+        format!(
+            "pane {pane} has an active run_shell_command; wait for its completion or pane closure before sending more input"
+        ),
+        Some(serde_json::json!({
+            "kind": "active_run",
+            "retryable": true,
             "stale": false,
         })),
     )
@@ -92,11 +121,56 @@ fn parse_attended_panes(
 }
 
 impl TmuxTools {
+    async fn pane_input_endpoint(&self) -> Result<PathBuf, ErrorData> {
+        let result = self
+            .server
+            .cmd(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("#{socket_path}"),
+            )
+            .await
+            .map_err(|error| tmux_error(&error))?;
+        if let Some(error) = result.refusal_for("display-message") {
+            return Err(tmux_error(&error));
+        }
+        let endpoint = result
+            .stdout()
+            .strip_suffix(b"\n")
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                endpoint_error("tmux returned no resolved socket path for pane input")
+            })?;
+        Ok(PathBuf::from(OsString::from_vec(endpoint.to_vec())))
+    }
+
     pub(crate) async fn preflight_pane_input(
         &self,
         pane: &str,
         reach: PaneInputReach,
         missing: MissingSource,
+    ) -> Result<PaneInputPlan, ErrorData> {
+        self.preflight_pane_input_with_run(pane, reach, missing, None)
+            .await
+    }
+
+    pub(crate) async fn preflight_pane_input_for_run(
+        &self,
+        pane: &str,
+        reach: PaneInputReach,
+        missing: MissingSource,
+        lease: &RunLease,
+    ) -> Result<PaneInputPlan, ErrorData> {
+        self.preflight_pane_input_with_run(pane, reach, missing, Some(lease))
+            .await
+    }
+
+    async fn preflight_pane_input_with_run(
+        &self,
+        pane: &str,
+        reach: PaneInputReach,
+        missing: MissingSource,
+        lease: Option<&RunLease>,
     ) -> Result<PaneInputPlan, ErrorData> {
         let panes = self
             .server
@@ -159,8 +233,12 @@ impl TmuxTools {
         }
         let attended = parse_attended_panes(client_result.stdout(), &window_panes)
             .map_err(client_attention_error)?;
+        let endpoint = self.pane_input_endpoint().await?;
 
         for (id, candidate) in &selected {
+            if run_request::is_reserved(&endpoint, id, lease) {
+                return Err(active_run_error(id));
+            }
             if attended.contains(id) {
                 return Err(bad_input(format!(
                     "pane {id} is visible to an attached terminal client; pane input is reserved for unattended panes"
@@ -186,6 +264,7 @@ impl TmuxTools {
         Ok(PaneInputPlan {
             target: source,
             configured: selected.into_keys().collect(),
+            endpoint,
         })
     }
 }

@@ -73,10 +73,17 @@ impl LoggedTmux {
     }
 
     fn send_dispatches(&self) -> usize {
+        self.command_dispatches("send-keys")
+    }
+
+    fn command_dispatches(&self, command: &str) -> usize {
         std::fs::read_to_string(&self.log)
             .expect("fixture log reads")
             .lines()
-            .filter(|line| line.split_ascii_whitespace().any(|arg| arg == "send-keys"))
+            .filter(|line| {
+                line.split_ascii_whitespace()
+                    .any(|argument| argument == command)
+            })
             .count()
     }
 }
@@ -428,6 +435,71 @@ async fn run_error(tools: &TmuxTools, pane: &str, command: &str) -> rmcp::model:
         .await
         .err()
         .unwrap_or_else(|| panic!("guarded run is refused: {command}"))
+}
+
+type RunTask = tokio::task::JoinHandle<
+    Result<rmcp::handler::server::wrapper::Json<tmux_mcp::RunView>, rmcp::model::ErrorData>,
+>;
+
+async fn waiting_run(
+    server: &Server,
+    tools: &TmuxTools,
+    pane: &str,
+    prefix: &str,
+    seconds: u64,
+    cancelled: CancellationToken,
+) -> (RunTask, String) {
+    let started = format!("{prefix}-started");
+    let release = format!("{prefix}-release");
+    let request = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.to_owned();
+        let started = started.clone();
+        let release = release.clone();
+        async move {
+            tools
+                .run_command(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "command": format!(
+                            "tmux wait-for -S {started}; tmux wait-for {release}"
+                        ),
+                        "seconds": seconds
+                    })),
+                    cancelled,
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+    await_channel(server, &started).await;
+    (request, release)
+}
+
+fn assert_active_run(error: &rmcp::model::ErrorData, operation: &str) {
+    assert_eq!(
+        error.data.as_ref().expect("typed active-run refusal")["kind"],
+        "active_run",
+        "{operation}: {error}"
+    );
+}
+
+async fn await_channel(server: &Server, channel: &str) {
+    assert_eq!(
+        server
+            .wait_for_channel(channel, Duration::from_secs(2))
+            .await
+            .expect("channel wait answers"),
+        libtmux::ChannelWait::Signalled,
+        "channel was not signalled: {channel}"
+    );
+}
+
+async fn signal_channel(server: &Server, channel: &str) {
+    server
+        .signal_channel(channel)
+        .await
+        .unwrap_or_else(|error| panic!("channel signal failed for {channel}: {error}"));
 }
 
 async fn assert_channel_quiet(server: &Server, channel: &str) {
@@ -1229,38 +1301,42 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
             .contains("retained-output")
     );
 
-    let cancelled = CancellationToken::new();
-    let request = tokio::spawn({
-        let tools = tools.clone();
-        let pane = pane.clone();
-        let cancelled = cancelled.clone();
-        async move {
-            tools
-                .run_command(
-                    args(serde_json::json!({
-                        "pane": pane,
-                        "command": "sleep 30",
-                        "seconds": 60
-                    })),
-                    cancelled,
-                    tmux_mcp::Reporter::none(),
-                )
-                .await
+    for (outcome, seconds, cancel) in [("cancelled", 60, true), ("deadline", 1, false)] {
+        let cancelled = CancellationToken::new();
+        let (request, release) = waiting_run(
+            guard.server(),
+            &tools,
+            &pane,
+            &format!("mcp-run-{outcome}"),
+            seconds,
+            cancelled.clone(),
+        )
+        .await;
+        if cancel {
+            cancelled.cancel();
         }
-    });
-    assert_eq!(
-        clients_settle(guard.server(), baseline_clients + 1).await,
-        baseline_clients + 1,
-        "the request owns one live output client while the command runs"
-    );
-    cancelled.cancel();
-    let stopped = json(request.await.expect("request joins").expect("run answers"));
-    assert_eq!(stopped["outcome"], "cancelled");
-    assert_eq!(
-        clients_settle(guard.server(), baseline_clients).await,
-        baseline_clients,
-        "cancellation must close the request-owned output client"
-    );
+        let stopped = json(request.await.expect("request joins").expect("run answers"));
+        assert_eq!(stopped["outcome"], outcome);
+        assert_eq!(
+            clients_settle(guard.server(), baseline_clients + 1).await,
+            baseline_clients + 1,
+            "{outcome} keeps the watcher until completion proof"
+        );
+        let refusal = tools
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .err()
+            .expect("the interrupted command still reserves the pane");
+        assert_active_run(&refusal, outcome);
+        signal_channel(guard.server(), &release).await;
+        assert_eq!(
+            clients_settle(guard.server(), baseline_clients).await,
+            baseline_clients,
+            "{outcome} reaps the watcher before reservation release"
+        );
+        prompt_ready(guard.server(), &pane).await;
+    }
+    assert_eq!(run_view(&tools, &pane, "true").await["exit_status"], 0);
     assert!(
         !json(tools.list_panes().await.expect("server still answers"))["panes"]
             .as_array()
@@ -1268,6 +1344,206 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
             .is_empty()
     );
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn run_requires_a_known_posix_shell_before_watcher_setup() {
+    let (guard, tools, pane) = typing_fixture("run-known-shell").await;
+    let mut target = pane_handle(guard.server(), &pane).await;
+    target
+        .respawn(Some("exec cat"), true)
+        .await
+        .expect("the pane enters an input-reading non-shell");
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        target.refresh().await.is_ok_and(|pane| {
+            pane.current_command()
+                .is_some_and(|value| value.as_bytes().ends_with(b"cat"))
+        })
+    })
+    .await
+    .expect("cat becomes the foreground program");
+    let baseline_clients = client_count(guard.server()).await;
+
+    let error = run_error(&tools, &pane, "printf should-not-run").await;
+
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error.data.expect("typed shell refusal")["kind"],
+        "invalid_input"
+    );
+    assert!(
+        error.message.contains("POSIX-compatible"),
+        "{}",
+        error.message
+    );
+    assert_eq!(client_count(guard.server()).await, baseline_clients);
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn active_run_reservation_is_process_wide_and_guards_all_input() {
+    let (guard, first, pane) = typing_fixture("run-reservation").await;
+    let second = bare_tools(guard.server());
+    let (running, release) = waiting_run(
+        guard.server(),
+        &first,
+        &pane,
+        "mcp-run-reservation",
+        10,
+        CancellationToken::new(),
+    )
+    .await;
+
+    let sent = second
+        .send_keys(args(serde_json::json!({"pane": pane, "text": ""})))
+        .await;
+    let pasted = second
+        .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+        .await;
+    let overlapping = second
+        .run_command(
+            args(serde_json::json!({"pane": pane, "command": "true", "seconds": 1})),
+            CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
+        )
+        .await;
+
+    signal_channel(guard.server(), &release).await;
+    let first_view = json(
+        running
+            .await
+            .expect("first request joins")
+            .expect("first run answers"),
+    );
+    assert_eq!(first_view["exit_status"], 0);
+
+    for (operation, result) in [
+        ("send", sent.map(|_| ())),
+        ("paste", pasted.map(|_| ())),
+        ("run", overlapping.map(|_| ())),
+    ] {
+        assert_active_run(
+            &result.expect_err("active run guards every pane-input route"),
+            operation,
+        );
+    }
+
+    prompt_ready(guard.server(), &pane).await;
+    assert_eq!(run_view(&second, &pane, "true").await["exit_status"], 0);
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn run_uses_exactly_two_complete_input_checkpoints() {
+    let logged = LoggedTmux::new();
+    let guard = TestServer::builder()
+        .tmux_executable(&logged.executable)
+        .start()
+        .await
+        .expect("logging tmux starts");
+    let tools = bare_tools(guard.server());
+    tools
+        .create_session(args(serde_json::json!({"name": "two-run-checkpoints"})))
+        .await
+        .expect("session is created");
+    let pane = panes(&tools).await[0]["id"]
+        .as_str()
+        .expect("pane id")
+        .to_owned();
+    prompt_ready(guard.server(), &pane).await;
+    logged.clear();
+
+    assert_eq!(run_view(&tools, &pane, "true").await["exit_status"], 0);
+
+    assert_eq!(
+        logged.command_dispatches("list-clients"),
+        2,
+        "the operation performs exactly two complete attention checkpoints"
+    );
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn uncertain_dispatch_keeps_the_run_reserved_until_proven() {
+    let (guard, normal, pane) = typing_fixture("run-uncertain-reservation").await;
+    let accepted = "mcp-run-uncertain-accepted";
+    let acknowledge = "mcp-run-uncertain-acknowledge";
+    let started = "mcp-run-uncertain-started";
+    let release = "mcp-run-uncertain-release";
+    guard
+        .server()
+        .set_hook(
+            "after-send-keys",
+            format!(
+                "if-shell -F '#{{==:#{{hook_flag_l}},1}}' \
+                 'wait-for -S {accepted}; wait-for {acknowledge}'"
+            ),
+        )
+        .await
+        .expect("the dispatch acknowledgement is held");
+    let executable = guard
+        .server()
+        .resolved_tmux_executable()
+        .expect("fixture tmux resolves");
+    let short = Server::builder()
+        .tmux_executable(executable)
+        .socket_path(guard.server().socket_path())
+        .default_timeout(Duration::from_millis(500))
+        .build()
+        .expect("short-timeout route builds");
+    let short_tools = bare_tools(&short);
+    let baseline_clients = client_count(guard.server()).await;
+
+    let error = short_tools
+        .run_command(
+            args(serde_json::json!({
+                "pane": pane,
+                "command": format!(
+                    "tmux wait-for -S {started}; tmux wait-for {release}"
+                ),
+                "seconds": 5
+            })),
+            CancellationToken::new(),
+            tmux_mcp::Reporter::none(),
+        )
+        .await
+        .err()
+        .expect("the accepted send times out before acknowledgement");
+    assert_eq!(
+        error.data.expect("typed uncertain dispatch")["kind"],
+        "dispatch_unknown"
+    );
+    await_channel(guard.server(), accepted).await;
+    signal_channel(guard.server(), acknowledge).await;
+    await_channel(guard.server(), started).await;
+    let refusal = normal
+        .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+        .await
+        .err()
+        .expect("uncertain delivery reserves the pane");
+    assert_active_run(&refusal, "paste after uncertain dispatch");
+
+    signal_channel(guard.server(), release).await;
+    libtmux::test::retry_until(Duration::from_secs(3), async || {
+        normal
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .is_ok()
+    })
+    .await
+    .expect("the completion proof releases the pane");
+    assert_eq!(client_count(guard.server()).await, baseline_clients);
+    guard
+        .server()
+        .unset_hook("after-send-keys")
+        .await
+        .expect("the dispatch hook is removed");
+    drop(short_tools);
+    short
+        .shutdown()
+        .await
+        .expect("short-timeout route shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -1300,7 +1576,7 @@ async fn run_refuses_initial_input_before_watcher_setup() {
         let error = run_error(&tools, &source, &format!("tmux wait-for -S {channel}")).await;
 
         assert_eq!(
-            error.data.expect("typed refusal")["kind"],
+            error.data.as_ref().expect("typed refusal")["kind"],
             expected_kind,
             "{boundary}"
         );
@@ -1321,7 +1597,7 @@ async fn run_refuses_initial_input_before_watcher_setup() {
 
 #[tokio::test]
 async fn run_rechecks_state_immediately_before_dispatch() {
-    for transition in ["cohort", "mode"] {
+    for transition in ["cohort", "mode", "shell"] {
         let name = format!("run-final-{transition}");
         let (guard, tools, source) = typing_fixture(&name).await;
         let source_handle = pane_handle(guard.server(), &source).await;
@@ -1335,6 +1611,7 @@ async fn run_rechecks_state_immediately_before_dispatch() {
                 )
             }
             "mode" => format!("copy-mode -t {source}"),
+            "shell" => format!("respawn-pane -k -t {source} 'exec cat'"),
             _ => unreachable!(),
         };
         guard
@@ -1348,10 +1625,13 @@ async fn run_rechecks_state_immediately_before_dispatch() {
         let error = run_error(&tools, &source, &format!("tmux wait-for -S {channel}")).await;
 
         assert_eq!(
-            error.data.expect("typed refusal")["kind"],
+            error.data.as_ref().expect("typed refusal")["kind"],
             "invalid_input",
             "{transition}"
         );
+        if transition == "shell" {
+            assert!(error.message.contains("POSIX-compatible"), "{error}");
+        }
         assert_eq!(
             clients_settle(guard.server(), baseline_clients).await,
             baseline_clients,
