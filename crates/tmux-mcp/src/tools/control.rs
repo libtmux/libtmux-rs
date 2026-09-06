@@ -57,6 +57,27 @@ fn input_dispatch(
     Some(commands.fold(CommandChain::new(first), CommandChain::then))
 }
 
+async fn delete_private_paste_buffer(server: &libtmux::Server, name: &str) -> Result<(), Error> {
+    if server.buffer(name).await?.is_none() {
+        return Ok(());
+    }
+    server.delete_buffer(name).await
+}
+
+fn cleanup_after_refusal(primary: ErrorData, cleanup: Result<(), Error>) -> ErrorData {
+    match cleanup {
+        Ok(()) => primary,
+        Err(cleanup) => {
+            let mut boundary = EffectBoundary::new("paste_text");
+            boundary.mark();
+            boundary.local(format!(
+                "{}; temporary paste buffer cleanup failed: {cleanup}",
+                primary.message
+            ))
+        }
+    }
+}
+
 impl TmuxTools {
     /// Refuse to destroy a window that currently contains the caller pane.
     pub(super) async fn protect_window_caller(
@@ -541,42 +562,77 @@ impl TmuxTools {
         description = "Put text into a pane through a tmux paste buffer instead of typing it \
                        key by key. Use this for anything long or awkward: send_keys types the \
                        text, so a shell reading it can react to each character, and a \
-                       bracketed-paste aware program treats a paste as one block. The buffer \
-                       is deleted afterwards. Paste targets only the named pane, even when \
+                       bracketed-paste aware program treats a paste as one block. Optional \
+                       Enter is appended to that same block. Empty text without Enter is a \
+                       guarded buffer-free no-op. Paste targets only the named pane, even when \
                        synchronized input is enabled. A dead, input-disabled, mode-owned, \
-                       terminal-attended, or inherited-caller target is refused before buffer \
-                       creation; that observation can still race with tmux.",
+                       terminal-attended, or inherited-caller target is refused before setup \
+                       and again immediately before paste. The private buffer is deleted after \
+                       setup, refusal, and paste outcomes; observations can still race with tmux.",
         title = "Paste Text Into Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],
-            "text" => [PaneInput]
+            "text" => [PaneInput],
+            "enter" => [PaneInput]
         })
     )]
     pub async fn paste_text(
         &self,
-        Parameters(PasteTextArgs { pane, text }): Parameters<PasteTextArgs>,
+        Parameters(PasteTextArgs { pane, text, enter }): Parameters<PasteTextArgs>,
     ) -> Result<Json<Pasted>, ErrorData> {
-        let target = self
+        let initial = self
             .preflight_pane_input(
                 &pane,
                 PaneInputReach::TargetOnly,
                 MissingSource::CallerInput,
             )
-            .await?
-            .target;
+            .await?;
         let bytes = text.len();
+        if text.is_empty() && !enter {
+            return Ok(Json(Pasted {
+                pane: initial.target.id().to_string(),
+                bytes,
+            }));
+        }
+        let mut payload = text;
+        if enter {
+            payload.push('\n');
+        }
         let buffer = format!(
             "tmux-mcp-{}-{}",
             std::process::id(),
             PASTE_BUFFER_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
 
-        self.server
-            .set_buffer(Some(&buffer), OsString::from(text))
+        if let Err(error) = self
+            .server
+            .set_buffer(Some(&buffer), OsString::from(payload))
             .await
-            .map_err(|e| tmux_error(&e))?;
+        {
+            let primary = tmux_error(&error);
+            return Err(cleanup_after_refusal(
+                primary,
+                delete_private_paste_buffer(&self.server, &buffer).await,
+            ));
+        }
+        let target = match self
+            .preflight_pane_input(
+                &pane,
+                PaneInputReach::TargetOnly,
+                MissingSource::PasteTransition,
+            )
+            .await
+        {
+            Ok(plan) => plan.target,
+            Err(primary) => {
+                return Err(cleanup_after_refusal(
+                    primary,
+                    delete_private_paste_buffer(&self.server, &buffer).await,
+                ));
+            }
+        };
         let pasted = target.paste_buffer(Some(&buffer)).await;
-        let deleted = self.server.delete_buffer(&buffer).await;
+        let deleted = delete_private_paste_buffer(&self.server, &buffer).await;
         paste_outcome(pasted, deleted).map_err(|error| tmux_error(&error))?;
 
         Ok(Json(Pasted {

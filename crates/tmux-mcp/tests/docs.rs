@@ -40,7 +40,7 @@ fn generated_reference() -> TestResult<String> {
         "`wait_for_text`. Pane-input tools refuse dead, input-disabled, mode-owned,\n",
         "terminal-attended, or possible caller recipients. `send_keys_batch` repeats\n",
         "that check for each executed row, while `paste_text` checks only its named\n",
-        "target before buffer creation.\n\n",
+        "target before buffer setup and again before paste.\n\n",
         "`run_shell_command` requires one configured recipient and checks its cohort,\n",
         "mode, liveness, input-off state, terminal attention, inherited-caller relation,\n",
         "and foreground command before watcher setup and before dispatch. Its resolved\n",

@@ -36,7 +36,7 @@ Keep observing with capture, snapshot, search, `capture_since`, or
 `wait_for_text`. Pane-input tools refuse dead, input-disabled, mode-owned,
 terminal-attended, or possible caller recipients. `send_keys_batch` repeats
 that check for each executed row, while `paste_text` checks only its named
-target before buffer creation.
+target before buffer setup and again before paste.
 
 `run_shell_command` requires one configured recipient and checks its cohort,
 mode, liveness, input-off state, terminal attention, inherited-caller relation,
@@ -336,7 +336,7 @@ Change tmux state; no client-supplied executable input. Move one window to a ses
 
 ## `paste_text`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Put text into a pane through a tmux paste buffer instead of typing it key by key. Use this for anything long or awkward: send_keys types the text, so a shell reading it can react to each character, and a bracketed-paste aware program treats a paste as one block. The buffer is deleted afterwards. Paste targets only the named pane, even when synchronized input is enabled. A dead, input-disabled, mode-owned, terminal-attended, or inherited-caller target is refused before buffer creation; that observation can still race with tmux.
+Send input to a pane's program; a shell that receives it runs it with your user's permissions. Put text into a pane through a tmux paste buffer instead of typing it key by key. Use this for anything long or awkward: send_keys types the text, so a shell reading it can react to each character, and a bracketed-paste aware program treats a paste as one block. Optional Enter is appended to that same block. Empty text without Enter is a guarded buffer-free no-op. Paste targets only the named pane, even when synchronized input is enabled. A dead, input-disabled, mode-owned, terminal-attended, or inherited-caller target is refused before setup and again immediately before paste. The private buffer is deleted after setup, refusal, and paste outcomes; observations can still race with tmux.
 
 - Toolset: `execute`
 - Process reach: `pane-input`

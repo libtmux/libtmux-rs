@@ -17,6 +17,7 @@ pub(crate) enum PaneInputReach {
 pub(crate) enum MissingSource {
     CallerInput,
     ObservedTransition,
+    PasteTransition,
 }
 
 pub(crate) struct PaneInputPlan {
@@ -110,6 +111,9 @@ impl TmuxTools {
                 MissingSource::CallerInput => object_gone("pane", pane),
                 MissingSource::ObservedTransition => {
                     vanished(&format!("pane {pane} disappeared between run checkpoints"))
+                }
+                MissingSource::PasteTransition => {
+                    vanished(&format!("pane {pane} disappeared before paste dispatch"))
                 }
             })?;
 

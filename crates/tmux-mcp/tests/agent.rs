@@ -1000,6 +1000,113 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
 }
 
 #[tokio::test]
+async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
+    let (guard, tools, pane) = typing_fixture("paste-recheck").await;
+    let buffers = guard.server().buffer_names().await.expect("buffers list");
+    guard
+        .server()
+        .set_hook("after-set-buffer", format!("copy-mode -t {pane}"))
+        .await
+        .expect("late transition hook is installed");
+
+    let empty = json(
+        tools
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .expect("empty guarded paste is a no-op"),
+    );
+    assert_eq!(empty["bytes"], 0);
+    assert_eq!(
+        guard.server().buffer_names().await.expect("buffers list"),
+        buffers
+    );
+    assert!(
+        !pane_handle(guard.server(), &pane).await.is_in_mode(),
+        "an empty paste never creates a buffer or fires its setup hook"
+    );
+
+    let screen = pane_screen(&tools, &pane).await;
+    let error = tools
+        .paste_text(args(serde_json::json!({"pane": pane, "text": "late"})))
+        .await
+        .err()
+        .expect("a transition after setup refuses the paste");
+    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert!(pane_handle(guard.server(), &pane).await.is_in_mode());
+    assert_eq!(
+        guard.server().buffer_names().await.expect("buffers list"),
+        buffers
+    );
+    assert_eq!(pane_screen(&tools, &pane).await, screen);
+
+    let pane_handle = pane_handle(guard.server(), &pane).await;
+    pane_handle
+        .exit_mode()
+        .await
+        .expect("fixture leaves copy mode");
+    guard
+        .server()
+        .unset_hook("after-set-buffer")
+        .await
+        .expect("transition hook is removed");
+    set_pane_input(guard.server(), &pane, false).await;
+    let error = tools
+        .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+        .await
+        .err()
+        .expect("even an empty paste performs its target guard");
+    assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
+    assert_eq!(
+        guard.server().buffer_names().await.expect("buffers list"),
+        buffers
+    );
+    set_pane_input(guard.server(), &pane, true).await;
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn paste_text_appends_enter_in_the_same_target_only_buffer() {
+    let (guard, tools, source, peer) = synchronized_fixture("paste-enter").await;
+    let buffers = guard.server().buffer_names().await.expect("buffers list");
+    let peer_screen = pane_screen(&tools, &peer).await;
+    let channel = "mcp-paste-enter";
+    let command = format!("printf paste-enter-marker; tmux wait-for -S {channel}");
+
+    let pasted = json(
+        tools
+            .paste_text(args(serde_json::json!({
+                "pane": source,
+                "text": command,
+                "enter": true
+            })))
+            .await
+            .expect("the pasted line is submitted"),
+    );
+    assert_eq!(pasted["bytes"], command.len());
+    assert_eq!(
+        guard
+            .server()
+            .wait_for_channel(channel, Duration::from_secs(2))
+            .await
+            .expect("pasted command signal is observed"),
+        libtmux::ChannelWait::Signalled
+    );
+    assert!(
+        pane_screen(&tools, &source)
+            .await
+            .contains("paste-enter-marker")
+    );
+    assert_eq!(pane_screen(&tools, &peer).await, peer_screen);
+    assert_eq!(
+        guard.server().buffer_names().await.expect("buffers list"),
+        buffers
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn send_keys_batch_preflights_each_executed_row() {
     let (guard, tools, source, peer) = synchronized_fixture("batch-preflight").await;
     let target = guard

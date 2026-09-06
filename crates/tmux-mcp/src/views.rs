@@ -354,6 +354,6 @@ pub struct PaneChanged {
 pub struct Pasted {
     /// The pane it went into.
     pub pane: String,
-    /// How many bytes were delivered.
+    /// How many bytes came from `text`, excluding optional Enter.
     pub bytes: usize,
 }

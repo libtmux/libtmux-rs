@@ -113,6 +113,9 @@ pub struct PasteTextArgs {
     pub pane: String,
     /// The text to deliver.
     pub text: String,
+    /// Whether to append Enter to the same paste block.
+    #[serde(default)]
+    pub enter: bool,
 }
 
 /// Arguments for waiting until a pane says something.
