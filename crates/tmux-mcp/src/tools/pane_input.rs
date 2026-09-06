@@ -1,6 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -404,27 +402,19 @@ fn configured_signature(
 }
 
 impl TmuxTools {
-    async fn pane_input_endpoint(&self) -> Result<PathBuf, ErrorData> {
-        let result = self
-            .server
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("#{socket_path}"),
-            )
-            .await
-            .map_err(|error| tmux_error(&error))?;
-        if let Some(error) = result.refusal_for("display-message") {
-            return Err(tmux_error(&error));
-        }
-        let endpoint = result
-            .stdout()
-            .strip_suffix(b"\n")
-            .filter(|path| !path.is_empty())
-            .ok_or_else(|| {
-                endpoint_error("tmux returned no resolved socket path for pane input")
-            })?;
-        let endpoint = PathBuf::from(OsString::from_vec(endpoint.to_vec()));
+    /// The socket path this process connects through.
+    ///
+    /// Taken from this crate's own configuration rather than from
+    /// `#{socket_path}`. tmux escapes a non-printable byte in the socket path
+    /// as an octal sequence when it stores it, and releases disagree about
+    /// whether they do so: 3.4 reports `sock-\376` where 3.7 reports the raw
+    /// byte. No format specifier recovers the original, so tmux's answer names
+    /// a file that does not exist and silently launders a terminal-control
+    /// byte into four safe ASCII characters. The configured path is
+    /// byte-exact, and it is the path every command here already travels
+    /// over, so it is what the caller comparison must rest on.
+    fn pane_input_endpoint(&self) -> Result<PathBuf, ErrorData> {
+        let endpoint = self.server.socket_path().to_path_buf();
         if !crate::exec::route_path_is_terminal_safe(endpoint.as_os_str()) {
             return Err(endpoint_error(
                 "the selected tmux socket contains an ASCII terminal-control byte",
@@ -515,7 +505,7 @@ impl TmuxTools {
             &source.state.window_id,
         )
         .map_err(client_attention_error)?;
-        let endpoint = self.pane_input_endpoint().await?;
+        let endpoint = self.pane_input_endpoint()?;
         self.server
             .require_generation(generation)
             .await
