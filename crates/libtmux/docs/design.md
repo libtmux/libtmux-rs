@@ -1846,26 +1846,38 @@ so a needle spanning the wrap never matches. A dead pane ends the wait rather
 than holding it to the deadline, and running out of time is
 `PaneWait::TimedOut` rather than an error.
 
-Both numbers that would justify a doorbell have now been taken, and neither
-argues for one.
+Both numbers that would justify a doorbell have now been taken, and they say
+something narrower than the argument they replaced. `benches/waits.rs` takes
+them against the same pane, on both paths:
+
+```console
+$ cargo bench --features test-support,control-mode --bench waits
+```
 
 Latency is a capture round-trip rather than a fraction of the poll interval,
-because the loop looks before it sleeps: twelve waits for a marker printed into
-a pane answered in 12ms at the fastest, 22ms median, 31ms at the slowest,
-measured from dispatching the key that produces the text. A doorbell removes
-the round trip, not an interval, so it is worth tens of milliseconds rather
-than the hundreds the interval suggests.
+because the loop looks before it sleeps. A marker printed into a pane answers
+in 5.7ms polled and 3.0ms streamed, measured from dispatching the key that
+produces the text. A doorbell removes the round trip rather than an interval,
+and the round trip is those two milliseconds: real, and not what a caller
+notices.
 
-A flood is where the two paths diverge, and not in the doorbell's favour.
-`seq 1 200000` into a pane, waiting for the last line: 460ms, found, nothing
-lost. Polling costs one capture per interval whatever the pane is doing, so a
-flood does not reach it. A doorbell rings per notification, which is where the
-Swift port's coalescing comes from -- machinery this path does not need
-because it does not have the problem.
+A flood is where the interval shows. `seq 1 20000` into a pane, waiting for a
+marker printed after its last line: 132ms polled against 21ms streamed.
+Polling costs one capture per `POLL_INTERVAL` whatever the pane is doing, so a
+flood never reaches it -- but that interval is 120ms, and anything finishing
+inside one is rounded up to it.
 
-So the doorbell stays unbuilt, and this is the reason rather than the absence
-of one. It buys tens of milliseconds and brings a failure mode the floor does
-not have.
+Ten times the flood closes the gap rather than widening it. At 200,000 lines
+polling holds [151, 184]ms and the stream [118, 260]ms: medians within 4% of
+each other, the stream reaching it with twice the spread, because it rings
+per notification where polling looks once per interval however much arrived in
+between. That spread is where the Swift port's coalescing comes from, and a
+capture poll cannot have the problem it solves.
+
+So the doorbell stays unbuilt, and what settles it is the feature argument
+below rather than the clock. The clock now says it would be worth having --
+two milliseconds on a marker, six times on a moderate flood, nothing once the
+flood is large enough -- and a default build still cannot reach it.
 
 What follows is why, and it is kept because the constraints it records are the
 ones the implementation had to meet.
@@ -1927,5 +1939,6 @@ surface a caller who only dispatches commands never needs", and a caller who
 dispatches a command does need to know when it finished: `send_keys` without
 that is half of one. Waiting therefore fails the test for being opt-in, which
 makes the polling path the floor and the doorbell an optimisation above it
-rather than an alternative to it. What remains to measure is what the doorbell
-saves, and what a flood does to a wait that rings on every byte.
+rather than an alternative to it. What the doorbell saves, and what a flood
+does to a wait that rings on every byte, are the numbers at the top of this
+section.

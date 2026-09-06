@@ -18,7 +18,6 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -26,7 +25,6 @@ use criterion::{BenchmarkId, Criterion, criterion_main};
 use libtmux::control::PaneOutput;
 use libtmux::test::TestServer;
 use libtmux::{Pane, PaneWait};
-use tokio::sync::Mutex;
 
 /// How long a wait is given before it is called a failure rather than a
 /// measurement. Generous: a sample that times out is a broken bench, not a
@@ -49,7 +47,9 @@ fn dispatch() -> (String, String) {
 
 /// Whether `haystack` holds `needle`, which `[u8]` does not answer itself.
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 /// One tmux server holding one shell pane to dispatch into.
@@ -114,10 +114,7 @@ async fn streamed(pane: &Pane, output: &mut PaneOutput) -> Duration {
 /// before the shell has printed anything at all.
 fn flood(lines: u64) -> (String, String) {
     let (_, needle) = dispatch();
-    (
-        format!("seq 1 {lines}; printf '%s\\n' {needle}"),
-        needle,
-    )
+    (format!("seq 1 {lines}; printf '%s\\n' {needle}"), needle)
 }
 
 /// Print `lines` lines and poll until the marker after the last of them.
@@ -132,7 +129,11 @@ async fn flooded(pane: &Pane, lines: u64) -> Duration {
         .expect("waiting is not an error");
     let waited = started.elapsed();
 
-    assert_eq!(outcome, PaneWait::Arrived, "the flood ended with its marker");
+    assert_eq!(
+        outcome,
+        PaneWait::Arrived,
+        "the flood ended with its marker"
+    );
     waited
 }
 
@@ -180,36 +181,36 @@ fn waits(criterion: &mut Criterion) {
         .measurement_time(Duration::from_secs(20));
 
     group.bench_function("polled", |bench| {
-        bench.to_async(&runtime).iter_custom(|iterations| async move {
-            let mut total = Duration::ZERO;
-            for _ in 0..iterations {
-                total += polled(pane).await;
-            }
-            total
-        });
+        bench
+            .to_async(&runtime)
+            .iter_custom(|iterations| async move {
+                let mut total = Duration::ZERO;
+                for _ in 0..iterations {
+                    total += polled(pane).await;
+                }
+                total
+            });
     });
 
-    // Opened after the polled lane and closed before the next one, because an
-    // open subscription nobody is reading holds tmux back: the actor stops
-    // reading the connection once its queue fills, and the pane it watches
-    // stops producing. Left open across a flood, that turns the polled lane
-    // into a timeout rather than a measurement.
-    let output = open_stream(&runtime, pane);
+    // Subscribed inside the batch and closed at the end of it, never held
+    // across another lane: a subscription nobody is reading holds tmux back,
+    // because the actor stops reading the connection once its queue fills and
+    // the pane it watches stops producing. Left open across the polled lanes
+    // that turns them into timeouts rather than measurements. Attaching is
+    // outside the accumulated span, so it costs wall-clock, not the number.
     group.bench_function("streamed", |bench| {
-        let output = Arc::clone(&output);
-        bench.to_async(&runtime).iter_custom(move |iterations| {
-            let output = Arc::clone(&output);
-            async move {
-                let mut output = output.lock().await;
+        bench
+            .to_async(&runtime)
+            .iter_custom(|iterations| async move {
+                let mut output = subscribe(pane).await;
                 let mut total = Duration::ZERO;
                 for _ in 0..iterations {
                     total += streamed(pane, &mut output).await;
                 }
+                unsubscribe(output).await;
                 total
-            }
-        });
+            });
     });
-    close_stream(&runtime, output);
 
     group.finish();
 
@@ -234,27 +235,24 @@ fn waits(criterion: &mut Criterion) {
                 });
         });
 
-        let output = open_stream(&runtime, pane);
         group.bench_with_input(
             BenchmarkId::new("streamed", lines),
             &lines,
             |bench, lines| {
                 let lines = *lines;
-                let output = Arc::clone(&output);
-                bench.to_async(&runtime).iter_custom(move |iterations| {
-                    let output = Arc::clone(&output);
-                    async move {
-                        let mut output = output.lock().await;
+                bench
+                    .to_async(&runtime)
+                    .iter_custom(move |iterations| async move {
+                        let mut output = subscribe(pane).await;
                         let mut total = Duration::ZERO;
                         for _ in 0..iterations {
                             total += flooded_stream(pane, &mut output, lines).await;
                         }
+                        unsubscribe(output).await;
                         total
-                    }
-                });
+                    });
             },
         );
-        close_stream(&runtime, output);
     }
 
     group.finish();
@@ -264,26 +262,17 @@ fn waits(criterion: &mut Criterion) {
         .expect("tmux fixture shuts down");
 }
 
-/// Subscribe to the pane, shared because criterion hands the closure back for
-/// every batch it times.
-fn open_stream(runtime: &tokio::runtime::Runtime, pane: &Pane) -> Arc<Mutex<PaneOutput>> {
-    runtime.block_on(async {
-        Arc::new(Mutex::new(
-            pane.stream_output().await.expect("a control connection"),
-        ))
-    })
+/// Open a doorbell on the pane for the batch about to be timed.
+async fn subscribe(pane: &Pane) -> PaneOutput {
+    pane.stream_output().await.expect("a control connection")
 }
 
-/// Close the subscription, so the next lane is measured without one open.
-fn close_stream(runtime: &tokio::runtime::Runtime, output: Arc<Mutex<PaneOutput>>) {
-    runtime.block_on(async {
-        Arc::try_unwrap(output)
-            .expect("the stream is no longer shared")
-            .into_inner()
-            .shutdown()
-            .await
-            .expect("the control connection closes");
-    });
+/// Close it, so no lane runs beside a subscription nobody is draining.
+async fn unsubscribe(output: PaneOutput) {
+    output
+        .shutdown()
+        .await
+        .expect("the control connection closes");
 }
 
 /// Register the group. Generated by the macro, so it is documented here.

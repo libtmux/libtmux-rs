@@ -22,6 +22,13 @@ impl Pane {
     /// them in whatever sized chunks it has, so a caller wanting lines has to
     /// buffer.
     ///
+    /// Keep reading, or the pane stops. Events are handed over with
+    /// backpressure rather than dropped, so a stream left unread stops the
+    /// connection reading from tmux, and tmux stops the pane that is filling
+    /// it. A caller who wants to stop watching calls
+    /// [`PaneOutput::shutdown`](crate::control::PaneOutput::shutdown) rather
+    /// than leaving the handle idle.
+    ///
     /// tmux discards what a pane has buffered when the pane exits, so a
     /// command that writes and returns immediately may be reported as nothing
     /// at all.

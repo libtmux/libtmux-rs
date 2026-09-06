@@ -351,6 +351,11 @@ serve-docs port='8971': docs-full
 bench *args:
     cargo bench --features test-support --bench hierarchy -- {{ args }}
 
+# Run the pane-wait benchmark against real tmux, both wait paths
+[group: 'bench']
+bench-waits *args:
+    cargo bench --features test-support,control-mode --bench waits -- {{ args }}
+
 # Build the crates that get published, and verify what they contain
 #
 # --allow-dirty so this stays runnable mid-change; `cargo publish` does its
