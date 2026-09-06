@@ -94,7 +94,9 @@ This script is best-effort and intentionally narrow:
   many directories. Every other CLI here has no per-project layer in
   the config file this script writes; the flag is silently coerced to
   ``user`` for them. Both Claude scopes can coexist with
-  independent backups; full ``revert`` unwinds in LIFO order.
+  independent backups. Since both use the same physical config, revert
+  one scope at a time in reverse swap order; selecting both fails before
+  any file changes.
 - **Simple binary detection.** Probing is ``shutil.which(<binary>)``
   plus ``<config_path>.exists()``. Custom install locations
   (Homebrew, npm prefixes, ``~/.npm-global/bin``,
