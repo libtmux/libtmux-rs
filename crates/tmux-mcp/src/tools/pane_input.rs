@@ -559,6 +559,37 @@ mod tests {
     };
     use crate::{CallerIdentity, TmuxTools};
 
+    /// The endpoint must come from configuration, not from tmux.
+    ///
+    /// Asking tmux is wrong for a reason only tmux 3.4 makes visible -- it
+    /// escapes a non-printable byte in the socket path -- so the compat lane
+    /// is otherwise the only gate that catches a regression, and it runs for
+    /// ninety minutes in CI. This bites on every version instead: no daemon
+    /// is running, so an answer that required one could not arrive at all.
+    #[test]
+    fn the_pane_input_endpoint_never_asks_tmux_for_it() {
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+        let socket = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+            b"/tmp/libtmux-rs-test/no-daemon-\xfe".to_vec(),
+        ));
+        let server = libtmux::Server::builder()
+            .socket_path(&socket)
+            .build()
+            .expect("a route builds without a daemon");
+        let tools = TmuxTools::builder(server).caller(None).build();
+
+        let endpoint = tools
+            .pane_input_endpoint()
+            .expect("a byte-exact path needs no server");
+
+        assert_eq!(
+            endpoint.as_os_str().as_bytes(),
+            socket.as_os_str().as_bytes(),
+            "the endpoint is the configured path, byte for byte"
+        );
+    }
+
     async fn caller_identity(
         server: &libtmux::Server,
         session: &str,
