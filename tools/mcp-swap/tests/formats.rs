@@ -8,6 +8,7 @@ use std::path::Path;
 use mcp_swap::config::{
     Action, ClientConfig, Scope, ServerSpec, delete_server, read_server, set_server,
 };
+use mcp_swap::jsonc;
 
 #[test]
 fn jsonc_rewrites_only_changed_members() {
@@ -60,6 +61,28 @@ fn jsonc_rewrites_only_changed_members() {
         .expect("rendered JSONC")
         .expect("tmux entry"),
         spec
+    );
+}
+
+#[test]
+fn jsonc_trailing_comma_scan_preserves_string_contents() {
+    let original = r#"{
+  // keep this comment and layout
+  "plain": "x, }",
+  "escaped": "say \"x, ]\"",
+  "items": ["keep",],
+}
+"#;
+    let expected = serde_json::json!({
+        "plain": "x, }",
+        "escaped": "say \"x, ]\"",
+        "items": ["keep"],
+    });
+
+    assert_eq!(jsonc::parse(original).expect("valid JSONC"), expected);
+    assert_eq!(
+        jsonc::merge(original, &expected).expect("unchanged JSONC"),
+        original
     );
 }
 

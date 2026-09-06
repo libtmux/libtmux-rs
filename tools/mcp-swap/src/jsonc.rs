@@ -118,8 +118,25 @@ pub fn blank_comments(text: &str) -> String {
 
 fn blank_trailing_commas(text: &str) -> String {
     let mut bytes = text.as_bytes().to_vec();
+    let mut in_string = false;
+    let mut escaped = false;
     for index in 0..bytes.len() {
-        if bytes[index] != b',' {
+        let byte = bytes[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            continue;
+        }
+        if byte != b',' {
             continue;
         }
         let next = skip_space(&bytes, index + 1);
