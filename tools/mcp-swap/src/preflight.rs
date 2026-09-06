@@ -57,8 +57,7 @@ pub fn preflight(spec: &ServerSpec, timeout: Duration) -> Result<(), FsError> {
         .stderr(Stdio::piped())
         .process_group(0);
     containment.configure(&mut command);
-    let mut child = command
-        .spawn()
+    let mut child = spawn_once_writable(&mut command)
         .map_err(|error| FsError::new(format!("could not launch {}: {error}", spec.command)))?;
     let Ok(raw_pid) = i32::try_from(child.id()) else {
         let _ = child.kill();
@@ -123,6 +122,33 @@ pub fn preflight(spec: &ServerSpec, timeout: Duration) -> Result<(), FsError> {
     let cleanup = stop_process_tree(&mut child, pid, &containment, deadline);
     let readers = finish_readers([stdout_reader, stderr_reader], deadline);
     with_cleanup(with_cleanup(result, cleanup), readers)
+}
+
+/// Spawn, retrying briefly while the executable is still open for writing.
+///
+/// `ETXTBSY` is a race, not a verdict: a binary staged moments ago is
+/// refused while any process still holds it writable. A concurrent fork is
+/// enough, because a descriptor stays writable in the child between `fork`
+/// and the `exec` that would close it. Waiting is what resolves it, so a
+/// bounded wait belongs here rather than in every caller.
+fn spawn_once_writable(command: &mut Command) -> std::io::Result<Child> {
+    const BUSY_ATTEMPTS: u32 = 50;
+    const BUSY_DELAY: Duration = Duration::from_millis(20);
+
+    for _ in 1..BUSY_ATTEMPTS {
+        match command.spawn() {
+            Err(error) if error.raw_os_error() == Some(libc_etxtbsy()) => {
+                thread::sleep(BUSY_DELAY);
+            }
+            result => return result,
+        }
+    }
+    command.spawn()
+}
+
+/// `ETXTBSY`, without taking a dependency for one integer.
+const fn libc_etxtbsy() -> i32 {
+    26
 }
 
 fn clean_after_error(

@@ -229,6 +229,36 @@ fn assert_process_stopped(pid_path: &Path) {
     panic!("preflight descendant remains alive");
 }
 
+#[test]
+fn a_writable_executable_is_waited_for_rather_than_refused() {
+    let root = tempdir().expect("temporary root");
+    let script = executable(
+        root.path(),
+        "busy",
+        "#!/bin/sh\nread request\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}'\n",
+    );
+    // Any writable descriptor makes execve report ETXTBSY, including one held
+    // here. Releasing it after a moment is what a concurrent fork does when it
+    // finally reaches its own exec.
+    let writable = fs::OpenOptions::new()
+        .write(true)
+        .open(&script)
+        .expect("hold the script open for writing");
+    let released = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        drop(writable);
+    });
+
+    let spec = ServerSpec {
+        command: script.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        env: BTreeMap::new(),
+    };
+    preflight(&spec, Duration::from_secs(5)).expect("a briefly busy executable still launches");
+
+    released.join().expect("release thread");
+}
+
 fn executable(root: &Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = root.join(name);
     fs::write(&path, body).expect("script");
