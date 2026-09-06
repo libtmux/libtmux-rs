@@ -1077,14 +1077,22 @@ and one per window, which is the shape a caller reaches for first.
 
 `tests/command_budget.rs` asserts the counts by observing what the crate
 actually ran, so a change that reintroduces per-object commands fails rather
-than merely getting slower. `benches/hierarchy.rs` reports the time, measured
-on one developer machine against tmux 3.7b:
+than merely getting slower. `benches/hierarchy.rs` reports the time:
+
+```console
+$ cargo bench --features test-support --bench hierarchy
+```
+
+Medians from one developer machine against tmux 3.7d. The ratio is the durable
+column; the two before it move with the machine, and did -- an earlier run of
+the same bench on tmux 3.7b read 6.7, 15.0 and 26.6ms gathered against 22.3,
+78.1 and 282ms walked, twice these and the same shape:
 
 | server | `hierarchy()` | walking down | ratio |
 | --- | --- | --- | --- |
-| 1 session, 1 window, 2 panes | 6.7 ms | 22.3 ms | 3.3x |
-| 2 sessions, 8 windows, 16 panes | 15.0 ms | 78.1 ms | 5.2x |
-| 4 sessions, 32 windows, 64 panes | 26.6 ms | 282 ms | 10.6x |
+| 1 session, 1 window, 2 panes | 3.5 ms | 10.7 ms | 3.0x |
+| 2 sessions, 8 windows, 16 panes | 7.3 ms | 41.7 ms | 5.7x |
+| 4 sessions, 32 windows, 64 panes | 13.0 ms | 139 ms | 10.7x |
 
 The gathered column is not flat, and saying it is would be wrong: the command
 count is constant, but tmux still has to produce and the crate still has to
