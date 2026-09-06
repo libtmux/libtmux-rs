@@ -183,6 +183,83 @@ async fn renaming_updates_the_handle_that_performed_it() {
 }
 
 #[tokio::test]
+async fn flag_shaped_names_layouts_and_keys_stay_literal() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let mut session = server
+        .new_session(NewSessionOptions::new("ordinary").command("cat"))
+        .await
+        .expect("session is created");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("active window resolves")
+        .expect("a session always has an active window");
+    let pane = window
+        .active_pane()
+        .await
+        .expect("active pane resolves")
+        .expect("a window always has an active pane");
+
+    session
+        .rename("-literal-session")
+        .await
+        .expect("a flag-shaped session name stays literal");
+    window
+        .rename("-literal-window")
+        .await
+        .expect("a flag-shaped window name stays literal");
+    assert_eq!(session.name().as_bytes(), b"-literal-session");
+    assert_eq!(window.name().as_bytes(), b"-literal-window");
+
+    window
+        .select_layout(Layout::Tiled)
+        .await
+        .expect("an ordinary layout still applies");
+    let error = window
+        .select_layout("-literal-layout")
+        .await
+        .expect_err("a flag-shaped invalid layout is refused as a layout");
+    assert!(
+        !error.to_string().contains("unknown flag"),
+        "the layout reached tmux as an operand: {error}"
+    );
+
+    pane.send_keys("-literal-text")
+        .await
+        .expect("flag-shaped text stays literal");
+    pane.send_key_names(["Enter"])
+        .await
+        .expect("Enter follows literal text");
+    pane.send_key_names(["-literal-key", "Enter"])
+        .await
+        .expect("flag-shaped key names stay operands");
+    pane.send_line("-literal-line")
+        .await
+        .expect("a flag-shaped line stays literal");
+
+    libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
+        pane.capture().await.is_ok_and(|lines| {
+            let screen = lines
+                .iter()
+                .flat_map(|line| line.as_bytes().iter().copied())
+                .collect::<Vec<_>>();
+            [
+                &b"-literal-text"[..],
+                &b"-literal-key"[..],
+                &b"-literal-line"[..],
+            ]
+            .iter()
+            .all(|needle| screen.windows(needle.len()).any(|part| part == *needle))
+        })
+    })
+    .await
+    .expect("all literal input reaches the pane");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn killing_removes_the_object_and_strands_other_handles() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();

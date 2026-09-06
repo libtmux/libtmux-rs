@@ -779,6 +779,7 @@ impl Server {
         if let Some(name) = name {
             command = command.arg("-b").arg(OsString::from(name));
         }
+        command = command.arg("--");
 
         listing::mutate(&self.core, "set-buffer", command.sensitive_arg(data.into())).await
     }

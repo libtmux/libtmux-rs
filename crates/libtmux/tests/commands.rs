@@ -47,6 +47,43 @@ async fn buffers_hold_exact_bytes_and_report_absence() {
 }
 
 #[tokio::test]
+async fn flag_shaped_buffer_data_and_channels_stay_literal() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    server
+        .set_buffer(Some("-literal-buffer"), "-literal-payload")
+        .await
+        .expect("flag-shaped buffer data stays literal");
+    assert_eq!(
+        server.buffer("-literal-buffer").await.expect("read"),
+        Some(b"-literal-payload".to_vec()),
+    );
+
+    server
+        .lock_channel("-literal-lock")
+        .await
+        .expect("a flag-shaped channel locks");
+    server
+        .unlock_channel("-literal-lock")
+        .await
+        .expect("a flag-shaped channel unlocks");
+    server
+        .signal_channel("-literal-signal")
+        .await
+        .expect("a flag-shaped channel signals");
+    assert_eq!(
+        server
+            .wait_for_channel("-literal-signal", Duration::from_secs(5))
+            .await
+            .expect("a flag-shaped channel waits"),
+        ChannelWait::Signalled,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn key_bindings_can_be_added_and_removed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();

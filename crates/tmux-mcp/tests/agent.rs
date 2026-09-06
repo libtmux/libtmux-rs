@@ -1492,6 +1492,137 @@ async fn selection_paste_and_channel_handlers_change_tmux() {
 }
 
 #[tokio::test]
+async fn mcp_flag_shaped_metadata_operands_stay_literal() {
+    let (guard, tools) = fixture("literal-operands").await;
+    let session = guard
+        .server()
+        .sessions()
+        .await
+        .expect("sessions list")
+        .remove(0);
+    let window = session
+        .active_window()
+        .await
+        .expect("active window resolves")
+        .expect("a window exists");
+
+    let renamed_session = call_tool(
+        tools.clone(),
+        "rename_session",
+        serde_json::json!({
+            "session": "literal-operands",
+            "name": "-mcp-session"
+        }),
+    )
+    .await
+    .structured_content
+    .expect("flag-shaped session name stays literal");
+    assert_eq!(renamed_session["name"], "-mcp-session");
+
+    let renamed_window = call_tool(
+        tools.clone(),
+        "rename_window",
+        serde_json::json!({
+            "window": window.id().to_string(),
+            "name": "-mcp-window"
+        }),
+    )
+    .await
+    .structured_content
+    .expect("flag-shaped window name stays literal");
+    assert_eq!(renamed_window["name"], "-mcp-window");
+
+    let Err(layout_error) = tools
+        .select_layout(args(serde_json::json!({
+            "window": window.id().to_string(),
+            "layout": "-E"
+        })))
+        .await
+    else {
+        panic!("a flag-shaped invalid layout was executed as an option");
+    };
+    assert!(
+        !layout_error.message.contains("unknown flag"),
+        "the layout reached tmux as an operand: {layout_error:?}"
+    );
+
+    tools
+        .signal_channel(args(serde_json::json!({"channel": "-mcp-channel"})))
+        .await
+        .expect("flag-shaped MCP channel signals");
+    let waited = json(
+        tools
+            .wait_for_channel(args(serde_json::json!({
+                "channel": "-mcp-channel",
+                "seconds": 5
+            })))
+            .await
+            .expect("flag-shaped MCP channel waits"),
+    );
+    assert_eq!(waited["outcome"], "signalled");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn mcp_flag_shaped_input_operands_stay_literal() {
+    let (guard, tools, pane) = typing_fixture("literal-input").await;
+
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "-mcp-text",
+            "enter": true
+        })))
+        .await
+        .expect("flag-shaped MCP text stays literal");
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "keys": ["-mcp-key"],
+            "enter": true
+        })))
+        .await
+        .expect("flag-shaped MCP key names stay operands");
+    tools
+        .paste_text(args(serde_json::json!({
+            "pane": pane,
+            "text": "-mcp-paste\n"
+        })))
+        .await
+        .expect("flag-shaped MCP paste text stays literal");
+
+    let batch = call_tool(
+        tools.clone(),
+        "send_keys_batch",
+        serde_json::json!({
+            "operations": [{
+                "pane": pane,
+                "text": "-mcp-batch",
+                "enter": true
+            }]
+        }),
+    )
+    .await;
+    let batch = batch
+        .structured_content
+        .expect("batch has structured content");
+    assert_eq!(batch["succeeded"], 1, "{batch}");
+    assert_eq!(batch["failed"], 0, "{batch}");
+
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        let screen = pane_screen(&tools, &pane).await;
+        ["-mcp-text", "-mcp-key", "-mcp-paste", "-mcp-batch"]
+            .iter()
+            .all(|needle| screen.contains(needle))
+    })
+    .await
+    .expect("all MCP literal input reaches the pane");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn window_selection_uses_core_fixture_setup() {
     let (guard, tools) = fixture("windows").await;
     let session = guard

@@ -381,6 +381,7 @@ impl Window {
             Command::new("rename-window")
                 .arg("-t")
                 .arg(self.id().to_string())
+                .arg("--")
                 .arg(name.into()),
         )
         .await?;
@@ -475,6 +476,7 @@ impl Window {
             Command::new("select-layout")
                 .arg("-t")
                 .arg(self.id().to_string())
+                .arg("--")
                 .arg(argument),
         )
         .await?;

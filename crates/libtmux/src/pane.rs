@@ -67,6 +67,7 @@ fn send_line_command(target: &PaneId, mut text: OsString) -> Command {
         .arg("-t")
         .arg(target.to_string())
         .arg("-l")
+        .arg("--")
         .sensitive_arg(text)
 }
 
@@ -573,6 +574,7 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("-l")
+                .arg("--")
                 .sensitive_arg(keys.into()),
         )
         .await
@@ -608,7 +610,8 @@ impl Pane {
     {
         let mut command = Command::new("send-keys")
             .arg("-t")
-            .arg(self.id().to_string());
+            .arg(self.id().to_string())
+            .arg("--");
         for key in keys {
             command = command.arg(key.into());
         }

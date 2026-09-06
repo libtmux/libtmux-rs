@@ -29,6 +29,7 @@ impl Server {
             "wait-for",
             Command::new("wait-for")
                 .arg("-S")
+                .arg("--")
                 .arg(OsString::from(channel)),
         )
         .await
@@ -45,6 +46,7 @@ impl Server {
             "wait-for",
             Command::new("wait-for")
                 .arg("-L")
+                .arg("--")
                 .arg(OsString::from(channel)),
         )
         .await
@@ -61,6 +63,7 @@ impl Server {
             "wait-for",
             Command::new("wait-for")
                 .arg("-U")
+                .arg("--")
                 .arg(OsString::from(channel)),
         )
         .await
@@ -135,7 +138,9 @@ impl Server {
             listing::mutate(
                 &self.core,
                 "wait-for",
-                Command::new("wait-for").arg(OsString::from(channel)),
+                Command::new("wait-for")
+                    .arg("--")
+                    .arg(OsString::from(channel)),
             ),
         )
         .await;
