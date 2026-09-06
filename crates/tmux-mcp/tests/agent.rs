@@ -2057,6 +2057,16 @@ async fn run_reports_phase_aware_source_disappearance() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// The raw bytes here cannot be a filename on macOS.
+///
+/// APFS and HFS+ reject a name that is not valid UTF-8, so the fixture fails
+/// with `EILSEQ` before the transport is reached. A control byte would be
+/// portable but would change the assertion: those are exactly what
+/// `pane_input_rejects_terminal_control_in_the_socket_route` requires the
+/// route to refuse, and this test requires it to succeed. So the case needs
+/// a byte that is neither ASCII-control nor valid UTF-8, which is the one
+/// macOS will not store.
+#[cfg(not(target_os = "macos"))]
 #[tokio::test]
 async fn run_transport_preserves_raw_executable_and_socket_paths() {
     let mut files = RawServerFiles::create(b"tmux-\'\xff", b"socket-\'\xfe");

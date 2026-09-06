@@ -555,9 +555,30 @@ mod tests {
     }
 
     #[test]
-    fn resolver_preserves_apostrophe_newline_and_non_utf8_bytes() {
+    fn resolver_preserves_apostrophe_and_newline() {
         let root = tempfile::tempdir().expect("temporary root");
-        let name = OsString::from_vec(b"tmux-'line\n-\xff".to_vec());
+        let name = OsString::from_vec(b"tmux-'line\n-x".to_vec());
+        let path = root.path().join(&name);
+        executable(&path);
+
+        assert_eq!(
+            launch(path.as_os_str(), root.path(), None).resolved_executable(),
+            Some(path)
+        );
+    }
+
+    /// A path is bytes on Linux and valid UTF-8 on macOS.
+    ///
+    /// APFS and HFS+ reject a name that is not valid UTF-8, so creating the
+    /// fixture fails with `EILSEQ` before the resolver is reached. The
+    /// invariant still holds there -- a path that cannot exist cannot be
+    /// resolved -- so the coverage is skipped rather than weakened, and the
+    /// apostrophe and newline above still run everywhere.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn resolver_preserves_non_utf8_bytes() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let name = OsString::from_vec(b"tmux-\xff".to_vec());
         let path = root.path().join(&name);
         executable(&path);
 
