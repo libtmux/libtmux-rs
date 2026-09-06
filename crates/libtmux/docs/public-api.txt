@@ -458,6 +458,7 @@ function libtmux::Pane::wait_for_text: async fn(&self, needle: impl AsRef<[u8]>,
 function libtmux::Pane::width: fn(&self) -> u32
 function libtmux::Pane::window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Pane::window_id: const fn(&self) -> &libtmux::WindowId
+function libtmux::Pane::window_index: const fn(&self) -> i32
 function libtmux::ReleaseSuffix::is_final: const fn(self) -> bool
 function libtmux::ReleaseSuffix::is_release_candidate: const fn(self) -> bool
 function libtmux::ReleaseSuffix::patch: fn(letter: char) -> Option<Self>

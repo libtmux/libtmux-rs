@@ -1888,7 +1888,7 @@ async fn run_refuses_initial_input_before_watcher_setup() {
 
 #[tokio::test]
 async fn run_rechecks_state_immediately_before_dispatch() {
-    for transition in ["cohort", "mode", "shell"] {
+    for transition in ["cohort", "mode", "shell", "placement"] {
         let name = format!("run-final-{transition}");
         let (guard, tools, source) = typing_fixture(&name).await;
         let source_handle = pane_handle(guard.server(), &source).await;
@@ -1903,6 +1903,11 @@ async fn run_rechecks_state_immediately_before_dispatch() {
             }
             "mode" => format!("copy-mode -t {source}"),
             "shell" => format!("respawn-pane -k -t {source} 'exec cat'"),
+            "placement" => format!(
+                "move-window -s {} -t {}:7",
+                source_handle.window_id(),
+                source_handle.session_id()
+            ),
             _ => unreachable!(),
         };
         guard
@@ -2079,6 +2084,34 @@ async fn run_rejects_terminal_control_in_the_executable_route() {
 #[tokio::test]
 async fn run_rejects_terminal_control_in_the_socket_route() {
     assert_terminal_control_route_is_preflight_failure(b"tmux", b"socket-\x03", "socket").await;
+}
+
+#[tokio::test]
+async fn pane_input_rejects_terminal_control_in_the_socket_route() {
+    let mut files = RawServerFiles::create(b"tmux", b"socket-\x03");
+    let (bootstrap, pane) = files.start("input-route-control").await;
+    let bootstrap_tools = bare_tools(&bootstrap);
+    let before = pane_screen(&bootstrap_tools, &pane).await;
+
+    let error = bare_tools(&files.route())
+        .paste_text(args(serde_json::json!({
+            "pane": pane,
+            "text": "blocked-route"
+        })))
+        .await
+        .err()
+        .expect("pane input rejects a terminal-control socket");
+
+    assert_eq!(error.data.expect("typed refusal")["kind"], "decode");
+    assert_eq!(pane_screen(&bootstrap_tools, &pane).await, before);
+    assert!(
+        bootstrap
+            .buffer_names()
+            .await
+            .expect("buffers list")
+            .is_empty()
+    );
+    files.shutdown(&bootstrap).await;
 }
 
 #[tokio::test]

@@ -31,10 +31,11 @@ pub(crate) use run::prepared_shutdown_completions;
 #[cfg(test)]
 use run::{
     FrameError, Scanner, TRAP_DECLARATION_LIMIT, find, frame_with_random, inherited_trap_capture,
-    quote_shell_word, render_payload, route_path_is_terminal_safe,
+    quote_shell_word, render_payload,
 };
 pub(crate) use run::{
     PrepareRunError, RunDispatch, RunProgress, prepare_run, readable, route_is_terminal_safe,
+    route_path_is_terminal_safe,
 };
 
 /// How a run finished.

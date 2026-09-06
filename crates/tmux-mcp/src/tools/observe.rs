@@ -289,6 +289,11 @@ impl TmuxTools {
                     "pane {checkpoint_pane} changed its POSIX-compatible foreground shell between run checkpoints"
                 )));
             }
+            if !initial.same_authority(&final_plan) {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} changed its configured input authority between run checkpoints"
+                )));
+            }
             let final_route = run_route(&self.server, &final_plan)?;
             if final_route != expected_route || !final_plan.owns(&final_lease) {
                 return Err(bad_input(format!(

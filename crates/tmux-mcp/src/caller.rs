@@ -105,8 +105,12 @@ impl CallerIdentity {
                 let server_pid = canonical_number(server_pid)
                     .and_then(|value| u32::try_from(value).ok())
                     .filter(|value| *value != 0)?;
-                let session = canonical_number(suffix)?;
-                if !socket.is_absolute() || !canonical_pane_id(&pane_id) {
+                let session =
+                    canonical_number(suffix).and_then(|value| u32::try_from(value).ok())?;
+                if !socket.is_absolute()
+                    || !crate::exec::route_path_is_terminal_safe(socket.as_os_str())
+                    || !canonical_pane_id(&pane_id)
+                {
                     return None;
                 }
                 Some((socket, server_pid, format!("${session}"), pane_id))
@@ -226,22 +230,15 @@ fn same_socket(caller: Option<&Path>, target: Option<&Path>) -> bool {
     }
 }
 
-/// Compare two paths, resolving symlinks when the filesystem allows it.
-///
-/// Temporary directories are routinely symlinked, so the resolved forms are
-/// what matter. Resolution can fail — the socket may have been removed since —
-/// and an exact match is still a match, so failure falls back to comparing the
-/// paths as written.
+/// Compare physical endpoints, with exact paths as the unavailable fallback.
 fn same_path(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
+    crate::run_request::same_endpoint(left, right)
 }
 
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
 
     #[test]
     fn any_present_caller_variable_is_not_detached() {
@@ -309,6 +306,7 @@ mod tests {
             ("/tmp/socket,01,0", "%0"),
             ("/tmp/socket,1,00", "%0"),
             ("/tmp/socket,1,$0", "%0"),
+            ("/tmp/socket,1,4294967296", "%0"),
             ("/tmp/socket,1,0", "%00"),
             ("relative/socket,1,0", "%0"),
             ("/tmp/socket,1,0,extra", "%0"),
@@ -317,6 +315,61 @@ mod tests {
                 .expect("present context");
             assert!(caller.malformed, "{tmux} {pane}");
         }
+    }
+
+    #[test]
+    fn caller_socket_rejects_ascii_terminal_controls() {
+        for byte in (0..=0x1f).chain([0x7f]) {
+            let mut tmux = b"/tmp/socket-".to_vec();
+            tmux.push(byte);
+            tmux.extend_from_slice(b",1,0");
+            let caller = CallerIdentity::from_values(
+                Some(OsString::from_vec(tmux)),
+                Some(OsString::from("%0")),
+            )
+            .expect("present context");
+            assert!(caller.malformed, "byte {byte:#04x} was accepted");
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_socket_hard_link_resolves_on_the_same_daemon() {
+        let guard = libtmux::test::TestServer::builder()
+            .start()
+            .await
+            .expect("tmux starts");
+        let server = guard.server();
+        let session = server
+            .new_session("caller-hard-link")
+            .await
+            .expect("session starts");
+        let pane = session.panes().await.expect("panes list").remove(0);
+        let generation = server.generation().await.expect("server generation");
+        let alias = server.socket_path().with_file_name("caller-hard-link.sock");
+        std::fs::hard_link(server.socket_path(), &alias).expect("socket hard link is created");
+        let caller = CallerIdentity::from_values(
+            Some(
+                format!(
+                    "{},{},{}",
+                    alias.display(),
+                    generation.pid(),
+                    session.id().as_ref().trim_start_matches('$')
+                )
+                .into(),
+            ),
+            Some(pane.id().as_ref().into()),
+        )
+        .expect("caller context is present");
+        let panes = server.panes().await.expect("pane snapshot");
+
+        assert_eq!(
+            caller
+                .resolve_on(server.socket_path(), generation, &panes)
+                .expect("physical alias is authenticated"),
+            Some(pane.id().as_ref())
+        );
+        std::fs::remove_file(&alias).expect("socket hard link is removed");
+        guard.shutdown().await.expect("tmux fixture shuts down");
     }
 
     #[test]

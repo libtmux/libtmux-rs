@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::future::Future;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::MetadataExt as _;
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -19,8 +20,35 @@ use crate::text::{TextFilter, readable_from};
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct RunKey {
     generation: ServerGeneration,
-    endpoint: PathBuf,
+    endpoint: EndpointIdentity,
     pane: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct EndpointIdentity {
+    device: u64,
+    inode: u64,
+}
+
+fn endpoint_identity(path: &Path) -> std::io::Result<EndpointIdentity> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(EndpointIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+pub(crate) fn same_endpoint(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (endpoint_identity(left), endpoint_identity(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => match (left.canonicalize(), right.canonicalize()) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        },
+    }
 }
 
 #[derive(Default)]
@@ -65,18 +93,21 @@ fn reservation_keys(
     generation: ServerGeneration,
     endpoint: &Path,
     panes: &[String],
-) -> Vec<RunKey> {
+) -> Option<Vec<RunKey>> {
+    let endpoint = endpoint_identity(endpoint).ok()?;
     let mut panes = panes.to_vec();
     panes.sort_unstable();
     panes.dedup();
-    panes
-        .into_iter()
-        .map(|pane| RunKey {
-            generation,
-            endpoint: endpoint.to_path_buf(),
-            pane,
-        })
-        .collect()
+    Some(
+        panes
+            .into_iter()
+            .map(|pane| RunKey {
+                generation,
+                endpoint,
+                pane,
+            })
+            .collect(),
+    )
 }
 
 /// Reserve every pane until the input completes or its watcher proves release.
@@ -85,7 +116,7 @@ pub(crate) fn reserve(
     endpoint: &Path,
     panes: &[String],
 ) -> Option<PaneReservation> {
-    let keys = reservation_keys(generation, endpoint, panes);
+    let keys = reservation_keys(generation, endpoint, panes)?;
     if keys.is_empty() {
         return None;
     }
@@ -108,9 +139,12 @@ pub(crate) fn is_reserved(
     pane: &str,
     permitted: Option<&PaneReservation>,
 ) -> bool {
+    let Some(endpoint) = endpoint_identity(endpoint).ok() else {
+        return true;
+    };
     let key = RunKey {
         generation,
-        endpoint: endpoint.to_path_buf(),
+        endpoint,
         pane: pane.to_owned(),
     };
     let active = hold(active_runs());
@@ -127,7 +161,9 @@ pub(crate) fn owns(
     endpoint: &Path,
     panes: &[String],
 ) -> bool {
-    let keys = reservation_keys(generation, endpoint, panes);
+    let Some(keys) = reservation_keys(generation, endpoint, panes) else {
+        return false;
+    };
     if keys != lease.0.keys {
         return false;
     }
@@ -440,32 +476,26 @@ mod tests {
             .to_string();
         let second_generation = replacement.generation().await.expect("second generation");
         let second_panes = vec![second_pane.clone()];
-        let replacement_lease =
-            reserve(second_generation, replacement.socket_path(), &second_panes);
-        let replacement_reserved = replacement_lease.is_some();
-        let first_still_owned = owns(
-            &first_lease,
-            first_generation,
-            server.socket_path(),
-            &first_panes,
-        );
-        let replacement_still_owned = replacement_lease.as_ref().is_some_and(|lease| {
-            owns(
-                lease,
-                second_generation,
-                replacement.socket_path(),
-                &second_panes,
-            )
-        });
-
-        drop(replacement_lease);
-        let first_survived_replacement_release = owns(
-            &first_lease,
-            first_generation,
-            server.socket_path(),
-            &first_panes,
+        let replacement_lease = reserve(
+            second_generation,
+            replacement.socket_path(),
+            &second_panes,
+        )
+        .expect("the replacement generation reserves its pane");
+        let replacement_still_owned = owns(
+            &replacement_lease,
+            second_generation,
+            replacement.socket_path(),
+            &second_panes,
         );
         drop(first_lease);
+        let replacement_survived_first_release = owns(
+            &replacement_lease,
+            second_generation,
+            replacement.socket_path(),
+            &second_panes,
+        );
+        drop(replacement_lease);
         replacement.kill().await.expect("replacement daemon stops");
         guard.shutdown().await.expect("tmux fixture shuts down");
 
@@ -475,12 +505,62 @@ mod tests {
             "the replacement is a distinct server generation"
         );
         assert!(
-            replacement_reserved,
-            "the old daemon's retained lease must not strand the replacement pane"
+            replacement_still_owned && replacement_survived_first_release,
+            "releasing the old daemon's lease cannot release the replacement's reservation"
         );
-        assert!(
-            first_still_owned && replacement_still_owned && first_survived_replacement_release,
-            "each daemon generation keeps and releases only its own reservation"
-        );
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::await_holding_invalid_type,
+        reason = "the guard serializes the process-wide reservation registry"
+    )]
+    async fn endpoint_aliases_share_one_pane_reservation() {
+        let _serial = CLEANUP_TEST.lock().await;
+        let guard = libtmux::test::TestServer::builder()
+            .start()
+            .await
+            .expect("tmux starts");
+        let server = guard.server();
+        let pane = server
+            .new_session("physical-reservation")
+            .await
+            .expect("session starts")
+            .panes()
+            .await
+            .expect("panes list")
+            .remove(0)
+            .id()
+            .to_string();
+        let generation = server.generation().await.expect("server generation");
+        let panes = vec![pane.clone()];
+        let socket = server.socket_path();
+        let hard_link = socket.with_file_name("reservation-hard-link.sock");
+        let symbolic_link = socket.with_file_name("reservation-symbolic-link.sock");
+        std::fs::hard_link(socket, &hard_link).expect("socket hard link is created");
+        std::os::unix::fs::symlink(socket, &symbolic_link)
+            .expect("socket symbolic link is created");
+
+        let lease = reserve(generation, socket, &panes).expect("source route reserves the pane");
+
+        for alias in [&hard_link, &symbolic_link] {
+            assert!(
+                reserve(generation, alias, &panes).is_none(),
+                "a physical endpoint alias cannot reserve the same pane"
+            );
+            assert!(
+                is_reserved(generation, alias, &pane, None),
+                "the active reservation is visible through every endpoint alias"
+            );
+            assert!(
+                owns(&lease, generation, alias, &panes),
+                "the lease owns its cohort through every endpoint alias"
+            );
+        }
+
+        drop(lease);
+        std::fs::remove_file(&hard_link).expect("socket hard link is removed");
+        std::fs::remove_file(&symbolic_link).expect("socket symbolic link is removed");
+        guard.shutdown().await.expect("tmux fixture shuts down");
     }
 }

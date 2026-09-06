@@ -310,7 +310,7 @@ pub(super) fn quote_shell_word(value: &OsStr) -> OsString {
     OsString::from_vec(quoted)
 }
 
-pub(super) fn route_path_is_terminal_safe(value: &OsStr) -> bool {
+pub(crate) fn route_path_is_terminal_safe(value: &OsStr) -> bool {
     !value.as_bytes().iter().any(u8::is_ascii_control)
 }
 

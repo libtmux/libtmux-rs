@@ -146,6 +146,13 @@ impl Pane {
         self.projection.link_identity().window_id()
     }
 
+    /// Return the window index for the session through which this pane was
+    /// reached.
+    #[must_use]
+    pub const fn window_index(&self) -> i32 {
+        self.projection.link_identity().window_index()
+    }
+
     /// Return the session this handle reached the pane through.
     ///
     /// A pane reached through a linked window can report a different session
