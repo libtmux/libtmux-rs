@@ -72,6 +72,11 @@ name = "hierarchy"
 harness = false
 required-features = ["test-support"]
 
+[[bench]]
+name = "waits"
+harness = false
+required-features = ["test-support", "control-mode"]
+
 [[test]]
 name = "filter_derive"
 path = "tests/filter_derive.rs"
