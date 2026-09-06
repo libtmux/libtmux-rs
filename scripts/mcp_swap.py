@@ -113,6 +113,8 @@ import contextlib
 import dataclasses
 import difflib
 import fcntl
+import hashlib
+import itertools
 import json
 import os
 import pathlib
@@ -191,26 +193,12 @@ def _parse_state_key(key: str) -> tuple[CLIName, Scope] | None:
     return None
 
 
-def _parse_state_entry(v: dict[str, t.Any]) -> SwapEntry | None:
-    """Build a :class:`SwapEntry` from a raw state-file dict, or ``None``.
-
-    Validates at the trust boundary so a hand-edited ``state.json`` can't
-    crash later code paths — particularly :func:`cmd_revert`'s LIFO sort,
-    which compares ``SwapEntry.seq_no`` and would raise ``TypeError`` on a
-    mixed ``int``/``str`` ordering. ``seq_no`` is coerced via ``int()``;
-    any ``KeyError`` (missing required field), ``ValueError`` (non-numeric
-    string), or ``TypeError`` (wrong shape, extra keys for the dataclass)
-    drops the entry silently. Same drop-on-malformed posture as
-    :func:`_parse_state_key`.
-
-    Mirrors CPython's ``Lib/sched.py`` discipline: validate at the
-    counter's *origin* (``enterabs`` for sched, ``load_state`` here), not
-    at sort time. State-file schema is internal — no compatibility
-    contract — so silent drop is the right failure mode.
-    """
+def _parse_state_entry(
+    value: dict[str, t.Any], *, allow_legacy: bool = True
+) -> SwapEntry | None:
+    """Build a validated state entry, optionally for read-only legacy use."""
     try:
-        v = {**v, "seq_no": int(v["seq_no"])}
-        return SwapEntry(**v)
+        return _state_entry_from_document(value, allow_legacy=allow_legacy)
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -236,6 +224,8 @@ STATE_DIR = _xdg_state_home() / "tmux-mcp-dev" / "swap"
 STATE_FILE = STATE_DIR / "state.json"
 
 BACKUP_SUFFIX_PREFIX = ".bak.mcp-swap-"
+STATE_VERSION = 1
+STATE_MAX_BYTES = 256 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +373,7 @@ PI_ADAPTER_HINT = "needs the pi-mcp-adapter package; pi has no built-in MCP clie
 #: GitHub publishes ``refs/pull/<n>/head`` on the *base* repository, so
 #: one URL serves same-repo and fork pull requests alike.
 
+
 @dataclasses.dataclass
 class McpServerSpec:
     """The portable shape shared across CLI configs."""
@@ -481,32 +472,676 @@ class SwapEntry:
     #: ``Lib/sched.py`` uses to break ties on ``Event(time, priority,
     #: sequence, …)``.
     seq_no: int
-    #: Exact destination changed by the swap. ``config_path`` may be a
-    #: symlink that is later repointed, so it is not sufficient recovery
-    #: identity. Older state entries omit this field and fall back to
-    #: ``config_path`` during revert.
+    #: Exact destination changed by the swap.
     target_path: str | None = None
+    version: int = 0
+    original_mode: int | None = None
+    expected_config: dict[str, t.Any] | None = None
+    expected_backup: dict[str, t.Any] | None = None
+
+
+class FileState(t.NamedTuple):
+    """Stable bytes and identity for one regular file."""
+
+    device: int
+    inode: int
+    mode: int
+    size: int
+    modified_ns: int
+    data: bytes
+
+
+class DirectoryState(t.NamedTuple):
+    """Logical and resolved identity for one existing directory."""
+
+    logical: pathlib.Path
+    physical: pathlib.Path
+    symlink: bool
+    link_text: str | None
+    link_device: int
+    link_inode: int
+    link_mode: int
+    device: int
+    inode: int
+    mode: int
+
+
+class ConfigState(t.NamedTuple):
+    """One config's logical topology and resolved regular-file state."""
+
+    info: CLIInfo
+    parent: DirectoryState
+    symlink: bool
+    link_text: str | None
+    link_device: int
+    link_inode: int
+    link_mode: int
+    target: pathlib.Path
+    file: FileState
+
+
+class RecoveryState(t.NamedTuple):
+    """One regular recovery path, which may be absent."""
+
+    path: pathlib.Path
+    parent: DirectoryState
+    physical: pathlib.Path
+    file: FileState | None
 
 
 @dataclasses.dataclass
-class _PreparedTarget:
-    """One selected config rendered and recovery-planned before any write."""
+class SwapPlan:
+    """One fully rendered config change awaiting backup and commit."""
 
     cli: CLIName
     scope: Scope
     label: str
     info: CLIInfo
-    target_path: pathlib.Path
-    original_bytes: bytes
+    config: ConfigState
+    backup: RecoveryState
     new_bytes: bytes
     action: t.Literal["replaced", "added"]
-    backup_base: pathlib.Path | None = None
-    backup_path: pathlib.Path | None = None
-    state_entry: SwapEntry | None = None
+    server: str
+    swapped_at: str
+    prior: SwapEntry | None
+    owner_key: tuple[CLIName, Scope] | None
+    backup_is_new: bool
+    backup_rewrites: tuple[BackupRewrite, ...]
+    backup_note: str = ""
+
+
+class BackupRewrite(t.NamedTuple):
+    """A newer recovery layer adjusted after an older layer changes."""
+
+    key: tuple[CLIName, Scope]
+    revealed_key: tuple[CLIName, Scope]
+    backup: RecoveryState
+    new_bytes: bytes
+
+
+class StagedBackupRewrite(t.NamedTuple):
+    """One backup rewrite and its rollback stages."""
+
+    plan: BackupRewrite
+    output: pathlib.Path
+    recovery: pathlib.Path
+
+
+class StagedUse(t.NamedTuple):
+    """A planned use update and its task-owned stages."""
+
+    plan: SwapPlan
+    output: pathlib.Path
+    recovery: pathlib.Path
+    backup: pathlib.Path | None
+    backup_rewrites: tuple[StagedBackupRewrite, ...]
+
+
+class RevertPlan(t.NamedTuple):
+    """One selected recovery layer to restore."""
+
+    config: ConfigState
+    key: tuple[CLIName, Scope]
+    backup: RecoveryState
+    restore_bytes: bytes
+    restore_mode: int
+
+
+class StagedRevert(t.NamedTuple):
+    """A planned revert and exact rollback artifacts."""
+
+    plan: RevertPlan
+    restored: pathlib.Path
+    recovery: pathlib.Path
+    backup_recovery: pathlib.Path
+
+
+class OwnedConfig(t.NamedTuple):
+    """Authenticated active config and recovery stack from persisted state."""
+
+    config: ConfigState
+    chain: list[tuple[CLIName, Scope]]
+    backups: dict[tuple[CLIName, Scope], RecoveryState]
 
 
 class SwapStateError(RuntimeError):
     """Swap state is unsafe to use for a mutating operation."""
+
+
+def _raise_changed(message: str) -> t.NoReturn:
+    raise RuntimeError(message)
+
+
+def _raise_state(message: str) -> t.NoReturn:
+    raise SwapStateError(message)
+
+
+def _file_state(path: pathlib.Path) -> FileState:
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{path} is not a regular file")
+    data = path.read_bytes()
+    after = path.stat()
+    before_key = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_size,
+        before.st_mtime_ns,
+    )
+    after_key = (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_size,
+        after.st_mtime_ns,
+    )
+    if before_key != after_key:
+        _raise_changed(f"{path} changed while it was read")
+    return FileState(
+        after.st_dev,
+        after.st_ino,
+        stat.S_IMODE(after.st_mode),
+        after.st_size,
+        after.st_mtime_ns,
+        data,
+    )
+
+
+def _directory_state(path: pathlib.Path) -> DirectoryState:
+    logical = path.lstat()
+    symlink = stat.S_ISLNK(logical.st_mode)
+    if not symlink and not stat.S_ISDIR(logical.st_mode):
+        raise ValueError(f"{path} is not a directory or directory symlink")
+    physical = path.resolve(strict=True)
+    details = physical.stat()
+    if not stat.S_ISDIR(details.st_mode):
+        raise ValueError(f"{path} is not a directory")
+    return DirectoryState(
+        path,
+        physical,
+        symlink,
+        str(path.readlink()) if symlink else None,
+        logical.st_dev,
+        logical.st_ino,
+        logical.st_mode,
+        details.st_dev,
+        details.st_ino,
+        stat.S_IMODE(details.st_mode),
+    )
+
+
+def _config_state(info: CLIInfo) -> ConfigState:
+    parent = _directory_state(info.config_path.parent)
+    details = info.config_path.lstat()
+    symlink = stat.S_ISLNK(details.st_mode)
+    if not symlink and not stat.S_ISREG(details.st_mode):
+        raise ValueError(f"{info.config_path} is not a regular file or symlink")
+    target = info.config_path.resolve(strict=True)
+    file = _file_state(target)
+    if not symlink and (details.st_dev, details.st_ino) != (file.device, file.inode):
+        _raise_changed(f"{info.config_path} changed while it was resolved")
+    return ConfigState(
+        info,
+        parent,
+        symlink,
+        str(info.config_path.readlink()) if symlink else None,
+        details.st_dev,
+        details.st_ino,
+        details.st_mode,
+        target,
+        file,
+    )
+
+
+def _recovery_state(path: pathlib.Path, *, required: bool = False) -> RecoveryState:
+    parent = _directory_state(path.parent)
+    physical = parent.physical / path.name
+    if not os.path.lexists(path):
+        if required:
+            raise FileNotFoundError(path)
+        return RecoveryState(path, parent, physical, None)
+    details = path.lstat()
+    if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+        raise ValueError(f"{path} is not a regular file")
+    if path.resolve(strict=True) != physical:
+        _raise_changed(f"{path} changed while it was resolved")
+    file = _file_state(physical)
+    if (details.st_dev, details.st_ino) != (file.device, file.inode):
+        _raise_changed(f"{path} changed while it was resolved")
+    return RecoveryState(path, parent, physical, file)
+
+
+def _verify_directory(expected: DirectoryState) -> None:
+    if _directory_state(expected.logical) != expected:
+        _raise_changed(f"{expected.logical} changed")
+
+
+def _verify_config(config: ConfigState, expected: FileState) -> None:
+    _verify_directory(config.parent)
+    details = config.info.config_path.lstat()
+    if config.symlink:
+        if (
+            not stat.S_ISLNK(details.st_mode)
+            or str(config.info.config_path.readlink()) != config.link_text
+            or (details.st_dev, details.st_ino, details.st_mode)
+            != (config.link_device, config.link_inode, config.link_mode)
+        ):
+            _raise_changed(f"{config.info.config_path} symlink changed")
+    elif not stat.S_ISREG(details.st_mode):
+        _raise_changed(f"{config.info.config_path} topology changed")
+    if config.info.config_path.resolve(strict=True) != config.target:
+        _raise_changed(f"{config.info.config_path} target changed")
+    current = _file_state(config.target)
+    if current != expected:
+        _raise_changed(f"{config.info.config_path} identity, mode, or bytes changed")
+    if not config.symlink and (details.st_dev, details.st_ino) != (
+        current.device,
+        current.inode,
+    ):
+        _raise_changed(f"{config.info.config_path} logical identity changed")
+
+
+def _verify_recovery(recovery: RecoveryState, expected: FileState | None) -> None:
+    _verify_directory(recovery.parent)
+    if expected is None:
+        if os.path.lexists(recovery.path):
+            _raise_changed(f"{recovery.path} appeared")
+        return
+    current = _recovery_state(recovery.path, required=True)
+    if current.parent != recovery.parent or current.physical != recovery.physical:
+        _raise_changed(f"{recovery.path} target changed")
+    if current.file != expected:
+        _raise_changed(f"{recovery.path} identity, mode, or bytes changed")
+
+
+def _file_document(file: FileState) -> dict[str, t.Any]:
+    return {
+        "device": file.device,
+        "inode": file.inode,
+        "mode": file.mode,
+        "sha256": hashlib.sha256(file.data).hexdigest(),
+        "size": file.size,
+    }
+
+
+def _directory_document(directory: DirectoryState) -> dict[str, t.Any]:
+    return {
+        "device": directory.device,
+        "inode": directory.inode,
+        "link_device": directory.link_device if directory.symlink else None,
+        "link_inode": directory.link_inode if directory.symlink else None,
+        "link_mode": directory.link_mode if directory.symlink else None,
+        "link_text": directory.link_text,
+        "logical": str(directory.logical),
+        "mode": directory.mode,
+        "physical": str(directory.physical),
+        "symlink": directory.symlink,
+    }
+
+
+def _config_document(config: ConfigState, file: FileState) -> dict[str, t.Any]:
+    return {
+        "file": _file_document(file),
+        "link_device": config.link_device if config.symlink else None,
+        "link_inode": config.link_inode if config.symlink else None,
+        "link_mode": config.link_mode if config.symlink else None,
+        "link_text": config.link_text,
+        "logical": str(config.info.config_path),
+        "parent": _directory_document(config.parent),
+        "symlink": config.symlink,
+        "target": str(config.target),
+    }
+
+
+def _recovery_document(recovery: RecoveryState, file: FileState) -> dict[str, t.Any]:
+    return {
+        "file": _file_document(file),
+        "parent": _directory_document(recovery.parent),
+        "path": str(recovery.path),
+        "target": str(recovery.physical),
+    }
+
+
+def _same_typed(left: t.Any, right: t.Any) -> bool:
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return set(left) == set(right) and all(
+            _same_typed(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_typed(one, two) for one, two in zip(left, right, strict=True)
+        )
+    return bool(left == right)
+
+
+def _object(value: t.Any, keys: set[str], label: str) -> dict[str, t.Any]:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError(f"{label} has unknown or missing fields")
+    return value
+
+
+def _integer(value: t.Any, label: str, *, maximum: int | None = None) -> int:
+    if type(value) is not int or value < 0 or (maximum is not None and value > maximum):
+        raise ValueError(f"{label} is invalid")
+    return value
+
+
+def _absolute(value: t.Any, label: str) -> str:
+    if type(value) is not str or not pathlib.Path(value).is_absolute():
+        raise ValueError(f"{label} is invalid")
+    return value
+
+
+def _validate_file_document(value: t.Any, label: str) -> dict[str, t.Any]:
+    document = _object(value, {"device", "inode", "mode", "sha256", "size"}, label)
+    _integer(document["device"], f"{label} device")
+    _integer(document["inode"], f"{label} inode")
+    _integer(document["mode"], f"{label} mode", maximum=0o7777)
+    _integer(document["size"], f"{label} size")
+    digest = document["sha256"]
+    if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError(f"{label} digest is invalid")
+    return document
+
+
+def _validate_directory_document(value: t.Any, label: str) -> dict[str, t.Any]:
+    document = _object(
+        value,
+        {
+            "device",
+            "inode",
+            "link_device",
+            "link_inode",
+            "link_mode",
+            "link_text",
+            "logical",
+            "mode",
+            "physical",
+            "symlink",
+        },
+        label,
+    )
+    _integer(document["device"], f"{label} device")
+    _integer(document["inode"], f"{label} inode")
+    _integer(document["mode"], f"{label} mode", maximum=0o7777)
+    _absolute(document["logical"], f"{label} logical path")
+    _absolute(document["physical"], f"{label} physical path")
+    if type(document["symlink"]) is not bool:
+        raise ValueError(f"{label} symlink flag is invalid")
+    link_values = (
+        document["link_device"],
+        document["link_inode"],
+        document["link_mode"],
+        document["link_text"],
+    )
+    if document["symlink"]:
+        _integer(link_values[0], f"{label} link device")
+        _integer(link_values[1], f"{label} link inode")
+        _integer(link_values[2], f"{label} link mode")
+        if type(link_values[3]) is not str:
+            raise ValueError(f"{label} link text is invalid")
+    elif any(item is not None for item in link_values):
+        raise ValueError(f"{label} link metadata is invalid")
+    return document
+
+
+def _validate_config_document(value: t.Any) -> dict[str, t.Any]:
+    document = _object(
+        value,
+        {
+            "file",
+            "link_device",
+            "link_inode",
+            "link_mode",
+            "link_text",
+            "logical",
+            "parent",
+            "symlink",
+            "target",
+        },
+        "recovery config",
+    )
+    _validate_file_document(document["file"], "recovery config file")
+    _validate_directory_document(document["parent"], "recovery config parent")
+    _absolute(document["logical"], "recovery config logical path")
+    _absolute(document["target"], "recovery config target")
+    if type(document["symlink"]) is not bool:
+        raise ValueError("recovery config symlink flag is invalid")
+    links = (
+        document["link_device"],
+        document["link_inode"],
+        document["link_mode"],
+        document["link_text"],
+    )
+    if document["symlink"]:
+        _integer(links[0], "recovery config link device")
+        _integer(links[1], "recovery config link inode")
+        _integer(links[2], "recovery config link mode")
+        if type(links[3]) is not str:
+            raise ValueError("recovery config link text is invalid")
+    elif any(item is not None for item in links):
+        raise ValueError("recovery config link metadata is invalid")
+    return document
+
+
+def _validate_recovery_document(value: t.Any) -> dict[str, t.Any]:
+    document = _object(value, {"file", "parent", "path", "target"}, "backup")
+    _validate_file_document(document["file"], "backup file")
+    _validate_directory_document(document["parent"], "backup parent")
+    _absolute(document["path"], "backup path")
+    _absolute(document["target"], "backup target")
+    return document
+
+
+def _state_entry_from_document(
+    value: dict[str, t.Any], *, allow_legacy: bool
+) -> SwapEntry:
+    if value.get("version", 0) == 0:
+        if not allow_legacy:
+            raise ValueError("legacy swap state cannot authorize a mutation")
+        required = {
+            "config_path",
+            "backup_path",
+            "server",
+            "action",
+            "swapped_at",
+            "seq_no",
+        }
+        optional = {
+            "target_path",
+            "version",
+            "original_mode",
+            "expected_config",
+            "expected_backup",
+        }
+        if not required <= set(value) or set(value) - required - optional:
+            raise ValueError("legacy recovery entry has unknown or missing fields")
+        if value.get("version", 0) != 0 or any(
+            value.get(key) is not None
+            for key in ("original_mode", "expected_config", "expected_backup")
+        ):
+            raise ValueError("legacy recovery entry has invalid ownership fields")
+        return SwapEntry(
+            config_path=_absolute(value["config_path"], "config path"),
+            backup_path=_absolute(value["backup_path"], "backup path"),
+            server=str(value["server"]),
+            action=value["action"],
+            swapped_at=str(value["swapped_at"]),
+            seq_no=int(value["seq_no"]),
+            target_path=value.get("target_path"),
+        )
+
+    document = _object(
+        value,
+        {
+            "action",
+            "backup_path",
+            "config_path",
+            "expected_backup",
+            "expected_config",
+            "original_mode",
+            "seq_no",
+            "server",
+            "swapped_at",
+            "target_path",
+            "version",
+        },
+        "recovery entry",
+    )
+    if document["version"] != STATE_VERSION:
+        raise ValueError("recovery entry version is unsupported")
+    config_path = _absolute(document["config_path"], "config path")
+    backup_path = _absolute(document["backup_path"], "backup path")
+    target_path = _absolute(document["target_path"], "target path")
+    expected_config = _validate_config_document(document["expected_config"])
+    expected_backup = _validate_recovery_document(document["expected_backup"])
+    if (
+        expected_config["logical"] != config_path
+        or expected_config["target"] != target_path
+    ):
+        raise ValueError("recovery config paths disagree")
+    if expected_backup["path"] != backup_path:
+        raise ValueError("recovery backup paths disagree")
+    action = document["action"]
+    if action not in ("replaced", "added"):
+        raise ValueError("recovery action is invalid")
+    if type(document["server"]) is not str or not document["server"]:
+        raise ValueError("recovery server is invalid")
+    if type(document["swapped_at"]) is not str:
+        raise ValueError("recovery timestamp is invalid")
+    return SwapEntry(
+        config_path=config_path,
+        backup_path=backup_path,
+        server=document["server"],
+        action=action,
+        swapped_at=document["swapped_at"],
+        seq_no=_integer(document["seq_no"], "recovery sequence"),
+        target_path=target_path,
+        version=STATE_VERSION,
+        original_mode=_integer(
+            document["original_mode"], "original mode", maximum=0o7777
+        ),
+        expected_config=expected_config,
+        expected_backup=expected_backup,
+    )
+
+
+def _state_checksum(version: int, entries: dict[str, t.Any]) -> str:
+    canonical = json.dumps(
+        {"entries": entries, "version": version},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _state_payload(
+    entries: dict[tuple[CLIName, Scope], SwapEntry],
+) -> dict[str, t.Any]:
+    raw_entries = {
+        _state_key(cli, scope): dataclasses.asdict(entry)
+        for (cli, scope), entry in entries.items()
+    }
+    return {
+        "version": STATE_VERSION,
+        "checksum": _state_checksum(STATE_VERSION, raw_entries),
+        "entries": raw_entries,
+    }
+
+
+def _state_bytes(entries: dict[tuple[CLIName, Scope], SwapEntry]) -> bytes:
+    data = (json.dumps(_state_payload(entries), indent=2) + "\n").encode()
+    if len(data) > STATE_MAX_BYTES:
+        raise ValueError(f"recovery state exceeds {STATE_MAX_BYTES} bytes")
+    return data
+
+
+def _stage_file(
+    directory: pathlib.Path,
+    logical_name: str,
+    role: str,
+    data: bytes,
+    mode: int,
+) -> pathlib.Path:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{logical_name}.mcp-swap-{role}-", dir=str(directory)
+    )
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return temporary
+
+
+def _apply_replace(
+    staged: pathlib.Path, destination: pathlib.Path
+) -> tuple[FileState, Exception | None]:
+    expected = _file_state(staged)
+    delayed_error: Exception | None = None
+    try:
+        staged.replace(destination)
+    except Exception as exc:
+        try:
+            committed = _file_state(destination)
+        except (OSError, RuntimeError, ValueError):
+            raise exc
+        if committed != expected:
+            raise
+        delayed_error = exc
+    else:
+        committed = _file_state(destination)
+    if committed != expected:
+        _raise_changed(f"atomic replacement of {destination} was not exact")
+    return committed, delayed_error
+
+
+def _publish_absent(
+    staged: pathlib.Path, destination: pathlib.Path
+) -> tuple[FileState, Exception | None]:
+    """Move a stage only when no unowned destination has appeared."""
+    if os.path.lexists(destination):
+        _raise_changed(f"{destination} appeared before publication")
+    return _apply_replace(staged, destination)
+
+
+def _raise_if_delayed(error: Exception | None) -> None:
+    if error is not None:
+        raise error
+
+
+def _cleanup_owned(
+    owned: set[pathlib.Path], preserve: set[pathlib.Path] | None = None
+) -> list[str]:
+    retained = preserve or set()
+    errors: list[str] = []
+    for path in sorted(owned - retained, key=str):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(f"could not remove task-owned stage {path}: {exc}")
+    return errors
+
+
+def _assert_destination_feasible(path: pathlib.Path) -> None:
+    candidate = path.parent
+    while not os.path.lexists(candidate):
+        parent = candidate.parent
+        if parent == candidate:
+            raise OSError(f"no existing parent for {path}")
+        candidate = parent
+    if not candidate.is_dir():
+        raise NotADirectoryError(candidate)
+    if not os.access(candidate, os.W_OK | os.X_OK):
+        raise PermissionError(f"destination is not writable: {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1332,7 +1967,9 @@ Source = t.Literal["debug", "release", "run", "path", "published"]
 DEFAULT_CRATE = "tmux-mcp"
 
 
-def resolve_repo_meta(repo: pathlib.Path, crate: str = DEFAULT_CRATE) -> tuple[str, str]:
+def resolve_repo_meta(
+    repo: pathlib.Path, crate: str = DEFAULT_CRATE
+) -> tuple[str, str]:
     """Derive (server_name, binary_name) from the crate's Cargo.toml.
 
     The server name is the registration slug used as the config-file key
@@ -1376,9 +2013,7 @@ def manifest_path(repo: pathlib.Path, crate: str = DEFAULT_CRATE) -> pathlib.Pat
     return scoped if scoped.is_file() else repo / "Cargo.toml"
 
 
-def build_profile_spec(
-    repo: pathlib.Path, binary: str, profile: str
-) -> McpServerSpec:
+def build_profile_spec(repo: pathlib.Path, binary: str, profile: str) -> McpServerSpec:
     """Point an agent straight at a compiled binary in ``target/<profile>``.
 
     The agent launches the binary itself, so nothing runs in front of it:
@@ -1583,64 +2218,81 @@ def preflight_spec(spec: McpServerSpec, *, timeout: float = 300.0) -> str | None
 # ---------------------------------------------------------------------------
 
 
+def _decode_state_data(
+    data: bytes, *, strict: bool
+) -> dict[tuple[CLIName, Scope], SwapEntry]:
+    if len(data) > STATE_MAX_BYTES:
+        raise SwapStateError(
+            f"swap state exceeds {STATE_MAX_BYTES} bytes: {STATE_FILE}"
+        )
+    try:
+        raw = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SwapStateError(f"swap state unreadable ({STATE_FILE}): {exc}") from exc
+    if not isinstance(raw, dict):
+        _raise_state(f"swap state has invalid shape: {STATE_FILE}")
+
+    legacy = set(raw) == {"entries"}
+    if legacy:
+        if strict:
+            raise SwapStateError(
+                f"legacy swap state cannot authorize a mutation: {STATE_FILE}"
+            )
+    else:
+        if set(raw) != {"checksum", "entries", "version"}:
+            _raise_state(f"swap state has unknown or missing fields: {STATE_FILE}")
+        if type(raw["version"]) is not int or raw["version"] != STATE_VERSION:
+            _raise_state(f"swap state version is unsupported: {STATE_FILE}")
+        if type(raw["checksum"]) is not str:
+            _raise_state(f"swap state checksum is invalid: {STATE_FILE}")
+        expected = _state_checksum(raw["version"], raw["entries"])
+        if raw["checksum"] != expected:
+            _raise_state(f"swap state checksum does not match: {STATE_FILE}")
+
+    entries = raw.get("entries")
+    if not isinstance(entries, dict):
+        _raise_state(f"swap state has invalid entries: {STATE_FILE}")
+    out: dict[tuple[CLIName, Scope], SwapEntry] = {}
+    for key, value in entries.items():
+        parsed = _parse_state_key(key)
+        entry = (
+            _parse_state_entry(value, allow_legacy=not strict)
+            if isinstance(value, dict)
+            else None
+        )
+        if parsed is None or entry is None:
+            if strict:
+                raise SwapStateError(
+                    f"swap state has invalid entry {key!r}: {STATE_FILE}"
+                )
+            continue
+        cli, _scope = parsed
+        if strict and entry.config_path != str(CLIS[cli].config_path):
+            raise SwapStateError(
+                f"swap state config path changed for {key!r}: {STATE_FILE}"
+            )
+        out[parsed] = entry
+    return out
+
+
 def load_state(*, strict: bool = False) -> dict[tuple[CLIName, Scope], SwapEntry]:
-    """Read the swap-state file, returning an empty mapping when absent.
-
-    The state file's schema is internal — no compatibility contract —
-    so this loader assumes a single canonical shape. Malformed keys
-    (those that don't parse as ``cli:scope``) and entries with a
-    non-coercible ``seq_no`` or missing required fields are dropped
-    silently so a hand-edited file cannot crash the script.
-
-    A file that will not parse at all is reported rather than dropped
-    silently: it means the record of every swap is gone, so ``revert``
-    is about to say there is nothing to unwind while swapped configs
-    and their backups sit on disk. Saying so is what lets the operator
-    go find those backups. Mutating callers pass ``strict=True`` so an
-    unreadable or malformed record blocks changes instead of being
-    overwritten as empty state.
-    """
-    if not STATE_FILE.exists():
+    """Read bounded, versioned recovery state without trusting partial records."""
+    if not os.path.lexists(STATE_FILE):
         return {}
     try:
-        raw = json.loads(STATE_FILE.read_text())
-    except (OSError, ValueError) as exc:
-        message = f"swap state unreadable ({STATE_FILE}): {exc}"
+        details = STATE_FILE.lstat()
+        if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+            _raise_state(f"swap state is not a regular file: {STATE_FILE}")
+        file = _file_state(STATE_FILE)
+        if strict and file.mode != 0o600:
+            _raise_state(f"swap state mode is not 0600: {STATE_FILE}")
+        return _decode_state_data(file.data, strict=strict)
+    except (OSError, RuntimeError, ValueError, SwapStateError) as exc:
+        message = str(exc)
         print(message, file=sys.stderr)
         if strict:
             raise SwapStateError(message) from exc
         return {}
-    if not isinstance(raw, dict):
-        if strict:
-            message = f"swap state has invalid shape: {STATE_FILE}"
-            print(message, file=sys.stderr)
-            raise SwapStateError(message)
-        return {}
-    entries = raw.get("entries", {})
-    if not isinstance(entries, dict):
-        if strict:
-            message = f"swap state has invalid entries: {STATE_FILE}"
-            print(message, file=sys.stderr)
-            raise SwapStateError(message)
-        entries = {}
-    out: dict[tuple[CLIName, Scope], SwapEntry] = {}
-    for k, v in entries.items():
-        parsed = _parse_state_key(k)
-        if parsed is None:
-            if strict:
-                message = f"swap state has invalid key {k!r}: {STATE_FILE}"
-                print(message, file=sys.stderr)
-                raise SwapStateError(message)
-            continue
-        entry = _parse_state_entry(v)
-        if entry is None:
-            if strict:
-                message = f"swap state has invalid entry {k!r}: {STATE_FILE}"
-                print(message, file=sys.stderr)
-                raise SwapStateError(message)
-            continue
-        out[parsed] = entry
-    return out
 
 
 @contextlib.contextmanager
@@ -1656,21 +2308,7 @@ def _state_lock() -> t.Iterator[None]:
 def save_state(entries: dict[tuple[CLIName, Scope], SwapEntry]) -> None:
     """Write the swap-state file atomically."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "entries": {
-            _state_key(cli, scope): dataclasses.asdict(v)
-            for (cli, scope), v in entries.items()
-        },
-    }
-    atomic_write(STATE_FILE, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
-
-
-def _save_or_clear_state(entries: dict[tuple[CLIName, Scope], SwapEntry]) -> None:
-    """Persist ``entries``, removing the state file when the mapping is empty."""
-    if entries:
-        save_state(entries)
-    elif STATE_FILE.exists():
-        STATE_FILE.unlink()
+    atomic_write(STATE_FILE, _state_bytes(entries))
 
 
 # ---------------------------------------------------------------------------
@@ -1836,16 +2474,695 @@ def _points_at(
     return current.command == target.command and current.args == target.args
 
 
+def _strict_state_snapshot() -> tuple[
+    dict[tuple[CLIName, Scope], SwapEntry], RecoveryState
+]:
+    state_file = _recovery_state(STATE_FILE)
+    if state_file.file is None:
+        return {}, state_file
+    if state_file.file.mode != 0o600:
+        _raise_state(f"swap state mode is not 0600: {STATE_FILE}")
+    return _decode_state_data(state_file.file.data, strict=True), state_file
+
+
+def _entry_config(entry: SwapEntry) -> dict[str, t.Any]:
+    if entry.version != STATE_VERSION or entry.expected_config is None:
+        _raise_state("recovery entry has no recorded config state")
+    return entry.expected_config
+
+
+def _entry_backup(entry: SwapEntry) -> dict[str, t.Any]:
+    if entry.version != STATE_VERSION or entry.expected_backup is None:
+        _raise_state("recovery entry has no recorded backup state")
+    return entry.expected_backup
+
+
+def _route_document(config: dict[str, t.Any]) -> dict[str, t.Any]:
+    return {key: value for key, value in config.items() if key != "file"}
+
+
+def _validate_state_sequences(
+    state: dict[tuple[CLIName, Scope], SwapEntry],
+) -> None:
+    sequences = [entry.seq_no for entry in state.values()]
+    if len(sequences) != len(set(sequences)):
+        _raise_state("swap state contains duplicate sequence numbers")
+
+
+def _validate_config_chain(
+    config: ConfigState,
+    state: dict[tuple[CLIName, Scope], SwapEntry],
+) -> tuple[
+    list[tuple[CLIName, Scope]],
+    dict[tuple[CLIName, Scope], RecoveryState],
+]:
+    keys = [
+        key
+        for key, entry in state.items()
+        if entry.config_path == str(config.info.config_path)
+    ]
+    keys.sort(key=lambda key: state[key].seq_no, reverse=True)
+    if not keys:
+        return [], {}
+
+    expected_current = _entry_config(state[keys[0]])
+    if not _same_typed(expected_current, _config_document(config, config.file)):
+        raise SwapStateError(
+            f"config no longer matches recovery state: {config.info.config_path}"
+        )
+
+    backups: dict[tuple[CLIName, Scope], RecoveryState] = {}
+    route = _route_document(expected_current)
+    for key in keys:
+        entry = state[key]
+        expected_config = _entry_config(entry)
+        if not _same_typed(_route_document(expected_config), route):
+            raise SwapStateError(
+                f"recovery route changed for {config.info.config_path}"
+            )
+        backup = _recovery_state(pathlib.Path(entry.backup_path), required=True)
+        expected_backup = _entry_backup(entry)
+        if not _same_typed(
+            expected_backup,
+            _recovery_document(backup, t.cast(FileState, backup.file)),
+        ):
+            raise SwapStateError(
+                f"backup no longer matches recovery state: {backup.path}"
+            )
+        backups[key] = backup
+
+    for newer, older in itertools.pairwise(keys):
+        newer_entry = state[newer]
+        older_file = _entry_config(state[older])["file"]
+        backup_file = _entry_backup(newer_entry)["file"]
+        if (
+            backup_file["sha256"] != older_file["sha256"]
+            or backup_file["size"] != older_file["size"]
+            or newer_entry.original_mode != older_file["mode"]
+        ):
+            raise SwapStateError(
+                f"recovery layers are not a valid stack: {config.info.config_path}"
+            )
+    return keys, backups
+
+
+def _snapshot_owned_state(
+    state: dict[tuple[CLIName, Scope], SwapEntry],
+) -> dict[str, OwnedConfig]:
+    """Authenticate every active config and backup owned by swap state."""
+    groups: dict[str, list[tuple[CLIName, Scope]]] = {}
+    for key, entry in state.items():
+        groups.setdefault(entry.config_path, []).append(key)
+
+    snapshots: dict[str, OwnedConfig] = {}
+    for logical, keys in groups.items():
+        clients = {cli for cli, _scope in keys}
+        if len(clients) != 1:
+            _raise_state(f"multiple clients claim recovery for {logical}")
+        cli = next(iter(clients))
+        config = _config_state(CLIS[cli])
+        chain, backups = _validate_config_chain(config, state)
+        if set(chain) != set(keys):
+            _raise_state(f"recovery stack is incomplete for {logical}")
+        snapshots[logical] = OwnedConfig(config, chain, backups)
+    return snapshots
+
+
+def _reject_transaction_aliases(
+    configs: list[tuple[str, ConfigState]],
+    recoveries: list[tuple[str, RecoveryState]],
+) -> None:
+    paths: dict[pathlib.Path, str] = {STATE_FILE.resolve(): "swap state"}
+    inodes: dict[tuple[int, int], str] = {}
+    if os.path.lexists(STATE_FILE):
+        state_file = _recovery_state(STATE_FILE, required=True)
+        inodes[
+            (
+                t.cast(FileState, state_file.file).device,
+                t.cast(FileState, state_file.file).inode,
+            )
+        ] = "swap state"
+
+    config_paths: dict[pathlib.Path, str] = {}
+    config_inodes: dict[tuple[int, int], str] = {}
+    for label, config in configs:
+        identity = (config.file.device, config.file.inode)
+        other = config_paths.get(config.target) or config_inodes.get(identity)
+        if other is not None:
+            _raise_state(f"duplicate physical config target for {other} and {label}")
+        owner = paths.get(config.target) or inodes.get(identity)
+        if owner is not None:
+            _raise_state(
+                f"duplicate transaction destination for {owner} and {label} config"
+            )
+        config_paths[config.target] = label
+        config_inodes[identity] = label
+        paths[config.target] = f"{label} config"
+        inodes[identity] = f"{label} config"
+
+    for label, recovery in recoveries:
+        identity = (
+            None
+            if recovery.file is None
+            else (recovery.file.device, recovery.file.inode)
+        )
+        owner = paths.get(recovery.physical)
+        if owner is None and identity is not None:
+            owner = inodes.get(identity)
+        if owner is not None:
+            _raise_state(f"duplicate transaction destination for {owner} and {label}")
+        paths[recovery.physical] = label
+        if identity is not None:
+            inodes[identity] = label
+
+
+def _plan_use_local(
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    server: str,
+    spec: McpServerSpec,
+    extra_env: dict[str, str],
+    state: dict[tuple[CLIName, Scope], SwapEntry],
+) -> tuple[list[SwapPlan], int]:
+    targets: list[CLIName] = list(dict.fromkeys(args.cli or present_clis()))
+    if not targets:
+        print("no CLIs detected — nothing to do", file=sys.stderr)
+        return [], 1
+
+    _validate_state_sequences(state)
+    owned_state = _snapshot_owned_state(state)
+    timestamp = time.strftime("%Y%m%d%H%M%S")
+    plans: list[SwapPlan] = []
+    selected_configs: list[tuple[str, ConfigState]] = []
+    had_error = 0
+    for cli in targets:
+        scope = _normalize_scope(cli, args.scope)
+        label = f"{cli}:{scope}" if cli == "claude" else cli
+        info = CLIS[cli]
+        if not os.path.lexists(info.config_path):
+            print(f"[{label}] skip — config not found at {info.config_path}")
+            had_error = 1
+            continue
+        try:
+            owned = owned_state.get(str(info.config_path))
+            config_state = owned.config if owned is not None else _config_state(info)
+            selected_configs.append((label, config_state))
+            chain, backups = (
+                (owned.chain, owned.backups) if owned is not None else ([], {})
+            )
+            config = _parse_config_bytes(info, config_state.file.data)
+            current = get_server(cli, config, server, repo, scope=scope)
+            if (
+                current
+                and _points_at(current, spec, repo)
+                and all(
+                    current.env.get(key) == value for key, value in extra_env.items()
+                )
+            ):
+                where = _describe_spec(spec, repo)
+                print(f"[{label}] already {where} — no change")
+                continue
+            base_env = dict(current.env) if current else {}
+            base_env.update(extra_env)
+            cli_spec = dataclasses.replace(spec, env=base_env) if base_env else spec
+            action = set_server(cli, config, server, cli_spec, repo, scope=scope)
+            new_bytes = dump_config_bytes(info, config, original=config_state.file.data)
+            key = (cli, scope)
+            prior = state.get(key)
+            backup_rewrites: list[BackupRewrite] = []
+            if prior is None:
+                suffix = f"{BACKUP_SUFFIX_PREFIX}{timestamp}"
+                if cli == "claude":
+                    suffix += f"-{scope}"
+                backup_path = _next_backup_path(
+                    info.config_path.with_suffix(info.config_path.suffix + suffix),
+                    set(),
+                )
+                backup = _recovery_state(backup_path)
+                backup_is_new = True
+                owner_key = None
+            else:
+                backup = backups[key]
+                backup_is_new = False
+                owner_key = chain[0]
+                selected_at = chain.index(key)
+                for index, newer_key in enumerate(chain[:selected_at]):
+                    newer_backup = backups[newer_key]
+                    newer_file = t.cast(FileState, newer_backup.file)
+                    historical = _parse_config_bytes(info, newer_file.data)
+                    set_server(
+                        cli,
+                        historical,
+                        server,
+                        cli_spec,
+                        repo,
+                        scope=scope,
+                    )
+                    rewritten = dump_config_bytes(
+                        info, historical, original=newer_file.data
+                    )
+                    backup_rewrites.append(
+                        BackupRewrite(
+                            newer_key,
+                            chain[index + 1],
+                            newer_backup,
+                            rewritten,
+                        )
+                    )
+            _check_backup_destination(backup.path)
+            _assert_destination_feasible(backup.physical)
+            _assert_destination_feasible(config_state.target)
+            for rewrite in backup_rewrites:
+                _assert_destination_feasible(rewrite.backup.physical)
+            plans.append(
+                SwapPlan(
+                    cli,
+                    scope,
+                    label,
+                    info,
+                    config_state,
+                    backup,
+                    new_bytes,
+                    action,
+                    server,
+                    timestamp,
+                    prior,
+                    owner_key,
+                    backup_is_new,
+                    tuple(backup_rewrites),
+                )
+            )
+        except (RuntimeError, ValueError, OSError, SwapStateError) as exc:
+            print(f"[{label}] {exc}", file=sys.stderr)
+            had_error = 1
+    if had_error:
+        return [], had_error
+
+    selected_logicals = {
+        str(config.info.config_path) for _label, config in selected_configs
+    }
+    all_configs = selected_configs + [
+        (f"{logical} owned config", owned.config)
+        for logical, owned in owned_state.items()
+        if logical not in selected_logicals
+    ]
+    recoveries = [
+        (f"{_state_key(*key)} backup", backup)
+        for owned in owned_state.values()
+        for key, backup in owned.backups.items()
+    ]
+    recoveries.extend(
+        (f"{plan.label} backup", plan.backup) for plan in plans if plan.prior is None
+    )
+    _reject_transaction_aliases(all_configs, recoveries)
+    _assert_destination_feasible(STATE_FILE)
+    return plans, 0
+
+
+def _stage_use_local(
+    plans: list[SwapPlan],
+    state: dict[tuple[CLIName, Scope], SwapEntry],
+    state_file: RecoveryState,
+) -> tuple[
+    list[StagedUse],
+    dict[tuple[CLIName, Scope], SwapEntry],
+    pathlib.Path,
+    pathlib.Path | None,
+    set[pathlib.Path],
+]:
+    owned: set[pathlib.Path] = set()
+    staged: list[StagedUse] = []
+    next_state = dict(state)
+    next_seq = max((entry.seq_no for entry in state.values()), default=-1) + 1
+    try:
+        for plan in plans:
+            output = _stage_file(
+                plan.config.target.parent,
+                plan.info.config_path.name,
+                "output",
+                plan.new_bytes,
+                plan.config.file.mode,
+            )
+            owned.add(output)
+            recovery = _stage_file(
+                plan.config.target.parent,
+                plan.info.config_path.name,
+                "recovery",
+                plan.config.file.data,
+                plan.config.file.mode,
+            )
+            owned.add(recovery)
+            backup_stage = None
+            if plan.backup_is_new:
+                backup_stage = _stage_file(
+                    plan.backup.parent.physical,
+                    plan.backup.path.name,
+                    "backup",
+                    plan.config.file.data,
+                    0o600,
+                )
+                owned.add(backup_stage)
+                backup_file = _file_state(backup_stage)
+                plan.backup_note = f"backup: {plan.backup.path}"
+            else:
+                backup_file = t.cast(FileState, plan.backup.file)
+                plan.backup_note = f"pre-swap backup kept: {plan.backup.path}"
+
+            staged_rewrites: list[StagedBackupRewrite] = []
+            for rewrite in plan.backup_rewrites:
+                rewrite_file = t.cast(FileState, rewrite.backup.file)
+                rewrite_output = _stage_file(
+                    rewrite.backup.parent.physical,
+                    rewrite.backup.path.name,
+                    "backup-output",
+                    rewrite.new_bytes,
+                    rewrite_file.mode,
+                )
+                owned.add(rewrite_output)
+                rewrite_recovery = _stage_file(
+                    rewrite.backup.parent.physical,
+                    rewrite.backup.path.name,
+                    "backup-recovery",
+                    rewrite_file.data,
+                    rewrite_file.mode,
+                )
+                owned.add(rewrite_recovery)
+                staged_rewrites.append(
+                    StagedBackupRewrite(rewrite, rewrite_output, rewrite_recovery)
+                )
+                output_state = _file_state(rewrite_output)
+                backup_owner = next_state[rewrite.key]
+                next_state[rewrite.key] = dataclasses.replace(
+                    backup_owner,
+                    expected_backup=_recovery_document(rewrite.backup, output_state),
+                )
+                revealed_owner = next_state[rewrite.revealed_key]
+                revealed_mode = t.cast(int, backup_owner.original_mode)
+                revealed_state = output_state._replace(mode=revealed_mode)
+                next_state[rewrite.revealed_key] = dataclasses.replace(
+                    revealed_owner,
+                    expected_config=_config_document(plan.config, revealed_state),
+                )
+
+            output_file = _file_state(output)
+            if plan.prior is None:
+                key = (plan.cli, plan.scope)
+                next_state[key] = SwapEntry(
+                    config_path=str(plan.info.config_path),
+                    backup_path=str(plan.backup.path),
+                    server=plan.server,
+                    action=plan.action,
+                    swapped_at=plan.swapped_at,
+                    seq_no=next_seq,
+                    target_path=str(plan.config.target),
+                    version=STATE_VERSION,
+                    original_mode=plan.config.file.mode,
+                    expected_config=_config_document(plan.config, output_file),
+                    expected_backup=_recovery_document(plan.backup, backup_file),
+                )
+                next_seq += 1
+            else:
+                owner_key = t.cast(tuple[CLIName, Scope], plan.owner_key)
+                owner = next_state[owner_key]
+                next_state[owner_key] = dataclasses.replace(
+                    owner,
+                    expected_config=_config_document(plan.config, output_file),
+                )
+            staged.append(
+                StagedUse(
+                    plan,
+                    output,
+                    recovery,
+                    backup_stage,
+                    tuple(staged_rewrites),
+                )
+            )
+
+        state_stage = _stage_file(
+            state_file.parent.physical,
+            state_file.path.name,
+            "state",
+            _state_bytes(next_state),
+            0o600,
+        )
+        owned.add(state_stage)
+        state_recovery = None
+        if state_file.file is not None:
+            state_recovery = _stage_file(
+                state_file.parent.physical,
+                state_file.path.name,
+                "state-recovery",
+                state_file.file.data,
+                state_file.file.mode,
+            )
+            owned.add(state_recovery)
+    except Exception:
+        _cleanup_owned(owned)
+        raise
+    return staged, next_state, state_stage, state_recovery, owned
+
+
+def _restore_config_stage(item: StagedUse, committed: FileState | None) -> None:
+    config = item.plan.config
+    if committed is None:
+        if os.path.lexists(config.target):
+            _raise_changed(f"{config.target} appeared before rollback")
+    else:
+        _verify_config(config, committed)
+    operation = _publish_absent if committed is None else _apply_replace
+    restored, _delayed_error = operation(item.recovery, config.target)
+    if restored != config.file:
+        _raise_changed(f"{item.plan.label} config rollback changed identity")
+    _verify_config(config, config.file)
+
+
+def _commit_use_local(
+    staged: list[StagedUse],
+    next_state: dict[tuple[CLIName, Scope], SwapEntry],
+    state_file: RecoveryState,
+    state_stage: pathlib.Path,
+    state_recovery: pathlib.Path | None,
+    owned: set[pathlib.Path],
+) -> int:
+    committed_backups: list[tuple[StagedUse, FileState]] = []
+    rewritten_backups: list[tuple[StagedBackupRewrite, FileState | None]] = []
+    config_operations: list[tuple[StagedUse, FileState | None]] = []
+    state_committed: FileState | None = None
+    state_removed = False
+    try:
+        for item in staged:
+            _verify_config(item.plan.config, item.plan.config.file)
+            _verify_recovery(item.plan.backup, item.plan.backup.file)
+            for rewrite in item.backup_rewrites:
+                _verify_recovery(rewrite.plan.backup, rewrite.plan.backup.file)
+        _verify_recovery(state_file, state_file.file)
+
+        for item in staged:
+            if item.backup is None:
+                continue
+            _verify_config(item.plan.config, item.plan.config.file)
+            _verify_recovery(item.plan.backup, None)
+            committed, delayed_error = _publish_absent(
+                item.backup, item.plan.backup.physical
+            )
+            owned.discard(item.backup)
+            committed_backups.append((item, committed))
+            _raise_if_delayed(delayed_error)
+
+        for item in staged:
+            for rewrite in item.backup_rewrites:
+                backup = rewrite.plan.backup
+                _verify_recovery(backup, backup.file)
+                moved, delayed_error = _apply_replace(backup.physical, rewrite.recovery)
+                rewritten_backups.append((rewrite, None))
+                if moved != backup.file:
+                    _raise_changed(f"backup recovery identity changed: {backup.path}")
+                _raise_if_delayed(delayed_error)
+                committed, delayed_error = _publish_absent(
+                    rewrite.output, backup.physical
+                )
+                owned.discard(rewrite.output)
+                rewritten_backups[-1] = (rewrite, committed)
+                _raise_if_delayed(delayed_error)
+
+        for item in staged:
+            expected = next(
+                (
+                    committed
+                    for committed_item, committed in committed_backups
+                    if committed_item is item
+                ),
+                item.plan.backup.file,
+            )
+            _verify_config(item.plan.config, item.plan.config.file)
+            _verify_recovery(item.plan.backup, expected)
+            for rewrite in item.backup_rewrites:
+                committed = next(
+                    current
+                    for current_rewrite, current in rewritten_backups
+                    if current_rewrite is rewrite
+                )
+                _verify_recovery(rewrite.plan.backup, committed)
+        _verify_recovery(state_file, state_file.file)
+
+        if state_file.file is not None:
+            recovery = t.cast(pathlib.Path, state_recovery)
+            moved, delayed_error = _apply_replace(state_file.physical, recovery)
+            state_removed = True
+            if moved != state_file.file:
+                _raise_changed("swap state recovery identity changed")
+            _raise_if_delayed(delayed_error)
+        state_committed, delayed_error = _publish_absent(
+            state_stage, state_file.physical
+        )
+        owned.discard(state_stage)
+        _raise_if_delayed(delayed_error)
+
+        for item in staged:
+            plan = item.plan
+            _verify_config(plan.config, plan.config.file)
+            current_state = _recovery_state(STATE_FILE, required=True)
+            if current_state.file != state_committed:
+                _raise_changed("swap state changed before config commit")
+            moved, delayed_error = _apply_replace(plan.config.target, item.recovery)
+            config_operations.append((item, None))
+            if moved != plan.config.file:
+                _raise_changed(f"{plan.label} config recovery identity changed")
+            _raise_if_delayed(delayed_error)
+            committed, delayed_error = _publish_absent(item.output, plan.config.target)
+            owned.discard(item.output)
+            config_operations[-1] = (item, committed)
+            _raise_if_delayed(delayed_error)
+            _verify_config(plan.config, committed)
+            owner_key = (
+                (plan.cli, plan.scope)
+                if plan.prior is None
+                else t.cast(tuple[CLIName, Scope], plan.owner_key)
+            )
+            if not _same_typed(
+                _entry_config(next_state[owner_key]),
+                _config_document(plan.config, committed),
+            ):
+                _raise_changed(f"{plan.label} recovery state does not own the config")
+    except Exception as exc:  # noqa: BLE001
+        rollback_errors: list[str] = []
+        preserved: set[pathlib.Path] = set()
+        for item, committed in reversed(config_operations):
+            try:
+                _restore_config_stage(item, committed)
+                owned.discard(item.recovery)
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f"{item.plan.label} config: {rollback_exc}")
+                if item.recovery.exists():
+                    preserved.add(item.recovery)
+
+        if rollback_errors:
+            if os.path.lexists(STATE_FILE):
+                preserved.add(STATE_FILE)
+            if state_recovery is not None and state_recovery.exists():
+                preserved.add(state_recovery)
+            preserved.update(item.plan.backup.path for item, _ in committed_backups)
+        else:
+            try:
+                if state_committed is not None:
+                    _verify_recovery(
+                        _recovery_state(STATE_FILE, required=True), state_committed
+                    )
+                    if state_file.file is None:
+                        STATE_FILE.unlink()
+                    else:
+                        recovery = t.cast(pathlib.Path, state_recovery)
+                        restored, _delayed_error = _apply_replace(
+                            recovery, state_file.physical
+                        )
+                        owned.discard(recovery)
+                        if restored != state_file.file:
+                            _raise_changed("swap state rollback changed identity")
+                elif state_removed:
+                    recovery = t.cast(pathlib.Path, state_recovery)
+                    if os.path.lexists(STATE_FILE):
+                        _raise_changed("swap state appeared before rollback")
+                    restored, _delayed_error = _publish_absent(
+                        recovery, state_file.physical
+                    )
+                    owned.discard(recovery)
+                    if restored != state_file.file:
+                        _raise_changed("swap state rollback changed identity")
+                _verify_recovery(state_file, state_file.file)
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f"recovery state: {rollback_exc}")
+                if state_recovery is not None and state_recovery.exists():
+                    preserved.add(state_recovery)
+                preserved.update(item.plan.backup.path for item, _ in committed_backups)
+
+        if not rollback_errors:
+            for rewrite, committed in reversed(rewritten_backups):
+                backup = rewrite.plan.backup
+                try:
+                    if committed is None:
+                        if os.path.lexists(backup.path):
+                            _raise_changed(f"{backup.path} appeared before rollback")
+                    else:
+                        _verify_recovery(backup, committed)
+                    operation = _publish_absent if committed is None else _apply_replace
+                    restored, _delayed_error = operation(
+                        rewrite.recovery, backup.physical
+                    )
+                    owned.discard(rewrite.recovery)
+                    if restored != backup.file:
+                        _raise_changed(f"{backup.path} rollback changed identity")
+                    _verify_recovery(backup, backup.file)
+                except Exception as rollback_exc:  # noqa: BLE001
+                    rollback_errors.append(f"backup {backup.path}: {rollback_exc}")
+                    if rewrite.recovery.exists():
+                        preserved.add(rewrite.recovery)
+                    if os.path.lexists(backup.path):
+                        preserved.add(backup.path)
+
+        if rollback_errors:
+            preserved.update(item.plan.backup.path for item, _ in committed_backups)
+            preserved.update(
+                rewrite.recovery
+                for rewrite, _ in rewritten_backups
+                if rewrite.recovery.exists()
+            )
+
+        if not rollback_errors:
+            for item, committed in reversed(committed_backups):
+                try:
+                    _verify_recovery(
+                        _recovery_state(item.plan.backup.path, required=True), committed
+                    )
+                    item.plan.backup.path.unlink()
+                except Exception as rollback_exc:  # noqa: BLE001
+                    rollback_errors.append(f"{item.plan.label} backup: {rollback_exc}")
+                    preserved.add(item.plan.backup.path)
+
+        cleanup_errors = _cleanup_owned(owned, preserved)
+        details = [f"swap failed: {exc}"]
+        if rollback_errors:
+            details.append("rollback incomplete: " + "; ".join(rollback_errors))
+        if cleanup_errors:
+            details.append("cleanup incomplete: " + "; ".join(cleanup_errors))
+        if preserved:
+            details.append(
+                "recovery artifacts: "
+                + ", ".join(str(path) for path in sorted(preserved, key=str))
+            )
+        print("; ".join(details), file=sys.stderr)
+        return 1
+
+    cleanup_errors = _cleanup_owned(owned)
+    if cleanup_errors:
+        print("; ".join(cleanup_errors), file=sys.stderr)
+        return 1
+    for item in staged:
+        print(f"[{item.plan.label}] {item.plan.action}; {item.plan.backup_note}")
+    return 0
+
+
 def _cmd_use_local(args: argparse.Namespace) -> int:
-    """Rewrite each target CLI's config to run the repo, or a pull request.
-
-    Which build the entry runs is chosen by ``--source``; see the module
-    docstring for what each one costs.
-
-    The optional ``--scope`` flag selects Claude's user-level fallback
-    vs. per-project override; see :data:`Scope`. The flag is silently
-    coerced to ``"user"`` for non-Claude CLIs by :func:`_normalize_scope`.
-    """
+    """Plan, stage, and commit every selected config as one transaction."""
     repo = pathlib.Path(args.repo).resolve()
     crate = getattr(args, "crate", None) or DEFAULT_CRATE
     server, default_binary = resolve_repo_meta(repo, crate)
@@ -1853,15 +3170,7 @@ def _cmd_use_local(args: argparse.Namespace) -> int:
     binary = args.entry or default_binary
     extra_env = dict(args.env or [])
     source: Source = getattr(args, "source", "debug")
-
-    # A config naming a binary that was never built leaves every agent
-    # failing to start a server, and the failure surfaces inside the agent
-    # rather than here.
     try:
-        if source in ("debug", "release") and not getattr(args, "no_build", False):
-            cargo_build(repo, binary, source, crate)
-        if source == "published":
-            install_published(crate, args.version, binary)
         spec = build_source_spec(
             source,
             repo=repo,
@@ -1872,6 +3181,49 @@ def _cmd_use_local(args: argparse.Namespace) -> int:
                 pathlib.Path(args.bin) if getattr(args, "bin", None) else None
             ),
         )
+    except RuntimeError as exc:
+        print(f"{source}: {exc}", file=sys.stderr)
+        return 1
+    spec = dataclasses.replace(spec, env=dict(extra_env))
+
+    hint = _naming_hint(repo, server)
+    if hint:
+        print(hint, file=sys.stderr)
+    try:
+        if args.dry_run:
+            state = load_state(strict=True)
+            state_file = None
+        else:
+            state, state_file = _strict_state_snapshot()
+        plans, error = _plan_use_local(args, repo, server, spec, extra_env, state)
+    except (OSError, RuntimeError, ValueError, SwapStateError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if error:
+        return error
+
+    if args.dry_run:
+        for plan in plans:
+            print(f"--- {plan.info.config_path} (current)")
+            print(f"+++ {plan.info.config_path} (proposed)")
+            diff = difflib.unified_diff(
+                plan.config.file.data.decode(errors="replace").splitlines(
+                    keepends=True
+                ),
+                plan.new_bytes.decode(errors="replace").splitlines(keepends=True),
+                lineterm="",
+            )
+            sys.stdout.writelines(diff)
+        return 0
+
+    if not plans:
+        return 0
+
+    try:
+        if source in ("debug", "release") and not getattr(args, "no_build", False):
+            cargo_build(repo, binary, source, crate)
+        if source == "published":
+            install_published(crate, args.version, binary)
     except (RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"{source}: {exc}", file=sys.stderr)
         return 1
@@ -1880,20 +3232,6 @@ def _cmd_use_local(args: argparse.Namespace) -> int:
     if spec.command != "cargo" and not launcher.is_file():
         print(f"{source}: {launcher} does not exist", file=sys.stderr)
         return 1
-    spec = dataclasses.replace(spec, env=dict(extra_env))
-
-    hint = _naming_hint(repo, server)
-    if hint:
-        print(hint, file=sys.stderr)
-
-    targets: list[CLIName] = list(dict.fromkeys(args.cli or present_clis()))
-    if not targets:
-        print("no CLIs detected — nothing to do", file=sys.stderr)
-        return 1
-
-    # Runs under --dry-run too, and for every source: starting the server
-    # once here is the difference between finding out that a build cannot
-    # speak the protocol now, and finding out from inside each agent.
     if not args.no_preflight:
         print(f"preflight: {spec.command} {' '.join(spec.args)}", file=sys.stderr)
         failure = preflight_spec(spec)
@@ -1901,204 +3239,21 @@ def _cmd_use_local(args: argparse.Namespace) -> int:
             print(f"preflight failed, nothing written:\n{failure}", file=sys.stderr)
             return 1
 
-    ts = time.strftime("%Y%m%d%H%M%S")
-    state = load_state(strict=True)
-    prepared: list[_PreparedTarget] = []
-    disk_bytes: dict[pathlib.Path, bytes] = {}
-    planned_bytes: dict[pathlib.Path, bytes] = {}
-    had_error = 0
-    for cli in targets:
-        scope = _normalize_scope(cli, args.scope)
-        label = f"{cli}:{scope}" if cli == "claude" else cli
-        info = CLIS[cli]
-        if not info.config_path.exists():
-            print(f"[{label}] skip — config not found at {info.config_path}")
-            had_error = 1
-            continue
-        target_path = info.config_path.resolve()
-        target_info = dataclasses.replace(info, config_path=target_path)
-        try:
-            observed = target_path.read_bytes()
-            baseline = disk_bytes.setdefault(target_path, observed)
-            if observed != baseline:
-                print(f"[{label}] config changed during preparation", file=sys.stderr)
-                had_error = 1
-                continue
-            original_bytes = planned_bytes.get(target_path, baseline)
-            config = _parse_config_bytes(target_info, original_bytes)
-            current = get_server(cli, config, server, repo, scope=scope)
-            if (
-                current
-                and _points_at(current, spec, repo)
-                and all(current.env.get(k) == v for k, v in extra_env.items())
-            ):
-                where = _describe_spec(spec, repo)
-                print(f"[{label}] already {where} — no change")
-                planned_bytes.setdefault(target_path, original_bytes)
-                continue
-            # Preserve client-side settings; an explicit --env value wins.
-            base_env = dict(current.env) if current else {}
-            base_env.update(extra_env)
-            cli_spec = (
-                dataclasses.replace(spec, env=base_env)
-                if (current or extra_env)
-                else spec
-            )
-            action = set_server(cli, config, server, cli_spec, repo, scope=scope)
-            new_bytes = dump_config_bytes(info, config, original=original_bytes)
-            planned_bytes[target_path] = new_bytes
-            prepared.append(
-                _PreparedTarget(
-                    cli=cli,
-                    scope=scope,
-                    label=label,
-                    info=info,
-                    target_path=target_path,
-                    original_bytes=original_bytes,
-                    new_bytes=new_bytes,
-                    action=action,
-                )
-            )
-        except (RuntimeError, ValueError, OSError) as exc:
-            print(f"[{label}] {exc}", file=sys.stderr)
-            had_error = 1
-            continue
-
-    if args.dry_run:
-        for item in prepared:
-            print(f"--- {item.info.config_path} (current)")
-            print(f"+++ {item.info.config_path} (proposed)")
-            diff = difflib.unified_diff(
-                item.original_bytes.decode(errors="replace").splitlines(
-                    keepends=True
-                ),
-                item.new_bytes.decode(errors="replace").splitlines(keepends=True),
-                lineterm="",
-            )
-            sys.stdout.writelines(diff)
-        return had_error
-
-    if had_error:
-        return had_error
-
-    for target_path, original_bytes in disk_bytes.items():
-        try:
-            unchanged = target_path.read_bytes() == original_bytes
-        except OSError as exc:
-            print(
-                f"config changed during preparation: {target_path}: {exc}",
-                file=sys.stderr,
-            )
-            return 1
-        if not unchanged:
-            print(
-                f"config changed during preparation: {target_path}; nothing written",
-                file=sys.stderr,
-            )
-            return 1
-
-    planned_state = dict(state)
-    reserved_backups: set[pathlib.Path] = set()
-    for item in prepared:
-        key = (item.cli, item.scope)
-        prior = planned_state.get(key)
-        prior_backup = pathlib.Path(prior.backup_path) if prior is not None else None
-        # Re-swapping a layer keeps its sole pre-swap copy and LIFO position.
-        if prior_backup is not None and prior_backup.exists():
-            backup_path = prior_backup
-        else:
-            if prior is not None:
-                print(
-                    f"[{item.label}] recorded backup is gone ({prior.backup_path}); "
-                    "the new backup captures the already-swapped config, not the "
-                    "original",
-                    file=sys.stderr,
-                )
-            backup_suffix = f"{BACKUP_SUFFIX_PREFIX}{ts}"
-            if item.cli == "claude":
-                backup_suffix += f"-{item.scope}"
-            item.backup_base = item.info.config_path.with_suffix(
-                item.info.config_path.suffix + backup_suffix
-            )
-            backup_path = _next_backup_path(item.backup_base, reserved_backups)
-            try:
-                _check_backup_destination(backup_path)
-            except OSError as exc:
-                print(f"[{item.label}] cannot write backup: {exc}", file=sys.stderr)
-                return 1
-            reserved_backups.add(backup_path)
-        if prior is not None and backup_path == prior_backup:
-            seq_no, swapped_at = prior.seq_no, prior.swapped_at
-        else:
-            seq_no = max((e.seq_no for e in planned_state.values()), default=-1) + 1
-            swapped_at = ts
-        item.backup_path = backup_path
-        item.state_entry = SwapEntry(
-            config_path=str(item.info.config_path),
-            backup_path=str(backup_path),
-            server=server,
-            action=item.action,
-            swapped_at=swapped_at,
-            seq_no=seq_no,
-            target_path=str(item.target_path),
+    try:
+        staged, next_state, state_stage, state_recovery, owned = _stage_use_local(
+            plans, state, t.cast(RecoveryState, state_file)
         )
-        planned_state[key] = item.state_entry
-
-    for item in prepared:
-        assert item.backup_path is not None
-        assert item.state_entry is not None
-        backup_path = item.backup_path
-        if item.backup_base is None:
-            backup_note = f"pre-swap backup kept: {backup_path}"
-        else:
-            try:
-                backup_path = write_new_backup(item.backup_base, item.original_bytes)
-            except OSError as exc:
-                print(f"[{item.label}] cannot write backup: {exc}", file=sys.stderr)
-                had_error = 1
-                continue
-            backup_note = f"backup: {backup_path}"
-        entry = dataclasses.replace(item.state_entry, backup_path=str(backup_path))
-        next_state = dict(state)
-        next_state[(item.cli, item.scope)] = entry
-        try:
-            save_state(next_state)
-        except OSError as exc:
-            print(
-                f"[{item.label}] cannot save recovery state ({exc}); config unchanged; "
-                f"backup at {backup_path}",
-                file=sys.stderr,
-            )
-            had_error = 1
-            continue
-        previous_state = state
-        state = next_state
-        try:
-            atomic_write(item.target_path, item.new_bytes)
-            _revalidate(dataclasses.replace(item.info, config_path=item.target_path))
-        except Exception as exc:
-            try:
-                atomic_write(item.target_path, item.original_bytes)
-            except Exception as rollback_exc:
-                rollback_note = f"; rollback failed ({rollback_exc})"
-            else:
-                rollback_note = "; original config restored"
-                try:
-                    _save_or_clear_state(previous_state)
-                except OSError as state_exc:
-                    rollback_note += f"; recovery state cleanup failed ({state_exc})"
-                else:
-                    state = previous_state
-            print(
-                f"[{item.label}] write failed ({exc}){rollback_note}; "
-                f"backup at {backup_path}",
-                file=sys.stderr,
-            )
-            had_error = 1
-            continue
-        print(f"[{item.label}] {item.action}; {backup_note}")
-
-    return had_error
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"swap staging failed: {exc}", file=sys.stderr)
+        return 1
+    return _commit_use_local(
+        staged,
+        next_state,
+        t.cast(RecoveryState, state_file),
+        state_stage,
+        state_recovery,
+        owned,
+    )
 
 
 def cmd_use_local(args: argparse.Namespace) -> int:
@@ -2115,96 +3270,382 @@ def cmd_use_local(args: argparse.Namespace) -> int:
         return 1
 
 
-def _revalidate(info: CLIInfo) -> None:
-    """Re-parse the file after writing; raise on failure."""
-    load_config(info)
+def _plan_revert(
+    args: argparse.Namespace,
+    state: dict[tuple[CLIName, Scope], SwapEntry],
+) -> tuple[list[RevertPlan], int]:
+    targets = list(dict.fromkeys(args.cli or (cli for cli, _scope in state)))
+    if not targets:
+        print("no recorded swaps — nothing to revert", file=sys.stderr)
+        return [], 1
+
+    selected: list[tuple[CLIName, Scope]] = []
+    for cli in targets:
+        scopes = (
+            (_normalize_scope(cli, args.scope),)
+            if args.scope is not None
+            else ALL_SCOPES
+        )
+        keys = [key for key in state if key[0] == cli and key[1] in scopes]
+        if not keys:
+            label = f"{cli}:{args.scope}" if args.scope and cli == "claude" else cli
+            print(f"[{label}] no state entry — skip")
+        selected.extend(keys)
+    if not selected:
+        return [], 0
+
+    _validate_state_sequences(state)
+    logical_owners: dict[str, str] = {}
+    for key in selected:
+        logical = state[key].config_path
+        label = _state_key(*key)
+        if logical in logical_owners:
+            print(
+                "duplicate physical config target for "
+                f"{logical_owners[logical]} and {label}",
+                file=sys.stderr,
+            )
+            return [], 1
+        logical_owners[logical] = label
+
+    plans: list[RevertPlan] = []
+    try:
+        owned_state = _snapshot_owned_state(state)
+        for key in selected:
+            cli, _scope = key
+            entry = state[key]
+            info = CLIS[cli]
+            if str(info.config_path) != entry.config_path:
+                _raise_state(f"recovery config path changed for {cli}")
+            owned = owned_state[entry.config_path]
+            config = owned.config
+            chain = owned.chain
+            backups = owned.backups
+            if not chain or chain[0] != key:
+                _raise_state(
+                    f"selected recovery layer is not the top of {info.config_path}"
+                )
+            backup = backups[key]
+            backup_file = t.cast(FileState, backup.file)
+            if entry.original_mode is None:
+                _raise_state(f"recovery mode is missing for {info.config_path}")
+            _check_backup_destination(backup.path)
+            _assert_destination_feasible(backup.physical)
+            _assert_destination_feasible(config.target)
+            plans.append(
+                RevertPlan(
+                    config,
+                    key,
+                    backup,
+                    backup_file.data,
+                    entry.original_mode,
+                )
+            )
+        configs = [
+            (f"{logical} owned config", owned.config)
+            for logical, owned in owned_state.items()
+        ]
+        recoveries = [
+            (f"{_state_key(*key)} backup", backup)
+            for owned in owned_state.values()
+            for key, backup in owned.backups.items()
+        ]
+        _reject_transaction_aliases(configs, recoveries)
+        _assert_destination_feasible(STATE_FILE)
+    except (OSError, RuntimeError, ValueError, SwapStateError) as exc:
+        print(exc, file=sys.stderr)
+        return [], 1
+    return plans, 0
+
+
+def _stage_revert(
+    plans: list[RevertPlan],
+    state: dict[tuple[CLIName, Scope], SwapEntry],
+    state_file: RecoveryState,
+) -> tuple[
+    list[StagedRevert],
+    dict[tuple[CLIName, Scope], SwapEntry],
+    pathlib.Path | None,
+    pathlib.Path,
+    set[pathlib.Path],
+]:
+    owned: set[pathlib.Path] = set()
+    staged: list[StagedRevert] = []
+    next_state = dict(state)
+    try:
+        for plan in plans:
+            restored = _stage_file(
+                plan.config.target.parent,
+                plan.config.info.config_path.name,
+                "restore",
+                plan.restore_bytes,
+                plan.restore_mode,
+            )
+            owned.add(restored)
+            recovery = _stage_file(
+                plan.config.target.parent,
+                plan.config.info.config_path.name,
+                "recovery",
+                plan.config.file.data,
+                plan.config.file.mode,
+            )
+            owned.add(recovery)
+            backup_file = t.cast(FileState, plan.backup.file)
+            backup_recovery = _stage_file(
+                plan.backup.parent.physical,
+                plan.backup.path.name,
+                "recovery",
+                backup_file.data,
+                backup_file.mode,
+            )
+            owned.add(backup_recovery)
+            staged.append(StagedRevert(plan, restored, recovery, backup_recovery))
+            next_state.pop(plan.key)
+
+        for item in staged:
+            remaining = [
+                key
+                for key, entry in next_state.items()
+                if entry.config_path == str(item.plan.config.info.config_path)
+            ]
+            if not remaining:
+                continue
+            top = max(remaining, key=lambda key: next_state[key].seq_no)
+            next_state[top] = dataclasses.replace(
+                next_state[top],
+                expected_config=_config_document(
+                    item.plan.config, _file_state(item.restored)
+                ),
+            )
+
+        state_stage = None
+        if next_state:
+            state_stage = _stage_file(
+                state_file.parent.physical,
+                state_file.path.name,
+                "state",
+                _state_bytes(next_state),
+                0o600,
+            )
+            owned.add(state_stage)
+        current_state = t.cast(FileState, state_file.file)
+        state_recovery = _stage_file(
+            state_file.parent.physical,
+            state_file.path.name,
+            "state-recovery",
+            current_state.data,
+            current_state.mode,
+        )
+        owned.add(state_recovery)
+    except Exception:
+        _cleanup_owned(owned)
+        raise
+    return staged, next_state, state_stage, state_recovery, owned
+
+
+def _commit_revert(
+    staged: list[StagedRevert],
+    next_state: dict[tuple[CLIName, Scope], SwapEntry],
+    state_file: RecoveryState,
+    state_stage: pathlib.Path | None,
+    state_recovery: pathlib.Path,
+    owned: set[pathlib.Path],
+) -> int:
+    config_operations: list[tuple[StagedRevert, FileState | None]] = []
+    removed_backups: list[tuple[RecoveryState, pathlib.Path]] = []
+    state_committed: FileState | None = None
+    state_removed = False
+    try:
+        for item in staged:
+            _verify_config(item.plan.config, item.plan.config.file)
+            _verify_recovery(item.plan.backup, item.plan.backup.file)
+        _verify_recovery(state_file, state_file.file)
+
+        for item in staged:
+            plan = item.plan
+            _verify_config(plan.config, plan.config.file)
+            _verify_recovery(plan.backup, plan.backup.file)
+            moved, delayed_error = _apply_replace(plan.config.target, item.recovery)
+            config_operations.append((item, None))
+            if moved != plan.config.file:
+                _raise_changed("config recovery identity changed")
+            _raise_if_delayed(delayed_error)
+            committed, delayed_error = _publish_absent(
+                item.restored, plan.config.target
+            )
+            owned.discard(item.restored)
+            config_operations[-1] = (item, committed)
+            _raise_if_delayed(delayed_error)
+            _verify_config(plan.config, committed)
+            remaining = [
+                key
+                for key, entry in next_state.items()
+                if entry.config_path == str(plan.config.info.config_path)
+            ]
+            if remaining:
+                top = max(remaining, key=lambda key: next_state[key].seq_no)
+                if not _same_typed(
+                    _entry_config(next_state[top]),
+                    _config_document(plan.config, committed),
+                ):
+                    _raise_changed("remaining recovery state does not own config")
+
+        _verify_recovery(state_file, state_file.file)
+        moved, delayed_error = _apply_replace(state_file.physical, state_recovery)
+        state_removed = True
+        if moved != state_file.file:
+            _raise_changed("swap state recovery identity changed")
+        _raise_if_delayed(delayed_error)
+        if state_stage is not None:
+            state_committed, delayed_error = _publish_absent(
+                state_stage, state_file.physical
+            )
+            owned.discard(state_stage)
+            _raise_if_delayed(delayed_error)
+        elif os.path.lexists(STATE_FILE):
+            _raise_changed("swap state remained after removal")
+
+        for item in staged:
+            backup = item.plan.backup
+            _verify_recovery(backup, backup.file)
+            if state_committed is not None:
+                current_state = _recovery_state(STATE_FILE, required=True)
+                if current_state.file != state_committed:
+                    _raise_changed("swap state changed before backup removal")
+            elif os.path.lexists(STATE_FILE):
+                _raise_changed("swap state reappeared before backup removal")
+            moved, delayed_error = _apply_replace(backup.physical, item.backup_recovery)
+            removed_backups.append((backup, item.backup_recovery))
+            if moved != backup.file:
+                _raise_changed(f"backup recovery identity changed: {backup.path}")
+            _raise_if_delayed(delayed_error)
+            if os.path.lexists(backup.path):
+                _raise_changed(f"backup remained after removal: {backup.path}")
+    except Exception as exc:  # noqa: BLE001
+        rollback_errors: list[str] = []
+        preserved: set[pathlib.Path] = set()
+        for backup, recovery in reversed(removed_backups):
+            try:
+                if os.path.lexists(backup.path):
+                    _raise_changed(f"{backup.path} appeared before rollback")
+                restored, _delayed_error = _publish_absent(recovery, backup.physical)
+                owned.discard(recovery)
+                if restored != backup.file:
+                    _raise_changed(f"{backup.path} rollback changed identity")
+                _verify_recovery(backup, backup.file)
+            except Exception as rollback_exc:  # noqa: BLE001
+                rollback_errors.append(f"backup {backup.path}: {rollback_exc}")
+                if recovery.exists():
+                    preserved.add(recovery)
+
+        try:
+            if state_removed:
+                if state_committed is not None:
+                    current = _recovery_state(STATE_FILE, required=True)
+                    if current.file != state_committed:
+                        _raise_changed("swap state changed before rollback")
+                elif os.path.lexists(STATE_FILE):
+                    _raise_changed("swap state appeared before rollback")
+                operation = (
+                    _apply_replace if state_committed is not None else _publish_absent
+                )
+                restored, _delayed_error = operation(
+                    state_recovery, state_file.physical
+                )
+                owned.discard(state_recovery)
+                if restored != state_file.file:
+                    _raise_changed("swap state rollback changed identity")
+                _verify_recovery(state_file, state_file.file)
+        except Exception as rollback_exc:  # noqa: BLE001
+            rollback_errors.append(f"recovery state: {rollback_exc}")
+            if state_recovery.exists():
+                preserved.add(state_recovery)
+
+        for item, committed in reversed(config_operations):
+            try:
+                if committed is None:
+                    if os.path.lexists(item.plan.config.target):
+                        _raise_changed("config appeared before rollback")
+                else:
+                    _verify_config(item.plan.config, committed)
+                operation = _apply_replace if committed is not None else _publish_absent
+                restored, _delayed_error = operation(
+                    item.recovery, item.plan.config.target
+                )
+                owned.discard(item.recovery)
+                if restored != item.plan.config.file:
+                    _raise_changed("config rollback changed identity")
+                _verify_config(item.plan.config, item.plan.config.file)
+            except Exception as rollback_exc:  # noqa: BLE001
+                label = item.plan.config.info.name
+                rollback_errors.append(f"{label} config: {rollback_exc}")
+                if item.recovery.exists():
+                    preserved.add(item.recovery)
+
+        cleanup_errors = _cleanup_owned(owned, preserved)
+        details = [f"revert failed: {exc}"]
+        if rollback_errors:
+            details.append("rollback incomplete: " + "; ".join(rollback_errors))
+        if cleanup_errors:
+            details.append("cleanup incomplete: " + "; ".join(cleanup_errors))
+        if preserved:
+            details.append(
+                "recovery artifacts: "
+                + ", ".join(str(path) for path in sorted(preserved, key=str))
+            )
+        print("; ".join(details), file=sys.stderr)
+        return 1
+
+    cleanup_errors = _cleanup_owned(owned)
+    if cleanup_errors:
+        print("; ".join(cleanup_errors), file=sys.stderr)
+        return 1
+    for item in staged:
+        cli, scope = item.plan.key
+        label = f"{cli}:{scope}" if cli == "claude" else cli
+        print(f"[{label}] restored from {item.plan.backup.path}")
+    return 0
 
 
 def _cmd_revert(args: argparse.Namespace) -> int:
-    """Restore each target CLI's config from the backup recorded in the state file.
-
-    Without ``--scope``, every recorded entry for the targeted CLIs is
-    reverted (so a Claude install that has both user-scope and
-    project-scope swaps gets both restored). With ``--scope``, only
-    the matching scope is reverted; the parameter is silently coerced
-    to ``"user"`` for non-Claude CLIs.
-    """
-    state = load_state(strict=True)
-    # Without --cli, revert every CLI that has any recorded swap.
-    targets = list(args.cli) if args.cli else list({cli for cli, _scope in state})
-    if not targets:
-        print("no recorded swaps — nothing to revert", file=sys.stderr)
+    """Restore all selected recovery records as one transaction."""
+    try:
+        if args.dry_run:
+            state = load_state(strict=True)
+            state_file = None
+        else:
+            state, state_file = _strict_state_snapshot()
+    except (OSError, RuntimeError, ValueError, SwapStateError) as exc:
+        print(exc, file=sys.stderr)
         return 1
 
-    had_error = 0
-    for cli in targets:
-        if args.scope is not None:
-            wanted_scopes: tuple[Scope, ...] = (_normalize_scope(cli, args.scope),)
-        else:
-            wanted_scopes = ALL_SCOPES
-        cli_keys = [
-            (sc_cli, sc_scope)
-            for (sc_cli, sc_scope) in state
-            if sc_cli == cli and sc_scope in wanted_scopes
-        ]
-        if not cli_keys:
-            label = f"{cli}:{args.scope}" if args.scope and cli == "claude" else cli
-            print(f"[{label}] no state entry — skip")
-            continue
-        # Unwind in reverse-registration order (LIFO) — sort by the
-        # explicit ``SwapEntry.seq_no`` counter so order is independent
-        # of JSON parse order, dict iteration, and wall-clock
-        # collisions. ``seq_no`` is coerced to ``int`` at load time by
-        # ``_parse_state_entry``; entries with a non-coercible value
-        # are dropped before they reach this sort, so the comparison
-        # is always int vs int. When two scopes back the same physical
-        # file (Claude user + project), the later swap's backup
-        # contains the earlier swap's modifications, so each backup
-        # must restore its own layer before the prior one is restored.
-        # Same explicit counter pattern CPython's ``Lib/sched.py`` uses
-        # to break ties on ``Event(time, priority, sequence, …)``.
-        cli_keys.sort(key=lambda k: state[k].seq_no, reverse=True)
-        for key in cli_keys:
-            sc_cli, sc_scope = key
-            entry = state[key]
-            label = f"{sc_cli}:{sc_scope}" if sc_cli == "claude" else sc_cli
-            backup = pathlib.Path(entry.backup_path)
-            dest = pathlib.Path(entry.target_path or entry.config_path)
-            if not backup.exists():
-                print(f"[{label}] backup missing: {backup}", file=sys.stderr)
-                had_error = 1
-                break
-            if args.dry_run:
-                print(f"[{label}] would restore {dest} from {backup}")
-                continue
-            try:
-                atomic_write(dest, backup.read_bytes())
-            except OSError as exc:
-                print(f"[{label}] restore failed: {exc}", file=sys.stderr)
-                had_error = 1
-                break
-            next_state = dict(state)
-            next_state.pop(key)
-            try:
-                _save_or_clear_state(next_state)
-            except OSError as exc:
-                print(
-                    f"[{label}] restored, but recovery state could not be updated: "
-                    f"{exc}",
-                    file=sys.stderr,
-                )
-                had_error = 1
-                break
-            state = next_state
-            try:
-                backup.unlink()
-            except OSError as exc:
-                print(
-                    f"[{label}] restored; backup cleanup failed: {exc}", file=sys.stderr
-                )
-                had_error = 1
-            print(f"[{label}] restored from {backup}")
-    return had_error
+    plans, error = _plan_revert(args, state)
+    if error or not plans:
+        return error
+    if args.dry_run:
+        for plan in plans:
+            cli, scope = plan.key
+            label = f"{cli}:{scope}" if cli == "claude" else cli
+            print(
+                f"[{label}] would restore {plan.config.target} from {plan.backup.path}"
+            )
+        return 0
+
+    try:
+        staged, next_state, state_stage, state_recovery, owned = _stage_revert(
+            plans, state, t.cast(RecoveryState, state_file)
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"revert staging failed: {exc}", file=sys.stderr)
+        return 1
+    return _commit_revert(
+        staged,
+        next_state,
+        t.cast(RecoveryState, state_file),
+        state_stage,
+        state_recovery,
+        owned,
+    )
 
 
 def cmd_revert(args: argparse.Namespace) -> int:
