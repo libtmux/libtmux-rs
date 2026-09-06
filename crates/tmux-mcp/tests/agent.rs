@@ -1577,10 +1577,15 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
     let stopped = json(
         tools
             .run_command(
+                // The budget has to outlast the shell acknowledgement, not
+                // just the command. `kill -KILL $$` leaves no completion
+                // marker either way, so the deadline still fires; a budget
+                // too tight for the handshake reports `no_shell` instead,
+                // which is a true answer to a different question.
                 args(serde_json::json!({
                     "pane": pane,
                     "command": "kill -KILL $$",
-                    "seconds": 1
+                    "seconds": 5
                 })),
                 CancellationToken::new(),
                 tmux_mcp::Reporter::none(),
