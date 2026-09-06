@@ -278,7 +278,7 @@ async fn flag_shaped_commands_and_paths_stay_literal() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let mut session = server
+    let session = server
         .new_session(NewSessionOptions::new("respawn").command("cat"))
         .await
         .expect("session is created");
