@@ -84,7 +84,7 @@ impl TmuxTools {
         &self,
         window: &libtmux::Window,
     ) -> Result<(), ErrorData> {
-        let Some(own) = self.protected_pane().await else {
+        let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
         let panes = window.panes().await.map_err(|e| tmux_error(&e))?;
@@ -96,7 +96,7 @@ impl TmuxTools {
 
     /// Refuse to destroy a session that currently contains the caller pane.
     async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ErrorData> {
-        let Some(own) = self.protected_pane().await else {
+        let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
         let panes = session.panes().await.map_err(|e| tmux_error(&e))?;
@@ -201,7 +201,7 @@ impl TmuxTools {
     ) -> Result<Json<Killed>, ErrorData> {
         let pane = self.find_pane(&pane).await?;
         let id = pane.id().to_string();
-        if self.protected_pane().await == Some(id.as_str()) {
+        if self.protected_pane().await? == Some(id.as_str()) {
             return Err(Self::self_harm("pane", &id));
         }
         pane.kill().await.map_err(|e| tmux_error(&e))?;

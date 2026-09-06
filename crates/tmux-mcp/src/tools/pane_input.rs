@@ -237,16 +237,6 @@ impl TmuxTools {
             .map(|candidate| candidate.id().to_string())
             .collect();
 
-        if let Some(own) = self.protected_pane().await
-            && selected.contains_key(own)
-        {
-            return Err(Self::self_protection(format!(
-                "refusing to send input to pane {own}: it matches this MCP server's inherited \
-                 caller context, so input there may disrupt or end this conversation. Run the \
-                 command in a terminal if that is what you meant."
-            )));
-        }
-
         let client_result = self
             .server
             .cmd(
@@ -266,6 +256,15 @@ impl TmuxTools {
             .require_generation(generation)
             .await
             .map_err(|error| tmux_error(&error))?;
+        if let Some(own) = self.caller_pane_for_snapshot(&endpoint, generation, &panes)?
+            && selected.contains_key(own)
+        {
+            return Err(Self::self_protection(format!(
+                "refusing to send input to pane {own}: it matches this MCP server's inherited \
+                 caller context, so input there may disrupt or end this conversation. Run the \
+                 command in a terminal if that is what you meant."
+            )));
+        }
 
         for (id, candidate) in &selected {
             if run_request::is_reserved(generation, &endpoint, id, reservation) {

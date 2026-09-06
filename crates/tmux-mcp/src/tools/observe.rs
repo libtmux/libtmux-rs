@@ -546,8 +546,21 @@ mod tests {
             .split(libtmux::SplitOptions::new(libtmux::SplitDirection::Below))
             .await
             .expect("caller peer is created");
+        let generation = server.generation().await.expect("server generation");
+        let session = peer.session_id().to_string();
+        let session = session
+            .strip_prefix('$')
+            .expect("tmux session ID has its canonical prefix");
         crate::CallerIdentity::from_values(
-            Some(format!("{},1,$0", server.socket_path().display()).into()),
+            Some(
+                format!(
+                    "{},{},{}",
+                    server.socket_path().display(),
+                    generation.pid(),
+                    session
+                )
+                .into(),
+            ),
             Some(peer.id().to_string().into()),
         )
         .expect("caller identity is complete")

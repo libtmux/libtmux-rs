@@ -462,8 +462,21 @@ async fn socket_of(server: &Server) -> String {
 }
 
 async fn identity_for(server: &Server, pane: &str) -> CallerIdentity {
+    let generation = server.generation().await.expect("server generation");
+    let session_id = pane_handle(server, pane).await.session_id().to_string();
+    let session = session_id
+        .strip_prefix('$')
+        .expect("tmux session ID has its canonical prefix");
     CallerIdentity::from_values(
-        Some(format!("{},1,$0", socket_of(server).await).into()),
+        Some(
+            format!(
+                "{},{},{}",
+                socket_of(server).await,
+                generation.pid(),
+                session
+            )
+            .into(),
+        ),
         Some(pane.into()),
     )
     .expect("caller identity")
@@ -1116,6 +1129,106 @@ async fn pane_input_and_batch_protect_only_reached_caller_panes() {
     );
     assert_eq!(result["results"][2]["success"], true, "{result}");
     assert_channel_quiet(guard.server(), batch_channel).await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn pane_input_fails_closed_on_incomplete_or_inconsistent_caller_context() {
+    let (guard, _, source, peer) = synchronized_fixture("input-caller-context").await;
+    pane_handle(guard.server(), &source)
+        .await
+        .set_option("synchronize-panes", "off")
+        .await
+        .expect("source opts out");
+    let socket = socket_of(guard.server()).await;
+    let generation = guard
+        .server()
+        .generation()
+        .await
+        .expect("server generation");
+    let session_id = pane_handle(guard.server(), &peer)
+        .await
+        .session_id()
+        .to_string();
+    let session = session_id
+        .strip_prefix('$')
+        .expect("tmux session ID has its canonical prefix");
+    let wrong_pid = generation.pid().wrapping_add(1).max(1);
+    let contexts = [
+        ("missing TMUX", None, Some(peer.clone().into())),
+        (
+            "missing TMUX_PANE",
+            Some(format!("{},{},{}", socket, generation.pid(), session).into()),
+            None,
+        ),
+        (
+            "truncated TMUX",
+            Some(socket.clone().into()),
+            Some(peer.clone().into()),
+        ),
+        (
+            "wrong server pid",
+            Some(format!("{socket},{wrong_pid},{session}").into()),
+            Some(peer.clone().into()),
+        ),
+        (
+            "wrong session",
+            Some(format!("{socket},{},999999", generation.pid()).into()),
+            Some(peer.clone().into()),
+        ),
+        (
+            "missing claimed pane",
+            Some(format!("{socket},{},{}", generation.pid(), session).into()),
+            Some("%999999".into()),
+        ),
+    ];
+
+    for (case, tmux, pane) in contexts {
+        let caller = CallerIdentity::from_values(tmux, pane)
+            .unwrap_or_else(|| panic!("{case} remains a non-detached caller context"));
+        let tools = TmuxTools::builder(guard.server().clone())
+            .caller(Some(caller))
+            .build();
+        let error = tools
+            .paste_text(args(serde_json::json!({"pane": source, "text": ""})))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{case} must fail pane input closed"));
+        assert_eq!(
+            error.data.as_ref().expect("typed caller refusal")["kind"],
+            "self_protection",
+            "{case}: {error:?}"
+        );
+    }
+
+    let foreign_guard = TestServer::builder()
+        .start()
+        .await
+        .expect("foreign tmux starts");
+    let foreign_pane = foreign_guard
+        .server()
+        .new_session("foreign-caller")
+        .await
+        .expect("foreign session starts")
+        .panes()
+        .await
+        .expect("foreign panes list")
+        .remove(0)
+        .id()
+        .to_string();
+    let foreign = identity_for(foreign_guard.server(), &foreign_pane).await;
+    let foreign_tools = TmuxTools::builder(guard.server().clone())
+        .caller(Some(foreign))
+        .build();
+    foreign_tools
+        .paste_text(args(serde_json::json!({"pane": source, "text": ""})))
+        .await
+        .expect("a complete caller on another socket is not selected");
+
+    foreign_guard
+        .shutdown()
+        .await
+        .expect("foreign tmux shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

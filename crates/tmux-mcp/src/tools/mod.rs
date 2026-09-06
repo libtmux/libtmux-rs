@@ -287,15 +287,38 @@ impl TmuxTools {
 
     /// The pane protected as the inherited caller on this server.
     ///
-    /// This errs toward protection when socket evidence is incomplete, so a
-    /// returned pane is not necessarily a confirmed location.
-    pub(super) async fn protected_pane(&self) -> Option<&str> {
-        let caller = self.caller.as_deref()?;
-        let pane = caller.pane_id()?;
-        let socket_name = self.server.socket_name().and_then(|name| name.to_str());
+    /// A returned pane has been resolved in the caller's claimed session on
+    /// the selected daemon. Malformed or stale context refuses the operation.
+    pub(super) async fn protected_pane(&self) -> Result<Option<&str>, ErrorData> {
+        if self.caller.is_none() {
+            return Ok(None);
+        }
+        let generation = self.server.generation().await.map_err(|e| tmux_error(&e))?;
+        let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
+        let socket = self.socket().await.ok_or_else(|| {
+            Self::caller_context_refusal("tmux did not report its selected socket")
+        })?;
+        self.server
+            .require_generation(generation)
+            .await
+            .map_err(|e| tmux_error(&e))?;
+        self.caller_pane_for_snapshot(socket, generation, &panes)
+    }
+
+    pub(super) fn caller_pane_for_snapshot<'a>(
+        &'a self,
+        socket: &Path,
+        generation: libtmux::ServerGeneration,
+        panes: &[libtmux::Pane],
+    ) -> Result<Option<&'a str>, ErrorData> {
+        let Some(caller) = self.caller.as_deref() else {
+            return Ok(None);
+        };
         caller
-            .may_be_on(self.socket().await, socket_name)
-            .then_some(pane)
+            .resolve_on(socket, generation, panes)
+            .map_err(|detail| {
+                Self::caller_context_refusal(&format!("inherited caller context is {detail}"))
+            })
     }
 
     /// The tools this server offers after startup selection.
@@ -304,7 +327,7 @@ impl TmuxTools {
         self.tool_router.list_all()
     }
 
-    /// The pane this process runs in, when tmux named one.
+    /// The pane this process runs in, when tmux named a complete identity.
     ///
     /// Reported without checking it against the server, because this is for
     /// saying what the environment claimed rather than for deciding anything.
@@ -326,6 +349,12 @@ impl TmuxTools {
                 "stale": false,
             })),
         )
+    }
+
+    fn caller_context_refusal(detail: &str) -> ErrorData {
+        Self::self_protection(format!(
+            "refusing this operation because {detail}; restart the MCP outside tmux or with a complete current TMUX and TMUX_PANE context"
+        ))
     }
 
     /// Refuse a command that may destroy the pane this process talks through.
