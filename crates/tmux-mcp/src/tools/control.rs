@@ -1,6 +1,7 @@
+use std::ffi::OsString;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libtmux::{Command, Error, NewSessionOptions, ResizeDirection};
+use libtmux::{Command, CommandChain, Error, NewSessionOptions, ResizeDirection};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
@@ -17,6 +18,44 @@ use super::pane_input::{MissingSource, PaneInputReach};
 
 /// Numbers temporary paste buffers so concurrent calls cannot share one.
 static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn literal_input(pane: &str, text: String) -> Command {
+    Command::new("send-keys")
+        .arg("-t")
+        .arg(pane)
+        .arg("-l")
+        .arg("--")
+        .sensitive_arg(OsString::from(text))
+}
+
+fn named_input(pane: &str, keys: Vec<String>, enter: bool) -> Command {
+    let mut command = Command::new("send-keys").arg("-t").arg(pane).arg("--");
+    for key in keys {
+        command = command.arg(key);
+    }
+    if enter {
+        command = command.arg("Enter");
+    }
+    command
+}
+
+fn input_dispatch(
+    pane: &str,
+    text: Option<String>,
+    keys: Vec<String>,
+    enter: bool,
+) -> Option<CommandChain> {
+    let mut commands = Vec::with_capacity(2);
+    if let Some(text) = text {
+        commands.push(literal_input(pane, text));
+    }
+    if !keys.is_empty() || enter {
+        commands.push(named_input(pane, keys, enter));
+    }
+    let mut commands = commands.into_iter();
+    let first = commands.next()?;
+    Some(commands.fold(CommandChain::new(first), CommandChain::then))
+}
 
 impl TmuxTools {
     /// Refuse to destroy a window that currently contains the caller pane.
@@ -67,18 +106,19 @@ impl TmuxTools {
                 MissingSource::CallerInput,
             )
             .await?;
+        let dispatch = input_dispatch(plan.target.id().as_ref(), text, keys, enter)
+            .ok_or_else(|| bad_input("send_keys needs text, keys, or enter".to_owned()))?;
         let mut boundary = EffectBoundary::new("send_keys");
-        if let Some(text) = text {
-            boundary.tmux(plan.target.send_keys(text).await)?;
+        if dispatch.command_count() > 1 {
             boundary.mark();
         }
-        if !keys.is_empty() {
-            boundary.tmux(plan.target.send_key_names(keys).await)?;
-            boundary.mark();
-        }
-        if enter {
-            boundary.tmux(plan.target.send_key_names(["Enter"]).await)?;
-            boundary.mark();
+        let result = self
+            .server
+            .chain(dispatch)
+            .await
+            .map_err(|error| boundary.error(error))?;
+        if let Some(error) = result.refusal_for("send-keys") {
+            return Err(boundary.error(error));
         }
 
         Ok(Json(Sent {
@@ -246,8 +286,9 @@ impl TmuxTools {
                        literally, so C-c in it types those three characters. Use `keys` for \
                        anything without a character of its own -- C-c to interrupt a running \
                        command, Escape, Up, C-d -- which are tmux key names and are \
-                       interpreted. Text is sent first, then keys, then Enter if asked. Before \
-                       input, the configured synchronized-pane cohort is observed; a dead, \
+                       interpreted. Text, keys, and optional Enter keep that order in one tmux \
+                       dispatch. Before input, the configured synchronized-pane cohort is \
+                       observed; a dead, \
                        input-disabled, mode-owned, terminal-attended, or inherited-caller member \
                        refuses the whole call. Returned pane IDs describe configured membership, \
                        not confirmed delivery. The \
@@ -531,7 +572,7 @@ impl TmuxTools {
         );
 
         self.server
-            .set_buffer(Some(&buffer), std::ffi::OsString::from(text))
+            .set_buffer(Some(&buffer), OsString::from(text))
             .await
             .map_err(|e| tmux_error(&e))?;
         let pasted = target.paste_buffer(Some(&buffer)).await;

@@ -501,7 +501,7 @@ Change tmux state; no client-supplied executable input. Select a window, making 
 
 ## `send_keys`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Type text into a pane, press named keys in it, or both. `text` is sent literally, so C-c in it types those three characters. Use `keys` for anything without a character of its own -- C-c to interrupt a running command, Escape, Up, C-d -- which are tmux key names and are interpreted. Text is sent first, then keys, then Enter if asked. Before input, the configured synchronized-pane cohort is observed; a dead, input-disabled, mode-owned, terminal-attended, or inherited-caller member refuses the whole call. Returned pane IDs describe configured membership, not confirmed delivery. The observation can race with tmux processing the input.
+Send input to a pane's program; a shell that receives it runs it with your user's permissions. Type text into a pane, press named keys in it, or both. `text` is sent literally, so C-c in it types those three characters. Use `keys` for anything without a character of its own -- C-c to interrupt a running command, Escape, Up, C-d -- which are tmux key names and are interpreted. Text, keys, and optional Enter keep that order in one tmux dispatch. Before input, the configured synchronized-pane cohort is observed; a dead, input-disabled, mode-owned, terminal-attended, or inherited-caller member refuses the whole call. Returned pane IDs describe configured membership, not confirmed delivery. The observation can race with tmux processing the input.
 
 - Toolset: `execute`
 - Process reach: `pane-input`
@@ -516,7 +516,7 @@ Send input to a pane's program; a shell that receives it runs it with your user'
 
 ## `send_keys_batch`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Send an ordered batch of input operations to panes. Each executed row repeats send_keys' effective synchronized-cohort, dead-pane, input-off, pane-mode, attended-client, and inherited-caller preflight immediately before that row. These observations can race with tmux processing the input.
+Send input to a pane's program; a shell that receives it runs it with your user's permissions. Send an ordered batch of input operations to panes. Each executed row repeats send_keys' effective synchronized-cohort, dead-pane, input-off, pane-mode, attended-client, and inherited-caller preflight, then crosses one tmux dispatch. These observations can race with tmux processing the input.
 
 - Toolset: `execute`
 - Process reach: `pane-input`

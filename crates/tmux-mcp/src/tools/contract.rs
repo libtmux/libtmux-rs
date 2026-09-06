@@ -920,8 +920,8 @@ impl TmuxTools {
     #[tool(
         description = "Send an ordered batch of input operations to panes. Each executed row \
                        repeats send_keys' effective synchronized-cohort, dead-pane, input-off, \
-                       pane-mode, attended-client, and inherited-caller preflight immediately \
-                       before that row. These observations can race with tmux processing the \
+                       pane-mode, attended-client, and inherited-caller preflight, then crosses \
+                       one tmux dispatch. These observations can race with tmux processing the \
                        input.",
         title = "Send Keys Batch",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {

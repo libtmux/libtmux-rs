@@ -32,6 +32,63 @@ struct RawServerFiles {
     cleaned: bool,
 }
 
+struct LoggedTmux {
+    directory: PathBuf,
+    executable: PathBuf,
+    log: PathBuf,
+}
+
+impl LoggedTmux {
+    fn new() -> Self {
+        let actual = Server::new()
+            .expect("default server config")
+            .resolved_tmux_executable()
+            .expect("configured tmux resolves");
+        let mut nonce = [0_u8; 8];
+        getrandom::fill(&mut nonce).expect("fixture nonce");
+        let directory = PathBuf::from("/tmp/libtmux-rs-test")
+            .join(format!("logged-{}", u64::from_ne_bytes(nonce)));
+        std::fs::create_dir(&directory).expect("private fixture directory");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .expect("private fixture permissions");
+        let executable = directory.join("tmux");
+        let log = directory.join("argv.log");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexec {} \"$@\"\n",
+            shell_quote(log.as_os_str()),
+            shell_quote(actual.as_os_str()),
+        );
+        std::fs::write(&executable, script).expect("logging fixture executable");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .expect("fixture executable permissions");
+        Self {
+            directory,
+            executable,
+            log,
+        }
+    }
+
+    fn clear(&self) {
+        std::fs::write(&self.log, []).expect("fixture log clears");
+    }
+
+    fn send_dispatches(&self) -> usize {
+        std::fs::read_to_string(&self.log)
+            .expect("fixture log reads")
+            .lines()
+            .filter(|line| line.split_ascii_whitespace().any(|arg| arg == "send-keys"))
+            .count()
+    }
+}
+
+impl Drop for LoggedTmux {
+    fn drop(&mut self) {
+        drop(std::fs::remove_file(&self.log));
+        drop(std::fs::remove_file(&self.executable));
+        drop(std::fs::remove_dir(&self.directory));
+    }
+}
+
 impl RawServerFiles {
     fn create(executable_name: &[u8], socket_name: &[u8]) -> Self {
         let actual = Server::new()
@@ -722,6 +779,68 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
         .shutdown()
         .await
         .expect("control-mode client shuts down");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn send_and_batch_use_one_dispatch_per_operation() {
+    let logged = LoggedTmux::new();
+    let guard = TestServer::builder()
+        .tmux_executable(&logged.executable)
+        .start()
+        .await
+        .expect("logging tmux starts");
+    let tools = bare_tools(guard.server());
+    tools
+        .create_session(args(serde_json::json!({"name": "one-send-dispatch"})))
+        .await
+        .expect("session is created");
+    let pane = panes(&tools).await[0]["id"]
+        .as_str()
+        .expect("pane id")
+        .to_owned();
+    prompt_ready(guard.server(), &pane).await;
+
+    logged.clear();
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "true",
+            "keys": ["C-l"],
+            "enter": true
+        })))
+        .await
+        .expect("the whole input operation succeeds");
+    assert_eq!(
+        logged.send_dispatches(),
+        1,
+        "one operation crosses one tmux process boundary"
+    );
+
+    logged.clear();
+    let response = call_tool(
+        tools,
+        "send_keys_batch",
+        serde_json::json!({
+            "operations": [
+                {"pane": pane, "text": "true", "keys": ["C-l"], "enter": true},
+                {"pane": pane, "text": "true", "keys": ["C-l"], "enter": true}
+            ],
+            "on_error": "stop"
+        }),
+    )
+    .await;
+    let result = response
+        .structured_content
+        .expect("the batch has structured content");
+    assert_eq!(result["succeeded"], 2, "{result}");
+    assert_eq!(result["failed"], 0, "{result}");
+    assert_eq!(
+        logged.send_dispatches(),
+        2,
+        "each batch operation crosses one tmux process boundary"
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
