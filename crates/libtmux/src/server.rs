@@ -448,6 +448,30 @@ impl Server {
     /// Bare names use the `PATH` captured by [`ServerBuilder::build`]. Relative
     /// paths use its captured working directory. The returned path preserves a
     /// configured wrapper or symlink rather than canonicalizing it.
+    ///
+    /// Returns `None` when the configured executable is not on the captured
+    /// `PATH`, so a caller can tell "tmux is missing" from "tmux failed".
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Any absolute path is resolved only if it is a runnable file, so this
+    /// // example names one POSIX guarantees rather than tmux's own location,
+    /// // which varies by platform.
+    /// let server = libtmux::Server::builder()
+    ///     .tmux_executable("/bin/sh")
+    ///     .build()?;
+    /// assert_eq!(
+    ///     server.resolved_tmux_executable(),
+    ///     Some(std::path::PathBuf::from("/bin/sh")),
+    /// );
+    ///
+    /// let missing = libtmux::Server::builder()
+    ///     .tmux_executable("tmux-that-is-not-installed")
+    ///     .build()?;
+    /// assert_eq!(missing.resolved_tmux_executable(), None);
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
     #[must_use]
     pub fn resolved_tmux_executable(&self) -> Option<PathBuf> {
         self.core.configuration().resolved_executable()
