@@ -180,8 +180,13 @@ fn stop_process_tree(
     deadline: Instant,
 ) -> Result<(), FsError> {
     let mut failures = Vec::new();
+    // This process created the group, so it always has permission to signal
+    // one that still has a live member. `ESRCH` and `EPERM` therefore both
+    // mean there is nothing left to kill, and which one arrives is a platform
+    // detail: Linux reports the group as missing, while macOS reports a group
+    // whose members have exited but not yet been reaped as forbidden.
     if let Err(error) = kill_process_group(pid, Signal::KILL) {
-        if error != Errno::SRCH {
+        if error != Errno::SRCH && error != Errno::PERM {
             failures.push(format!("kill MCP process group: {error}"));
         }
     }
