@@ -217,17 +217,22 @@ pub(super) fn inherited_trap_capture(shell: &[u8], nonce: &str) -> Option<TrapCa
     let template = quote_shell_word(OsStr::new(&template));
     let prefix = quote_shell_word(OsStr::new(&prefix));
 
+    // Every statement gets its own line. A terminal in canonical mode caps
+    // one input line at `MAX_CANON`, which is 1024 bytes on macOS against
+    // 4096 on Linux, and this frame is typed into a pane rather than piped.
+    // Joined with `; ` the bash setup reached 1715 bytes, so the line could
+    // never be delivered there and the run reported `no_shell` forever.
     let mut setup = format!(
-        "{declarations}=; {errexit}=0; {status}=125; {xtrace}=0; \
-         case $- in *e*) {errexit}=1;; esac; \
-         case $- in *x*) {xtrace}=1; \\set +x;; esac; \
-         {file}=; {read_owned}=0; {write_owned}=0; "
+        "{declarations}=\n{errexit}=0\n{status}=125\n{xtrace}=0\n\
+         case $- in *e*) {errexit}=1;; esac\n\
+         case $- in *x*) {xtrace}=1; \\set +x;; esac\n\
+         {file}=\n{read_owned}=0\n{write_owned}=0\n"
     );
     if shell == b"bash" {
         let files = format!("__libtmux_mcp_trap_files_{nonce}");
         let _ = write!(
             setup,
-            "{files}=(); if /usr/bin/mktemp {} >/dev/null; then ",
+            "{files}=()\nif /usr/bin/mktemp {} >/dev/null; then\n",
             template.to_string_lossy()
         );
         let discover = format!("{files}=({}.??????)", prefix.to_string_lossy());
@@ -235,21 +240,22 @@ pub(super) fn inherited_trap_capture(shell: &[u8], nonce: &str) -> Option<TrapCa
         setup.push_str(&discover);
         setup.push_str("; \\set -f ;; *) ");
         setup.push_str(&discover);
-        setup.push_str(" ;; esac; if [ \"${#");
+        setup.push_str(" ;; esac\n");
+        setup.push_str("if [ \"${#");
         setup.push_str(&files);
-        setup.push_str("[@]}\" -eq 1 ]; then ");
+        setup.push_str("[@]}\" -eq 1 ]; then\n");
         setup.push_str(&file);
         setup.push_str("=\"${");
         setup.push_str(&files);
-        setup.push_str("[0]}\"; elif ! /bin/rm -f \"${");
+        setup.push_str("[0]}\"\nelif ! /bin/rm -f \"${");
         setup.push_str(&files);
-        setup.push_str("[@]}\"; then ");
+        setup.push_str("[@]}\"; then\n");
         setup.push_str(&status);
-        setup.push_str("=125; fi; fi; ");
+        setup.push_str("=125\nfi\nfi\n");
     } else {
-        let _ = write!(
+        let _ = writeln!(
             setup,
-            "if /usr/bin/mktemp {} | IFS= \\read -r {file}; then :; else {file}=; fi; ",
+            "if /usr/bin/mktemp {} | IFS= \\read -r {file}; then :; else {file}=; fi",
             template.to_string_lossy()
         );
     }
@@ -260,25 +266,26 @@ pub(super) fn inherited_trap_capture(shell: &[u8], nonce: &str) -> Option<TrapCa
          && ! ( : >&9 ) 2>/dev/null && ! ( : <&9 ) 2>/dev/null \\
          && \\exec 8<> \"${file}\" && {write_owned}=1 \\
          && \\exec 9< \"${file}\" && {read_owned}=1 \\
-         && /bin/rm -f \"${file}\" && {file}=; then "
+         && /bin/rm -f \"${file}\" && {file}=; then\n"
     );
     if shell == b"bash" {
-        setup.push_str("if \\trap -p ERR DEBUG >&8; then ");
+        setup.push_str("if \\trap -p ERR DEBUG >&8; then\n");
     } else {
-        setup.push_str("if \\trap - $signals[1,-3]; then if \\trap >&8; then ");
+        setup.push_str("if \\trap - $signals[1,-3]; then\nif \\trap >&8; then\n");
     }
-    let capture_close = if shell == b"zsh" { "fi; " } else { "" };
+    let capture_close = if shell == b"zsh" { "fi\n" } else { "" };
     let _ = write!(
         setup,
-        "{status}=0; fi; {capture_close}fi; if ! \\trap - ERR DEBUG; then {status}=125; fi; \\
-         if [ \"${write_owned}\" -eq 1 ]; then \\
-         if ! \\exec 8>&-; then {status}=125; fi; {write_owned}=0; fi; \\
-         if [ \"${status}\" -eq 0 ] && [ \"${read_owned}\" -eq 1 ]; then \\
+        "{status}=0\nfi\n{capture_close}fi\n\\
+         if ! \\trap - ERR DEBUG; then {status}=125; fi\n\\
+         if [ \"${write_owned}\" -eq 1 ]; then\n\\
+         if ! \\exec 8>&-; then {status}=125; fi\n{write_owned}=0\nfi\n\\
+         if [ \"${status}\" -eq 0 ] && [ \"${read_owned}\" -eq 1 ]; then\n\\
          if {declarations}=$(LC_ALL=C /usr/bin/head -c {TRAP_DECLARATION_LIMIT} <&9) \\
-         && [ \"$(LC_ALL=C /usr/bin/head -c 1 <&9 | /usr/bin/wc -c)\" -eq 0 ]; then :; \\
-         else {declarations}=; {status}=125; fi; fi; \\
-         if [ \"${read_owned}\" -eq 1 ]; then \\
-         if ! \\exec 9<&-; then {status}=125; fi; {read_owned}=0; fi; \\
+         && [ \"$(LC_ALL=C /usr/bin/head -c 1 <&9 | /usr/bin/wc -c)\" -eq 0 ]; then :\n\\
+         else {declarations}=\n{status}=125\nfi\nfi\n\\
+         if [ \"${read_owned}\" -eq 1 ]; then\n\\
+         if ! \\exec 9<&-; then {status}=125; fi\n{read_owned}=0\nfi\n\\
          if [ -n \"${file}\" ] && ! /bin/rm -f \"${file}\"; then {status}=125; fi\n"
     );
 

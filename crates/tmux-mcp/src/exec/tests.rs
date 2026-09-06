@@ -739,3 +739,46 @@ fn marker_lookalikes_are_command_output() {
     assert!(view.output.contains(":00\n"));
     assert_eq!(view.exit_status, Some(0));
 }
+
+/// No frame line may exceed a terminal's canonical input limit.
+///
+/// The frame is typed into a pane, not piped, so every line passes through a
+/// terminal in canonical mode. `MAX_CANON` bounds one such line: 1024 bytes
+/// on macOS and the BSDs against 4096 on Linux. A longer line is never
+/// delivered, so the shell waits at its continuation prompt and the run
+/// reports `no_shell` until it times out -- with no error anywhere, because
+/// nothing failed, the input simply never arrived.
+///
+/// Joined with `; `, the bash trap setup reached 1715 bytes and zsh 1115.
+/// Both worked on Linux and neither could work on macOS.
+#[test]
+fn no_frame_line_exceeds_a_terminal_input_limit() {
+    // macOS and the BSDs, which is the tightest limit this runs against.
+    const MAX_CANON: usize = 1024;
+
+    for shell in [b"sh".as_slice(), b"bash", b"zsh"] {
+        for suppress_history in [false, true] {
+            let payload = render_payload(
+                OsStr::new("/opt/homebrew/bin/tmux"),
+                Path::new("/tmp/libtmux-rs-test/agent-preserves-raw.sock"),
+                "63bdf5760a1f845190b25ac835320917",
+                shell,
+                OsStr::new("printf body # trailing comment"),
+                suppress_history,
+            );
+            let longest = payload
+                .as_bytes()
+                .split(|byte| *byte == b'\n')
+                .map(<[u8]>::len)
+                .max()
+                .unwrap_or(0);
+
+            assert!(
+                longest < MAX_CANON,
+                "{} frame has a {longest}-byte line, over the {MAX_CANON}-byte \
+                 terminal limit; it cannot be typed into a pane on macOS",
+                String::from_utf8_lossy(shell)
+            );
+        }
+    }
+}
