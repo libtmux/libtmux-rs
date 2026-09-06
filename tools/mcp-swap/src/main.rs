@@ -263,8 +263,8 @@ fn use_command(paths: &Paths, clients: &[Client], args: UseArgs) -> Result<(), F
         }
         return Ok(());
     }
-    prepare_source(args.source, &options, args.no_build)?;
     let planned_specs = planned_use_specs(paths, &selected, &request)?;
+    prepare_source(args.source, &options, args.no_build)?;
     if !args.no_preflight {
         let mut checked = Vec::new();
         for planned in &planned_specs {

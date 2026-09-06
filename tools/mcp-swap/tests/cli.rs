@@ -228,6 +228,56 @@ fn repository_metadata_rejects_traversing_components() {
 }
 
 #[test]
+fn published_install_waits_for_all_config_planning() {
+    let fixture = CliFixture::new();
+    fixture.seed(&["cursor", "pi"]);
+    let paths = Paths::from_roots(&fixture.home, &fixture.config, &fixture.state).expect("paths");
+    let pi = known_clients(&paths)
+        .into_iter()
+        .find(|client| client.name.as_str() == "pi")
+        .expect("pi client");
+    fs::write(&pi.config_path, b"{ not JSON").expect("malformed later config");
+
+    let fake_bin = fixture.home.join("fake-bin");
+    fs::create_dir(&fake_bin).expect("fake binary directory");
+    let fake_cargo = fake_bin.join("cargo");
+    fs::write(
+        &fake_cargo,
+        "#!/bin/sh\nset -eu\n: > \"$MCP_SWAP_CARGO_MARKER\"\nroot=\nwhile [ \"$#\" -gt 0 ]; do\n    if [ \"$1\" = \"--root\" ]; then\n        shift\n        root=$1\n        break\n    fi\n    shift\ndone\n[ -n \"$root\" ]\nmkdir -p \"$root/bin\"\n: > \"$root/bin/tmux-mcp\"\n",
+    )
+    .expect("fake cargo");
+    fs::set_permissions(&fake_cargo, fs::Permissions::from_mode(0o700)).expect("fake cargo mode");
+    let marker = fixture.state.join("cargo-invoked");
+
+    let output = fixture
+        .command()
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
+        .env("MCP_SWAP_CARGO_MARKER", &marker)
+        .args([
+            "use",
+            "--repo",
+            fixture.repo.to_str().expect("repo path"),
+            "--source",
+            "published",
+            "--version",
+            "0.1.0",
+            "--cli",
+            "cursor,pi",
+            "--no-preflight",
+        ])
+        .output()
+        .expect("published use");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .expect("UTF-8 error")
+            .contains("pi")
+    );
+    assert!(!marker.exists(), "cargo install ran before config planning");
+}
+
+#[test]
 fn dry_run_selectors_do_not_build_preflight_or_write() {
     let fixture = CliFixture::new();
     fixture.seed(&["claude", "agy", "pi"]);
