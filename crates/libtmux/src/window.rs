@@ -509,7 +509,7 @@ impl Window {
             respawn = respawn.arg("-k");
         }
         if let Some(command) = command {
-            respawn = respawn.arg(command.into());
+            respawn = respawn.arg("--").arg(command.into());
         }
 
         listing::mutate(&self.core, "respawn-window", respawn).await?;

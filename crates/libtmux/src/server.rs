@@ -1205,7 +1205,9 @@ impl Server {
         listing::mutate(
             &self.core,
             "source-file",
-            Command::new("source-file").arg(path.into().into_os_string()),
+            Command::new("source-file")
+                .arg("--")
+                .arg(path.into().into_os_string()),
         )
         .await
     }

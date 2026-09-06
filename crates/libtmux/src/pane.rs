@@ -889,7 +889,7 @@ impl Pane {
             .arg("-t")
             .arg(self.id().to_string());
         if let Some(command) = command {
-            pipe = pipe.sensitive_arg(command.into());
+            pipe = pipe.arg("--").sensitive_arg(command.into());
         }
 
         listing::mutate(&self.core, "pipe-pane", pipe).await
@@ -914,7 +914,7 @@ impl Pane {
             respawn = respawn.arg("-k");
         }
         if let Some(command) = command {
-            respawn = respawn.arg(command.into());
+            respawn = respawn.arg("--").arg(command.into());
         }
 
         listing::mutate(&self.core, "respawn-pane", respawn).await?;
