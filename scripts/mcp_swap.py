@@ -145,6 +145,8 @@ ALL_CLIS: tuple[CLIName, ...] = (
     "opencode",
     "pi",
 )
+CLI_ALIASES: dict[str, CLIName] = {"antigravity": "agy"}
+CLI_CHOICES = (*ALL_CLIS, *CLI_ALIASES)
 
 #: Width of the CLI-name column in ``detect`` output, derived rather
 #: than hardcoded so adding a longer name cannot silently misalign it.
@@ -172,6 +174,13 @@ def _normalize_scope(cli: CLIName, scope: Scope | None) -> Scope:
     if cli != "claude":
         return "user"
     return scope if scope is not None else "project"
+
+
+def _cli_name(raw: str) -> CLIName:
+    canonical = CLI_ALIASES.get(raw, raw)
+    if canonical not in ALL_CLIS:
+        raise argparse.ArgumentTypeError(f"unknown CLI: {raw}")
+    return t.cast(CLIName, canonical)
 
 
 def _state_key(cli: CLIName, scope: Scope) -> str:
@@ -4036,7 +4045,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--server", help="MCP server name (default: crate name minus '-mcp')"
     )
     ps.add_argument(
-        "--cli", action="append", choices=ALL_CLIS, help="limit to one or more CLIs"
+        "--cli",
+        action="append",
+        type=_cli_name,
+        choices=CLI_CHOICES,
+        help="limit to one or more CLIs",
     )
     ps.add_argument(
         "--scope",
@@ -4116,7 +4129,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Use to inject e.g. LIBTMUX_TOOLSETS without a manual post-edit."
         ),
     )
-    pu.add_argument("--cli", action="append", choices=ALL_CLIS)
+    pu.add_argument("--cli", action="append", type=_cli_name, choices=CLI_CHOICES)
     pu.add_argument(
         "--scope",
         choices=ALL_SCOPES,
@@ -4132,7 +4145,7 @@ def build_parser() -> argparse.ArgumentParser:
     pu.set_defaults(func=cmd_use_local)
 
     pr = sub.add_parser("revert", help="restore each CLI's config from its swap backup")
-    pr.add_argument("--cli", action="append", choices=ALL_CLIS)
+    pr.add_argument("--cli", action="append", type=_cli_name, choices=CLI_CHOICES)
     pr.add_argument(
         "--scope",
         choices=ALL_SCOPES,

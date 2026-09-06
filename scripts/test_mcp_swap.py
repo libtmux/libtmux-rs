@@ -224,6 +224,72 @@ def test_grok_and_agy_registered() -> None:
     assert parser.parse_args(["status", "--cli", "agy"]).cli == ["agy"]
 
 
+def test_antigravity_alias_parses_for_every_command(
+    fake_home: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The public alias normalizes to the canonical persisted client name."""
+    parser = mcp_swap.build_parser()
+    for argv in (
+        ["status", "--cli", "antigravity"],
+        ["use", "--cli", "antigravity"],
+        ["revert", "--cli", "antigravity"],
+    ):
+        assert parser.parse_args(argv).cli == ["agy"]
+    with pytest.raises(SystemExit) as stopped:
+        parser.parse_args(["use", "--help"])
+    assert stopped.value.code == 0
+    assert "antigravity" in capsys.readouterr().out
+
+
+def test_antigravity_alias_round_trip_and_deduplication(
+    fake_home: pathlib.Path,
+    fake_repo: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Alias use, status, dry-run, and revert operate on one agy record."""
+    info = mcp_swap.CLIS["agy"]
+    _seed_registered_cli(info)
+    original = info.config_path.read_bytes()
+    parser = mcp_swap.build_parser()
+    assert (
+        mcp_swap.cmd_status(
+            parser.parse_args(
+                ["status", "--repo", str(fake_repo), "--cli", "antigravity"]
+            )
+        )
+        == 0
+    )
+    assert "[agy]" in capsys.readouterr().out
+    use = [
+        "use",
+        "--no-build",
+        "--no-preflight",
+        "--repo",
+        str(fake_repo),
+        "--cli",
+        "antigravity",
+        "--cli",
+        "agy",
+    ]
+    assert mcp_swap.cmd_use_local(parser.parse_args(use)) == 0
+    assert list(mcp_swap.load_state(strict=True)) == [("agy", "user")]
+    current = info.config_path.read_bytes()
+    state = mcp_swap.STATE_FILE.read_bytes()
+    assert (
+        mcp_swap.cmd_use_local(
+            parser.parse_args([*use, "--env", "ROUND=dry", "--dry-run"])
+        )
+        == 0
+    )
+    assert info.config_path.read_bytes() == current
+    assert mcp_swap.STATE_FILE.read_bytes() == state
+    assert (
+        mcp_swap.cmd_revert(parser.parse_args(["revert", "--cli", "antigravity"])) == 0
+    )
+    assert info.config_path.read_bytes() == original
+
+
 def test_grok_set_get_delete_roundtrip(fake_repo: pathlib.Path) -> None:
     """The Grok CLI reads/writes the TOML ``[mcp_servers]`` table like Codex."""
     config = tomlkit.parse("")
