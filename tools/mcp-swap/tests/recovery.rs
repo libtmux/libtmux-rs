@@ -6,9 +6,12 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::process::Command;
 
+use mcp_swap::config::Scope;
 use mcp_swap::fs::{ArtifactClaim, reject_aliases, resolve_config_route, stable_snapshot};
 use mcp_swap::lock::TransactionLock;
-use mcp_swap::recovery::{Ledger, STATE_MAX_BYTES, ledger_bytes, load_ledger};
+use mcp_swap::recovery::{
+    Ledger, RecoveryEntry, STATE_MAX_BYTES, ledger_bytes, load_ledger, state_key,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -142,6 +145,52 @@ fn ledger_rejects_duplicate_json_fields() {
     let error = load_ledger(&state).expect_err("duplicate recovery field");
 
     assert!(error.to_string().contains("duplicate"), "{error}");
+}
+
+#[test]
+fn ledger_rejects_exhausted_sequence_space() {
+    let ledger = Ledger {
+        next_sequence: u64::MAX,
+        ..Ledger::default()
+    };
+
+    let error = ledger_bytes(&ledger).expect_err("exhausted sequence space");
+
+    assert!(error.to_string().contains("sequence"), "{error}");
+}
+
+#[test]
+fn ledger_rejects_noncanonical_scope() {
+    let root = tempdir().expect("temporary root");
+    let entry = recovery_entry(root.path(), "cursor", Scope::Project, 0);
+    let ledger = Ledger {
+        next_sequence: 1,
+        entries: [(state_key("cursor", Scope::Project), entry)]
+            .into_iter()
+            .collect(),
+    };
+
+    let scope_error = ledger_bytes(&ledger).expect_err("non-Claude project scope");
+    assert!(scope_error.to_string().contains("scope"), "{scope_error}");
+}
+
+#[test]
+fn ledger_rejects_noncanonical_backup_path() {
+    let root = tempdir().expect("temporary root");
+    let mut entry = recovery_entry(root.path(), "cursor", Scope::User, 0);
+    entry.backup_path = root.path().join("config.json.bak.mcp-swap-legacy");
+    let ledger = Ledger {
+        next_sequence: 1,
+        entries: [(state_key("cursor", Scope::User), entry)]
+            .into_iter()
+            .collect(),
+    };
+
+    let path_error = ledger_bytes(&ledger).expect_err("non-Rust backup name");
+    assert!(
+        path_error.to_string().contains("backup path"),
+        "{path_error}"
+    );
 }
 
 #[test]
@@ -295,4 +344,35 @@ fn assert_record_lock_held(path: &std::path::Path) {
 fn write_ledger(path: &std::path::Path, ledger: &Ledger) {
     fs::write(path, ledger_bytes(ledger).expect("ledger bytes")).expect("write ledger");
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).expect("ledger mode");
+}
+
+fn recovery_entry(
+    root: &std::path::Path,
+    client: &str,
+    scope: Scope,
+    sequence: u64,
+) -> RecoveryEntry {
+    let config = root.join("config.json");
+    fs::write(&config, b"{}\n").expect("config");
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o640)).expect("config mode");
+    let route = resolve_config_route(&config, 1024).expect("config route");
+    let backup_path = root.join(format!("config.json.bak.mcp-swap-rust-{sequence:020}"));
+    fs::write(&backup_path, b"{}\n").expect("backup");
+    fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600)).expect("backup mode");
+    let backup = stable_snapshot(&backup_path, 1024).expect("backup snapshot");
+    RecoveryEntry {
+        client: client.into(),
+        scope,
+        sequence,
+        server: "tmux".into(),
+        config_path: route.logical,
+        target_path: route.target,
+        route_links: route.links,
+        route_anchors: route.anchors,
+        route_parent: route.parent,
+        original_mode: route.file.identity.mode,
+        backup_path,
+        backup: backup.identity,
+        expected_config: route.file.identity,
+    }
 }

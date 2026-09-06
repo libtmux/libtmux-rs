@@ -12,7 +12,8 @@ use crate::fs::{
 };
 use crate::lock::{TransactionLock, ensure_private_directory};
 use crate::recovery::{
-    Ledger, RecoveryEntry, STATE_MAX_BYTES, ledger_bytes, load_ledger_snapshot_with_hook, state_key,
+    Ledger, RecoveryEntry, STATE_MAX_BYTES, backup_path, ledger_bytes,
+    load_ledger_snapshot_with_hook, state_key,
 };
 
 const CONFIG_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -1249,14 +1250,6 @@ fn load_optional_ledger_with_hook(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((Ledger::default(), None)),
         Err(error) => Err(FsError::new(format!("inspect recovery state: {error}"))),
     }
-}
-
-fn backup_path(target: &Path, sequence: u64) -> PathBuf {
-    let name = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("config");
-    target.with_file_name(format!("{name}.bak.mcp-swap-rust-{sequence:020}"))
 }
 
 fn recovery_path(destination: &Path, label: &str) -> PathBuf {

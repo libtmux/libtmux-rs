@@ -147,6 +147,9 @@ fn ledger_checksum(ledger: &Ledger) -> Result<String, FsError> {
 }
 
 fn validate_ledger(ledger: &Ledger) -> Result<(), FsError> {
+    if ledger.next_sequence == u64::MAX {
+        return Err(FsError::new("recovery sequence space is exhausted"));
+    }
     let mut sequences = BTreeMap::new();
     for (key, entry) in &ledger.entries {
         if key != &state_key(&entry.client, entry.scope) {
@@ -161,6 +164,12 @@ fn validate_ledger(ledger: &Ledger) -> Result<(), FsError> {
                 entry.client
             )));
         }
+        if entry.client != "claude" && entry.scope != Scope::User {
+            return Err(FsError::new(format!(
+                "{} recovery scope must be user",
+                entry.client
+            )));
+        }
         for (label, path) in [
             ("config_path", &entry.config_path),
             ("target_path", &entry.target_path),
@@ -170,6 +179,9 @@ fn validate_ledger(ledger: &Ledger) -> Result<(), FsError> {
                 return Err(FsError::new(format!("recovery {label} must be absolute")));
             }
         }
+        if entry.backup_path != backup_path(&entry.target_path, entry.sequence) {
+            return Err(FsError::new("noncanonical recovery backup path"));
+        }
         if sequences.insert(entry.sequence, key).is_some() {
             return Err(FsError::new("recovery sequence numbers must be unique"));
         }
@@ -178,6 +190,14 @@ fn validate_ledger(ledger: &Ledger) -> Result<(), FsError> {
         }
     }
     Ok(())
+}
+
+pub(crate) fn backup_path(target: &Path, sequence: u64) -> PathBuf {
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config");
+    target.with_file_name(format!("{name}.bak.mcp-swap-rust-{sequence:020}"))
 }
 
 fn validate_private(identity: &FileIdentity, label: &str) -> Result<(), FsError> {
