@@ -221,7 +221,7 @@ fn status(clients: &[Client], args: StatusArgs) -> Result<(), FsError> {
                     "[{label}] {server} = {} {} env={:?}",
                     spec.command,
                     spec.args.join(" "),
-                    spec.env
+                    spec.env.keys().collect::<Vec<_>>()
                 ),
                 Ok(None) => println!("[{label}] no entry for {server:?}"),
                 Err(error) => eprintln!("[{label}] {error}"),

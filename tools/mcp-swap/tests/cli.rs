@@ -351,6 +351,55 @@ fn selected_clients_use_and_revert_with_environment_overlay() {
 }
 
 #[test]
+fn status_lists_environment_keys_without_values() {
+    let fixture = CliFixture::new();
+    fixture.seed(&["cursor"]);
+    let secret = "status-must-not-print-this-secret";
+
+    let use_output = fixture
+        .command()
+        .args([
+            "use",
+            "--repo",
+            fixture.repo.to_str().expect("repo path"),
+            "--source",
+            "path",
+            "--bin",
+            fixture.binary.to_str().expect("binary path"),
+            "--no-preflight",
+            "--cli",
+            "cursor",
+            "--env",
+            &format!("STATUS_SECRET={secret}"),
+        ])
+        .output()
+        .expect("use");
+    assert!(
+        use_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&use_output.stderr)
+    );
+
+    let status = fixture
+        .command()
+        .args([
+            "status",
+            "--repo",
+            fixture.repo.to_str().expect("repo path"),
+            "--cli",
+            "cursor",
+        ])
+        .output()
+        .expect("status");
+    assert!(status.status.success());
+    let stdout = String::from_utf8(status.stdout).expect("UTF-8 status");
+    let stderr = String::from_utf8(status.stderr).expect("UTF-8 status error");
+    assert!(stdout.contains("STATUS_SECRET"));
+    assert!(!stdout.contains(secret));
+    assert!(!stderr.contains(secret));
+}
+
+#[test]
 fn detect_and_doctor_are_read_only() {
     let fixture = CliFixture::new();
     fixture.seed(&["pi"]);
