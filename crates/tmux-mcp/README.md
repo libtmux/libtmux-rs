@@ -222,12 +222,20 @@ directly from that registry.
 
 `set_synchronize_panes` changes the window default; individual pane overrides
 determine the effective configured recipient cohort. `send_keys` observes that
-cohort before input and refuses the whole call if a configured pane is dead, in
-a tmux mode, or may be the inherited caller. `send_keys_batch` repeats the
-check for each executed row.
+cohort immediately before input and refuses the whole call if any configured
+pane is dead, input-disabled, in a tmux mode, attended by a non-control client,
+reserved by an active MCP run, or may be the inherited caller. Malformed state
+fails closed. `send_keys_batch` repeats the complete check for each executed
+row.
 Returned pane IDs describe configured membership and do not prove delivery.
-`paste_text` refuses a dead, mode-owned, or possible caller target before buffer
-creation and, even with synchronized input enabled, targets only the named pane.
+`paste_text` applies the same refusals to its named target before buffer
+creation. Text and optional Enter share one private buffer; an empty paste
+without Enter stays buffer-free. The tool repeats the target check immediately
+before target-only paste and deletes the buffer after refusal or delivery.
+Synchronized input never expands paste.
+`run_shell_command` requires a single configured recipient and reserves its
+resolved server and pane process-wide until completion or pane closure is
+proved. Every MCP pane-input route observes that reservation.
 `call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
 the complete JSON-RPC response line, including its request ID and newline, at
 1,000,000 bytes. Truncated payloads and omitted bytes are explicit, and every
@@ -378,6 +386,11 @@ that caller; target-only paste checks only its named pane. Teardown tools refuse
 a target that may contain the caller. The comparison weighs the socket as well
 as the pane ID because `%1` names a different pane on every tmux server.
 
+Pane input also refuses a configured pane visible to a non-control tmux client.
+In an unzoomed window every visible pane is attended; in a zoomed window only
+the active pane is. Control-mode clients do not count. This is a protective
+refusal, not a consent signal.
+
 ## Choosing a server
 
 Without arguments the server selects the `libtmux-mcp` socket, starts it with
@@ -418,7 +431,9 @@ reserved words and special builtins retain their standard meanings. The tmux
 server and configuration are trusted too. Its resolved tmux executable and
 socket path must contain no ASCII terminal-control bytes; the tool rejects such
 routes before attaching its watcher. Command aliases and hooks are executable
-configuration, not a sandbox boundary.
+configuration, not a sandbox boundary. Valid inherited Bash and zsh `ERR` and
+`DEBUG` traps remain visible to the authored command; parent-shell traps and
+the `errexit`, `xtrace`, and `noglob` options remain unchanged.
 
 Pane output and tmux metadata may contain sensitive or untrusted text.
 Environment values may contain secrets. Hooks may contain executable
@@ -468,10 +483,12 @@ finish, and answers with its exit status and output. Reaching the deadline ends
 the waiting, not the pane command. Inspect the pane before sending more input;
 use `send_keys` with `keys: ["C-c"]` only when pane-wide interruption is
 intended. The tool requires one configured input recipient and observes its
-cohort, mode, liveness, inherited-caller relation, and foreground command before
-watcher setup and again before dispatch. Invalid syntax completes with a
-nonzero shell status. These checks do not lock the pane; state can change before
-tmux processes the input.
+cohort, input-off state, mode, liveness, client attention, inherited-caller
+relation, foreground shell, route, and active-run ownership at exactly two
+checkpoints: before watcher setup and immediately before its single dispatch.
+Invalid syntax completes with a nonzero shell status. The process-wide
+reservation blocks other MCP pane input until completion is proved, but does
+not lock tmux against an external client changing the pane.
 
 **Waiting for something you did not start.** `wait_for_text` watches the
 pane's output stream for a pattern, with stop patterns for the failures you
