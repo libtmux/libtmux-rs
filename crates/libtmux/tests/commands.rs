@@ -2071,6 +2071,39 @@ async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A quiet shorter than the polling interval costs one interval anyway.
+///
+/// `wait_for_quiet` compares one look with the last, so the shortest silence
+/// it can observe is the gap between two of them. Both waits document that
+/// gap as 120ms, and a number in prose is only as good as what fails when it
+/// moves: shortening `POLL_INTERVAL` without saying so fails here.
+#[tokio::test]
+async fn a_quiet_below_the_polling_interval_still_costs_one() {
+    use libtmux::PaneWait;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("settling").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    // Nothing is dispatched, so what this times is the floor the interval puts
+    // under a shorter request rather than any work the pane is doing.
+    let started = std::time::Instant::now();
+    let settled = pane
+        .wait_for_quiet(Duration::from_millis(5), Duration::from_secs(20))
+        .await
+        .expect("waiting is not an error");
+    let waited = started.elapsed();
+
+    assert_eq!(settled, PaneWait::Arrived, "an idle pane is quiet");
+    assert!(
+        waited >= Duration::from_millis(120),
+        "a 5ms quiet cannot be seen sooner than the 120ms interval: {waited:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// Breaking out the only pane relinks its window instead of doing nothing.
 ///
 /// tmux takes the command, and `cmd-break-pane.c` links the window at a free

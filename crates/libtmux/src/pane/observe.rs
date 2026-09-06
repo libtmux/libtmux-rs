@@ -222,6 +222,12 @@ impl Pane {
     /// subscription would answer sooner and is not available in a default
     /// build.
     ///
+    /// A look costs one `capture-pane` and looks are 120ms apart, which keeps
+    /// a wait under ten dispatches a second and answers within an interval of
+    /// the text appearing. The first look comes before the first sleep, so
+    /// text already there when the wait begins is answered at once, and a
+    /// `within` shorter than one interval buys exactly one look.
+    ///
     /// Each look reads the scrollback rather than the visible screen, and
     /// joins lines tmux wrapped. Both matter for correctness rather than
     /// completeness: text that scrolled off before the look would otherwise
@@ -271,10 +277,11 @@ impl Pane {
     /// Wait until this pane stops producing output for `quiet_for`.
     ///
     /// For work that prints nothing recognisable at its end. Quiet is measured
-    /// from the last change this saw, so it cannot be shorter than the polling
-    /// interval; a caller wanting a specific string should say so with
-    /// [`Pane::wait_for_text`], which answers as soon as it appears rather
-    /// than after a silence.
+    /// from the last change this saw, so it cannot be shorter than the 120ms
+    /// interval [`Pane::wait_for_text`] describes: a smaller `quiet_for` is
+    /// rounded up to it rather than refused. A caller wanting a specific
+    /// string should say so with [`Pane::wait_for_text`], which answers as
+    /// soon as it appears rather than after a silence.
     ///
     /// # Errors
     ///
