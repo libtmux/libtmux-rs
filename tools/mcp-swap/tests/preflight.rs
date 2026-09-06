@@ -13,6 +13,8 @@ use mcp_swap::config::ServerSpec;
 use mcp_swap::preflight::preflight;
 use rustix::io::Errno;
 use rustix::process::{Pid, test_kill_process};
+#[cfg(target_os = "linux")]
+use rustix::process::{Signal, kill_process};
 use tempfile::tempdir;
 
 #[test]
@@ -53,6 +55,52 @@ fn initialize_result_is_accepted_before_a_long_lived_server_exits() {
 
     preflight(&spec, Duration::from_secs(2)).expect("initialize response before exit");
 
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_process_stopped(&child_pid);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn initialize_result_reaps_a_setsid_descendant_holding_pipes() {
+    let root = tempdir().expect("temporary root");
+    let child_pid = root.path().join("setsid-child.pid");
+    let script = executable(
+        root.path(),
+        "setsid-child",
+        &format!(
+            "#!/bin/sh\nread request\nsetsid sh -c 'echo $$ > {}; exec sleep 30' &\nwhile [ ! -s {} ]; do :; done\nprintf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":\"2025-06-18\"}}}}'\nwait\n",
+            child_pid.display(),
+            child_pid.display()
+        ),
+    );
+    let spec = ServerSpec {
+        command: script.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        env: BTreeMap::new(),
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    let worker = thread::spawn(move || {
+        let result = preflight(&spec, Duration::from_secs(2));
+        let _ = sender.send(result);
+    });
+
+    let result = match receiver.recv_timeout(Duration::from_secs(3)) {
+        Ok(result) => {
+            worker.join().expect("preflight worker");
+            result
+        }
+        Err(error) => {
+            let raw_pid = fs::read_to_string(&child_pid).expect("descendant PID");
+            let pid = Pid::from_raw(raw_pid.trim().parse().expect("numeric descendant PID"))
+                .expect("positive descendant PID");
+            let _ = kill_process(pid, Signal::KILL);
+            assert_process_stopped(&child_pid);
+            panic!("preflight did not return promptly: {error}");
+        }
+    };
+
+    result.expect("initialize response before exit");
     assert!(started.elapsed() < Duration::from_secs(1));
     assert_process_stopped(&child_pid);
 }

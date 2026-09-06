@@ -161,7 +161,10 @@ appeared late.
 Before `use` writes anything, it launches the selected server with the proposed
 environment and requires a valid MCP `initialize` result. A healthy stdio
 server may remain running after replying; the probe accepts the reply, then
-terminates and reaps the probe process group.
+terminates its process group and reaps the direct child. On Linux, an
+exact-marker sweep also terminates descendants that leave the group. Other
+Unix targets provide process-group cleanup only, so a detached descendant can
+outlive the probe there.
 
 If a boundary changes and exact reverse rollback can be proven, every earlier
 step is unwound in reverse order. If it cannot be proven, the command fails
