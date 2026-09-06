@@ -54,10 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 other => println!("  gave up: {other:?}"),
             }
 
+            // region: capture
             let lines = pane.capture().await?;
             for line in lines.iter().filter(|line| !line.as_bytes().is_empty()) {
                 println!("  | {}", line.to_string_lossy());
             }
+            // endregion
 
             Ok::<_, Box<dyn std::error::Error>>(lines.len())
         })
