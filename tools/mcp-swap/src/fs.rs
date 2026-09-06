@@ -220,12 +220,13 @@ fn route_topology(
                 let parent = current
                     .parent()
                     .ok_or_else(|| FsError::new("configuration symlink has no parent"))?;
-                anchors.push(snapshot_directory(parent)?);
+                let anchor = snapshot_directory(parent)?;
                 let next = if target.is_absolute() {
                     target
                 } else {
-                    parent.join(target)
+                    anchor.physical.join(target)
                 };
+                anchors.push(anchor);
                 current = normalize_absolute(&next)?;
             }
             Ok(_) => break,
@@ -404,12 +405,13 @@ pub fn resolve_config_route(path: &Path, limit: usize) -> Result<ConfigRoute, Fs
             let parent = current
                 .parent()
                 .ok_or_else(|| FsError::new("configuration symlink has no parent"))?;
-            anchors.push(snapshot_directory(parent)?);
+            let anchor = snapshot_directory(parent)?;
             let next = if target.is_absolute() {
                 target
             } else {
-                parent.join(target)
+                anchor.physical.join(target)
             };
+            anchors.push(anchor);
             current = normalize_absolute(&next)?;
             continue;
         }

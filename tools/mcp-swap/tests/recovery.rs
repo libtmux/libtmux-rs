@@ -36,6 +36,48 @@ fn config_route_rejects_a_replaced_symlink() {
 }
 
 #[test]
+fn relative_config_symlink_uses_its_physical_parent() {
+    let root = tempdir().expect("temporary root");
+    let logical_home = root.path().join("logical-home");
+    let physical_home = root.path().join("physical-home");
+    let physical_parent = physical_home.join("client");
+    fs::create_dir_all(&logical_home).expect("logical home");
+    fs::create_dir_all(&physical_parent).expect("physical parent");
+    let logical_parent = logical_home.join("client");
+    symlink(&physical_parent, &logical_parent).expect("logical parent link");
+    let logical_sibling = logical_home.join("shared.json");
+    let physical_sibling = physical_home.join("shared.json");
+    fs::write(&logical_sibling, b"lexical\n").expect("lexical sibling");
+    fs::write(&physical_sibling, b"physical\n").expect("physical sibling");
+    let config = logical_parent.join("config.json");
+    symlink("../shared.json", physical_parent.join("config.json")).expect("relative config link");
+
+    let route = resolve_config_route(&config, 1024).expect("relative route");
+    route.verify().expect("stable relative route");
+    assert_eq!(route.links[0].path, config);
+    assert_eq!(
+        route.links[0].target,
+        std::path::Path::new("../shared.json")
+    );
+    assert_eq!(route.anchors[0].logical, logical_parent);
+    assert_eq!(
+        route.anchors[0].physical,
+        physical_parent.canonicalize().expect("physical parent")
+    );
+
+    fs::write(&route.target, b"updated\n").expect("write resolved target");
+    assert_eq!(
+        fs::read(&logical_sibling).expect("unchanged lexical sibling"),
+        b"lexical\n"
+    );
+    assert_eq!(
+        fs::read(&physical_sibling).expect("updated physical sibling"),
+        b"updated\n"
+    );
+    assert_eq!(route.target, physical_sibling);
+}
+
+#[test]
 fn physical_aliases_are_refused_even_through_hard_links() {
     let root = tempdir().expect("temporary root");
     let first = root.path().join("first");
