@@ -51,7 +51,12 @@ jobs:
           ref: e30bcba4ca470e49ba798255ca4e3d36d58f95bf # v0.1.0-alpha.1
           path: docs
 
+      # package_json_file, because this repository has no package.json of its
+      # own: the action reads `packageManager` from the repo root by default,
+      # and the one that pins pnpm belongs to the checkout of libtmux/docs.
       - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: docs/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: '26'
