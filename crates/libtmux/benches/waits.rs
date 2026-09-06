@@ -157,8 +157,8 @@ async fn flooded_stream(pane: &Pane, output: &mut PaneOutput, lines: u64) -> Dur
         if contains(&tail, needle.as_bytes()) {
             return started.elapsed();
         }
-        let keep = tail.len().saturating_sub(needle.len() * 2);
-        tail.drain(..keep);
+        let stale = tail.len().saturating_sub(needle.len() * 2);
+        tail.drain(..stale);
     }
 
     panic!("the stream ended before the flood's marker arrived");

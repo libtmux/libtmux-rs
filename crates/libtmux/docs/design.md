@@ -1858,8 +1858,8 @@ Latency is a capture round-trip rather than a fraction of the poll interval,
 because the loop looks before it sleeps. A marker printed into a pane answers
 in 5.7ms polled and 3.0ms streamed, measured from dispatching the key that
 produces the text. A doorbell removes the round trip rather than an interval,
-and the round trip is those two milliseconds: real, and not what a caller
-notices.
+and the round trip is those under three milliseconds: real, and not what a
+caller notices.
 
 A flood is where the interval shows. `seq 1 20000` into a pane, waiting for a
 marker printed after its last line: 132ms polled against 21ms streamed.
@@ -1869,15 +1869,15 @@ inside one is rounded up to it.
 
 Ten times the flood closes the gap rather than widening it. At 200,000 lines
 polling holds [151, 184]ms and the stream [118, 260]ms: medians within 4% of
-each other, the stream reaching it with twice the spread, because it rings
-per notification where polling looks once per interval however much arrived in
-between. That spread is where the Swift port's coalescing comes from, and a
-capture poll cannot have the problem it solves.
+each other, reached across an interval 33ms wide against one 142ms wide. The
+stream rings per notification where polling looks once per interval however
+much arrived in between, and that four-fold spread is where the Swift port's
+coalescing comes from. A capture poll cannot have the problem it solves.
 
 So the doorbell stays unbuilt, and what settles it is the feature argument
 below rather than the clock. The clock now says it would be worth having --
-two milliseconds on a marker, six times on a moderate flood, nothing once the
-flood is large enough -- and a default build still cannot reach it.
+under three milliseconds on a marker, six times on a moderate flood, nothing
+once the flood is large enough -- and a default build still cannot reach it.
 
 What follows is why, and it is kept because the constraints it records are the
 ones the implementation had to meet.

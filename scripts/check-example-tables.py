@@ -44,7 +44,11 @@ def blocks(text: str) -> list[tuple[int, str, str]]:
     """Yield `(line number, example argv, block body)` for each marked block."""
     found = []
     for marker in MARKER.finditer(text):
-        fence = FENCE.search(text, marker.end())
+        # Anchored to what follows the marker rather than searched for, so a
+        # marker whose block was deleted claims the next one down the page
+        # instead of reporting itself missing.
+        rest = text[marker.end() :]
+        fence = FENCE.match(rest.lstrip())
         if fence is None:
             raise Drift(
                 f"the marker for `{marker.group('argv')}` is followed by no "

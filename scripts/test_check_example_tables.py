@@ -39,6 +39,14 @@ class BlockTests(unittest.TestCase):
         with self.assertRaises(checker.Drift):
             checker.blocks("<!-- example-output: matrix -->\n\njust prose\n")
 
+    def test_a_marker_does_not_claim_a_block_further_down_the_page(self) -> None:
+        # The block this marker named was deleted. Searching forward would
+        # adopt the next one and check the wrong output against it.
+        with self.assertRaises(checker.Drift):
+            checker.blocks(
+                "<!-- example-output: matrix -->\n\nprose\n\n```text\nsomeone else's\n```\n"
+            )
+
 
 class CellTests(unittest.TestCase):
     def test_single_spaces_inside_a_cell_do_not_split_it(self) -> None:
