@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::catalog::{Client, Paths, known_clients};
 use crate::config::{Action, Scope, ServerSpec, read_server, set_server};
 use crate::fs::{
-    ArtifactClaim, ConfigRoute, FileIdentity, FileSnapshot, FsError, reject_aliases, remove_exact,
-    rename_no_replace, resolve_config_route, stable_snapshot, stage_file,
+    ArtifactClaim, ConfigRoute, FileIdentity, FileSnapshot, FsError, StagedFile, reject_aliases,
+    remove_exact, rename_no_replace, resolve_config_route, stable_snapshot, stage_file,
 };
 use crate::lock::{TransactionLock, ensure_private_directory};
 use crate::recovery::{
@@ -102,7 +102,7 @@ impl RestoredContent {
 struct FileOperation {
     label: String,
     destination: PathBuf,
-    stage: Option<PathBuf>,
+    stage: Option<StagedFile>,
     staged: Option<FileIdentity>,
     prior: Option<FileSnapshot>,
     recovery: Option<PathBuf>,
@@ -116,12 +116,12 @@ impl FileOperation {
     fn replacement(
         label: impl Into<String>,
         destination: PathBuf,
-        stage: PathBuf,
+        stage: StagedFile,
         prior: Option<FileSnapshot>,
         limit: usize,
-    ) -> Result<Self, FsError> {
-        let staged = stable_snapshot(&stage, limit)?.identity;
-        Ok(Self {
+    ) -> Self {
+        let staged = stage.identity().clone();
+        Self {
             label: label.into(),
             destination,
             stage: Some(stage),
@@ -132,7 +132,7 @@ impl FileOperation {
             new_published: false,
             limit,
             route: None,
-        })
+        }
     }
 
     fn deletion(
@@ -195,7 +195,7 @@ impl FileOperation {
                 route.verify_target_absent()?;
             }
         }
-        let Some(stage) = self.stage.as_ref() else {
+        let Some(stage) = self.stage.as_mut() else {
             return Ok(());
         };
         hook(&format!("before-{}-publish", self.label))?;
@@ -203,7 +203,8 @@ impl FileOperation {
         if let Some(route) = &self.route {
             route.verify_target_absent()?;
         }
-        rename_no_replace(stage, &self.destination)?;
+        rename_no_replace(stage.path(), &self.destination)?;
+        stage.disarm();
         self.new_published = true;
         let published = stable_snapshot(&self.destination, self.limit)?;
         if Some(&published.identity) != self.staged.as_ref() {
@@ -369,25 +370,8 @@ impl FileOperation {
         Ok(())
     }
 
-    fn cleanup_stage(&self) -> Result<(), FsError> {
-        let Some(stage) = &self.stage else {
-            return Ok(());
-        };
-        match fs::symlink_metadata(stage) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Ok(_) => {}
-            Err(error) => {
-                return Err(FsError::new(format!(
-                    "inspect staged {}: {error}",
-                    self.label
-                )));
-            }
-        }
-        let identity = self
-            .staged
-            .as_ref()
-            .ok_or_else(|| FsError::new("stage has no authenticated identity"))?;
-        remove_exact(stage, identity, self.limit)
+    fn cleanup_stage(&mut self) -> Result<(), FsError> {
+        self.stage.as_mut().map_or(Ok(()), StagedFile::cleanup)
     }
 }
 
@@ -923,7 +907,7 @@ fn stage_use(
         state_stage,
         state_snapshot.cloned(),
         STATE_MAX_BYTES,
-    )?);
+    ));
     let config_start = prefix.len();
     prefix.extend(config_operations);
     Ok((prefix, config_start))
@@ -939,19 +923,19 @@ fn stage_use_plan(
         &plan.bytes,
         plan.route.file.identity.mode,
     )?;
-    let config_identity = stable_snapshot(&config_stage, CONFIG_MAX_BYTES)?.identity;
+    let config_identity = config_stage.identity().clone();
     let backup_identity = if let Some(entry) = &plan.existing {
         entry.backup.clone()
     } else {
         let backup_stage = stage_file(&plan.backup_path, &plan.route.file.bytes, 0o600)?;
-        let identity = stable_snapshot(&backup_stage, CONFIG_MAX_BYTES)?.identity;
+        let identity = backup_stage.identity().clone();
         operations.push(FileOperation::replacement(
             format!("backup-{}", plan.client.name.as_str()),
             plan.backup_path.clone(),
             backup_stage,
             None,
             CONFIG_MAX_BYTES,
-        )?);
+        ));
         identity
     };
     stage_recovery_rewrites(plan, next, operations)?;
@@ -1009,7 +993,7 @@ fn stage_use_plan(
             config_stage,
             Some(plan.route.file.clone()),
             CONFIG_MAX_BYTES,
-        )?
+        )
         .with_route(&plan.route),
     );
     Ok(())
@@ -1022,7 +1006,7 @@ fn stage_recovery_rewrites(
 ) -> Result<(), FsError> {
     for rewrite in &plan.backup_rewrites {
         let stage = stage_file(&rewrite.entry.backup_path, &rewrite.bytes, 0o600)?;
-        let identity = stable_snapshot(&stage, CONFIG_MAX_BYTES)?.identity;
+        let identity = stage.identity().clone();
         next.entries
             .get_mut(&rewrite.key)
             .ok_or_else(|| FsError::new("recovery-chain entry disappeared"))?
@@ -1037,7 +1021,7 @@ fn stage_recovery_rewrites(
             stage,
             Some(rewrite.backup.clone()),
             CONFIG_MAX_BYTES,
-        )?);
+        ));
     }
     Ok(())
 }
@@ -1081,11 +1065,11 @@ fn stage_revert(
             &plan.backup.bytes,
             plan.entry.original_mode,
         )?;
-        let restored = stable_snapshot(&stage, CONFIG_MAX_BYTES)?;
+        let restored = stage.identity().clone();
         restored_identities.push((
             plan.entry.target_path.clone(),
             plan.entry.sequence,
-            restored.identity.clone(),
+            restored.clone(),
         ));
         let mut route = plan.route.clone();
         route.file = prior.clone();
@@ -1096,15 +1080,15 @@ fn stage_revert(
                 stage,
                 Some(prior),
                 CONFIG_MAX_BYTES,
-            )?
+            )
             .with_route(&route),
         );
         current.insert(
             plan.route.target.clone(),
             FileSnapshot {
                 path: plan.route.target.clone(),
-                identity: restored.identity,
-                bytes: restored.bytes,
+                identity: restored,
+                bytes: plan.backup.bytes.clone(),
             },
         );
     }
@@ -1139,7 +1123,7 @@ fn stage_revert(
             state_stage,
             Some(state_snapshot.clone()),
             STATE_MAX_BYTES,
-        )?);
+        ));
     }
     let backup_start = operations.len();
     for plan in plans {
@@ -1206,7 +1190,7 @@ fn rollback_operations(operations: &mut [FileOperation], error: FsError) -> Resu
             rollback.push(rollback_error.to_string());
         }
     }
-    for operation in operations.iter() {
+    for operation in operations.iter_mut() {
         if let Err(cleanup_error) = operation.cleanup_stage() {
             rollback.push(cleanup_error.to_string());
         }

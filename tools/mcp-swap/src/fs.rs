@@ -69,6 +69,76 @@ pub struct FileSnapshot {
     pub bytes: Vec<u8>,
 }
 
+pub(crate) struct StagedFile {
+    path: PathBuf,
+    identity: FileIdentity,
+    limit: usize,
+    armed: bool,
+    complete: bool,
+}
+
+impl StagedFile {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn identity(&self) -> &FileIdentity {
+        &self.identity
+    }
+
+    pub(crate) fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    pub(crate) fn cleanup(&mut self) -> Result<(), FsError> {
+        if !self.armed {
+            return Ok(());
+        }
+        match fs::symlink_metadata(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.armed = false;
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return Err(FsError::new(format!(
+                    "inspect stage {}: {error}",
+                    self.path.display()
+                )));
+            }
+        }
+        let current = stable_snapshot(&self.path, self.limit)?;
+        let matches = if self.complete {
+            current.identity == self.identity
+        } else {
+            current.identity.device == self.identity.device
+                && current.identity.inode == self.identity.inode
+        };
+        if !matches {
+            return Err(FsError::new(format!(
+                "stage changed; retained {}",
+                self.path.display()
+            )));
+        }
+        remove_exact(&self.path, &current.identity, self.limit)?;
+        self.armed = false;
+        Ok(())
+    }
+
+    fn cleanup_error(&mut self, error: FsError) -> FsError {
+        match self.cleanup() {
+            Ok(()) => error,
+            Err(cleanup) => FsError::new(format!("{error}; stage cleanup incomplete: {cleanup}")),
+        }
+    }
+}
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let _ = self.cleanup();
+    }
+}
+
 /// One symlink in a logical configuration route.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -532,7 +602,11 @@ pub fn reject_aliases(claims: &[ArtifactClaim]) -> Result<(), FsError> {
 /// # Errors
 ///
 /// Returns [`FsError`] when no unique stage can be created or written.
-pub fn stage_file(destination: &Path, bytes: &[u8], mode: u32) -> Result<PathBuf, FsError> {
+pub(crate) fn stage_file(
+    destination: &Path,
+    bytes: &[u8],
+    mode: u32,
+) -> Result<StagedFile, FsError> {
     let parent = destination
         .parent()
         .ok_or_else(|| FsError::new("stage destination has no parent"))?;
@@ -549,20 +623,56 @@ pub fn stage_file(destination: &Path, bytes: &[u8], mode: u32) -> Result<PathBuf
         match open(
             &path,
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-            Mode::from_raw_mode(mode & 0o7777),
+            Mode::from_raw_mode(0o600),
         ) {
             Ok(descriptor) => {
                 let mut file = File::from(descriptor);
-                file.write_all(bytes).map_err(|error| {
-                    FsError::new(format!("write stage {}: {error}", path.display()))
+                let created = file.metadata().map_err(|error| {
+                    FsError::new(format!(
+                        "inspect new stage {}: {error}; retained stage",
+                        path.display()
+                    ))
                 })?;
-                fs::set_permissions(&path, fs::Permissions::from_mode(mode & 0o7777))
-                    .map_err(|error| FsError::new(format!("set stage mode: {error}")))?;
-                file.sync_all().map_err(|error| {
-                    FsError::new(format!("synchronize stage {}: {error}", path.display()))
-                })?;
-                sync_directory(parent)?;
-                return Ok(path);
+                let mut stage = StagedFile {
+                    path,
+                    identity: identity(&created, &[]),
+                    limit: bytes.len(),
+                    armed: true,
+                    complete: false,
+                };
+                let result = (|| {
+                    file.write_all(bytes).map_err(|error| {
+                        FsError::new(format!("write stage {}: {error}", stage.path.display()))
+                    })?;
+                    file.set_permissions(fs::Permissions::from_mode(mode & 0o7777))
+                        .map_err(|error| FsError::new(format!("set stage mode: {error}")))?;
+                    file.sync_all().map_err(|error| {
+                        FsError::new(format!(
+                            "synchronize stage {}: {error}",
+                            stage.path.display()
+                        ))
+                    })?;
+                    sync_directory(parent)
+                })();
+                if let Err(error) = result {
+                    return Err(stage.cleanup_error(error));
+                }
+                let snapshot = match stable_snapshot(stage.path(), bytes.len()) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return Err(stage.cleanup_error(error)),
+                };
+                if snapshot.identity.device != stage.identity.device
+                    || snapshot.identity.inode != stage.identity.inode
+                {
+                    let error = FsError::new(format!(
+                        "stage changed after creation: {}",
+                        stage.path.display()
+                    ));
+                    return Err(stage.cleanup_error(error));
+                }
+                stage.identity = snapshot.identity;
+                stage.complete = true;
+                return Ok(stage);
             }
             Err(error) if error == rustix::io::Errno::EXIST => {}
             Err(error) => {

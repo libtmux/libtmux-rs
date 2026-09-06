@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use mcp_swap::catalog::{Client, Paths, known_clients, select_clients};
 use mcp_swap::config::{Scope, ServerSpec, read_server};
 use mcp_swap::fs::{FsError, stable_snapshot};
-use mcp_swap::recovery::{ledger_bytes, load_ledger};
+use mcp_swap::recovery::{STATE_MAX_BYTES, ledger_bytes, load_ledger};
 use mcp_swap::transaction::{
     RevertRequest, UseRequest, planned_use_specs, revert_clients, revert_clients_with_hook,
     use_clients, use_clients_preflighted, use_clients_with_hook,
@@ -100,6 +100,37 @@ impl Fixture {
         backups.sort();
         backups.dedup();
         backups
+    }
+
+    fn stage_files(&self) -> Vec<PathBuf> {
+        let mut directories: Vec<_> = self
+            .clients
+            .iter()
+            .map(|client| {
+                client
+                    .config_path
+                    .parent()
+                    .expect("config parent")
+                    .to_path_buf()
+            })
+            .collect();
+        directories.push(self.paths.state_dir());
+        directories.sort();
+        directories.dedup();
+        let mut stages = Vec::new();
+        for directory in directories {
+            for entry in fs::read_dir(directory).expect("artifact directory") {
+                let path = entry.expect("directory entry").path();
+                if path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(".mcp-swap-stage-"))
+                {
+                    stages.push(path);
+                }
+            }
+        }
+        stages.sort();
+        stages
     }
 }
 
@@ -308,6 +339,34 @@ fn malformed_later_config_aborts_before_any_artifact_write() {
     assert_eq!(fs::read(cursor).expect("cursor survives"), before);
     assert!(!fixture.paths.state_file().exists());
     assert!(fixture.backup_files().is_empty());
+}
+
+#[test]
+fn staging_failure_removes_every_owned_stage() {
+    let fixture = Fixture::new();
+    let selected = fixture.selected(&["cursor", "gemini"]);
+    let original: Vec<_> = selected
+        .iter()
+        .map(|client| {
+            (
+                client.config_path.clone(),
+                fs::read(&client.config_path).expect("original config"),
+            )
+        })
+        .collect();
+    let mut request = fixture.request("tmux-mcp");
+    request.server = "x".repeat(STATE_MAX_BYTES);
+
+    let error = use_clients(&fixture.paths, &selected, &request, false)
+        .expect_err("oversized recovery state");
+
+    assert!(error.to_string().contains("recovery state exceeds"));
+    for (path, bytes) in original {
+        assert_eq!(fs::read(path).expect("unchanged config"), bytes);
+    }
+    assert!(!fixture.paths.state_file().exists());
+    assert!(fixture.backup_files().is_empty());
+    assert!(fixture.stage_files().is_empty(), "owned stages leaked");
 }
 
 #[test]
