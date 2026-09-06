@@ -83,6 +83,15 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
 
+      # TEMPORARY: one failing frame with its pane contents.
+      - name: Framing diagnostic
+        run: |
+          set +e
+          cargo test --locked -p tmux-mcp --all-features --test agent \
+            run_framing_preserves_parent_shell_state_and_status -- --nocapture 2>&1 \
+            | sed -n '/PANE-DUMP-BEGIN/,/VIEW=/p' | head -200
+          exit 0
+
       # `--no-fail-fast` because this lane runs only on master and bills at ten
       # times a Linux runner. Stopping at the first failing test binary hides
       # every later one, so a platform difference costs one full run per
