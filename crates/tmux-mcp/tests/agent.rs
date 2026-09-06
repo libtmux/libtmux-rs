@@ -2209,25 +2209,6 @@ async fn run_framing_preserves_parent_shell_state_and_status() {
         "printf 'POS:%s' \"$1\"; cd /; export MCP_FRAME_CHILD=changed; false",
     )
     .await;
-    // TEMPORARY: dump what the pane actually holds when this fails.
-    if changed["outcome"] != "completed" {
-        let dump = guard
-            .server()
-            .cmd(
-                Command::new("capture-pane")
-                    .arg("-p")
-                    .arg("-S")
-                    .arg("-")
-                    .arg("-t")
-                    .arg(&pane),
-            )
-            .await
-            .expect("capture runs");
-        eprintln!(
-            "PANE-DUMP-BEGIN\n{}\nPANE-DUMP-END\nVIEW={changed}",
-            String::from_utf8_lossy(dump.stdout())
-        );
-    }
     assert_eq!(changed["outcome"], "completed");
     assert_eq!(changed["exit_status"], 1);
     assert!(
