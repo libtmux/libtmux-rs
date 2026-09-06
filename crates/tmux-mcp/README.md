@@ -225,8 +225,10 @@ determine the effective configured recipient cohort. `send_keys` observes that
 cohort immediately before input and refuses the whole call if any configured
 pane is dead, input-disabled, in a tmux mode, attended by a non-control client,
 reserved by an active MCP run, or may be the inherited caller. Malformed state
-fails closed. `send_keys_batch` repeats the complete check for each executed
-row.
+fails closed. Caller context is detached only when both `TMUX` and `TMUX_PANE`
+are absent; partial, empty, noncanonical, stale, or unresolved selected-daemon
+context refuses input. `send_keys_batch` repeats the complete check for each
+executed row.
 Returned pane IDs describe configured membership and do not prove delivery.
 `paste_text` applies the same refusals to its named target before buffer
 creation. Text and optional Enter share one private buffer; an empty paste
@@ -379,12 +381,14 @@ Clients can use each tool's four MCP annotations to decide whether to ask a
 person before a whole call. Tool selection shapes the advertised interface; it
 does not reduce the tmux user's authority.
 
-When launched from tmux, the process inherits a pane ID and socket. Pane
-listings mark that pane `caller: "self"` only when the socket matches the
-selected server. Pane-input tools refuse any configured recipient that may be
-that caller; target-only paste checks only its named pane. Teardown tools refuse
-a target that may contain the caller. The comparison weighs the socket as well
-as the pane ID because `%1` names a different pane on every tmux server.
+When launched from tmux, the process inherits a pane ID, session number, server
+PID, and socket. Pane listings mark that pane `caller: "self"` only when the
+socket matches the selected server. Pane-input and teardown tools additionally
+resolve the complete identity against a fresh selected-daemon snapshot before
+acting. A complete identity on another physical socket is foreign; malformed or
+inconsistent context on the selected socket fails closed. The comparison weighs
+the socket as well as the pane ID because `%1` names a different pane on every
+tmux server.
 
 Pane input also refuses a configured pane visible to a non-control tmux client.
 In an unzoomed window every visible pane is attended; in a zoomed window only
