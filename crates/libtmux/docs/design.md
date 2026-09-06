@@ -789,6 +789,13 @@ The protocol is parsed as bytes. tmux escapes only what would break the line
 protocol -- bytes below `0x20`, and backslash -- so `%output` carries a pane's
 bytes literally and a line is not necessarily UTF-8.
 
+A subscription reports at most once a second, and the number is tmux's rather
+than a choice made here: `control.c` arms `subs_timer` with
+`struct timeval tv = { .tv_sec = 1 }` when a subscription is added and re-arms
+it with the same value each time the timer fires. `ControlSender::subscribe`
+says so, because a caller who reads it as a change feed will silently miss
+every step a value took between two reports.
+
 ## Module and component map
 
 This table spans implemented and planned components. A listed target file is
