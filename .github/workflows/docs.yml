@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: libtmux/docs
-          ref: e30bcba4ca470e49ba798255ca4e3d36d58f95bf # v0.1.0-alpha.1
+          ref: ce9d7edd63f6a543801d9b93366ecad5e158c0ec # v0.1.0-alpha.2
           path: docs
 
       # package_json_file, because this repository has no package.json of its
@@ -85,7 +85,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@e30bcba4ca470e49ba798255ca4e3d36d58f95bf # v0.1.0-alpha.1
+    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@ce9d7edd63f6a543801d9b93366ecad5e158c0ec # v0.1.0-alpha.2
     with:
       # Unprefixed by locale — reusable-deploy prepends <locale>/ itself when
       # `port` is set, so this becomes en/rs/latest.
