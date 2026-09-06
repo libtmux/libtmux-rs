@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use mcp_swap::catalog::{Client, Paths, known_clients, select_clients};
 use mcp_swap::config::{Scope, ServerSpec, read_server};
 use mcp_swap::fs::{FsError, stable_snapshot};
-use mcp_swap::recovery::load_ledger;
+use mcp_swap::recovery::{ledger_bytes, load_ledger};
 use mcp_swap::transaction::{
     RevertRequest, UseRequest, planned_use_specs, revert_clients, revert_clients_with_hook,
     use_clients, use_clients_preflighted, use_clients_with_hook,
@@ -572,6 +572,44 @@ fn late_state_file_survives_create_new_publication() {
     .expect_err("late state");
 
     assert_eq!(fs::read(state).expect("late state survives"), late);
+}
+
+#[test]
+fn recovery_parse_and_transaction_snapshot_are_one_read() {
+    let fixture = Fixture::new();
+    let selected = fixture.selected(&["cursor"]);
+    use_clients(&fixture.paths, &selected, &fixture.request("first"), false).expect("initial use");
+    let state = fixture.paths.state_file();
+    let config = selected[0].config_path.clone();
+    let before = fs::read(&config).expect("swapped config");
+    let mut replacement = load_ledger(&state).expect("recovery state");
+    replacement.next_sequence += 1;
+    let replacement = ledger_bytes(&replacement).expect("replacement state");
+    let mut injected = false;
+    let mut hook = |boundary: &str| {
+        if boundary == "after-recovery-state-snapshot" && !injected {
+            injected = true;
+            fs::write(&state, &replacement).map_err(|error| FsError::new(error.to_string()))?;
+        }
+        Ok(())
+    };
+
+    let error = use_clients_with_hook(
+        &fixture.paths,
+        &selected,
+        &fixture.request("second"),
+        false,
+        &mut hook,
+    )
+    .expect_err("replacement state must block publication");
+
+    assert!(
+        error
+            .to_string()
+            .contains("state changed before take-aside")
+    );
+    assert_eq!(fs::read(state).expect("replacement survives"), replacement);
+    assert_eq!(fs::read(config).expect("config unchanged"), before);
 }
 
 #[test]

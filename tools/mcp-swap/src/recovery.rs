@@ -1,14 +1,14 @@
 //! Versioned, checksummed, private recovery state.
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::Scope;
-use crate::fs::{DirectorySnapshot, FileIdentity, FsError, LinkSnapshot, digest, stable_snapshot};
+use crate::fs::{
+    DirectorySnapshot, FileIdentity, FileSnapshot, FsError, LinkSnapshot, digest, stable_snapshot,
+};
 use crate::jsonc;
 
 /// Recovery schema version written by this native tool.
@@ -73,14 +73,20 @@ struct LedgerFile {
 /// Returns [`FsError`] for symlinks, wrong ownership or mode, hard links,
 /// oversize input, malformed schemas, noncanonical entries, or checksum drift.
 pub fn load_ledger(path: &Path) -> Result<Ledger, FsError> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        FsError::new(format!("read recovery state {}: {error}", path.display()))
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(FsError::new("recovery state is a symlink"));
-    }
-    validate_private(&metadata, "recovery state")?;
+    load_ledger_snapshot(path).map(|(ledger, _)| ledger)
+}
+
+pub(crate) fn load_ledger_snapshot(path: &Path) -> Result<(Ledger, FileSnapshot), FsError> {
+    load_ledger_snapshot_with_hook(path, &mut || Ok(()))
+}
+
+pub(crate) fn load_ledger_snapshot_with_hook(
+    path: &Path,
+    hook: &mut dyn FnMut() -> Result<(), FsError>,
+) -> Result<(Ledger, FileSnapshot), FsError> {
     let snapshot = stable_snapshot(path, STATE_MAX_BYTES)?;
+    hook()?;
+    validate_private(&snapshot.identity, "recovery state")?;
     let text = std::str::from_utf8(&snapshot.bytes)
         .map_err(|error| FsError::new(format!("recovery state is not UTF-8: {error}")))?;
     let value = jsonc::parse_json(text)
@@ -98,7 +104,7 @@ pub fn load_ledger(path: &Path) -> Result<Ledger, FsError> {
     if file.checksum != expected {
         return Err(FsError::new("recovery state checksum mismatch"));
     }
-    Ok(file.payload)
+    Ok((file.payload, snapshot))
 }
 
 /// Serialize a ledger under the size ceiling.
@@ -174,17 +180,14 @@ fn validate_ledger(ledger: &Ledger) -> Result<(), FsError> {
     Ok(())
 }
 
-fn validate_private(metadata: &fs::Metadata, label: &str) -> Result<(), FsError> {
-    if !metadata.is_file() {
-        return Err(FsError::new(format!("{label} is not a regular file")));
-    }
-    if metadata.mode() & 0o7777 != 0o600 {
+fn validate_private(identity: &FileIdentity, label: &str) -> Result<(), FsError> {
+    if identity.mode != 0o600 {
         return Err(FsError::new(format!("{label} must have mode 0600")));
     }
-    if metadata.uid() != rustix::process::getuid().as_raw() {
+    if identity.uid != rustix::process::getuid().as_raw() {
         return Err(FsError::new(format!("{label} has a different owner")));
     }
-    if metadata.nlink() != 1 {
+    if identity.links != 1 {
         return Err(FsError::new(format!(
             "{label} must have exactly one hard link"
         )));

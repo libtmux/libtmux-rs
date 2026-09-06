@@ -12,7 +12,7 @@ use crate::fs::{
 };
 use crate::lock::{TransactionLock, ensure_private_directory};
 use crate::recovery::{
-    Ledger, RecoveryEntry, STATE_MAX_BYTES, ledger_bytes, load_ledger, state_key,
+    Ledger, RecoveryEntry, STATE_MAX_BYTES, ledger_bytes, load_ledger_snapshot_with_hook, state_key,
 };
 
 const CONFIG_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -479,7 +479,7 @@ fn use_clients_impl(
         return Ok(changes_from_use(&plans));
     }
     let lock = TransactionLock::acquire(&paths.lock_dir())?;
-    let (ledger, state_snapshot) = load_optional_ledger(&paths.state_file())?;
+    let (ledger, state_snapshot) = load_optional_ledger_with_hook(&paths.state_file(), hook)?;
     let plans = plan_use(clients, request, &ledger)?;
     validate_use_aliases(paths, &plans, &ledger, Some(&lock))?;
     if preflighted.is_some_and(|expected| expected != specs_from_use(&plans)) {
@@ -542,7 +542,7 @@ pub fn revert_clients_with_hook(
         return Ok(changes_from_revert(&plans));
     }
     let lock = TransactionLock::acquire(&paths.lock_dir())?;
-    let (ledger, state_snapshot) = load_optional_ledger(&paths.state_file())?;
+    let (ledger, state_snapshot) = load_optional_ledger_with_hook(&paths.state_file(), hook)?;
     let state_snapshot =
         state_snapshot.ok_or_else(|| FsError::new("no recovery state to revert"))?;
     let plans = plan_revert(clients, request, &ledger)?;
@@ -1248,10 +1248,18 @@ fn changes_from_revert(plans: &[RevertPlan<'_>]) -> Vec<Change> {
 }
 
 fn load_optional_ledger(path: &Path) -> Result<(Ledger, Option<FileSnapshot>), FsError> {
+    load_optional_ledger_with_hook(path, &mut |_| Ok(()))
+}
+
+fn load_optional_ledger_with_hook(
+    path: &Path,
+    hook: &mut dyn FnMut(&str) -> Result<(), FsError>,
+) -> Result<(Ledger, Option<FileSnapshot>), FsError> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            let ledger = load_ledger(path)?;
-            let snapshot = stable_snapshot(path, STATE_MAX_BYTES)?;
+            let (ledger, snapshot) = load_ledger_snapshot_with_hook(path, &mut || {
+                hook("after-recovery-state-snapshot")
+            })?;
             Ok((ledger, Some(snapshot)))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((Ledger::default(), None)),
