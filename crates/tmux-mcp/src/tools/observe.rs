@@ -21,6 +21,7 @@ struct RunRoute {
     executable: PathBuf,
     endpoint: PathBuf,
     pane: String,
+    generation: libtmux::ServerGeneration,
 }
 
 fn known_posix_shell(command: &libtmux::TmuxText) -> bool {
@@ -84,6 +85,7 @@ fn run_route(server: &libtmux::Server, plan: &PaneInputPlan) -> Result<RunRoute,
         executable,
         endpoint: plan.endpoint.clone(),
         pane: plan.target.id().to_string(),
+        generation: plan.generation,
     })
 }
 
@@ -261,14 +263,15 @@ impl TmuxTools {
         }
         let foreground = require_known_shell(&initial, "initial")?;
         let route = run_route(&self.server, &initial)?;
-        let lease = run_request::reserve(&route.endpoint, &route.pane)
+        let lease = initial
+            .reserve()
             .ok_or_else(|| active_run_error(&route.pane))?;
         let checkpoint_pane = initial.target.id().to_string();
         let expected_route = route.clone();
         let final_lease = lease.clone();
         let final_check = async {
             let final_plan = self
-                .preflight_pane_input_for_run(
+                .preflight_reserved_pane_input(
                     &checkpoint_pane,
                     PaneInputReach::Synchronized,
                     MissingSource::ObservedTransition,
@@ -287,9 +290,7 @@ impl TmuxTools {
                 )));
             }
             let final_route = run_route(&self.server, &final_plan)?;
-            if final_route != expected_route
-                || !run_request::owns(&final_lease, &final_route.endpoint, &final_route.pane)
-            {
+            if final_route != expected_route || !final_plan.owns(&final_lease) {
                 return Err(bad_input(format!(
                     "pane {checkpoint_pane} changed its tmux route or active-run reservation between run checkpoints"
                 )));
@@ -559,7 +560,7 @@ mod tests {
         tools: &TmuxTools,
         source: &str,
         foreground: &libtmux::TmuxText,
-        lease: &run_request::RunLease,
+        lease: &run_request::PaneReservation,
     ) -> Result<(), ErrorData> {
         if transition == "caller" {
             server
@@ -605,7 +606,7 @@ mod tests {
             }
         }
         let final_plan = tools
-            .preflight_pane_input_for_run(
+            .preflight_reserved_pane_input(
                 source,
                 PaneInputReach::Synchronized,
                 MissingSource::ObservedTransition,
@@ -686,8 +687,7 @@ mod tests {
                 .resolved_tmux_executable()
                 .expect("fixture tmux resolves");
             let socket = initial.endpoint.clone();
-            let lease =
-                run_request::reserve(&socket, &source).expect("the fixture pane is unreserved");
+            let lease = initial.reserve().expect("the fixture pane is unreserved");
             let final_lease = lease.clone();
             let baseline_clients = client_count(server).await;
             let mut transition_pane = pane.clone();

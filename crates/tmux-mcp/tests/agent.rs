@@ -38,6 +38,74 @@ struct LoggedTmux {
     log: PathBuf,
 }
 
+struct DispatchBarrier {
+    held: PathBuf,
+    release: PathBuf,
+    released: bool,
+}
+
+#[derive(Clone, Copy)]
+enum GuardedDispatch {
+    Send,
+    Paste,
+}
+
+impl GuardedDispatch {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Send => "send",
+            Self::Paste => "paste",
+        }
+    }
+
+    fn tmux_command(self) -> &'static str {
+        match self {
+            Self::Send => "send-keys",
+            Self::Paste => "paste-buffer",
+        }
+    }
+
+    fn start(
+        self,
+        tools: TmuxTools,
+        pane: String,
+    ) -> tokio::task::JoinHandle<Result<(), rmcp::model::ErrorData>> {
+        tokio::spawn(async move {
+            match self {
+                Self::Send => tools
+                    .send_keys(args(serde_json::json!({"pane": pane, "keys": ["C-l"]})))
+                    .await
+                    .map(|_| ()),
+                Self::Paste => tools
+                    .paste_text(args(serde_json::json!({"pane": pane, "text": "race"})))
+                    .await
+                    .map(|_| ()),
+            }
+        })
+    }
+}
+
+impl DispatchBarrier {
+    async fn wait(&self) {
+        libtmux::test::retry_until(Duration::from_secs(2), async || self.held.exists())
+            .await
+            .expect("the selected dispatch reaches its barrier");
+    }
+
+    fn release(&mut self) {
+        std::fs::write(&self.release, []).expect("the dispatch barrier releases");
+        self.released = true;
+    }
+}
+
+impl Drop for DispatchBarrier {
+    fn drop(&mut self) {
+        if !self.released {
+            drop(std::fs::write(&self.release, []));
+        }
+    }
+}
+
 impl LoggedTmux {
     fn new() -> Self {
         let actual = Server::new()
@@ -54,7 +122,23 @@ impl LoggedTmux {
         let executable = directory.join("tmux");
         let log = directory.join("argv.log");
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexec {} \"$@\"\n",
+            "#!/bin/sh\n\
+             barrier_root={}\n\
+             for argument do\n\
+             \thold=\"$barrier_root/hold-$argument\"\n\
+             \tif [ -f \"$hold\" ]; then\n\
+             \t\trm -f \"$hold\"\n\
+             \t\theld=\"$barrier_root/held-$argument\"\n\
+             \t\trelease=\"$barrier_root/release-$argument\"\n\
+             \t\t: > \"$held\"\n\
+             \t\twhile [ ! -f \"$release\" ]; do sleep 0.01; done\n\
+             \t\trm -f \"$held\" \"$release\"\n\
+             \t\tbreak\n\
+             \tfi\n\
+             done\n\
+             printf '%s\\n' \"$*\" >> {}\n\
+             exec {} \"$@\"\n",
+            shell_quote(directory.as_os_str()),
             shell_quote(log.as_os_str()),
             shell_quote(actual.as_os_str()),
         );
@@ -70,6 +154,18 @@ impl LoggedTmux {
 
     fn clear(&self) {
         std::fs::write(&self.log, []).expect("fixture log clears");
+    }
+
+    fn hold_next(&self, command: &str) -> DispatchBarrier {
+        let armed = self.directory.join(format!("hold-{command}"));
+        let held = self.directory.join(format!("held-{command}"));
+        let release = self.directory.join(format!("release-{command}"));
+        std::fs::write(armed, []).expect("the next selected dispatch is held");
+        DispatchBarrier {
+            held,
+            release,
+            released: false,
+        }
     }
 
     fn send_dispatches(&self) -> usize {
@@ -1432,6 +1528,88 @@ async fn active_run_reservation_is_process_wide_and_guards_all_input() {
     prompt_ready(guard.server(), &pane).await;
     assert_eq!(run_view(&second, &pane, "true").await["exit_status"], 0);
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+async fn assert_input_reservation_blocks_run(operation: GuardedDispatch) {
+    let logged = LoggedTmux::new();
+    let guard = TestServer::builder()
+        .tmux_executable(&logged.executable)
+        .start()
+        .await
+        .expect("logging tmux starts");
+    let tools = bare_tools(guard.server());
+    tools
+        .create_session(args(serde_json::json!({
+            "name": format!("{}-run-race", operation.name())
+        })))
+        .await
+        .expect("session is created");
+    let pane = panes(&tools).await[0]["id"]
+        .as_str()
+        .expect("pane id")
+        .to_owned();
+    prompt_ready(guard.server(), &pane).await;
+    let mut barrier = logged.hold_next(operation.tmux_command());
+    let run_started = format!("mcp-{}-race-run-started", operation.name());
+    let release_run = format!("mcp-{}-race-run-release", operation.name());
+
+    let input = operation.start(tools.clone(), pane.clone());
+    barrier.wait().await;
+    let running = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        let run_started = run_started.clone();
+        let release_run = release_run.clone();
+        async move {
+            tools
+                .run_command(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "command": format!(
+                            "tmux wait-for -S {run_started}; tmux wait-for {release_run}"
+                        ),
+                        "seconds": 10
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+    let raced = guard
+        .server()
+        .wait_for_channel(&run_started, Duration::from_millis(500))
+        .await
+        .expect("run-start channel wait answers")
+        == libtmux::ChannelWait::Signalled;
+
+    barrier.release();
+    signal_channel(guard.server(), &release_run).await;
+    let input = input.await.expect("input request joins");
+    let run = running.await.expect("run request joins");
+    input.expect("the reserved input completes");
+
+    assert!(
+        !raced,
+        "the racing run reached the {}-owned pane",
+        operation.name()
+    );
+    assert_active_run(
+        &run.err()
+            .expect("the input reservation refuses the racing run"),
+        &format!("run racing a {}", operation.name()),
+    );
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn send_reservation_blocks_a_run_until_dispatch() {
+    assert_input_reservation_blocks_run(GuardedDispatch::Send).await;
+}
+
+#[tokio::test]
+async fn paste_reservation_blocks_a_run_until_dispatch() {
+    assert_input_reservation_blocks_run(GuardedDispatch::Paste).await;
 }
 
 #[tokio::test]

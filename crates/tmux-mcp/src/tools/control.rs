@@ -14,7 +14,7 @@ use crate::{
 
 use super::error::{EffectBoundary, bad_input, tmux_error, vanished};
 use super::lossy;
-use super::pane_input::{MissingSource, PaneInputReach};
+use super::pane_input::{MissingSource, PaneInputReach, active_run_error};
 
 /// Numbers temporary paste buffers so concurrent calls cannot share one.
 static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -120,13 +120,29 @@ impl TmuxTools {
             return Err(bad_input("send_keys needs text, keys, or enter".to_owned()));
         }
 
-        let plan = self
+        let initial = self
             .preflight_pane_input(
                 &pane,
                 PaneInputReach::Synchronized,
                 MissingSource::CallerInput,
             )
             .await?;
+        let reservation = initial
+            .reserve()
+            .ok_or_else(|| active_run_error(initial.target.id().as_ref()))?;
+        let plan = self
+            .preflight_reserved_pane_input(
+                &pane,
+                PaneInputReach::Synchronized,
+                MissingSource::CallerInput,
+                &reservation,
+            )
+            .await?;
+        if !initial.same_authority(&plan) || !plan.owns(&reservation) {
+            return Err(bad_input(format!(
+                "pane {pane} changed its configured input authority before send dispatch"
+            )));
+        }
         let dispatch = input_dispatch(plan.target.id().as_ref(), text, keys, enter)
             .ok_or_else(|| bad_input("send_keys needs text, keys, or enter".to_owned()))?;
         let mut boundary = EffectBoundary::new("send_keys");
@@ -615,15 +631,30 @@ impl TmuxTools {
                 delete_private_paste_buffer(&self.server, &buffer).await,
             ));
         }
+        let Some(reservation) = initial.reserve() else {
+            return Err(cleanup_after_refusal(
+                active_run_error(initial.target.id().as_ref()),
+                delete_private_paste_buffer(&self.server, &buffer).await,
+            ));
+        };
         let target = match self
-            .preflight_pane_input(
+            .preflight_reserved_pane_input(
                 &pane,
                 PaneInputReach::TargetOnly,
                 MissingSource::PasteTransition,
+                &reservation,
             )
             .await
         {
-            Ok(plan) => plan.target,
+            Ok(plan) if initial.same_authority(&plan) && plan.owns(&reservation) => plan.target,
+            Ok(_) => {
+                return Err(cleanup_after_refusal(
+                    bad_input(format!(
+                        "pane {pane} changed its configured input authority before paste dispatch"
+                    )),
+                    delete_private_paste_buffer(&self.server, &buffer).await,
+                ));
+            }
             Err(primary) => {
                 return Err(cleanup_after_refusal(
                     primary,

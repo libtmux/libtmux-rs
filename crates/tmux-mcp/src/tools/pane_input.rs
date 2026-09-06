@@ -3,11 +3,11 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
 
-use libtmux::Command;
+use libtmux::{Command, ServerGeneration};
 use rmcp::model::ErrorData;
 
 use crate::TmuxTools;
-use crate::run_request::{self, RunLease};
+use crate::run_request::{self, PaneReservation};
 
 use super::error::{bad_input, object_gone, tmux_error, vanished};
 
@@ -28,6 +28,29 @@ pub(crate) struct PaneInputPlan {
     pub(crate) target: libtmux::Pane,
     pub(crate) configured: Vec<String>,
     pub(crate) endpoint: PathBuf,
+    pub(crate) generation: ServerGeneration,
+}
+
+impl PaneInputPlan {
+    pub(crate) fn reserve(&self) -> Option<PaneReservation> {
+        run_request::reserve(self.generation, &self.endpoint, &self.configured)
+    }
+
+    pub(crate) fn same_authority(&self, other: &Self) -> bool {
+        self.target.id() == other.target.id()
+            && self.configured == other.configured
+            && self.endpoint == other.endpoint
+            && self.generation == other.generation
+    }
+
+    pub(crate) fn owns(&self, reservation: &PaneReservation) -> bool {
+        run_request::owns(
+            reservation,
+            self.generation,
+            &self.endpoint,
+            &self.configured,
+        )
+    }
 }
 
 const CLIENT_ATTENTION_FORMAT: &str = "#{client_control_mode}|#{pane_id}|#{window_zoomed_flag}";
@@ -154,14 +177,14 @@ impl TmuxTools {
             .await
     }
 
-    pub(crate) async fn preflight_pane_input_for_run(
+    pub(crate) async fn preflight_reserved_pane_input(
         &self,
         pane: &str,
         reach: PaneInputReach,
         missing: MissingSource,
-        lease: &RunLease,
+        reservation: &PaneReservation,
     ) -> Result<PaneInputPlan, ErrorData> {
-        self.preflight_pane_input_with_run(pane, reach, missing, Some(lease))
+        self.preflight_pane_input_with_run(pane, reach, missing, Some(reservation))
             .await
     }
 
@@ -170,8 +193,13 @@ impl TmuxTools {
         pane: &str,
         reach: PaneInputReach,
         missing: MissingSource,
-        lease: Option<&RunLease>,
+        reservation: Option<&PaneReservation>,
     ) -> Result<PaneInputPlan, ErrorData> {
+        let generation = self
+            .server
+            .generation()
+            .await
+            .map_err(|error| tmux_error(&error))?;
         let panes = self
             .server
             .panes()
@@ -234,9 +262,13 @@ impl TmuxTools {
         let attended = parse_attended_panes(client_result.stdout(), &window_panes)
             .map_err(client_attention_error)?;
         let endpoint = self.pane_input_endpoint().await?;
+        self.server
+            .require_generation(generation)
+            .await
+            .map_err(|error| tmux_error(&error))?;
 
         for (id, candidate) in &selected {
-            if run_request::is_reserved(&endpoint, id, lease) {
+            if run_request::is_reserved(generation, &endpoint, id, reservation) {
                 return Err(active_run_error(id));
             }
             if attended.contains(id) {
@@ -265,6 +297,7 @@ impl TmuxTools {
             target: source,
             configured: selected.into_keys().collect(),
             endpoint,
+            generation,
         })
     }
 }
