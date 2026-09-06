@@ -17,7 +17,12 @@ use crate::recovery::{
 };
 
 const CONFIG_MAX_BYTES: usize = 16 * 1024 * 1024;
-const RETIRED_SAFETY: &str = "LIBTMUX_SAFETY";
+/// Safety settings `tmux-mcp` rejects at startup, kept in step with
+/// `policy::RETIRED_SAFETY_ENV` and `policy::RETIRED_RUST_SAFETY_ENV`.
+///
+/// Writing either into a client configuration produces a server that
+/// refuses to start, so a swap rejects them the same way the server does.
+pub const RETIRED_SAFETY: [&str; 2] = ["LIBTMUX_SAFETY", "TMUX_MCP_SAFETY"];
 const TOOLSETS: &str = "LIBTMUX_TOOLSETS";
 
 /// Inputs shared by every client in one `use` transaction.
@@ -556,13 +561,17 @@ fn migrate_environment(
     mut existing: BTreeMap<String, String>,
     requested: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, FsError> {
-    if requested.contains_key(RETIRED_SAFETY) {
-        return Err(FsError::new(
-            "LIBTMUX_SAFETY is retired; use LIBTMUX_TOOLSETS",
-        ));
+    for retired in RETIRED_SAFETY {
+        if requested.contains_key(retired) {
+            return Err(FsError::new(format!(
+                "{retired} is retired; use {TOOLSETS}"
+            )));
+        }
     }
     if requested.contains_key(TOOLSETS) {
-        existing.remove(RETIRED_SAFETY);
+        for retired in RETIRED_SAFETY {
+            existing.remove(retired);
+        }
     }
     existing.extend(requested.clone());
     Ok(existing)

@@ -106,20 +106,20 @@ fn help_lists_commands_sources_and_selector_alias() {
 }
 
 #[test]
-fn retired_safety_environment_is_rejected_by_the_command_line() {
+fn retired_safety_environments_are_rejected_by_the_command_line() {
     let fixture = CliFixture::new();
-    let output = fixture
-        .command()
-        .args(["use", "--env", "LIBTMUX_SAFETY=readonly"])
-        .output()
-        .expect("invalid environment");
+    for name in ["LIBTMUX_SAFETY", "TMUX_MCP_SAFETY"] {
+        let output = fixture
+            .command()
+            .args(["use", "--env", &format!("{name}=readonly")])
+            .output()
+            .expect("invalid environment");
 
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stderr)
-            .expect("UTF-8 error")
-            .contains("LIBTMUX_SAFETY is retired")
-    );
+        assert!(!output.status.success(), "{name}");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 error");
+        assert!(stderr.contains(name), "{stderr}");
+        assert!(stderr.contains("LIBTMUX_TOOLSETS"), "{stderr}");
+    }
 }
 
 #[test]

@@ -12,8 +12,8 @@ use mcp_swap::config::{Scope, ServerSpec, read_server};
 use mcp_swap::fs::{FsError, stable_snapshot};
 use mcp_swap::recovery::{STATE_MAX_BYTES, ledger_bytes, load_ledger};
 use mcp_swap::transaction::{
-    RevertRequest, UseRequest, planned_use_specs, revert_clients, revert_clients_with_hook,
-    use_clients, use_clients_preflighted, use_clients_with_hook,
+    RETIRED_SAFETY, RevertRequest, UseRequest, planned_use_specs, revert_clients,
+    revert_clients_with_hook, use_clients, use_clients_preflighted, use_clients_with_hook,
 };
 use tempfile::TempDir;
 
@@ -205,16 +205,38 @@ fn all_clients_use_and_revert_as_one_exact_transaction() {
 }
 
 #[test]
-fn use_retires_safety_only_with_an_explicit_toolset_replacement() {
+fn planned_use_rejects_explicit_retired_safety_aliases() {
+    let fixture = Fixture::new();
+    let selected = fixture.selected(&["cursor"]);
+
+    for name in ["LIBTMUX_SAFETY", "TMUX_MCP_SAFETY"] {
+        let mut request = fixture.request("new");
+        request.spec.env = BTreeMap::from([(name.into(), "readonly".into())]);
+
+        let error = planned_use_specs(&fixture.paths, &selected, &request)
+            .expect_err("retired safety request");
+
+        assert!(error.to_string().contains(name), "{error}");
+        assert!(error.to_string().contains("LIBTMUX_TOOLSETS"), "{error}");
+    }
+}
+
+#[test]
+fn use_preserves_safety_aliases_until_explicit_toolset_replacement() {
     let fixture = Fixture::new();
     let selected = fixture.selected(&["cursor"]);
     fs::write(
         &selected[0].config_path,
-        br#"{"mcpServers":{"tmux":{"command":"old","args":[],"env":{"KEEP":"yes","LIBTMUX_SAFETY":"readonly"}}}}"#,
+        br#"{"mcpServers":{"tmux":{"command":"old","args":[],"env":{"KEEP":"yes","LIBTMUX_SAFETY":"readonly","TMUX_MCP_SAFETY":"read-only"}}}}"#,
     )
     .expect("legacy config");
     let mut request = fixture.request("new");
 
+    let specs =
+        planned_use_specs(&fixture.paths, &selected, &request).expect("explicit replacement plan");
+    assert_eq!(specs.len(), 1);
+    assert!(!specs[0].env.contains_key("LIBTMUX_SAFETY"));
+    assert!(!specs[0].env.contains_key("TMUX_MCP_SAFETY"));
     use_clients(&fixture.paths, &selected, &request, false).expect("explicit replacement");
     let changed = fs::read(&selected[0].config_path).expect("changed config");
     let spec = read_server(
@@ -232,8 +254,9 @@ fn use_retires_safety_only_with_an_explicit_toolset_replacement() {
         Some("standard")
     );
     assert!(!spec.env.contains_key("LIBTMUX_SAFETY"));
+    assert!(!spec.env.contains_key("TMUX_MCP_SAFETY"));
 
-    request.spec.env.clear();
+    request.spec.env = BTreeMap::from([("NEW".into(), "value".into())]);
     revert_clients(
         &fixture.paths,
         &selected,
@@ -242,14 +265,23 @@ fn use_retires_safety_only_with_an_explicit_toolset_replacement() {
     )
     .expect("restore legacy config");
     let original = fs::read(&selected[0].config_path).expect("legacy config restored");
-    assert!(
-        String::from_utf8(original)
-            .expect("UTF-8 legacy config")
-            .contains("LIBTMUX_SAFETY")
-    );
+    let original = String::from_utf8(original).expect("UTF-8 legacy config");
+    assert!(original.contains("LIBTMUX_SAFETY"));
+    assert!(original.contains("TMUX_MCP_SAFETY"));
 
+    let specs =
+        planned_use_specs(&fixture.paths, &selected, &request).expect("inherited safety plan");
+    assert_eq!(specs.len(), 1);
+    assert_eq!(
+        specs[0].env.get("LIBTMUX_SAFETY").map(String::as_str),
+        Some("readonly")
+    );
+    assert_eq!(
+        specs[0].env.get("TMUX_MCP_SAFETY").map(String::as_str),
+        Some("read-only")
+    );
     use_clients(&fixture.paths, &selected, &request, false)
-        .expect("legacy safety is preserved without an explicit replacement");
+        .expect("safety aliases are preserved without an explicit replacement");
     let changed = fs::read(&selected[0].config_path).expect("changed config");
     let spec = read_server(
         &selected[0].config,
@@ -264,6 +296,11 @@ fn use_retires_safety_only_with_an_explicit_toolset_replacement() {
         spec.env.get("LIBTMUX_SAFETY").map(String::as_str),
         Some("readonly")
     );
+    assert_eq!(
+        spec.env.get("TMUX_MCP_SAFETY").map(String::as_str),
+        Some("read-only")
+    );
+    assert_eq!(spec.env.get("NEW").map(String::as_str), Some("value"));
 }
 
 #[test]
@@ -1314,4 +1351,44 @@ fn final_guard_rejects_a_symlink_logical_parent_replacement() {
 
     assert_eq!(fs::read(&target).expect("target survives"), original);
     assert_eq!(fs::read_link(&logical).expect("link survives"), target);
+}
+
+/// The swapper writes the configuration `tmux-mcp` starts from, so a name the
+/// server rejects but the swapper accepts produces a server that cannot start.
+/// Read the server's own constants rather than trusting a copied list.
+#[test]
+fn retired_safety_names_match_the_server_that_rejects_them() {
+    let policy = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/tmux-mcp/src/policy.rs")
+        .canonicalize()
+        .expect("tmux-mcp policy source");
+    let source = fs::read_to_string(&policy).expect("read policy source");
+
+    let declared: Vec<String> = source
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("pub const ")?;
+            let (name, value) = rest.split_once(": &str = ")?;
+            name.contains("SAFETY_ENV")
+                .then(|| value.trim_end_matches(';').trim_matches('"').to_owned())
+        })
+        .collect();
+
+    assert!(
+        !declared.is_empty(),
+        "no *SAFETY_ENV constant found in {}; the parser or the server moved",
+        policy.display()
+    );
+    let mut expected = declared;
+    expected.sort();
+    let mut actual: Vec<String> = RETIRED_SAFETY
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    actual.sort();
+    assert_eq!(
+        actual, expected,
+        "mcp-swap rejects {actual:?} but tmux-mcp rejects {expected:?}"
+    );
 }

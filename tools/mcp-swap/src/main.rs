@@ -15,7 +15,7 @@ use mcp_swap::preflight::preflight;
 use mcp_swap::recovery::load_ledger;
 use mcp_swap::source::{Source, SourceOptions, prepare_source, resolve_repo_meta, source_spec};
 use mcp_swap::transaction::{
-    RevertRequest, UseRequest, planned_use_specs, revert_clients, use_clients,
+    RETIRED_SAFETY, RevertRequest, UseRequest, planned_use_specs, revert_clients, use_clients,
     use_clients_preflighted,
 };
 
@@ -416,8 +416,8 @@ fn parse_environment(raw: &str) -> Result<(String, String), String> {
     if key.is_empty() {
         return Err(format!("--env expects KEY=VALUE, got {raw:?}"));
     }
-    if key == "LIBTMUX_SAFETY" {
-        return Err("LIBTMUX_SAFETY is retired; use LIBTMUX_TOOLSETS".into());
+    if RETIRED_SAFETY.contains(&key) {
+        return Err(format!("{key} is retired; use LIBTMUX_TOOLSETS"));
     }
     Ok((key.into(), value.into()))
 }
