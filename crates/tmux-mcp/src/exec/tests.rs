@@ -751,6 +751,10 @@ fn marker_lookalikes_are_command_output() {
 ///
 /// Joined with `; `, the bash trap setup reached 1715 bytes and zsh 1115.
 /// Both worked on Linux and neither could work on macOS.
+///
+/// The frame is staged in a tmux buffer now, so its own lines are read over
+/// the socket rather than typed. The gate stays because it is cheap and it
+/// keeps the frame deliverable if staging is ever bypassed.
 #[test]
 fn no_frame_line_exceeds_a_terminal_input_limit() {
     // macOS and the BSDs, which is the tightest limit this runs against.
@@ -778,6 +782,60 @@ fn no_frame_line_exceeds_a_terminal_input_limit() {
                 "{} frame has a {longest}-byte line, over the {MAX_CANON}-byte \
                  terminal limit; it cannot be typed into a pane on macOS",
                 String::from_utf8_lossy(shell)
+            );
+        }
+    }
+}
+
+/// The typed line must fit a terminal whatever the command weighs.
+///
+/// This is the line that actually reaches the pty, so it answers both limits
+/// that drop pane input: `MAX_CANON` per line, and the pty input queue for a
+/// burst the shell has not drained. It names the tmux binary, the socket and
+/// the buffer, and never the command, so a caller cannot grow it. Before
+/// staging, a 16 KiB command produced a 16 KiB line and was truncated on
+/// Linux too, not only on macOS.
+#[test]
+fn the_typed_line_never_carries_the_command() {
+    // macOS and the BSDs, which is the tightest limit this runs against.
+    const MAX_CANON: usize = 1024;
+
+    let executable = OsStr::new("/opt/homebrew/bin/tmux");
+    let socket = Path::new("/tmp/libtmux-rs-test/agent-preserves-raw.sock");
+    let huge = "printf ".to_owned() + &"z".repeat(16 * 1024);
+
+    for command in [OsStr::new("printf body"), OsStr::new(&huge)] {
+        for suppress_history in [false, true] {
+            let frame = frame_with_random(
+                executable,
+                socket,
+                b"bash",
+                command,
+                suppress_history,
+                |bytes| {
+                    bytes.fill(7);
+                    Ok(())
+                },
+            )
+            .expect("the frame renders");
+
+            let staged = frame_path(&frame.nonce);
+            let line = staged_line(&staged, b"bash", suppress_history);
+            let bytes = line.as_bytes();
+
+            assert!(
+                bytes.len() < MAX_CANON,
+                "the typed line is {} bytes, over the {MAX_CANON}-byte limit",
+                bytes.len()
+            );
+            assert!(!bytes.contains(&b'\n'), "the typed line must stay one line");
+            assert!(
+                find(bytes, b"printf").is_none(),
+                "the command must travel in the buffer, not the typed line"
+            );
+            assert!(
+                find(bytes, staged.as_os_str().as_bytes()).is_some(),
+                "the typed line must name the file holding the frame"
             );
         }
     }

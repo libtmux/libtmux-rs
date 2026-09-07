@@ -4,7 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::ops::Range;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -152,7 +152,8 @@ impl RunProgress<'_> {
 /// A watched run whose pane has not been changed yet.
 pub(crate) struct PreparedRun {
     pane: Pane,
-    payload: OsString,
+    frame: PathBuf,
+    staged: OsString,
     run: Run,
 }
 
@@ -181,6 +182,7 @@ pub(super) struct Frame {
     pub(super) payload: OsString,
     pub(super) opened: Vec<u8>,
     pub(super) closed: Vec<u8>,
+    pub(super) nonce: String,
 }
 
 pub(super) struct TrapCapture {
@@ -325,11 +327,24 @@ fn definitely_not_dispatched(error: &Error) -> bool {
     )
 }
 
+/// Discard a staged frame the pane will never read.
+async fn remove_frame(path: &Path) {
+    let path = path.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(path)).await;
+}
+
 impl PreparedRun {
     /// Send the prepared payload and Enter while retaining its watcher.
     pub(crate) async fn dispatch(self) -> RunDispatch {
-        let Self { pane, payload, run } = self;
-        if let Err(error) = pane.send_line(payload).await {
+        let Self {
+            pane,
+            frame,
+            staged,
+            run,
+        } = self;
+        if let Err(error) = pane.send_line(staged).await {
+            // The frame never reached a shell, so nothing else will remove it.
+            remove_frame(&frame).await;
             if definitely_not_dispatched(&error) {
                 return RunDispatch::NotDispatched(error);
             }
@@ -340,8 +355,9 @@ impl PreparedRun {
 
     /// Close the watcher without sending the prepared pane input.
     pub(crate) async fn shutdown(self) -> Result<(), Error> {
-        let Self { run, .. } = self;
+        let Self { frame, run, .. } = self;
         let Run { output, .. } = run;
+        remove_frame(&frame).await;
         let result = output.shutdown().await;
         #[cfg(test)]
         let _ = PREPARED_SHUTDOWNS.try_with(|count| count.fetch_add(1, Ordering::Relaxed));
@@ -394,6 +410,90 @@ fn display_client(executable: &OsStr, socket: &Path, message: &[u8]) -> Vec<u8> 
     client.extend_from_slice(message);
     client.extend_from_slice(b" )");
     client
+}
+
+/// Where one run's frame is staged for the pane's shell to read.
+///
+/// Alongside `/tmp/libtmux-mcp-traps-*`, which the trap capture already
+/// writes, so a frame leaves nothing in a new place.
+pub(super) fn frame_path(nonce: &str) -> PathBuf {
+    PathBuf::from(format!("/tmp/libtmux-mcp-frame-{nonce}"))
+}
+
+/// Write the frame where the pane's shell can source it.
+///
+/// `create_new` is `O_EXCL | O_CREAT`, so this refuses a path that already
+/// exists and cannot be aimed at another file through a planted symlink; the
+/// nonce makes the name unguessable and the mode keeps the command private to
+/// the user running it. Off-thread because a blocking write must not stall the
+/// executor.
+async fn stage_frame(path: PathBuf, payload: OsString) -> std::io::Result<()> {
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(payload.as_bytes())?;
+        file.write_all(b"\n")
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+/// Build the pane input that loads a staged frame and runs it.
+///
+/// The frame itself is never typed. Two separate limits drop pane input that
+/// is: a terminal in canonical mode discards a line past `MAX_CANON`, which is
+/// 1024 bytes on macOS and the BSDs against 4096 on Linux, and the pty input
+/// queue discards whatever a burst adds beyond its depth while the shell is
+/// busy rather than reading. The frame runs to thousands of bytes and stalls
+/// its own reader partway through, so it exceeds both. This line stays a few
+/// hundred bytes whatever the frame holds, and tmux hands the frame to the
+/// shell over the socket instead of through the terminal.
+///
+/// Build the pane input that loads a staged frame and runs it.
+///
+/// The frame is evaluated, not sourced. `.` gives a sourced file its own
+/// scope for trap inheritance, so `trap -p ERR DEBUG` inside one reports
+/// nothing and the capture restores nothing; the command would then run
+/// without the traps its own shell had. `eval` introduces no scope, so the
+/// frame sees exactly what typing it saw.
+///
+/// How the frame is read matters as much. Under an inherited `DEBUG` trap
+/// that writes to standard output, zsh captures that output into a command
+/// substitution, so `$( cat frame )` hands `eval` the trap's text followed by
+/// the frame and the parse fails. `$(<file)` reads the file without running a
+/// command, which neither trap can precede. dash accepts `$(<file)` and
+/// quietly yields nothing, which would hang the run waiting for a marker, so
+/// every other shell reads through `cat` -- safely, because a shell without
+/// `$(<...)` has no `DEBUG` trap to capture.
+///
+/// The file is removed once the frame returns, so `;` cleans up whatever the
+/// command exited with, and a run outliving this process still tidies itself.
+pub(super) fn staged_line(path: &Path, shell: &[u8], suppress_history: bool) -> OsString {
+    let quoted = quote_shell_word(path.as_os_str());
+    let basename = shell_basename(shell);
+
+    let mut line = Vec::new();
+    if suppress_history {
+        line.push(b' ');
+    }
+    line.extend_from_slice(b"eval \"$(");
+    if basename == b"bash" || basename == b"zsh" {
+        line.extend_from_slice(b"<");
+        line.extend_from_slice(quoted.as_bytes());
+    } else {
+        line.extend_from_slice(b" /bin/cat ");
+        line.extend_from_slice(quoted.as_bytes());
+        line.push(b' ');
+    }
+    line.extend_from_slice(b")\" ; /bin/rm -f -- ");
+    line.extend_from_slice(quoted.as_bytes());
+    OsString::from_vec(line)
 }
 
 fn marker_message(nonce: &str, closing: bool) -> Vec<u8> {
@@ -574,6 +674,7 @@ fn frame_with_nonce(
         payload,
         opened,
         closed,
+        nonce: nonce.to_owned(),
     })
 }
 
@@ -618,6 +719,7 @@ pub(crate) async fn prepare_run(
         payload,
         opened,
         closed,
+        nonce,
     } = frame_with_random(
         executable,
         socket,
@@ -628,12 +730,27 @@ pub(crate) async fn prepare_run(
     )
     .map_err(|_| PrepareRunError::Frame)?;
 
+    // Staged before the watcher, so a frame that cannot be written costs no
+    // attachment. Only `staged` is ever typed into the pane.
+    let frame = frame_path(&nonce);
+    stage_frame(frame.clone(), payload)
+        .await
+        .map_err(|_| PrepareRunError::Frame)?;
+    let staged = staged_line(&frame, shell, suppress_history);
+
     // Attached before the keys are sent, so no output can arrive unseen.
-    let output = pane.stream_output().await?;
+    let output = match pane.stream_output().await {
+        Ok(output) => output,
+        Err(error) => {
+            remove_frame(&frame).await;
+            return Err(error.into());
+        }
+    };
 
     Ok(PreparedRun {
         pane: pane.clone(),
-        payload,
+        frame,
+        staged,
         run: Run {
             output,
             scanner: Scanner::new(opened, closed),
