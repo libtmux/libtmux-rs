@@ -420,7 +420,7 @@ pub(super) fn frame_path(nonce: &str) -> PathBuf {
     PathBuf::from(format!("/tmp/libtmux-mcp-frame-{nonce}"))
 }
 
-/// Write the frame where the pane's shell can source it.
+/// Write the frame where the pane's shell can read it back.
 ///
 /// `create_new` is `O_EXCL | O_CREAT`, so this refuses a path that already
 /// exists and cannot be aimed at another file through a planted symlink; the
@@ -457,16 +457,13 @@ pub(super) async fn stage_frame(path: PathBuf, payload: OsString) -> std::io::Re
 
 /// Build the pane input that loads a staged frame and runs it.
 ///
-/// The frame itself is never typed. Two separate limits drop pane input that
-/// is: a terminal in canonical mode discards a line past `MAX_CANON`, which is
-/// 1024 bytes on macOS and the BSDs against 4096 on Linux, and the pty input
-/// queue discards whatever a burst adds beyond its depth while the shell is
-/// busy rather than reading. The frame runs to thousands of bytes and stalls
-/// its own reader partway through, so it exceeds both. This line stays a few
-/// hundred bytes whatever the frame holds, and tmux hands the frame to the
-/// shell over the socket instead of through the terminal.
-///
-/// Build the pane input that loads a staged frame and runs it.
+/// The frame itself is never typed. A pane accepts about 1024 bytes of input
+/// in one burst on macOS and the BSDs, against 4096 on Linux, and drops the
+/// rest: the pty input queue discards whatever a burst adds while the shell
+/// is echoing rather than reading. The frame runs to thousands of bytes, so
+/// it never arrived whole. Sending one `send-keys` per line fails the same
+/// way, because the bound is the burst and not `MAX_CANON` for one line.
+/// This line stays a few hundred bytes whatever the frame holds.
 ///
 /// The frame is evaluated, not sourced. `.` gives a sourced file its own
 /// scope for trap inheritance, so `trap -p ERR DEBUG` inside one reports
