@@ -342,6 +342,15 @@ async fn split(server: &Server, pane: &str) -> String {
         .to_string()
 }
 
+async fn pane_present(server: &Server, pane: &str) -> bool {
+    server
+        .panes()
+        .await
+        .expect("panes list")
+        .iter()
+        .any(|candidate| candidate.id().to_string() == pane)
+}
+
 async fn pane_handle(server: &Server, pane: &str) -> libtmux::Pane {
     server
         .panes()
@@ -1616,6 +1625,27 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
         matches!(outcome, "deadline" | "pane_closed"),
         "an interrupted run must settle, got {outcome}"
     );
+    // tmux 3.2a sometimes drops the pane instead of retaining it once the
+    // run's control-mode watcher is attached. Bare 3.2a keeps it twenty times
+    // out of twenty under the same `remain-on-exit`, so this is the watcher
+    // meeting an old server, not the option. Both worlds are checked rather
+    // than assumed: a pane that survives must report its dead process, and a
+    // pane that did not must have been reported as closed instead of the run
+    // claiming it merely ran out of time.
+    if !pane_present(guard.server(), &pane).await {
+        assert_eq!(
+            outcome, "pane_closed",
+            "a pane that went away must not be reported as a deadline"
+        );
+        assert_eq!(
+            clients_settle(guard.server(), baseline_clients).await,
+            baseline_clients,
+            "a closed pane still drops the stalled watcher"
+        );
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    }
+
     libtmux::test::retry_until(Duration::from_secs(3), async || {
         pane_handle(guard.server(), &pane).await.is_dead()
     })
