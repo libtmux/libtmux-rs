@@ -255,6 +255,15 @@ fn trap_capture_is_bounded_and_preserves_foreign_descriptors() {
             let capture = inherited_trap_capture(shell_name.as_bytes(), &nonce)
                 .unwrap_or_else(|| unreachable!("tested shells capture traps"));
             let mut script = String::new();
+            // The capture refuses to run when descriptor 8 or 9 is already
+            // open, so it never clobbers one it did not open -- which the
+            // `occupied` case below asserts deliberately. That makes an
+            // inherited descriptor indistinguishable from a real failure, and
+            // this binary runs its tests in parallel with each opening tmux
+            // sockets, so whether 8 and 9 are free in the child is a property
+            // of the harness rather than of the capture. Close them first and
+            // the precondition belongs to the test.
+            script.push_str("exec 8>&- 9>&-; ");
             if fd8_open {
                 script.push_str("exec 8>/dev/null; ");
             }
