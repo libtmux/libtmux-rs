@@ -203,6 +203,26 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let created_dedicated = if default_config && !existing_before {
+        // `check_alive` just reported the endpoint unreachable, so whatever
+        // holds the path answers for no daemon -- a socket a killed server
+        // left behind, or something else entirely. tmux will not bind over
+        // it, and clears it on the way in only on Linux, so a macOS start
+        // failed with "no server for start-server" against a path this
+        // process is about to own. Only the socket this process chose is
+        // cleared; a caller that named one keeps whatever is there.
+        if default_socket {
+            match std::fs::remove_file(server.socket_path()) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "cannot clear the unreachable tmux endpoint at {}: {error}",
+                        server.socket_path().display()
+                    )
+                    .into());
+                }
+            }
+        }
         server
             .start()
             .await
