@@ -262,10 +262,16 @@ fn trap_capture_is_bounded_and_preserves_foreign_descriptors() {
             script.push_str(&quote_shell_word(OsStr::new(&action)).to_string_lossy());
             script.push_str(" DEBUG; ");
             script.push_str(std::str::from_utf8(&capture.setup).expect("capture setup is ASCII"));
+            // Report the status and any temporary file still on disk. The
+            // capture degrades to 125 for every reason it can fail, so a bare
+            // exit code says only that something did -- and this failed once
+            // on the macOS lane and then passed, which is the case that needs
+            // to explain itself.
             let _ = write!(
                 script,
-                "[ \"${}\" -eq {expected_status} ] || exit 80; ",
-                capture.status
+                "[ \"${}\" -eq {expected_status} ] || {{ printf 'status=%s leftover=%s\\n' \
+                 \"${}\" \"$(echo /tmp/libtmux-mcp-traps-{nonce}.??????)\" >&2; exit 80; }}; ",
+                capture.status, capture.status
             );
             script.push_str(if fd8_open {
                 "( : >&8 ) 2>/dev/null || exit 81; "
