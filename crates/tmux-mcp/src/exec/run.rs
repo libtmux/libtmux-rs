@@ -427,7 +427,19 @@ pub(super) fn frame_path(nonce: &str) -> PathBuf {
 /// nonce makes the name unguessable and the mode keeps the command private to
 /// the user running it. Off-thread because a blocking write must not stall the
 /// executor.
-async fn stage_frame(path: PathBuf, payload: OsString) -> std::io::Result<()> {
+pub(super) async fn stage_frame(path: PathBuf, payload: OsString) -> std::io::Result<()> {
+    // The frame removes itself before anything else. Both readers finish the
+    // whole file before `eval` runs, so by then nothing needs it, and a run
+    // that ends without returning -- `exit`, or a killed pane -- has already
+    // cleaned up. `|| :` keeps a refused unlink from tripping `set -e` or an
+    // ERR trap and stranding the run.
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"/bin/rm -f -- ");
+    frame.extend_from_slice(quote_shell_word(path.as_os_str()).as_bytes());
+    frame.extend_from_slice(b" || :\n");
+    frame.extend_from_slice(payload.as_bytes());
+    frame.push(b'\n');
+
     tokio::task::spawn_blocking(move || {
         use std::io::Write as _;
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -437,8 +449,7 @@ async fn stage_frame(path: PathBuf, payload: OsString) -> std::io::Result<()> {
             .create_new(true)
             .mode(0o600)
             .open(&path)?;
-        file.write_all(payload.as_bytes())?;
-        file.write_all(b"\n")
+        file.write_all(&frame)
     })
     .await
     .map_err(std::io::Error::other)?
@@ -472,8 +483,8 @@ async fn stage_frame(path: PathBuf, payload: OsString) -> std::io::Result<()> {
 /// every other shell reads through `cat` -- safely, because a shell without
 /// `$(<...)` has no `DEBUG` trap to capture.
 ///
-/// The file is removed once the frame returns, so `;` cleans up whatever the
-/// command exited with, and a run outliving this process still tidies itself.
+/// The frame removes the file itself, as its first statement, so a command
+/// that never returns still cleans up. See `stage_frame`.
 pub(super) fn staged_line(path: &Path, shell: &[u8], suppress_history: bool) -> OsString {
     let quoted = quote_shell_word(path.as_os_str());
     let basename = shell_basename(shell);
@@ -491,8 +502,7 @@ pub(super) fn staged_line(path: &Path, shell: &[u8], suppress_history: bool) -> 
         line.extend_from_slice(quoted.as_bytes());
         line.push(b' ');
     }
-    line.extend_from_slice(b")\" ; /bin/rm -f -- ");
-    line.extend_from_slice(quoted.as_bytes());
+    line.extend_from_slice(b")\"");
     OsString::from_vec(line)
 }
 

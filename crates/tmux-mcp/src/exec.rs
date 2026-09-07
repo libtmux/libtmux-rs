@@ -31,7 +31,7 @@ pub(crate) use run::observing_prepared_shutdowns;
 #[cfg(test)]
 use run::{
     FrameError, Scanner, TRAP_DECLARATION_LIMIT, find, frame_path, frame_with_random,
-    inherited_trap_capture, quote_shell_word, render_payload, staged_line,
+    inherited_trap_capture, quote_shell_word, render_payload, stage_frame, staged_line,
 };
 pub(crate) use run::{
     PrepareRunError, RunDispatch, RunProgress, prepare_run, readable, route_is_terminal_safe,

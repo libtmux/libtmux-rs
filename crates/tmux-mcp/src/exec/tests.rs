@@ -840,3 +840,55 @@ fn the_typed_line_never_carries_the_command() {
         }
     }
 }
+
+/// A staged frame removes itself, and cannot be aimed at an existing file.
+///
+/// The typed line's trailing removal only runs if the frame returns, so a
+/// command that calls `exit` used to strand its frame in `/tmp`; three were
+/// left behind by one pass of this suite. Both readers consume the whole file
+/// before `eval` runs, so the frame can unlink itself first and cover every
+/// way a run can end.
+#[tokio::test]
+async fn a_staged_frame_removes_itself_and_refuses_an_occupied_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let path = std::env::temp_dir().join(format!(
+        "libtmux-mcp-frame-test-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    stage_frame(path.clone(), OsString::from("( : )"))
+        .await
+        .expect("the frame is staged");
+
+    let staged = std::fs::read(&path).expect("the frame is readable");
+    let first = staged
+        .split(|byte| *byte == b'\n')
+        .next()
+        .expect("the frame has a first line");
+    assert!(
+        find(first, b"/bin/rm").is_some() && find(first, path.as_os_str().as_bytes()).is_some(),
+        "the frame must remove itself first, got {:?}",
+        String::from_utf8_lossy(first)
+    );
+    assert!(
+        find(first, b"|| :").is_some(),
+        "a refused unlink must not trip `set -e` and strand the run"
+    );
+
+    let mode = std::fs::metadata(&path)
+        .expect("the frame is stat-able")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "the command must stay private to its owner");
+
+    // `create_new` is what keeps a planted path from redirecting the write.
+    stage_frame(path.clone(), OsString::from("( : )"))
+        .await
+        .expect_err("an occupied path is refused");
+
+    std::fs::remove_file(&path).expect("the frame is removed");
+}
