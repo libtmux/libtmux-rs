@@ -1603,7 +1603,19 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
             .await
             .expect("the interrupted run answers"),
     );
-    assert_eq!(stopped["outcome"], "deadline");
+    // Both answers are true here and which one arrives is a race, measured
+    // at about one run in ten against tmux 3.2a. `remain-on-exit` keeps the
+    // pane, so the budget can expire first; the shell is gone, so the pane
+    // has "stopped writing for good" and `pane_closed` is equally correct.
+    // What this test is for is that an interrupted run settles rather than
+    // hanging, and that the pane survives to be inspected -- both asserted
+    // below. `no_shell` is the answer that would mean the budget never
+    // covered the handshake, and it is still refused.
+    let outcome = stopped["outcome"].as_str().expect("run outcome");
+    assert!(
+        matches!(outcome, "deadline" | "pane_closed"),
+        "an interrupted run must settle, got {outcome}"
+    );
     libtmux::test::retry_until(Duration::from_secs(3), async || {
         pane_handle(guard.server(), &pane).await.is_dead()
     })
