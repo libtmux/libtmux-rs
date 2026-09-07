@@ -287,13 +287,39 @@ fn trap_capture_is_bounded_and_preserves_foreign_descriptors() {
                 .arg(script)
                 .output()
                 .unwrap_or_else(|error| panic!("{shell_name}/{case} starts: {error}"));
-            assert!(
-                output.status.success(),
-                "{shell_name}/{case}: status={:?}, stdout={:?}, stderr={:?}",
-                output.status.code(),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
+            if !output.status.success() {
+                // The capture answers 125 for every reason it can fail, and a
+                // successful one also leaves no temporary file, so neither the
+                // status nor the leftovers separate the causes. Ask the
+                // machine directly, and only when something already failed.
+                // This runs on a lane the author cannot reach, so the failure
+                // has to arrive already diagnosed.
+                let probe = Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(
+                        "printf 'shell=%s\\n' \"$($0 --version 2>&1 | head -1)\"; \
+                         probe=$(/usr/bin/mktemp /tmp/libtmux-mcp-probe.XXXXXX 2>&1) \
+                           && printf 'mktemp=ok:%s\\n' \"$probe\" \
+                           || printf 'mktemp=fail:%s\\n' \"$probe\"; \
+                         [ -f \"$probe\" ] && printf 'created=yes\\n' || printf 'created=no\\n'; \
+                         /bin/rm -f \"$probe\"; \
+                         printf abc | LC_ALL=C /usr/bin/head -c 2 >/dev/null 2>&1 \
+                           && printf 'head_c=ok\\n' || printf 'head_c=unsupported\\n'; \
+                         printf 'tmp=%s\\n' \"$(cd /tmp && pwd -P)\"",
+                    )
+                    .arg(shell)
+                    .output()
+                    .map_or_else(
+                        |error| format!("probe did not run: {error}"),
+                        |probe| String::from_utf8_lossy(&probe.stdout).into_owned(),
+                    );
+                panic!(
+                    "{shell_name}/{case}: status={:?}, stdout={:?}, stderr={:?}, probe={probe:?}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
             let prefix = format!("libtmux-mcp-traps-{nonce}.");
             assert!(
                 std::fs::read_dir("/tmp")
