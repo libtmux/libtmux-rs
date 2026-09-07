@@ -401,11 +401,21 @@ async fn attach_terminal_client(server: &Server, pane: &str) -> TerminalClient {
         shell_quote(server.socket_path().as_os_str()),
         shell_quote(OsStr::new(&pane.session_id().to_string())),
     );
-    let child = std::process::Command::new("script")
-        .arg("-q")
-        .arg("-c")
-        .arg(command)
-        .arg("/dev/null")
+    // util-linux takes the command behind `-c` and then the typescript file.
+    // BSD `script`, which is what macOS ships, has no `-c` at all: the file
+    // comes first and the command is the remaining arguments.
+    let mut builder = std::process::Command::new("script");
+    if cfg!(target_os = "macos") {
+        builder
+            .arg("-q")
+            .arg("/dev/null")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(command);
+    } else {
+        builder.arg("-q").arg("-c").arg(command).arg("/dev/null");
+    }
+    let child = builder
         .env("TERM", "xterm")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

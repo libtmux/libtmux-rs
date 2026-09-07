@@ -77,7 +77,12 @@ fn relative_config_symlink_uses_its_physical_parent() {
         fs::read(&physical_sibling).expect("updated physical sibling"),
         b"updated\n"
     );
-    assert_eq!(route.target, physical_sibling);
+    // Canonical, like `anchors[0].physical` above: macOS resolves the
+    // temporary root to `/private/var`, and resolving is the library's job.
+    assert_eq!(
+        route.target,
+        physical_sibling.canonicalize().expect("physical sibling")
+    );
 }
 
 #[test]

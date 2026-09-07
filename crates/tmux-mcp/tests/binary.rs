@@ -5,7 +5,7 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Output, Stdio};
 use std::time::Duration;
 
 use libtmux::test::TestServer;
@@ -17,6 +17,7 @@ struct Process {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    stderr: Option<ChildStderr>,
     seq: i64,
 }
 
@@ -30,10 +31,12 @@ impl Process {
         let mut child = command.spawn().expect("the binary runs");
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
+        let stderr = child.stderr.take();
         let mut process = Self {
             child,
             stdin,
             stdout,
+            stderr,
             seq: 0,
         };
         process.request(
@@ -64,10 +67,14 @@ impl Process {
         self.stdin.flush().expect("request flushes");
         loop {
             let mut line = String::new();
-            assert_ne!(
-                self.stdout.read_line(&mut line).expect("stdout reads"),
-                0,
-                "server closed while {method} was pending",
+            let read = self.stdout.read_line(&mut line).expect("stdout reads");
+            // A server that exits during startup says why on stderr, and this
+            // used to throw that away -- leaving a lane the author cannot
+            // reach reporting only that it closed.
+            assert!(
+                read != 0,
+                "server closed while {method} was pending; stderr: {}",
+                self.explanation()
             );
             let message: Value = serde_json::from_str(line.trim_end()).unwrap_or_else(|error| {
                 panic!("stdout carried non-JSON-RPC data: {line:?} ({error})")
@@ -99,14 +106,36 @@ impl Process {
             .collect()
     }
 
+    /// Drain whatever the process explained before it stopped answering.
+    ///
+    /// Reading blocks until the process closes stderr, so every caller must
+    /// have stopped expecting it to answer first.
+    fn explanation(&mut self) -> String {
+        let Some(mut stderr) = self.stderr.take() else {
+            return String::from("(already read)");
+        };
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+        text
+    }
+
     fn finish(self) -> String {
-        drop(self.stdin);
-        let output = self
-            .child
-            .wait_with_output()
-            .expect("the process exits when stdin closes");
-        assert!(output.status.success(), "{output:?}");
-        String::from_utf8_lossy(&output.stderr).into_owned()
+        let Self {
+            mut child,
+            stdin,
+            stderr,
+            ..
+        } = self;
+        // stdin first: the process exits when it closes, and stderr does not
+        // reach end of file until it does.
+        drop(stdin);
+        let mut text = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+        }
+        let status = child.wait().expect("the process exits when stdin closes");
+        assert!(status.success(), "{status:?}; stderr: {text}");
+        text
     }
 }
 
