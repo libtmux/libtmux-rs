@@ -83,7 +83,11 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo test --locked --workspace --all-targets --all-features
+      # `--no-fail-fast` because this lane runs only on master and bills at ten
+      # times a Linux runner. Stopping at the first failing test binary hides
+      # every later one, so a platform difference costs one full run per
+      # failure to find; reporting them together costs one run for all of them.
+      - run: cargo test --locked --workspace --all-targets --all-features --no-fail-fast
 
   # There is no automated semver gate while every version is a prerelease:
   # `cargo-semver-checks` skips every lint on a prerelease-to-prerelease step

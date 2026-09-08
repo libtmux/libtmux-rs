@@ -263,7 +263,7 @@ Writing an entry:
 
 - Lead with the identifier and a concrete verb: add, fix, remove, refuse,
   report, `now`, `no longer`. Name identifiers literally —
-  `Pane::capture_lines`, `--confirm`, `TMUX_MCP_CONFIRM`.
+  `Pane::capture_lines`, `LIBTMUX_TOOLSETS`, `tmux://capabilities`.
 - Write from the caller's side. "Reduce peak memory when traversing large
   trees", not "replace the walker with a channel-based scheduler."
 - A second sentence carries the impact, and is usually the sentence worth
@@ -392,8 +392,8 @@ it documents:
   format is a contract. Say which is which, so terminal presentation stays
   free to improve.
 - **Destructive behavior**, stated as an invariant rather than a warning.
-  "`kill_session` refuses without `--confirm` when the client cannot ask" beats
-  "be careful."
+  "`kill_session` is unavailable outside `teardown` and refuses a target that
+  may contain the MCP caller" beats "be careful."
 
 An error message answers three questions in order: what failed, why, and what
 the reader can do. `Error::kind` exists so a caller can branch on the answer;

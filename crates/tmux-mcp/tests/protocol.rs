@@ -1,117 +1,19 @@
-//! The tools as an agent reaches them: over the wire, through the schemas.
-//!
-//! The other suites call the handler methods directly, which skips the layer
-//! an agent actually uses. A tool whose arguments cannot be deserialized from
-//! the JSON its own schema advertises passes every method-level test and fails
-//! the first real call. So every tool here is called the way a client calls
-//! it, with arguments built as JSON.
+//! The frozen tool surface as an MCP client reaches it.
 
-// Helpers outside a test function are not covered by clippy.toml's
-// in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-use std::time::Duration;
+use std::collections::BTreeSet;
 
-use libtmux::test::{DaemonState, TestServer, retry_until};
-use libtmux::{Command, NewSessionOptions, Server};
-use rmcp::model::{
-    CallToolRequestParams, ClientInfo, ElicitRequestParams, ElicitResult, ElicitationAction,
-    ElicitationCapability,
-};
+use libtmux::test::TestServer;
+use rmcp::model::{CallToolRequestParams, ReadResourceRequestParams, ResourceContents};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt as _, serve_server};
 use serde_json::{Value, json};
-use tmux_mcp::{CallerIdentity, Safety, TmuxTools};
+use tmux_mcp::{Selection, SocketProvenance, TmuxTools};
 
-mod support;
-
-use support::prompt_ready;
-
-/// A client and server talking over an in-memory duplex.
 struct Wire {
     client: RunningService<RoleClient, ()>,
     server: tokio::task::JoinHandle<()>,
-}
-
-/// A tmux move to make immediately before answering a confirmation.
-#[derive(Clone)]
-struct PaneMove {
-    server: Server,
-    source: String,
-    target: String,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ConfirmedDestruction {
-    Window,
-    Session,
-    Plan,
-}
-
-/// A client that can decide confirmations after an optional pane move.
-#[derive(Clone)]
-struct Decider {
-    approve: Arc<AtomicBool>,
-    asked: Arc<AtomicBool>,
-    before_answer: Option<PaneMove>,
-}
-
-impl rmcp::ClientHandler for Decider {
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
-        info.capabilities.elicitation = Some(ElicitationCapability::default());
-        info
-    }
-
-    async fn create_elicitation(
-        &self,
-        _: ElicitRequestParams,
-        _: rmcp::service::RequestContext<RoleClient>,
-    ) -> Result<ElicitResult, rmcp::ErrorData> {
-        if let Some(movement) = &self.before_answer {
-            let moved = movement
-                .server
-                .cmd(
-                    Command::new("join-pane")
-                        .arg("-d")
-                        .arg("-s")
-                        .arg(&movement.source)
-                        .arg("-t")
-                        .arg(&movement.target),
-                )
-                .await
-                .expect("tmux answers the move");
-            assert!(moved.success(), "the caller pane moves: {moved:?}");
-        }
-        self.asked.store(true, Ordering::SeqCst);
-
-        let mut answer = ElicitResult::new(ElicitationAction::Accept);
-        answer.content = Some(json!({"confirmed": self.approve.load(Ordering::SeqCst)}));
-        Ok(answer)
-    }
-}
-
-/// Which layer turned a call down.
-///
-/// The distinction is the whole point of this suite: only one of the two is
-/// evidence about a schema, and both reach a caller as an error.
-#[derive(Debug)]
-enum Refusal {
-    /// The arguments could not be built by rmcp, so the tool never ran.
-    Arguments(String),
-    /// The arguments were accepted and the call failed after that.
-    Call(String),
-}
-
-impl std::fmt::Display for Refusal {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (Self::Arguments(detail) | Self::Call(detail)) = self;
-        formatter.write_str(detail)
-    }
 }
 
 impl Wire {
@@ -127,64 +29,13 @@ impl Wire {
         Self { client, server }
     }
 
-    /// Call a tool with JSON arguments, as a client does.
-    ///
-    /// Answers come back as `structuredContent`, which is where a typed tool
-    /// puts its value; the text block carries the same thing for clients that
-    /// predate structured output.
-    async fn call(&self, name: &'static str, arguments: Value) -> Result<String, Refusal> {
-        let mut params = CallToolRequestParams::default();
-        params.name = name.into();
-        params.arguments = arguments.as_object().cloned();
-        let answer = self
-            .client
-            .call_tool(params)
-            .await
-            .map_err(|error| Refusal::Call(error.to_string()))?;
-
-        let text = answer
-            .content
-            .iter()
-            .filter_map(|part| part.as_text().map(|text| text.text.clone()))
-            .collect::<String>();
-        if answer.is_error == Some(true) {
-            return Err(Refusal::Arguments(text));
-        }
-        Ok(text)
-    }
-
-    /// Call a tool and read the structured value it answered with.
-    async fn json(&self, name: &'static str, arguments: Value) -> Value {
-        let mut params = CallToolRequestParams::default();
-        params.name = name.into();
-        params.arguments = arguments.as_object().cloned();
-        let answer = self
-            .client
-            .call_tool(params)
-            .await
-            .unwrap_or_else(|error| panic!("{name} failed: {error}"));
-        assert_ne!(answer.is_error, Some(true), "{name} refused the call");
-
-        // Every tool is typed now, so an answer without structured content is
-        // a tool that lost its shape somewhere.
-        answer
-            .structured_content
-            .unwrap_or_else(|| panic!("{name} answered without structured content"))
-    }
-
-    /// Render one prompt through the protocol.
-    async fn prompt(&self, name: &'static str, arguments: Value) -> String {
-        let mut params = rmcp::model::GetPromptRequestParams::default();
-        params.name = name.into();
-        params.arguments = arguments.as_object().cloned();
+    async fn call(&self, name: &'static str, arguments: Value) -> rmcp::model::CallToolResult {
+        let request = CallToolRequestParams::new(name)
+            .with_arguments(arguments.as_object().cloned().expect("object arguments"));
         self.client
-            .get_prompt(params)
+            .call_tool(request)
             .await
             .unwrap_or_else(|error| panic!("{name} failed: {error}"))
-            .messages
-            .iter()
-            .filter_map(|message| message.content.as_text().map(|text| text.text.clone()))
-            .collect()
     }
 
     async fn shutdown(self) {
@@ -193,1795 +44,397 @@ impl Wire {
     }
 }
 
-/// The classification an error carries alongside its message.
-///
-/// A tool that rejects its own arguments answers with a protocol error.
-/// Arguments that never deserialize are refused a layer earlier, by rmcp, and
-/// come back as an ordinary result marked `is_error` — which the tool never saw
-/// and so cannot classify. That case is called out separately, because reading
-/// it as "the call succeeded" would hide a malformed request.
-async fn detail(wire: &Wire, name: &'static str, arguments: Value) -> Value {
-    let mut params = CallToolRequestParams::default();
-    params.name = name.into();
-    params.arguments = arguments.as_object().cloned();
-    match wire.client.call_tool(params).await {
-        Err(rmcp::service::ServiceError::McpError(data)) => data
-            .data
-            .unwrap_or_else(|| panic!("{name} carried no detail")),
-        Err(other) => panic!("{name} failed in the wrong way: {other}"),
-        Ok(answer) if answer.is_error == Some(true) => {
-            panic!("{name} was refused before it ran, so its arguments do not fit its schema")
-        }
-        Ok(_) => panic!("{name} should have failed"),
-    }
-}
-
-/// Read the daemon's fate, allowing for one that is on its way out.
-///
-/// tmux's client reports a lost server as soon as the socket closes, which is
-/// before the kernel has a status for the process behind it, so a single
-/// reading calls a dead daemon running. This waits for the exit rather than
-/// for a duration, and reports what it saw either way.
-async fn daemon_fate(guard: &mut TestServer) -> DaemonState {
-    let _ = retry_until(Duration::from_secs(5), async || {
-        !guard.daemon_state().is_running()
-    })
-    .await;
-    guard.daemon_state()
+fn selection(toolsets: &str) -> Selection {
+    Selection::parse(Some(toolsets), None, None).expect("valid selection")
 }
 
 #[tokio::test]
-async fn every_tool_advertises_a_description_and_a_schema() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    let listed = wire
-        .client
-        .list_all_tools()
-        .await
-        .expect("tools are listed");
-
-    assert!(!listed.is_empty(), "the server advertises tools");
-    for tool in &listed {
-        let name = tool.name.as_ref();
-        assert!(
-            tool.description
-                .as_ref()
-                .is_some_and(|text| text.len() > 20),
-            "{name} needs a description an agent can choose from",
-        );
-        // An agent picks tools by reading these, so an empty object schema on
-        // a tool that takes arguments is a silent trap.
-        let schema = serde_json::to_value(&tool.input_schema).expect("a schema serialises");
-        assert_eq!(
-            schema.get("type").and_then(Value::as_str),
-            Some("object"),
-            "{name} advertises an object schema",
-        );
-    }
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn malformed_portable_filters_stop_at_the_protocol_boundary() {
-    let wire =
-        Wire::connect(TmuxTools::builder(Server::new().expect("server config")).build()).await;
-
-    for (name, arguments) in [
-        (
-            "find_panes",
-            json!({"filter": {"version": 1, "target": "pane", "expr":
-                {"op": "contains", "field": "pane_active", "value": "yes"}}}),
-        ),
-        (
-            "find_sessions",
-            json!({"filter": {"version": 1, "target": "session_tree", "expr": {
-                "op": "relation", "field": "panes", "quantifier": "any",
-                "expr": {"op": "eq", "field": "pane_dead", "value": true}
-            }}}),
-        ),
-    ] {
-        match wire
-            .call(name, arguments)
-            .await
-            .expect_err("malformed filter is refused")
-        {
-            Refusal::Arguments(detail) => assert!(!detail.is_empty()),
-            Refusal::Call(detail) => panic!("{name} reached the tool route: {detail}"),
-        }
-    }
-
-    wire.shutdown().await;
-}
-
-/// One call per tool, with arguments as a client would send them.
-///
-/// Kept beside the test rather than inside it so the list stays readable as
-/// tools are added; the test checks it covers everything the server offers.
-#[allow(
-    clippy::too_many_lines,
-    reason = "one call per tool, and the list is the point"
-)]
-fn every_call(
-    job: &str,
-    pane: &str,
-    window: &str,
-    spare: &str,
-    spare_live: &str,
-    doomed_window: &str,
-) -> Vec<(&'static str, Value)> {
-    // Every tool, called as a client calls it. The point is the arguments:
-    // each one has to survive JSON, the advertised schema, and serde.
-    vec![
-        // A plan the wire has to carry intact: a creation, a forward
-        // reference to what it makes, and typing into that.
-        (
-            "run_plan",
-            json!({
-                "plan": [
-                    {"NewSession": {"name": "wired-plan", "start_directory": null,
-                                    "window_name": null}},
-                    {"SendKeys": {"target": {"Slot": {"index": 0, "part": "FirstPane"}},
-                                  "text": "# wired", "keys": [], "enter": true}}
-                ],
-                "grouping": "sequential"
-            }),
-        ),
-        ("list_sessions", json!({})),
-        ("list_windows", json!({})),
-        ("list_panes", json!({})),
-        ("describe", json!({})),
-        ("list_session_windows", json!({"session": "wire"})),
-        ("list_window_panes", json!({"window": window})),
-        (
-            "capture_pane",
-            json!({"pane": pane, "history": true, "start": 0, "end": 2}),
-        ),
-        (
-            "snapshot_pane",
-            json!({"pane": pane, "max_lines": 4, "history": false}),
-        ),
-        (
-            "search_panes",
-            json!({"pattern": "a", "regex": false, "match_case": false, "history": false, "session": "wire"}),
-        ),
-        (
-            "find_panes",
-            json!({
-                "filter": {"version": 1, "target": "pane",
-                           "expr": {"op": "eq", "field": "pane_at_top", "value": true}},
-                "session": "wire"
-            }),
-        ),
-        (
-            "find_sessions",
-            json!({"filter": {"version": 1, "target": "session_tree",
-                          "expr": {"op": "relation", "field": "windows", "quantifier": "any",
-                                   "expr": {"op": "eq", "field": "window_name", "value": "doomed"}}}}),
-        ),
-        ("select_pane", json!({"pane": pane, "direction": "next"})),
-        (
-            "select_window",
-            json!({"window": window, "direction": "last"}),
-        ),
-        (
-            "resize_pane",
-            json!({"pane": pane, "direction": "up", "cells": 1}),
-        ),
-        (
-            "send_keys",
-            json!({"pane": pane, "text": "true", "keys": ["Escape"], "enter": true}),
-        ),
-        (
-            "run_command",
-            json!({"pane": pane, "command": "true", "seconds": 25, "suppress_history": true}),
-        ),
-        (
-            "wait_for_text",
-            json!({"pane": pane, "patterns": ["never"], "stop": ["nope"], "regex": false, "match_case": true, "seconds": 1}),
-        ),
-        (
-            "watch_pane",
-            json!({"pane": pane, "seconds": 1, "max_bytes": 32}),
-        ),
-        ("capture_since", json!({"pane": pane})),
-        (
-            "set_option",
-            json!({"name": "@wire", "scope": "pane", "target": pane, "value": "v"}),
-        ),
-        (
-            "show_option",
-            json!({"name": "@wire", "scope": "pane", "target": pane}),
-        ),
-        ("signal_channel", json!({"channel": "wire-chan"})),
-        (
-            "wait_for_channel",
-            json!({"channel": "wire-chan", "seconds": 1}),
-        ),
-        ("rename", json!({"target": window, "name": "renamed"})),
-        (
-            "split_pane",
-            json!({"pane": pane, "direction": "right", "percent": 40, "command": "sleep 60"}),
-        ),
-        ("kill_pane", json!({"pane": spare})),
-        ("kill_window", json!({"window": doomed_window})),
-        ("kill_session", json!({"session": "spare-session"})),
-        ("new_window", json!({"session": "wire", "name": "last"})),
-        (
-            "create_session",
-            json!({"name": "another", "start_directory": "/tmp"}),
-        ),
-        (
-            "start_command",
-            json!({"pane": pane, "command": "sleep 30"}),
-        ),
-        ("list_servers", json!({})),
-        ("what_changed", json!({"since": 0})),
-        (
-            "expand_format",
-            json!({"format": "#{pane_id}", "pane": pane}),
-        ),
-        ("show_environment", json!({})),
-        (
-            "set_environment",
-            json!({"name": "WIRE_VAR", "value": "wire-value"}),
-        ),
-        ("show_hooks", json!({})),
-        ("pipe_pane", json!({"pane": pane})),
-        (
-            "select_layout",
-            json!({"window": window, "layout": "even-vertical"}),
-        ),
-        ("clear_pane", json!({"pane": pane})),
-        (
-            "respawn_pane",
-            json!({"pane": spare_live, "command": "sleep 60", "kill_first": true}),
-        ),
-        ("paste_text", json!({"pane": pane, "text": "pasted"})),
-        ("job_status", json!({"job": job, "cursor": 0, "seconds": 0})),
-        ("list_jobs", json!({})),
-        ("forget_job", json!({"job": job})),
-        (
-            "wait_for_idle",
-            json!({"pane": pane, "quiet_seconds": 1, "seconds": 2}),
-        ),
-        ("kill_server", json!({})),
-    ]
-}
-
-#[tokio::test]
-async fn every_tool_accepts_the_arguments_its_schema_describes() {
-    let mut guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    wire.json("create_session", json!({"name": "wire"})).await;
-    let panes = wire.json("list_panes", json!({})).await;
-    let panes = panes["panes"].as_array().expect("a listing").clone();
-    let pane = panes[0]["id"].as_str().expect("a pane id").to_owned();
-    let window = panes[0]["window_id"]
-        .as_str()
-        .expect("a window id")
-        .to_owned();
-    prompt_ready(guard.server(), &pane).await;
-
-    // These tools answer with the object they made, so the id comes out of it.
-    let spare = wire
-        .json("split_pane", json!({"pane": pane, "direction": "below"}))
-        .await["id"]
-        .as_str()
-        .expect("a pane to destroy")
-        .to_owned();
-    let doomed_window = wire
-        .json("new_window", json!({"session": "wire", "name": "doomed"}))
-        .await["id"]
-        .as_str()
-        .expect("a window to destroy")
-        .to_owned();
-    wire.json("select_window", json!({"window": doomed_window}))
-        .await;
-    wire.json("create_session", json!({"name": "spare-session"}))
-        .await;
-    let spare_live = wire
-        .json("split_pane", json!({"pane": pane, "direction": "below"}))
-        .await["id"]
-        .as_str()
-        .expect("a pane to respawn")
-        .to_owned();
-
-    // Started here rather than in the list, because the job tools need an id
-    // that exists and the list is built before any of it runs.
-    let job = wire
-        .json(
-            "start_command",
-            json!({"pane": pane, "command": "sleep 30"}),
-        )
-        .await["job"]
-        .as_str()
-        .expect("a job id")
-        .to_owned();
-
-    let calls = every_call(&job, &pane, &window, &spare, &spare_live, &doomed_window);
-
-    // A list of calls rots the moment a tool is added without one, and a
-    // rotted list looks exactly like a passing test. So the list is checked
-    // against what the server advertises before any of it runs.
-    let advertised: Vec<String> = wire
-        .client
-        .list_all_tools()
-        .await
-        .expect("tools are listed")
-        .iter()
-        .map(|tool| tool.name.to_string())
-        .collect();
-    let covered: Vec<&str> = calls.iter().map(|(name, _)| *name).collect();
-    let missing: Vec<&String> = advertised
-        .iter()
-        .filter(|name| !covered.contains(&name.as_str()))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "these tools are advertised but never called over the wire: {missing:?}",
-    );
-
-    // The daemon is checked before each call rather than after, so the last
-    // call in the list is the one tool allowed to end it: `kill_server`.
-    let mut previous = "the setup";
-    for (name, arguments) in calls {
-        let daemon = guard.daemon_state();
-        assert!(
-            daemon.is_running(),
-            "the fixture daemon is {daemon} before {name}, so {previous} took the server \
-             down and nothing after it says anything about a schema",
-        );
-
-        if let Err(refusal) = wire.call(name, arguments.clone()).await {
-            let daemon = daemon_fate(&mut guard).await;
-            match refusal {
-                Refusal::Arguments(detail) => panic!(
-                    "{name} rejected the arguments its own schema describes \
-                     (fixture daemon {daemon}): {arguments} -> {detail}",
-                ),
-                Refusal::Call(detail) => panic!(
-                    "{name} accepted its arguments and the call failed after that, so this \
-                     is not evidence about its schema (fixture daemon {daemon}): \
-                     {arguments} -> {detail}",
-                ),
-            }
-        }
-        previous = name;
-    }
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-/// The tools advertised as read-only.
-const READING: &[&str] = &[
-    "list_sessions",
-    "list_windows",
-    "list_panes",
-    "describe",
-    "list_session_windows",
-    "list_window_panes",
-    "capture_pane",
-    "snapshot_pane",
-    "search_panes",
-    "find_panes",
-    "find_sessions",
-    "job_status",
-    "list_jobs",
-    "list_servers",
-    "show_environment",
-    "show_hooks",
-    "what_changed",
-];
-
-/// Tools that can overwrite, delete, or execute caller-controlled payloads.
-const DESTRUCTIVE: &[&str] = &[
-    "expand_format",
-    "new_window",
-    "kill_pane",
-    "kill_window",
-    "rename",
-    "create_session",
-    "kill_session",
-    "kill_server",
-    "split_pane",
-    "resize_pane",
-    "send_keys",
-    "select_pane",
-    "select_window",
-    "run_command",
-    "start_command",
-    "forget_job",
-    "show_option",
-    "set_option",
-    "set_environment",
-    "pipe_pane",
-    "select_layout",
-    "clear_pane",
-    "respawn_pane",
-    "paste_text",
-    "signal_channel",
-    "wait_for_channel",
-    "run_plan",
-];
-
-/// Tools that can execute outside tmux or configure later execution there.
-const OPEN_WORLD: &[&str] = &[
-    "expand_format",
-    "new_window",
-    "rename",
-    "create_session",
-    "split_pane",
-    "send_keys",
-    "run_command",
-    "start_command",
-    "show_option",
-    "set_option",
-    "pipe_pane",
-    "respawn_pane",
-    "paste_text",
-    "list_servers",
-    "run_plan",
-];
-
-#[tokio::test]
-async fn every_tool_declares_what_it_does_to_the_server() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    let listed = wire
-        .client
-        .list_all_tools()
-        .await
-        .expect("tools are listed");
-
-    for tool in &listed {
-        let name = tool.name.as_ref();
-        let hints = tool
-            .annotations
-            .as_ref()
-            .unwrap_or_else(|| panic!("{name} carries no annotations"));
-
-        assert!(
-            tool.title.is_some(),
-            "{name} needs a title; clients show it instead of the bare name",
-        );
-
-        // A client decides what to run unattended and what to confirm from
-        // these three. Leaving them unset on a server that can kill every
-        // session on a machine makes `list_panes` and `kill_server` look
-        // alike.
-        let reads = READING.contains(&name);
-        assert_eq!(
-            hints.read_only_hint,
-            Some(reads),
-            "{name} should declare read_only_hint = {reads}",
-        );
-        let destroys = DESTRUCTIVE.contains(&name);
-        assert_eq!(
-            hints.destructive_hint,
-            Some(destroys),
-            "{name} should declare destructive_hint = {destroys}",
-        );
-        let open = OPEN_WORLD.contains(&name);
-        assert_eq!(
-            hints.open_world_hint,
-            Some(open),
-            "{name} should declare open_world_hint = {open}: these tools can reach \
-             outside the selected tmux server or make it do so",
-        );
-        assert!(
-            hints.idempotent_hint.is_some(),
-            "{name} should say whether calling it twice differs from once",
-        );
-    }
-
-    // A tool added without a place in the taxonomy is a tool whose hints
-    // nobody chose. Catch it here rather than shipping the macro's defaults.
-    let known: Vec<&str> = READING
-        .iter()
-        .chain(DESTRUCTIVE)
-        .chain(OPEN_WORLD)
-        .copied()
-        .collect();
-    let unclassified: Vec<&str> = listed
-        .iter()
-        .map(|tool| tool.name.as_ref())
-        .filter(|name| !known.contains(name))
-        .collect();
-    for name in &unclassified {
-        let tool = listed
-            .iter()
-            .find(|tool| tool.name.as_ref() == *name)
-            .expect("the tool was just listed");
-        let hints = tool.annotations.as_ref().expect("annotations");
-        assert_eq!(
-            (
-                hints.read_only_hint,
-                hints.destructive_hint,
-                hints.open_world_hint
-            ),
-            (Some(false), Some(false), Some(false)),
-            "{name} is not in any named group, so it must be an additive, \
-             closed-world change; if it is not, add it to the right list",
-        );
-    }
-
-    for name in [
-        "rename",
-        "select_layout",
-        "select_pane",
-        "select_window",
-        "set_option",
-        "show_option",
-        "signal_channel",
-    ] {
-        let tool = listed
-            .iter()
-            .find(|tool| tool.name == name)
-            .expect("the focus tool is listed");
-        assert_eq!(
-            tool.annotations
-                .as_ref()
-                .expect("the focus tool carries annotations")
-                .idempotent_hint,
-            Some(false),
-            "{name} has an additional effect when repeated",
-        );
-    }
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn the_recipes_teach_what_no_single_tool_can_say() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    let listed = wire
-        .client
-        .list_all_prompts()
-        .await
-        .expect("prompts are listed");
-    let names: Vec<&str> = listed.iter().map(|prompt| &*prompt.name).collect();
-    for expected in ["run_and_wait", "interrupt_gracefully", "diagnose_pane"] {
-        assert!(
-            names.contains(&expected),
-            "{expected} is offered: {names:?}"
-        );
-    }
-    for prompt in &listed {
-        let name: &str = &prompt.name;
-        assert!(prompt.title.is_some(), "{name} needs a title");
-        assert!(prompt.description.is_some(), "{name} needs a description");
-    }
-
-    // A recipe is only worth its place if it renders with the caller's
-    // arguments in it, so check the text an agent would actually receive.
-    let text = wire
-        .prompt(
-            "run_and_wait",
-            json!({"pane": "%7", "command": "cargo test"}),
-        )
-        .await;
-
-    assert!(text.contains("%7"), "the pane reaches the text: {text}");
-    assert!(text.contains("cargo test"), "so does the command: {text}");
-    // The three things this recipe exists to say.
-    assert!(text.contains("run_command"), "it names the right tool");
-    assert!(
-        text.contains("deadline") && text.contains("no_shell"),
-        "and the two outcomes that are not failures: {text}",
-    );
-
-    let text = wire
-        .prompt("interrupt_gracefully", json!({"pane": "%2"}))
-        .await;
-    assert!(
-        text.contains("C-c") && text.contains("keys"),
-        "the interrupt recipe must say to send the key, not type it: {text}",
-    );
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn prompt_recipes_match_the_advertised_tier() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-
-    for (tier, expected) in [
-        (Safety::ReadOnly, &["diagnose_pane"][..]),
-        (
-            Safety::Mutating,
-            &["diagnose_pane", "interrupt_gracefully", "run_and_wait"][..],
-        ),
-        (
-            Safety::Destructive,
-            &["diagnose_pane", "interrupt_gracefully", "run_and_wait"][..],
-        ),
-    ] {
-        let wire = Wire::connect(
-            TmuxTools::builder(guard.server().clone())
-                .safety(tier)
-                .caller(None)
-                .confirm(false)
-                .build(),
-        )
-        .await;
-        let listed = wire
-            .client
-            .list_all_prompts()
-            .await
-            .expect("prompts are listed");
-        let mut names: Vec<&str> = listed.iter().map(|prompt| prompt.name.as_ref()).collect();
-        names.sort_unstable();
-        assert_eq!(names, expected, "{tier:?} prompt surface drifted");
-
-        match tier {
-            Safety::ReadOnly => {
-                let text = wire.prompt("diagnose_pane", json!({"pane": "%1"})).await;
-                assert!(
-                    !text.contains("capture_since"),
-                    "readonly advice names a withheld tool: {text}",
-                );
-            }
-            Safety::Mutating => {
-                let text = wire
-                    .prompt("interrupt_gracefully", json!({"pane": "%1"}))
-                    .await;
-                assert!(
-                    !text.contains("kill_pane"),
-                    "mutating advice names a withheld tool: {text}",
-                );
-            }
-            Safety::Destructive => {
-                let text = wire
-                    .prompt("interrupt_gracefully", json!({"pane": "%1"}))
-                    .await;
-                assert!(
-                    text.contains("kill_pane"),
-                    "destructive advice should retain the last resort: {text}",
-                );
-            }
-        }
-
-        wire.shutdown().await;
-    }
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_tier_withholds_the_tools_above_it() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let all_tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::Destructive)
-        .caller(None)
-        .confirm(false)
+async fn client_sees_the_exact_cross_port_inventory() {
+    let server = libtmux::Server::builder()
+        .socket_name("libtmux-mcp")
         .build()
-        .offered()
-        .len();
-
-    // Withheld, not merely refused: an agent cannot choose what it cannot
-    // see, and a refusal it never provokes is better than one it has to
-    // learn from.
-    for (tier, expected_kills) in [
-        (Safety::ReadOnly, 0),
-        (Safety::Mutating, 0),
-        (Safety::Destructive, 4),
-    ] {
-        let wire = Wire::connect(
-            TmuxTools::builder(guard.server().clone())
-                .safety(tier)
-                .caller(None)
-                .confirm(false)
-                .build(),
-        )
-        .await;
-        let listed = wire
-            .client
-            .list_all_tools()
-            .await
-            .expect("tools are listed");
-        let names: Vec<&str> = listed.iter().map(|tool| tool.name.as_ref()).collect();
-
-        match tier {
-            Safety::ReadOnly => {
-                let mut expected = READING.to_vec();
-                expected.push("run_plan");
-                expected.sort_unstable();
-                let mut actual = names.clone();
-                actual.sort_unstable();
-                assert_eq!(actual, expected, "readonly route classification drifted");
-            }
-            Safety::Mutating => assert_eq!(names.len(), all_tools - 4),
-            Safety::Destructive => assert_eq!(names.len(), all_tools),
-        }
-
-        let kills = names
-            .iter()
-            .filter(|name| name.starts_with("kill_"))
-            .count();
-        assert_eq!(kills, expected_kills, "{tier:?} offered {names:?}");
-
-        // Reading is always offered; it is the floor every tier shares.
-        assert!(
-            names.contains(&"list_panes"),
-            "{tier:?} withheld list_panes"
-        );
-
-        let writes = names.contains(&"send_keys");
-        assert_eq!(
-            writes,
-            tier != Safety::ReadOnly,
-            "{tier:?} should {} send_keys",
-            if tier == Safety::ReadOnly {
-                "withhold"
-            } else {
-                "offer"
-            },
-        );
-
-        assert_eq!(
-            names.contains(&"expand_format"),
-            tier != Safety::ReadOnly,
-            "{tier:?} offered {names:?}",
-        );
-
-        if tier == Safety::Mutating {
-            for name in DESTRUCTIVE {
-                if !name.starts_with("kill_") {
-                    assert!(
-                        names.contains(name),
-                        "protocol effect hints must not withhold {name}: {names:?}",
-                    );
-                }
-            }
-        }
-
-        // A withheld tool is gone, not hidden-but-callable.
-        if tier != Safety::Destructive {
-            assert!(
-                wire.call("kill_server", json!({})).await.is_err(),
-                "{tier:?} advertised no kill_server but still answered one",
-            );
-        }
-
-        wire.shutdown().await;
-    }
-
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn the_default_tier_withholds_dedicated_kill_tools() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    // What an operator gets without saying anything. Open-ended tools remain,
-    // so this proves surface selection rather than confinement.
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::default())
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    let listed = wire
+        .expect("server config");
+    let tools = TmuxTools::builder(server)
+        .selection(selection("inspect,manage,execute,teardown"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let actual: BTreeSet<_> = wire
         .client
         .list_all_tools()
         .await
-        .expect("tools are listed");
-    let names: Vec<&str> = listed.iter().map(|tool| tool.name.as_ref()).collect();
+        .expect("tools list")
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
+        .collect();
+    let expected: BTreeSet<_> = [
+        "list_sessions",
+        "list_windows",
+        "list_panes",
+        "get_server_info",
+        "get_session_info",
+        "get_window_info",
+        "get_pane_info",
+        "capture_pane",
+        "capture_since",
+        "snapshot_pane",
+        "search_panes",
+        "find_pane_by_position",
+        "wait_for_text",
+        "get_tmux_variables",
+        "show_option",
+        "show_environment",
+        "show_hooks",
+        "call_read_tools_batch",
+        "rename_session",
+        "rename_window",
+        "select_window",
+        "select_pane",
+        "select_layout",
+        "resize_window",
+        "resize_pane",
+        "move_window",
+        "swap_pane",
+        "set_pane_title",
+        "wait_for_channel",
+        "signal_channel",
+        "set_mouse_enabled",
+        "set_history_limit",
+        "create_session",
+        "create_window",
+        "split_window",
+        "respawn_pane",
+        "run_shell_command",
+        "send_keys",
+        "send_keys_batch",
+        "paste_text",
+        "set_synchronize_panes",
+        "clear_pane_scrollback",
+        "kill_pane",
+        "kill_window",
+        "kill_session",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
 
-    assert!(
-        !names.iter().any(|name| name.starts_with("kill_")),
-        "the default tier should withhold dedicated kill tools: {names:?}",
-    );
-    assert!(names.contains(&"run_command"), "but still allow work done");
-
+    assert_eq!(actual, expected);
     wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
 #[tokio::test]
-async fn the_discovery_anchors_ask_to_stay_loaded() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
+async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .selection(selection("inspect,manage,execute,teardown"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let listed = wire.client.list_all_tools().await.expect("tools list");
 
-    let listed = wire
-        .client
-        .list_all_tools()
-        .await
-        .expect("tools are listed");
-
-    let marked: Vec<&str> = listed
-        .iter()
-        .filter(|tool| {
+    for tool in listed {
+        let description = tool.description.expect("controlled description");
+        assert!(
+            description.starts_with("Inspect tmux metadata;")
+                || description.starts_with("Read pane output;")
+                || description.starts_with("Read the tmux environment;")
+                || description.starts_with("Read configured tmux commands;")
+                || description.starts_with("Change tmux state;")
+                || description.starts_with("Start a pane's configured process;")
+                || description.starts_with("Send input to a pane's program;")
+                || description.starts_with("Run a shell command in a pane")
+                || description.starts_with("Delete tmux state;"),
+            "{}: {description}",
+            tool.name,
+        );
+        let annotations = tool.annotations.expect("whole-call annotations");
+        assert!(annotations.read_only_hint.is_some(), "{}", tool.name);
+        assert!(annotations.destructive_hint.is_some(), "{}", tool.name);
+        assert!(annotations.idempotent_hint.is_some(), "{}", tool.name);
+        assert!(annotations.open_world_hint.is_some(), "{}", tool.name);
+        assert!(
             tool.meta
                 .as_ref()
-                .and_then(|meta| meta.0.get("anthropic/alwaysLoad"))
-                == Some(&Value::Bool(true))
-        })
-        .map(|tool| tool.name.as_ref())
+                .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+                .is_some(),
+            "{}",
+            tool.name,
+        );
+    }
+    wire.shutdown().await;
+}
+
+#[tokio::test]
+async fn read_batch_rejects_more_than_sixteen_operations() {
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let operations: Vec<_> = (0..17)
+        .map(|_| json!({"tool": "list_sessions", "arguments": {}}))
         .collect();
 
-    // Three, and these three: enough that a bare "what is in my pane" finds
-    // the server, few enough that the hint keeps its value. Marking more is a
-    // decision to make deliberately, not by accident.
-    assert_eq!(
-        marked.len(),
-        3,
-        "expected exactly three discovery anchors, got {marked:?}",
-    );
-    for anchor in ["list_panes", "describe", "snapshot_pane"] {
-        assert!(marked.contains(&anchor), "{anchor} is a discovery anchor");
-    }
+    let arguments = json!({"operations": operations, "on_error": "stop"});
+    let request = CallToolRequestParams::new("call_read_tools_batch")
+        .with_arguments(arguments.as_object().cloned().expect("object arguments"));
+    let error = wire
+        .client
+        .call_tool(request)
+        .await
+        .expect_err("seventeen operations exceed the batch limit");
+
+    assert!(error.to_string().contains("1 through 16"), "{error}");
+    wire.shutdown().await;
+}
+
+#[tokio::test]
+async fn read_batch_preserves_nested_protocol_errors() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+
+    let response = wire
+        .call(
+            "call_read_tools_batch",
+            json!({
+                "operations": [{
+                    "tool": "get_pane_info",
+                    "arguments": {"pane": "%999999"}
+                }],
+                "on_error": "stop"
+            }),
+        )
+        .await;
+    let structured = response
+        .structured_content
+        .expect("batch has structured content");
+    let error = &structured["results"][0]["error"];
+
+    assert_eq!(error["code"], -32602, "{error}");
+    assert_eq!(error["message"], "no pane %999999", "{error}");
+    assert_eq!(error["data"]["kind"], "object_gone", "{error}");
+    assert_eq!(error["data"]["retryable"], false, "{error}");
+    assert_eq!(error["data"]["stale"], true, "{error}");
 
     wire.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
 #[tokio::test]
-async fn every_tool_answers_with_a_typed_value() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    let listed = wire
+async fn withheld_tools_are_neither_listed_nor_callable() {
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let names: BTreeSet<_> = wire
         .client
         .list_all_tools()
         .await
-        .expect("tools are listed");
+        .expect("tools list")
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
+        .collect();
 
+    assert_eq!(names.len(), 18);
+    assert!(!names.contains("kill_session"));
+    wire.client
+        .call_tool(
+            CallToolRequestParams::new("kill_session")
+                .with_arguments(json!({"session": "$1"}).as_object().cloned().unwrap()),
+        )
+        .await
+        .expect_err("withheld route");
+    wire.shutdown().await;
+}
+
+#[tokio::test]
+async fn capabilities_resource_reports_the_effective_surface() {
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .selection(
+            Selection::parse(Some("inspect"), None, Some("capture_pane")).expect("selection"),
+        )
+        .build();
+    let wire = Wire::connect(tools).await;
+    let resource = wire
+        .client
+        .read_resource(ReadResourceRequestParams::new("tmux://capabilities"))
+        .await
+        .expect("capabilities resource");
+    let ResourceContents::TextResourceContents { text, .. } = &resource.contents[0] else {
+        panic!("capabilities must be text")
+    };
+    let report: Value = serde_json::from_str(text).expect("JSON report");
+    let listed = wire.client.list_all_tools().await.expect("tools list");
+    let names: BTreeSet<_> = report["tools"]
+        .as_array()
+        .expect("tool rows")
+        .iter()
+        .map(|row| row["name"].as_str().expect("tool name"))
+        .collect();
+    let nested: BTreeSet<_> = report["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "call_read_tools_batch")
+        .expect("batch row")["nestedAuthority"]
+        .as_array()
+        .expect("nested authority")
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+
+    assert!(!names.contains("capture_pane"));
+    assert!(!nested.contains("capture_pane"));
     for tool in &listed {
-        let name = tool.name.as_ref();
-        // Without a schema an agent has to call the tool to learn what comes
-        // back, which is the guessing this was meant to end.
-        let schema = tool
-            .output_schema
-            .as_ref()
-            .unwrap_or_else(|| panic!("{name} does not say what it answers with"));
-        let schema = serde_json::to_value(schema).expect("a schema serialises");
-        assert_eq!(
-            schema.get("type").and_then(Value::as_str),
-            Some("object"),
-            "{name} must answer with an object: the protocol says structured \
-             content is one, so a bare array or string has nowhere to go",
-        );
-    }
-
-    // And the value really arrives in the structured field, not only as text.
-    wire.json("create_session", json!({"name": "typed"})).await;
-    let answer = wire.json("list_panes", json!({})).await;
-    assert!(
-        answer["panes"].is_array(),
-        "a listing arrives wrapped: {answer}",
-    );
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_tool_that_does_not_exist_is_refused_over_the_wire() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    assert!(
-        wire.call("no_such_tool", json!({})).await.is_err(),
-        "an unknown tool is an error rather than a silent success",
-    );
-    assert!(
-        wire.call("capture_pane", json!({})).await.is_err(),
-        "a missing required argument is an error",
-    );
-    assert!(
-        wire.call("capture_pane", json!({"pane": 42}))
-            .await
-            .is_err(),
-        "an argument of the wrong type is an error",
-    );
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_command_cannot_forge_the_result_of_its_own_run() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    wire.json("create_session", json!({"name": "forge"})).await;
-    let panes = wire.json("list_panes", json!({})).await;
-    let panes = panes["panes"].as_array().expect("a listing").clone();
-    let pane = panes[0]["id"].as_str().expect("a pane id").to_owned();
-    prompt_ready(guard.server(), &pane).await;
-
-    // A run is bracketed by APC strings carrying a nonce. A command is free to
-    // print APC of its own, including something shaped exactly like a closing
-    // sentinel, and none of it may be read as this run's result.
-    for (label, command, expected) in [
-        (
-            "foreign APC",
-            r"printf 'before\033_not-ours\033\\after\n'; exit 4",
-            4,
-        ),
-        (
-            "sentinel-shaped APC with a foreign nonce",
-            r"printf 'x\033_deadbeefe;99\033\\y\n'; exit 5",
-            5,
-        ),
-        (
-            "the sentinel's source text",
-            r"printf '%s\n' '\033_fake\033\\'; exit 6",
-            6,
-        ),
-    ] {
-        let answer = wire
-            .json(
-                "run_command",
-                json!({"pane": pane, "command": command, "seconds": 30}),
-            )
-            .await;
-        assert_eq!(answer["outcome"], "completed", "{label}: {answer}");
-        assert_eq!(
-            answer["exit_status"], expected,
-            "{label} must not be read as this run's status: {answer}",
-        );
-    }
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn tmux_metacharacters_survive_the_round_trip() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    // A semicolon ends a command in tmux's own parser, and a space separates
-    // arguments. Anything reaching tmux has to survive both.
-    //
-    // `$` is deliberately absent: tmux 3.2a and 3.4 escape it into the name
-    // they actually store, so `dol$lar` becomes `dol\$lar` there and killing
-    // it by the original name fails. That is tmux renaming the session, not
-    // this crate mangling it, and it is not ours to paper over.
-    for name in [
-        "semi;colon",
-        "with space",
-        "quo'te",
-        "dou\"ble",
-        "bra{ce}",
-        "ha#sh",
-        // The separator this crate's own format rows are split on. `#{n}`
-        // escapes it in both transport dialects, and nothing exercised that:
-        // a regression there mis-splits every row rather than failing.
-        "per%cent",
-    ] {
-        wire.call("create_session", json!({"name": name}))
-            .await
-            .unwrap_or_else(|error| panic!("creating {name:?}: {error}"));
-
-        let listed = wire.json("list_sessions", json!({})).await;
-        let found = listed["sessions"]
+        let row = report["tools"]
             .as_array()
-            .expect("a listing")
+            .unwrap()
             .iter()
-            .any(|session| session["name"] == name);
-        assert!(found, "{name:?} is listed as it was given: {listed}");
-
-        wire.call("kill_session", json!({"session": name}))
-            .await
-            .unwrap_or_else(|error| panic!("killing {name:?}: {error}"));
+            .find(|row| row["name"] == tool.name.as_ref())
+            .unwrap_or_else(|| panic!("{} report row", tool.name));
+        let metadata = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+            .unwrap_or_else(|| panic!("{} capability metadata", tool.name));
+        assert_eq!(metadata, row, "{} metadata/report", tool.name);
+        assert_eq!(row["description"].as_str(), tool.description.as_deref());
+        assert_eq!(
+            row["inputSchema"],
+            Value::Object((*tool.input_schema).clone()),
+            "{} input schema",
+            tool.name,
+        );
+        assert_eq!(
+            row["outputSchema"],
+            Value::Object((**tool.output_schema.as_ref().expect("typed output schema")).clone()),
+            "{} output schema",
+            tool.name,
+        );
     }
-
     wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-// JSON Schema says an unknown `format` is an annotation to ignore, so
-// nothing breaks -- it is the client's log that suffers. One real client
-// printed a line per occurrence on every listing.
-const KNOWN: &[&str] = &[
-    "date-time",
-    "date",
-    "time",
-    "duration",
-    "email",
-    "idn-email",
-    "hostname",
-    "idn-hostname",
-    "ipv4",
-    "ipv6",
-    "uri",
-    "uri-reference",
-    "iri",
-    "iri-reference",
-    "uuid",
-    "uri-template",
-    "json-pointer",
-    "relative-json-pointer",
-    "regex",
-    "int32",
-    "int64",
-    "float",
-    "double",
-];
-
-/// Collect every `format` under a schema, with the path that reached it.
-fn formats(node: &Value, path: &str, found: &mut Vec<(String, String)>) {
-    match node {
-        Value::Object(map) => {
-            if let Some(Value::String(format)) = map.get("format") {
-                found.push((path.to_owned(), format.clone()));
-            }
-            for (key, value) in map {
-                formats(value, &format!("{path}/{key}"), found);
-            }
-        }
-        Value::Array(items) => {
-            for (index, value) in items.iter().enumerate() {
-                formats(value, &format!("{path}/{index}"), found);
-            }
-        }
-        _ => {}
-    }
 }
 
 #[tokio::test]
-async fn every_advertised_schema_uses_formats_json_schema_defines() {
+async fn aggregate_only_selection_dispatches_hidden_native_routes() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    let listed = wire
+    guard
+        .server()
+        .new_session("nested-only")
+        .await
+        .expect("session");
+    let selected = Selection::parse(Some(""), Some("call_read_tools_batch"), None)
+        .expect("aggregate-only selection");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .selection(selected)
+        .build();
+    let wire = Wire::connect(tools).await;
+    let names: Vec<_> = wire
         .client
         .list_all_tools()
         .await
-        .expect("tools are listed");
-    let mut found = Vec::new();
-    for tool in &listed {
-        let input = serde_json::to_value(&tool.input_schema).expect("a schema serialises");
-        formats(&input, &format!("{}:input", tool.name), &mut found);
-        if let Some(output) = tool.output_schema.as_ref() {
-            let output = serde_json::to_value(output).expect("a schema serialises");
-            formats(&output, &format!("{}:output", tool.name), &mut found);
-        }
-    }
-
-    let unknown: Vec<_> = found
-        .iter()
-        .filter(|(_, format)| !KNOWN.contains(&format.as_str()))
+        .expect("tools list")
+        .into_iter()
+        .map(|tool| tool.name.into_owned())
         .collect();
-    assert!(
-        unknown.is_empty(),
-        "these advertise a format JSON Schema does not define: {unknown:?}",
-    );
+    assert_eq!(names, ["call_read_tools_batch"]);
 
-    // An unsigned field still says it cannot go negative, which is the part
-    // the removed format was standing in for.
-    let snapshot = listed
-        .iter()
-        .find(|tool| tool.name == "snapshot_pane")
-        .expect("snapshot_pane is offered");
-    let schema = serde_json::to_value(
-        snapshot
-            .output_schema
-            .as_ref()
-            .expect("snapshot_pane answers with a typed value"),
-    )
-    .expect("a schema serialises");
-    assert_eq!(schema["properties"]["width"]["minimum"], 0, "{schema}");
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_failure_says_whether_repeating_unchanged_is_safe() {
-    let mut guard = TestServer::builder().start().await.expect("tmux starts");
-    // Destructive, so the kill tools are offered: a tool the tier withheld
-    // would fail as an unknown tool and never reach the classification.
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .safety(Safety::Destructive)
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-    wire.json("create_session", json!({"name": "kinds"})).await;
-
-    // A pane that is not there is the caller's problem, and a listing taken
-    // now would say something different -- so it is worth taking again.
-    let gone = detail(&wire, "capture_pane", json!({"pane": "%9999"})).await;
-    assert_eq!(gone["kind"], "object_gone", "{gone}");
-    assert_eq!(gone["stale"], true, "a vanished target is worth re-listing");
-    assert_eq!(
-        gone["retryable"], false,
-        "the same call would fail the same way; the listing has to change first",
-    );
-
-    // An argument this server will not pass on is also the caller's problem,
-    // but nothing has gone stale: re-listing would not help.
-    let rejected = detail(
-        &wire,
-        "select_pane",
-        json!({"pane": "%0", "direction": "sideways"}),
-    )
-    .await;
-    assert_eq!(rejected["kind"], "invalid_input", "{rejected}");
-    assert_eq!(
-        rejected["stale"], false,
-        "a bad argument does not mean the listing is out of date",
-    );
-
-    // The vocabulary is only useful if it is total: an agent that reads these
-    // fields must not have to also handle their absence.
-    let failures = [
-        ("capture_pane", json!({"pane": "nonsense"})),
-        ("list_window_panes", json!({"window": "@9999"})),
-        ("list_session_windows", json!({"session": "no-such"})),
-        ("rename", json!({"target": "@9999", "name": "x"})),
-        ("kill_pane", json!({"pane": "%9999"})),
-        (
-            "resize_pane",
-            json!({"pane": "%0", "direction": "inward", "cells": 1}),
-        ),
-        ("search_panes", json!({"pattern": "(", "regex": true})),
-        ("show_option", json!({"scope": "session", "name": "status"})),
-        (
-            "wait_for_text",
-            json!({"pane": "%9999", "patterns": ["x"], "seconds": 1}),
-        ),
-        ("run_command", json!({"pane": "%9999", "command": "true"})),
-        ("capture_since", json!({"pane": "%9999"})),
-    ];
-    for (tool, arguments) in failures {
-        let classified = detail(&wire, tool, arguments).await;
-        assert!(
-            classified["kind"].is_string(),
-            "{tool} answered without a kind: {classified}",
-        );
-        assert!(
-            classified["retryable"].is_boolean(),
-            "{tool} did not say whether retrying helps: {classified}",
-        );
-        assert!(
-            classified["stale"].is_boolean(),
-            "{tool} did not say whether its listing is out of date: {classified}",
-        );
-    }
-
-    // A server that is not there is nobody's argument. tmux reports it the
-    // same way it reports a refusal, so an agent told "refused" would rewrite
-    // a request that was never the trouble.
-    wire.json("kill_server", json!({})).await;
-    let daemon = daemon_fate(&mut guard).await;
-    assert!(!daemon.is_running(), "the fixture daemon is {daemon}");
-
-    let absent = detail(&wire, "list_sessions", json!({})).await;
-    assert_eq!(absent["kind"], "server_gone", "{absent}");
-    assert_eq!(
-        absent["retryable"], true,
-        "the unchanged read is safe and may succeed after a server starts",
-    );
-    assert_eq!(
-        absent["stale"], false,
-        "an absent server is not a listing that went out of date",
-    );
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-/// Read one URI and hand back its single text body.
-async fn body(wire: &Wire, uri: String) -> String {
-    let read = wire
-        .client
-        .read_resource(rmcp::model::ReadResourceRequestParams::new(uri.clone()))
-        .await
-        .unwrap_or_else(|error| panic!("{uri} is readable: {error}"));
-    match read.contents.into_iter().next() {
-        Some(rmcp::model::ResourceContents::TextResourceContents { text, .. }) => text,
-        other => panic!("{uri} answered with {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn the_hierarchy_is_reachable_as_resources() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    // A name with a space, because a client fills a template by percent
-    // encoding and the server has to undo exactly that.
-    wire.json("create_session", json!({"name": "res demo"}))
-        .await;
-    let panes = wire.json("list_panes", json!({})).await;
-    let pane = panes["panes"][0]["id"]
-        .as_str()
-        .expect("a pane id is a string")
-        .to_owned();
-    let windows = wire.json("list_windows", json!({})).await;
-    let index = windows["windows"][0]["index"].clone();
-
-    // Everything advertised is readable. A picker that lists a URI the server
-    // then refuses is worse than not listing it.
-    let listed = wire
-        .client
-        .list_all_resources()
-        .await
-        .expect("resources are listed");
-    assert!(!listed.is_empty(), "the server advertises resources");
-    for resource in &listed {
-        let read = wire
-            .client
-            .read_resource(rmcp::model::ReadResourceRequestParams::new(
-                resource.uri.clone(),
-            ))
-            .await
-            .unwrap_or_else(|error| {
-                panic!("{} is advertised but unreadable: {error}", resource.uri)
-            });
-        assert!(
-            !read.contents.is_empty(),
-            "{} answered with nothing",
-            resource.uri,
-        );
-    }
-
-    let server: Value = serde_json::from_str(&body(&wire, "tmux://server".to_owned()).await)
-        .expect("the server resource is JSON");
-    assert!(server.get("inherited_caller_pane").is_some(), "{server}");
-    assert!(server.get("caller_pane").is_none(), "{server}");
-
-    // The templated forms, filled the way a client fills them. A URI naming
-    // one thing answers with that thing: wrapping it in the tools' list
-    // object would make every reader index into a one-element array to reach
-    // what the URI already named.
-    let session: Value =
-        serde_json::from_str(&body(&wire, "tmux://sessions/res%20demo".to_owned()).await)
-            .expect("a session resource is JSON");
-    assert_eq!(session["name"], "res demo", "{session}");
-    assert!(
-        session.get("sessions").is_none(),
-        "a single session is not wrapped in a listing: {session}",
-    );
-
-    let window: Value = serde_json::from_str(
-        &body(&wire, format!("tmux://sessions/res%20demo/windows/{index}")).await,
-    )
-    .expect("a window resource is JSON");
-    assert_eq!(window["index"], index, "{window}");
-    assert!(window.get("windows").is_none(), "{window}");
-
-    let one: Value = serde_json::from_str(&body(&wire, format!("tmux://panes/{pane}")).await)
-        .expect("a pane resource is JSON");
-    assert_eq!(one["id"], pane.as_str(), "{one}");
-    assert!(one.get("panes").is_none(), "{one}");
-
-    // The plural forms keep the wrapper, and their elements are the same
-    // shape the singular forms answer with.
-    let all: Value = serde_json::from_str(&body(&wire, "tmux://panes".to_owned()).await)
-        .expect("the pane listing is JSON");
-    assert!(all["panes"].is_array(), "{all}");
-    assert_eq!(all["panes"][0]["id"], one["id"], "same shape either way");
-
-    // Pane content is text rather than JSON, because it is what a terminal
-    // drew rather than a value with fields.
-    let content = wire
-        .client
-        .read_resource(rmcp::model::ReadResourceRequestParams::new(format!(
-            "tmux://panes/{pane}/content"
-        )))
-        .await
-        .expect("pane content is readable");
-    match content.contents.first() {
-        Some(rmcp::model::ResourceContents::TextResourceContents { mime_type, .. }) => {
-            assert_eq!(mime_type.as_deref(), Some("text/plain"));
-        }
-        other => panic!("pane content came back as {other:?}"),
-    }
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_resource_that_names_nothing_is_refused_in_the_same_vocabulary() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-
-    for (uri, kind) in [
-        ("tmux://nope", "invalid_input"),
-        ("tmux://panes/%9999", "object_gone"),
-        ("tmux://sessions/no-such-session", "object_gone"),
-    ] {
-        let error = wire
-            .client
-            .read_resource(rmcp::model::ReadResourceRequestParams::new(uri.to_owned()))
-            .await
-            .err()
-            .unwrap_or_else(|| panic!("{uri} should have failed"));
-        let rmcp::service::ServiceError::McpError(data) = error else {
-            panic!("{uri} failed in the wrong way");
-        };
-        // The same three fields the tools carry, so a client that reads them
-        // does not need a second vocabulary for resources.
-        let detail = data
-            .data
-            .unwrap_or_else(|| panic!("{uri} carried no classification"));
-        assert_eq!(detail["kind"], kind, "{uri}: {detail}");
-        assert!(detail["retryable"].is_boolean(), "{uri}: {detail}");
-        assert!(detail["stale"].is_boolean(), "{uri}: {detail}");
-    }
-
-    wire.shutdown().await;
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn an_option_value_may_be_written_as_a_number_or_a_flag() {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let wire = Wire::connect(
-        TmuxTools::builder(guard.server().clone())
-            .caller(None)
-            .confirm(false)
-            .build(),
-    )
-    .await;
-    wire.json("create_session", json!({"name": "opts"})).await;
-
-    // tmux stores every option as text, so a number here is a spelling rather
-    // than a type. An agent setting a limit writes 5000, and refusing that is
-    // a deserialization error with no tmux in it -- the least useful failure
-    // to hand back.
-    wire.json(
-        "set_option",
-        json!({"name": "history-limit", "value": 5000, "scope": "global-session"}),
-    )
-    .await;
-    let read = wire
-        .json(
-            "show_option",
-            json!({"name": "history-limit", "scope": "global-session"}),
+    let response = wire
+        .call(
+            "call_read_tools_batch",
+            json!({
+                "operations": [{"tool": "list_sessions", "arguments": {}}],
+                "on_error": "stop"
+            }),
         )
         .await;
-    assert_eq!(read["value"], "5000", "{read}");
-
-    // A boolean becomes the on/off tmux itself uses, not "true".
-    wire.json(
-        "set_option",
-        json!({"name": "status", "value": false, "scope": "global-session"}),
-    )
-    .await;
-    let read = wire
-        .json(
-            "show_option",
-            json!({"name": "status", "scope": "global-session"}),
-        )
-        .await;
-    assert_eq!(read["value"], "off", "{read}");
-
-    // And a string still means itself.
-    wire.json(
-        "set_option",
-        json!({"name": "status-left", "value": "hello", "scope": "global-session"}),
-    )
-    .await;
-    let read = wire
-        .json(
-            "show_option",
-            json!({"name": "status-left", "scope": "global-session"}),
-        )
-        .await;
-    assert_eq!(read["value"], "hello", "{read}");
+    let nested = &response
+        .structured_content
+        .expect("batch structured result")["results"][0];
+    assert_eq!(nested["success"], true, "{nested}");
+    assert_eq!(
+        nested["result"]["structuredContent"]["sessions"][0]["name"], "nested-only",
+        "{nested}",
+    );
+    wire.client
+        .call_tool(CallToolRequestParams::new("list_sessions"))
+        .await
+        .expect_err("hidden child is not directly callable");
 
     wire.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A long call must say it is still going, or a client cannot tell it from a
-/// server that has stopped answering. MCP sends progress only to a request
-/// that asked for it, so the test asks and then requires it.
 #[tokio::test]
-async fn a_long_wait_reports_progress_to_a_client_that_asked() {
-    use std::sync::{Arc, Mutex};
-
-    use rmcp::model::RequestParamsMeta as _;
-    use rmcp::model::{ClientInfo, ProgressToken};
-
-    /// A client that records the progress notifications it is sent.
-    #[derive(Clone, Default)]
-    struct Watcher {
-        seen: Arc<Mutex<Vec<String>>>,
-    }
-
-    impl rmcp::ClientHandler for Watcher {
-        fn get_info(&self) -> ClientInfo {
-            ClientInfo::default()
-        }
-
-        async fn on_progress(
-            &self,
-            params: rmcp::model::ProgressNotificationParam,
-            _: rmcp::service::NotificationContext<RoleClient>,
-        ) {
-            if let Some(message) = params.message {
-                self.seen.lock().expect("the lock holds").push(message);
-            }
-        }
-    }
-
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let tools = TmuxTools::builder(guard.server().clone())
-        .caller(None)
-        .confirm(false)
+async fn capability_report_uses_the_common_socket_and_boundary_shape() {
+    let server = libtmux::Server::builder()
+        .socket_name("libtmux-mcp")
+        .build()
+        .expect("server config");
+    let tools = TmuxTools::builder(server)
+        .selection(selection("inspect"))
+        .socket_provenance(SocketProvenance::DedicatedMinimal)
         .build();
-
-    let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
-    let server = tokio::spawn(async move {
-        let service = serve_server(tools, server_transport)
-            .await
-            .expect("server starts");
-        let _ = service.waiting().await;
-    });
-    let watcher = Watcher::default();
-    let client = watcher
-        .clone()
-        .serve(client_transport)
+    let wire = Wire::connect(tools).await;
+    let resource = wire
+        .client
+        .read_resource(ReadResourceRequestParams::new("tmux://capabilities"))
         .await
-        .expect("client connects");
+        .expect("capabilities resource");
+    let ResourceContents::TextResourceContents { text, .. } = &resource.contents[0] else {
+        panic!("capabilities must be text")
+    };
+    let report: Value = serde_json::from_str(text).expect("JSON report");
 
-    let session = client
-        .call_tool({
-            let mut params = CallToolRequestParams::default();
-            params.name = "create_session".into();
-            params.arguments = json!({"name": "progress"}).as_object().cloned();
-            params
-        })
-        .await
-        .expect("session is created");
-    let _ = session;
-
-    let panes = client
-        .call_tool({
-            let mut params = CallToolRequestParams::default();
-            params.name = "list_panes".into();
-            params.arguments = json!({}).as_object().cloned();
-            params
-        })
-        .await
-        .expect("panes are listed");
-    let listed: Value = serde_json::to_value(panes.structured_content).expect("json");
-    let pane = listed["panes"][0]["id"]
-        .as_str()
-        .expect("a pane id")
-        .to_owned();
-
-    // A wait for something that never comes, long enough to tick twice.
-    let mut params = CallToolRequestParams::default();
-    params.name = "wait_for_text".into();
-    params.arguments = json!({
-        "pane": pane,
-        "patterns": ["this-never-appears"],
-        "seconds": 12,
-    })
-    .as_object()
-    .cloned();
-    params.set_progress_token(ProgressToken(rmcp::model::NumberOrString::Number(1)));
-
-    let answer = client.call_tool(params).await.expect("the wait answers");
-    assert!(answer.is_error != Some(true), "the wait itself succeeded");
-
-    let seen = watcher.seen.lock().expect("the lock holds").clone();
-    assert!(
-        seen.len() >= 2,
-        "a twelve-second wait ticked more than once: {seen:?}",
+    assert_eq!(report["hostCommandTools"], 0);
+    assert_eq!(
+        report["toolFilteringBoundary"],
+        "interface-shaping-not-authorization"
     );
-    assert!(
-        seen.iter().all(|line| line.contains("still watching")),
-        "each tick says what it is still doing: {seen:?}",
+    assert_eq!(report["executionAuthority"], "tmux-user");
+    assert_eq!(report["operatingSystemBoundary"], "none");
+    assert_eq!(report["boundary"]["oneSocketPerProcess"], true);
+    assert_eq!(report["boundary"]["perCallSocketSelection"], false);
+    assert_eq!(report["boundary"]["hostCommandExecution"], false);
+    assert_eq!(report["boundary"]["dynamicResources"], false);
+    assert_eq!(report["toolCount"], 18);
+    assert_eq!(report["toolsets"], json!(["inspect"]));
+    assert_eq!(report["socket"]["selector"], "name:libtmux-mcp");
+    assert_eq!(report["socket"]["selectionProvenance"], "default-dedicated");
+    assert_eq!(report["socket"]["serverState"], "created");
+    assert_eq!(report["socket"]["configurationProvenance"], "minimal");
+    assert_eq!(report["socket"]["namespaceBoundary"], "tmux-objects-only");
+    assert_eq!(report["connection"]["socketSelector"], "name:libtmux-mcp");
+    assert_eq!(
+        report["connection"]["socketProvenance"],
+        "default-dedicated"
     );
-
-    let _ = client.cancel().await;
-    server.abort();
-    guard.shutdown().await.expect("tmux fixture shuts down");
+    assert_eq!(report["connection"]["serverState"], "created");
+    assert_eq!(report["connection"]["configurationProvenance"], "minimal");
+    assert!(report["connection"]["resolvedSocketPath"].is_string());
+    assert!(
+        report["connection"]["attachCommand"]
+            .as_str()
+            .is_some_and(|command| command.contains(" -N -S ") && command.ends_with(" attach"))
+    );
+    wire.shutdown().await;
 }
 
-/// Asking is only worth anything if the answer is honoured, so the test
-/// answers both ways and checks what survived.
 #[tokio::test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "a client that answers both ways, and the state left behind by each"
-)]
-async fn a_client_that_can_be_asked_decides_whether_work_is_destroyed() {
+async fn commandless_creation_runs_the_configured_process() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::Destructive)
-        .confirm(true)
+        .selection(selection("inspect,execute,teardown"))
         .caller(None)
         .build();
+    let wire = Wire::connect(tools).await;
 
-    let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
-    let server = tokio::spawn(async move {
-        let service = serve_server(tools, server_transport)
-            .await
-            .expect("server starts");
-        let _ = service.waiting().await;
-    });
-    let decider = Decider {
-        approve: Arc::new(AtomicBool::new(false)),
-        asked: Arc::new(AtomicBool::new(false)),
-        before_answer: None,
-    };
-    let client = decider
-        .clone()
-        .serve(client_transport)
-        .await
-        .expect("client connects");
+    let created = wire.call("create_session", json!({"name": "wire"})).await;
+    assert_ne!(created.is_error, Some(true));
+    let listed = wire.call("list_sessions", json!({})).await;
+    assert_ne!(listed.is_error, Some(true));
+    let rendered = serde_json::to_string(&listed.structured_content).expect("JSON answer");
+    assert!(rendered.contains("wire"), "{rendered}");
 
-    let call = |name: &'static str, arguments: Value| {
-        let mut params = CallToolRequestParams::default();
-        params.name = name.into();
-        params.arguments = arguments.as_object().cloned();
-        params
-    };
-
-    client
-        .call_tool(call("create_session", json!({"name": "asked"})))
-        .await
-        .expect("session is created");
-    let listed = client
-        .call_tool(call("list_panes", json!({})))
-        .await
-        .expect("panes are listed");
-    let listed: Value = serde_json::to_value(listed.structured_content).expect("json");
-    let pane = listed["panes"][0]["id"]
-        .as_str()
-        .expect("a pane id")
-        .to_owned();
-    let spare = client
-        .call_tool(call("split_pane", json!({"pane": pane})))
-        .await
-        .expect("the pane splits");
-    let spare: Value = serde_json::to_value(spare.structured_content).expect("json");
-    let spare = spare["id"].as_str().expect("a pane id").to_owned();
-
-    // Declined: the pane survives.
-    let refused = client
-        .call_tool(call("kill_pane", json!({"pane": spare})))
-        .await;
-    assert!(decider.asked.load(Ordering::SeqCst), "the client was asked");
-    assert!(
-        refused.is_err() || refused.expect("answer").is_error == Some(true),
-        "a declined confirmation refuses the call",
-    );
-    let after: Value = serde_json::to_value(
-        client
-            .call_tool(call("list_panes", json!({})))
-            .await
-            .expect("panes are listed")
-            .structured_content,
-    )
-    .expect("json");
-    assert_eq!(
-        after["panes"].as_array().expect("a listing").len(),
-        2,
-        "the pane a person refused to destroy is still there",
-    );
-
-    // Approved: it goes.
-    decider.approve.store(true, Ordering::SeqCst);
-    client
-        .call_tool(call("kill_pane", json!({"pane": spare})))
-        .await
-        .expect("an approved confirmation destroys the pane");
-    let after: Value = serde_json::to_value(
-        client
-            .call_tool(call("list_panes", json!({})))
-            .await
-            .expect("panes are listed")
-            .structured_content,
-    )
-    .expect("json");
-    assert_eq!(after["panes"].as_array().expect("a listing").len(), 1);
-
-    let _ = client.cancel().await;
-    server.abort();
+    wire.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-async fn assert_moved_caller_is_protected(route: ConfirmedDestruction) {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
-    let caller = guard
-        .server()
-        .new_session(NewSessionOptions::new("caller").command("sleep 300"))
-        .await
-        .expect("caller session is created");
-    let own = caller.panes().await.expect("caller panes are listed")[0]
-        .id()
-        .to_string();
-    let target = guard
-        .server()
-        .new_session(NewSessionOptions::new("target").command("sleep 300"))
-        .await
-        .expect("target session is created");
-    let target_window = target.windows().await.expect("target windows are listed")[0].clone();
-    let target_pane = target_window
-        .panes()
-        .await
-        .expect("target panes are listed")[0]
-        .id()
-        .to_string();
-    let caller = CallerIdentity::from_values(
-        Some(format!("{},1,$0", guard.socket_path().display()).into()),
-        Some(own.clone().into()),
-    )
-    .expect("caller identity is complete");
-    let tools = TmuxTools::builder(guard.server().clone())
-        .safety(Safety::Destructive)
-        .caller(Some(caller))
-        .confirm(true)
-        .build();
-
-    let (client_transport, server_transport) = tokio::io::duplex(1 << 20);
-    let server = tokio::spawn(async move {
-        let service = serve_server(tools, server_transport)
-            .await
-            .expect("server starts");
-        let _ = service.waiting().await;
-    });
-    let client = Decider {
-        approve: Arc::new(AtomicBool::new(true)),
-        asked: Arc::new(AtomicBool::new(false)),
-        before_answer: Some(PaneMove {
-            server: guard.server().clone(),
-            source: own.clone(),
-            target: target_pane,
-        }),
-    }
-    .serve(client_transport)
-    .await
-    .expect("client connects");
-    let arguments = match route {
-        ConfirmedDestruction::Window => {
-            json!({"window": target_window.id().to_string()})
-        }
-        ConfirmedDestruction::Session => json!({"session": "target"}),
-        ConfirmedDestruction::Plan => {
-            let mut plan = libtmux::plan::Plan::new();
-            plan.add(libtmux::plan::KillWindow::new(target_window.id().clone()));
-            json!({"plan": plan, "grouping": "sequential"})
-        }
-    };
-    let mut call = CallToolRequestParams::default();
-    call.name = match route {
-        ConfirmedDestruction::Window => "kill_window",
-        ConfirmedDestruction::Session => "kill_session",
-        ConfirmedDestruction::Plan => "run_plan",
-    }
-    .into();
-    call.arguments = arguments.as_object().cloned();
-
-    let refused = client.call_tool(call).await;
-    assert!(
-        refused.is_err() || refused.is_ok_and(|answer| answer.is_error == Some(true)),
-        "the newly protected target is refused for {route:?}",
-    );
-    assert!(
-        target_window
-            .panes()
-            .await
-            .expect("the target window survives")
-            .iter()
-            .any(|pane| pane.id().to_string() == own),
-        "the caller pane survives in its new window",
-    );
-
-    let _ = client.cancel().await;
-    server.abort();
-    guard.shutdown().await.expect("tmux fixture shuts down");
-}
-
-#[tokio::test]
-async fn a_caller_moved_during_window_confirmation_is_still_protected() {
-    assert_moved_caller_is_protected(ConfirmedDestruction::Window).await;
-}
-
-#[tokio::test]
-async fn a_caller_moved_during_session_confirmation_is_still_protected() {
-    assert_moved_caller_is_protected(ConfirmedDestruction::Session).await;
-}
-
-#[tokio::test]
-async fn a_caller_moved_during_plan_confirmation_is_still_protected() {
-    assert_moved_caller_is_protected(ConfirmedDestruction::Plan).await;
 }

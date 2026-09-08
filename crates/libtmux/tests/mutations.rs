@@ -183,6 +183,142 @@ async fn renaming_updates_the_handle_that_performed_it() {
 }
 
 #[tokio::test]
+async fn flag_shaped_names_layouts_and_keys_stay_literal() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let mut session = server
+        .new_session(NewSessionOptions::new("ordinary").command("cat"))
+        .await
+        .expect("session is created");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("active window resolves")
+        .expect("a session always has an active window");
+    let pane = window
+        .active_pane()
+        .await
+        .expect("active pane resolves")
+        .expect("a window always has an active pane");
+
+    session
+        .rename("-literal-session")
+        .await
+        .expect("a flag-shaped session name stays literal");
+    window
+        .rename("-literal-window")
+        .await
+        .expect("a flag-shaped window name stays literal");
+    assert_eq!(session.name().as_bytes(), b"-literal-session");
+    assert_eq!(window.name().as_bytes(), b"-literal-window");
+
+    window
+        .select_layout(Layout::Tiled)
+        .await
+        .expect("an ordinary layout still applies");
+    let error = window
+        .select_layout("-literal-layout")
+        .await
+        .expect_err("a flag-shaped invalid layout is refused as a layout");
+    assert!(
+        !error.to_string().contains("unknown flag"),
+        "the layout reached tmux as an operand: {error}"
+    );
+
+    pane.send_keys("-literal-text")
+        .await
+        .expect("flag-shaped text stays literal");
+    pane.send_key_names(["Enter"])
+        .await
+        .expect("Enter follows literal text");
+    pane.send_key_names(["-literal-key", "Enter"])
+        .await
+        .expect("flag-shaped key names stay operands");
+    pane.send_line("-literal-line")
+        .await
+        .expect("a flag-shaped line stays literal");
+
+    libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
+        pane.capture().await.is_ok_and(|lines| {
+            let screen = lines
+                .iter()
+                .flat_map(|line| line.as_bytes().iter().copied())
+                .collect::<Vec<_>>();
+            [
+                &b"-literal-text"[..],
+                &b"-literal-key"[..],
+                &b"-literal-line"[..],
+            ]
+            .iter()
+            .all(|needle| screen.windows(needle.len()).any(|part| part == *needle))
+        })
+    })
+    .await
+    .expect("all literal input reaches the pane");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn flag_shaped_commands_and_paths_stay_literal() {
+    // Without a terminator tmux reads each operand below as a flag and fails
+    // with "unknown flag -z" before it ever looks at the value. Respawning a
+    // bogus command fails either way, so the flag text is what is asserted,
+    // not the success of the call.
+    fn stayed_literal(label: &str, error: Option<libtmux::Error>) {
+        let Some(error) = error else {
+            return;
+        };
+        let message = error.to_string();
+        assert!(
+            !message.contains("unknown flag"),
+            "{label} parsed its operand as a flag: {message}"
+        );
+    }
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session(NewSessionOptions::new("respawn").command("cat"))
+        .await
+        .expect("session is created");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("active window resolves")
+        .expect("a session always has an active window");
+    let mut pane = window
+        .active_pane()
+        .await
+        .expect("active pane resolves")
+        .expect("a window always has an active pane");
+
+    // pipe-pane withholds its stderr because the command is sensitive input,
+    // so success is the only signal available here.
+    pane.pipe(Some("-zzz-pipe"))
+        .await
+        .expect("a flag-shaped pipe command stays an operand");
+    pane.pipe(None::<&str>)
+        .await
+        .expect("stopping a pipe still needs no operand");
+
+    stayed_literal(
+        "source-file",
+        server.source_file("-zzz-missing").await.err(),
+    );
+    stayed_literal(
+        "respawn-pane",
+        pane.respawn(Some("-zzz-respawn"), true).await.err(),
+    );
+    stayed_literal(
+        "respawn-window",
+        window.respawn(Some("-zzz-respawn"), true).await.err(),
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn killing_removes_the_object_and_strands_other_handles() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();

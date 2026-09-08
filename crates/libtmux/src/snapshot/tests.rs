@@ -5,8 +5,6 @@ use super::{
     ClientFields, ClientInfo, PaneFields, PaneProgressState, SessionFields, SessionInfo,
     WindowFields,
 };
-#[cfg(any(feature = "query", feature = "test-support"))]
-use crate::PaneId;
 #[cfg(feature = "query")]
 use crate::formats::{CLIENT_INFO_DESCRIPTORS, CLIENT_LAST_SESSION, CLIENT_SESSION};
 use crate::formats::{
@@ -29,7 +27,7 @@ use crate::target::WindowLinkIdentity;
 use crate::test::TestServer;
 #[cfg(feature = "test-support")]
 use crate::{Command, ReleaseSuffix, ReleaseVersion};
-use crate::{ServerIdentity, SessionId, TmuxText, TmuxVersion, WindowId};
+use crate::{PaneId, ServerIdentity, SessionId, TmuxText, TmuxVersion, WindowId};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 #[cfg(feature = "test-support")]
@@ -1351,19 +1349,6 @@ fn snapshot_catalog_typed_decoders_accept_exact_boundaries() {
         );
     }
 
-    let sessions = session_fixture(b"tmux 3.7\n", &[("session_id", b"$001")])
-        .ok()
-        .expect("SessionId accepts leading zeroes");
-    let windows = window_fixture(b"tmux 3.7\n", &[("window_id", b"@001")])
-        .ok()
-        .expect("WindowId accepts leading zeroes");
-    let panes = pane_fixture(b"tmux 3.7\n", &[("pane_id", b"%001")])
-        .ok()
-        .expect("PaneId accepts leading zeroes");
-    assert_eq!(sessions.session_id.as_ref(), "$1");
-    assert_eq!(windows.window_id.as_ref(), "@1");
-    assert_eq!(panes.pane_id.as_ref(), "%1");
-
     let sessions = session_fixture(b"tmux 3.7\n", &[("session_id", b"$4294967295")])
         .ok()
         .expect("SessionId accepts u32 maximum");
@@ -1453,26 +1438,75 @@ fn snapshot_catalog_typed_decoders_reject_noncanonical_or_overflowing_values() {
     for input in [b"Hidden".as_slice(), b"NORMAL", b"unknown", b"\xc3\xa9"] {
         assert_pane_invalid("pane_pb_state", input, DecoderKind::PaneProgressState);
     }
+}
 
+#[test]
+fn snapshot_catalog_identity_decoders_reject_noncanonical_or_overflowing_values() {
     for (profile, field, invalid) in [
         (ListProfile::Sessions, "session_id", b"$".as_slice()),
         (ListProfile::Sessions, "session_id", b"$x"),
+        (ListProfile::Sessions, "session_id", b"$001"),
         (ListProfile::Sessions, "session_id", b"@1"),
+        (ListProfile::Sessions, "session_id", b"$1\n"),
+        (ListProfile::Sessions, "session_id", b"$1x"),
         (ListProfile::Sessions, "session_id", b"$4294967296"),
         (ListProfile::Sessions, "session_id", b"$\xc3\xa9"),
         (ListProfile::Windows, "window_id", b"@"),
         (ListProfile::Windows, "window_id", b"@x"),
+        (ListProfile::Windows, "window_id", b"@001"),
         (ListProfile::Windows, "window_id", b"$1"),
+        (ListProfile::Windows, "window_id", b"@1\n"),
+        (ListProfile::Windows, "window_id", b"@1x"),
         (ListProfile::Windows, "window_id", b"@4294967296"),
         (ListProfile::Windows, "window_id", b"@\xc3\xa9"),
         (ListProfile::Panes, "pane_id", b"%"),
         (ListProfile::Panes, "pane_id", b"%x"),
+        (ListProfile::Panes, "pane_id", b"%001"),
         (ListProfile::Panes, "pane_id", b"@1"),
+        (ListProfile::Panes, "pane_id", b"%1\n"),
+        (ListProfile::Panes, "pane_id", b"%1x"),
         (ListProfile::Panes, "pane_id", b"%4294967296"),
         (ListProfile::Panes, "pane_id", b"%\xc3\xa9"),
     ] {
         assert_identity_invalid(profile, field, invalid);
     }
+}
+
+#[test]
+fn pane_projection_stdout_rejects_noncanonical_raw_identities() {
+    let server_identity = projection_server_identity("/private/noncanonical-pane-endpoint");
+    let plan = pane_projection_plan(&version(b"tmux 3.7\n"))
+        .ok()
+        .expect("Pane projection plan is valid");
+    for (field, expected, invalid) in [
+        ("session_id", DecoderKind::SessionId, b"$001".as_slice()),
+        ("session_id", DecoderKind::SessionId, b"@1"),
+        ("session_id", DecoderKind::SessionId, b"$1\n"),
+        ("session_id", DecoderKind::SessionId, b"$1x"),
+        ("window_id", DecoderKind::WindowId, b"@001"),
+        ("window_id", DecoderKind::WindowId, b"$1"),
+        ("window_id", DecoderKind::WindowId, b"@1\n"),
+        ("window_id", DecoderKind::WindowId, b"@1x"),
+        ("pane_id", DecoderKind::PaneId, b"%001"),
+        ("pane_id", DecoderKind::PaneId, b"@1"),
+        ("pane_id", DecoderKind::PaneId, b"%1\n"),
+        ("pane_id", DecoderKind::PaneId, b"%1x"),
+    ] {
+        let (stdout, offsets) = framed_row(&plan, &[(field, invalid)]);
+        let error = hydrate_pane_projections_from_stdout(&server_identity, &plan, &stdout)
+            .err()
+            .expect("a noncanonical raw identity is rejected before hydration");
+        assert_invalid_value(&error, &plan, &offsets, field, expected);
+    }
+}
+
+#[test]
+fn public_identity_parsing_still_canonicalizes_leading_zeroes() {
+    let pane: PaneId = "%001"
+        .parse()
+        .expect("public target syntax stays compatible");
+
+    assert_eq!(pane.as_ref(), "%1");
 }
 
 #[test]

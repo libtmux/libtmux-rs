@@ -420,7 +420,9 @@ function libtmux::Pane::is_at_right: fn(&self) -> bool
 function libtmux::Pane::is_at_top: fn(&self) -> bool
 function libtmux::Pane::is_dead: fn(&self) -> bool
 function libtmux::Pane::is_in_mode: fn(&self) -> bool
+function libtmux::Pane::is_input_disabled: fn(&self) -> bool
 function libtmux::Pane::is_piped: fn(&self) -> bool
+function libtmux::Pane::is_synchronized: fn(&self) -> bool
 function libtmux::Pane::join_into: async fn(self, beside: &Self, options: libtmux::JoinOptions) -> Result<Self, libtmux::Error>
 function libtmux::Pane::kill: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::Pane::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
@@ -456,6 +458,7 @@ function libtmux::Pane::wait_for_text: async fn(&self, needle: impl AsRef<[u8]>,
 function libtmux::Pane::width: fn(&self) -> u32
 function libtmux::Pane::window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Pane::window_id: const fn(&self) -> &libtmux::WindowId
+function libtmux::Pane::window_index: const fn(&self) -> i32
 function libtmux::ReleaseSuffix::is_final: const fn(self) -> bool
 function libtmux::ReleaseSuffix::is_release_candidate: const fn(self) -> bool
 function libtmux::ReleaseSuffix::patch: fn(letter: char) -> Option<Self>
@@ -523,6 +526,7 @@ function libtmux::Server::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, l
 function libtmux::Server::panes_or_empty: async fn(&self) -> Vec<libtmux::Pane>
 function libtmux::Server::prompt_history: async fn(&self, kind: libtmux::PromptKind) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Server::require_generation: async fn(&self, expected: libtmux::ServerGeneration) -> Result<(), libtmux::Error>
+function libtmux::Server::resolved_tmux_executable: fn(&self) -> Option<PathBuf>
 function libtmux::Server::revoke_access: async fn(&self, user: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::run_shell: async fn(&self, command: impl Into<OsString>) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Server::session: async fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Session>, libtmux::Error>

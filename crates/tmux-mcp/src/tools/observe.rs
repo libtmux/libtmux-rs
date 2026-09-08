@@ -1,92 +1,117 @@
-use std::time::Duration;
+use std::path::PathBuf;
 
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::exec::{self, Patterns};
-use crate::jobs;
 use crate::policy::reporting;
+use crate::run_request;
 use crate::tail::TailError;
 use crate::{
-    CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, ForgetJobArgs, IdleView, JobForgotten,
-    JobList, JobStatusArgs, Reporter, RunCommandArgs, RunView, Since, StartCommandArgs, TmuxTools,
-    WaitForIdleArgs, WaitForTextArgs, WaitView, Watch, WatchPaneArgs,
+    CaptureSinceArgs, ChannelArgs, ChannelWait, Cursor, Reporter, RunCommandArgs, RunView, Since,
+    TmuxTools, WaitForTextArgs, WaitView,
 };
 
-use super::error::{EffectBoundary, at_capacity, bad_input, tmux_error};
+use super::error::{EffectBoundary, bad_input, tmux_error};
+use super::pane_input::{MissingSource, PaneInputPlan, PaneInputReach, active_run_error};
 
-/// The most a single `watch_pane` call will return.
-///
-/// A pane can produce output faster than any consumer reads it, so the ceiling
-/// belongs here rather than in the caller's hands.
-const WATCH_BYTES: usize = 64 * 1024;
-
-/// Report a job id this server does not hold.
-///
-/// Classified `stale` rather than as bad input: a caller can explicitly
-/// forget a job, or one can age out, so listing again is what helps.
-fn unknown_job(job: &str) -> ErrorData {
-    let mut data = serde_json::Map::new();
-    data.insert("kind".into(), "object_gone".into());
-    data.insert("retryable".into(), false.into());
-    data.insert("stale".into(), true.into());
-
-    ErrorData::new(
-        rmcp::model::ErrorCode::INVALID_PARAMS,
-        format!("no job {job}; it was explicitly forgotten, aged out, or never existed"),
-        Some(serde_json::Value::Object(data)),
-    )
+#[derive(Clone, Eq, PartialEq)]
+struct RunRoute {
+    executable: PathBuf,
+    endpoint: PathBuf,
+    pane: String,
+    generation: libtmux::ServerGeneration,
 }
 
-/// Translate a background-start failure at the protocol boundary.
-fn start_error(error: jobs::StartError) -> ErrorData {
-    match error {
-        jobs::StartError::AtCapacity { limit } => at_capacity(limit),
-        jobs::StartError::IdentityUnavailable => ErrorData::internal_error(
-            "job identity is unavailable".to_owned(),
+fn known_posix_shell(command: &libtmux::TmuxText) -> bool {
+    let basename = command
+        .as_bytes()
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or_default();
+    let basename = basename.strip_prefix(b"-").unwrap_or(basename);
+    [
+        b"ash".as_slice(),
+        b"bash",
+        b"dash",
+        b"ksh",
+        b"ksh93",
+        b"mksh",
+        b"pdksh",
+        b"sh",
+        b"zsh",
+    ]
+    .contains(&basename)
+}
+
+fn require_known_shell(
+    plan: &PaneInputPlan,
+    checkpoint: &str,
+) -> Result<libtmux::TmuxText, ErrorData> {
+    let pane = plan.target.id();
+    let Some(command) = plan
+        .target
+        .current_command()
+        .filter(|command| known_posix_shell(command))
+    else {
+        return Err(bad_input(format!(
+            "pane {pane} must run a known POSIX-compatible foreground shell at the {checkpoint} run checkpoint"
+        )));
+    };
+    Ok(command.clone())
+}
+
+fn resolved_executable(server: &libtmux::Server) -> Result<PathBuf, ErrorData> {
+    server.resolved_tmux_executable().ok_or_else(|| {
+        ErrorData::internal_error(
+            "the configured tmux executable cannot be resolved from its captured launch context"
+                .to_owned(),
             Some(serde_json::json!({
                 "kind": "unreachable",
-                "retryable": true,
+                "retryable": false,
                 "stale": false,
             })),
-        ),
-        jobs::StartError::IdSpaceExhausted => ErrorData::internal_error(
-            "job id space is exhausted; restart tmux-mcp before starting another job".to_owned(),
+        )
+    })
+}
+
+fn run_route(server: &libtmux::Server, plan: &PaneInputPlan) -> Result<RunRoute, ErrorData> {
+    let executable = resolved_executable(server)?;
+    if !exec::route_is_terminal_safe(executable.as_os_str(), &plan.endpoint) {
+        return Err(run_error(run_request::RunError::Frame));
+    }
+    Ok(RunRoute {
+        executable,
+        endpoint: plan.endpoint.clone(),
+        pane: plan.target.id().to_string(),
+        generation: plan.generation,
+    })
+}
+
+/// Translate a request-owned run failure at the protocol boundary.
+fn run_error(error: run_request::RunError) -> ErrorData {
+    match error {
+        run_request::RunError::Tmux(error) => tmux_error(&error),
+        run_request::RunError::DispatchUnknown(cause) => ErrorData::internal_error(
+            format!(
+                "tmux did not confirm whether it started the pane command: {cause}; inspect the pane \
+                     before acting because the command may be running. Do not retry \
+                     automatically. To interrupt, use pane-wide send_keys with keys=[\"C-c\"], \
+                     which can discard unrelated queued input"
+            ),
             Some(serde_json::json!({
-                "kind": "job_id_exhausted",
+                "kind": "dispatch_unknown",
                 "retryable": false,
                 "stale": false,
             })),
         ),
-        jobs::StartError::Tmux(error) => tmux_error(&error),
-        jobs::StartError::DispatchUnknown { job, cause } => {
-            let cause = match cause {
-                jobs::DispatchFailure::Tmux(error) => error.to_string(),
-                jobs::DispatchFailure::WorkerStopped => "the startup worker stopped".to_owned(),
-            };
-            ErrorData::internal_error(
-                format!(
-                    "tmux did not confirm whether it started {job}: {cause}; inspect it with \
-                     job_status and inspect the pane; retrying automatically is unsafe because \
-                     the command may be running. forget_job only discards retained output. To \
-                     interrupt, use pane-wide send_keys with keys=[\"C-c\"], which can discard \
-                     unrelated queued input"
-                ),
-                Some(serde_json::json!({
-                    "kind": "dispatch_unknown",
-                    "retryable": false,
-                    "stale": false,
-                    "job": job,
-                })),
-            )
-        }
-        jobs::StartError::WorkerStopped => ErrorData::internal_error(
-            "background job startup stopped without a retained result; pane input may have been \
-             sent, so do not retry automatically"
+        run_request::RunError::Guard(error) => error,
+        run_request::RunError::Frame => ErrorData::internal_error(
+            "run_shell_command could not prepare a secure completion frame; no pane input was sent"
                 .to_owned(),
             Some(serde_json::json!({
-                "kind": "startup_stopped",
+                "kind": "unreachable",
                 "retryable": false,
                 "stale": false,
             })),
@@ -172,88 +197,35 @@ fn tail_snapshot_error(error: libtmux::Error, opened: bool) -> ErrorData {
 
 #[tool_router(router = observe_router, vis = "pub(super)")]
 impl TmuxTools {
-    /// Watch a pane produce output, without polling.
-    #[tool(
-        description = "Watch a pane and report everything it writes for a bounded time. \
-                       Unlike capture_pane this misses nothing, including output that \
-                       scrolls past, but it blocks for the requested duration. The live \
-                       stream attaches a client for that duration, changing the session's \
-                       attached-client state.",
-        title = "Watch Pane Bytes",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    pub async fn watch_pane(
-        &self,
-        Parameters(WatchPaneArgs {
-            pane,
-            seconds,
-            max_bytes,
-        }): Parameters<WatchPaneArgs>,
-    ) -> Result<Json<Watch>, ErrorData> {
-        // An agent that asks for an hour gets a minute: this call holds a
-        // connection open and blocks its own response until it returns.
-        let window = Duration::from_secs(seconds.clamp(1, 60));
-        let budget = max_bytes.unwrap_or(WATCH_BYTES).clamp(1, WATCH_BYTES);
-
-        let pane = self.find_pane(&pane).await?;
-        let mut output = pane.stream_output().await.map_err(|e| tmux_error(&e))?;
-
-        let mut collected = Vec::new();
-        let mut stopped = "deadline";
-        let deadline = tokio::time::Instant::now() + window;
-
-        while collected.len() < budget {
-            match tokio::time::timeout_at(deadline, output.next_chunk()).await {
-                Ok(Some(chunk)) => collected.extend_from_slice(&chunk),
-                // The pane stopped writing for good, which is worth saying:
-                // it is the difference between a busy pane and a dead one.
-                Ok(None) => {
-                    stopped = "pane closed";
-                    break;
-                }
-                Err(_) => break,
-            }
-        }
-        if collected.len() >= budget {
-            collected.truncate(budget);
-            stopped = "byte limit";
-        }
-
-        let view = Watch {
-            pane: output.pane().to_string(),
-            bytes: collected.len(),
-            // A pane emits whatever bytes it likes, and JSON carries text.
-            output: String::from_utf8_lossy(&collected).into_owned(),
-            stopped: stopped.to_owned(),
-        };
-
-        output.shutdown().await.map_err(|e| tmux_error(&e))?;
-
-        Ok(Json(view))
-    }
-
     /// Run a command in a pane and report how it went.
     #[tool(
+        name = "run_shell_command",
         description = "Run a shell command in a pane, wait for it to finish, and report its \
                        exit status with everything it wrote. This is the tool for \"run this \
                        and tell me if it worked\". Output is read from the pane's live stream, \
                        so nothing is missed and the shell prompt is not included. The command \
-                       runs in a subshell, so cd and export do not persist. \
-                       Reaching the deadline or cancelling this request stops the waiting, not \
-                       the command. The result includes a job id: inspect it with job_status or \
-                       forget its retained output with forget_job.",
+                       runs in a subshell, so cd and export do not persist and invalid syntax \
+                       completes with a nonzero status. Valid inherited Bash and zsh ERR and \
+                       DEBUG traps remain visible to the command while parent-shell traps and \
+                       options remain unchanged. It requires one configured input \
+                       recipient and observes its mode, liveness, input-off state, attended-client \
+                       state, cohort, inherited-caller relation, known POSIX shell, and resolved \
+                       route before watcher setup and again before dispatch. A process-wide \
+                       endpoint-and-pane reservation blocks other MCP pane input until the \
+                       completion marker or pane closure is proved. The resolved tmux executable \
+                       and socket path must contain no ASCII terminal-control bytes. The \
+                       reservation serializes this MCP's input, but tmux observations can still \
+                       race with dispatch. The pane shell, tmux server, and configuration must be \
+                       trusted. Reaching the deadline, cancelling, or an uncertain dispatch stops \
+                       this request while its watcher keeps the reservation until completion is \
+                       proved.",
         title = "Run Command In Pane",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
+        meta = crate::capability_meta!(Execute, PaneCommand, [Change], [TmuxMetadata, TerminalContent], true, true, {
+            "pane" => [TmuxLookup],
+            "command" => [PaneInput, ShellCommand],
+            "seconds" => [None],
+            "suppress_history" => [None]
+        })
     )]
     pub async fn run_command(
         &self,
@@ -266,196 +238,92 @@ impl TmuxTools {
         cancelled: tokio_util::sync::CancellationToken,
         reporter: Reporter,
     ) -> Result<Json<RunView>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
-        // A pane in copy mode does not pass keys to the shell, so the command
-        // would be read as navigation and the wait would run to its deadline
-        // with nothing to show for it.
-        if target.is_in_mode() {
+        if command.as_bytes().contains(&0) {
+            return Err(bad_input("command must not contain a NUL byte".to_owned()));
+        }
+        let configured_executable = resolved_executable(&self.server)?;
+        if !exec::route_is_terminal_safe(
+            configured_executable.as_os_str(),
+            self.server.socket_path(),
+        ) {
+            return Err(run_error(run_request::RunError::Frame));
+        }
+        let initial = self
+            .preflight_pane_input(
+                &pane,
+                PaneInputReach::Synchronized,
+                MissingSource::CallerInput,
+            )
+            .await?;
+        if initial.configured.len() != 1 {
             return Err(bad_input(format!(
-                "pane {pane} is in copy mode, where keys move the cursor rather than \
-                     reaching the shell. Leave it first."
+                "pane {pane} has synchronized input enabled for {} panes; run_shell_command requires one configured recipient",
+                initial.configured.len()
             )));
         }
-        let view = reporting(
+        let foreground = require_known_shell(&initial, "initial")?;
+        let route = run_route(&self.server, &initial)?;
+        let lease = initial
+            .reserve()
+            .ok_or_else(|| active_run_error(&route.pane))?;
+        let checkpoint_pane = initial.target.id().to_string();
+        let expected_route = route.clone();
+        let final_lease = lease.clone();
+        let final_check = async {
+            let final_plan = self
+                .preflight_reserved_pane_input(
+                    &checkpoint_pane,
+                    PaneInputReach::Synchronized,
+                    MissingSource::ObservedTransition,
+                    &final_lease,
+                )
+                .await?;
+            if final_plan.configured.len() != 1 {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} gained synchronized recipients between run checkpoints"
+                )));
+            }
+            let final_foreground = require_known_shell(&final_plan, "final")?;
+            if final_foreground != foreground {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} changed its POSIX-compatible foreground shell between run checkpoints"
+                )));
+            }
+            if !initial.same_authority(&final_plan) {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} changed its configured input authority between run checkpoints"
+                )));
+            }
+            let final_route = run_route(&self.server, &final_plan)?;
+            if final_route != expected_route || !final_plan.owns(&final_lease) {
+                return Err(bad_input(format!(
+                    "pane {checkpoint_pane} changed its tmux route or active-run reservation between run checkpoints"
+                )));
+            }
+            Ok(())
+        };
+        let view = Box::pin(reporting(
             reporter,
             "still running",
-            self.jobs.run(
-                &target,
+            run_request::run(
+                &initial.target,
                 &command,
                 Self::budget(seconds),
                 suppress_history,
                 &cancelled,
+                run_request::RunTransport {
+                    server: &self.server,
+                    generation: initial.generation,
+                    executable: route.executable.as_os_str(),
+                    endpoint: &route.endpoint,
+                    shell: foreground.as_bytes(),
+                    lease,
+                },
+                final_check,
             ),
-        )
+        ))
         .await
-        .map_err(start_error)?;
-
-        Ok(Json(view))
-    }
-
-    /// Start a command without waiting for it.
-    #[tool(
-        description = "Start a shell command in a pane and return at once with a job id, \
-                       instead of holding this call until it finishes. Use this for anything \
-                       slow -- a build, a test suite, a deploy -- and for running several at \
-                       once: the answer is collected whether or not you are waiting for it. \
-                       Poll with job_status, which returns only what is new. Prefer \
-                       run_command when the command is quick and you want its answer now. If \
-                       every job slot is active, this refuses before sending anything to the \
-                       pane. An unconfirmed send returns the retained job id in the error; \
-                       inspect it with job_status and inspect the pane, because retrying \
-                       automatically is unsafe. forget_job only discards retained output. To \
-                       interrupt the whole pane, use send_keys with keys: [\"C-c\"]; that can \
-                       discard unrelated queued input.",
-        title = "Start Command In Background",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
-        )
-    )]
-    pub async fn start_command(
-        &self,
-        Parameters(StartCommandArgs {
-            pane,
-            command,
-            suppress_history,
-        }): Parameters<StartCommandArgs>,
-    ) -> Result<Json<jobs::JobView>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
-        // A pane in copy mode does not pass keys to the shell, so the command
-        // would be read as navigation and the job would never start.
-        if target.is_in_mode() {
-            return Err(bad_input(format!(
-                "pane {pane} is in copy mode, where keys move the cursor rather than \
-                     reaching the shell. Leave it first."
-            )));
-        }
-
-        let view = self
-            .jobs
-            .start(&target, &command, suppress_history)
-            .await
-            .map_err(start_error)?;
-
-        Ok(Json(view))
-    }
-
-    /// Report how a background command is getting on.
-    #[tool(
-        description = "Report a job's state, its exit status once finished, and what it has \
-                       written since the cursor you were given last. Pass that cursor back \
-                       to read only what is new. Give seconds to wait for it to finish, \
-                       which returns as soon as it does rather than at the deadline.",
-        title = "Check Background Command",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    pub async fn job_status(
-        &self,
-        Parameters(JobStatusArgs {
-            job,
-            cursor,
-            seconds,
-        }): Parameters<JobStatusArgs>,
-    ) -> Result<Json<jobs::JobProgress>, ErrorData> {
-        if let Some(seconds) = seconds.filter(|seconds| *seconds > 0) {
-            self.jobs.wait(&job, Self::budget(Some(seconds))).await;
-        }
-
-        self.jobs
-            .read(&job, cursor)
-            .map(Json)
-            .ok_or_else(|| unknown_job(&job))
-    }
-
-    /// List the background commands this server is holding.
-    #[tool(
-        description = "List every command this server still owns, including start_command \
-                       jobs, run_command calls that stopped waiting, and starts whose dispatch \
-                       was not confirmed. A finished job is kept so its answer can still be \
-                       collected. The least recently read finished job is forgotten when a new \
-                       job needs its slot; an active job is never forgotten.",
-        title = "List Background Commands",
-        annotations(
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    pub async fn list_jobs(&self) -> Result<Json<JobList>, ErrorData> {
-        Ok(Json(JobList {
-            jobs: self.jobs.list(),
-        }))
-    }
-
-    /// Stop collecting a background command and forget its retained output.
-    #[tool(
-        description = "Stop collecting and forget a job's retained output. This does not \
-                       interrupt the pane or change what it is running.",
-        title = "Forget Background Command",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    pub async fn forget_job(
-        &self,
-        Parameters(ForgetJobArgs { job }): Parameters<ForgetJobArgs>,
-    ) -> Result<Json<JobForgotten>, ErrorData> {
-        let pane = self.jobs.forget(&job).ok_or_else(|| unknown_job(&job))?;
-
-        Ok(Json(JobForgotten { job, pane }))
-    }
-
-    /// Wait until a pane stops writing.
-    #[tool(
-        description = "Wait until a pane has written nothing for a few seconds. Use this when \
-                       you cannot name what success looks like: a TUI settling, an installer \
-                       finishing, a prompt whose glyph you cannot predict. Prefer run_command \
-                       for a command you sent yourself, and wait_for_text when you know the \
-                       text to look for -- both are exact, and this one infers. The live stream \
-                       attaches a client while waiting, changing the session's attached-client \
-                       state.",
-        title = "Wait For Pane To Go Quiet",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    pub async fn wait_for_idle(
-        &self,
-        Parameters(WaitForIdleArgs {
-            pane,
-            quiet_seconds,
-            seconds,
-        }): Parameters<WaitForIdleArgs>,
-        cancelled: tokio_util::sync::CancellationToken,
-        reporter: Reporter,
-    ) -> Result<Json<IdleView>, ErrorData> {
-        let target = self.find_pane(&pane).await?;
-        // Clamped against the total, because quiet longer than the deadline
-        // could never be observed and would always answer `deadline`.
-        let budget = Self::budget(seconds);
-        let quiet = Duration::from_secs(quiet_seconds.unwrap_or(2).max(1)).min(budget);
-
-        let view = reporting(
-            reporter,
-            "still waiting for the pane to go quiet",
-            exec::wait_for_idle(&target, quiet, budget, &cancelled),
-        )
-        .await
-        .map_err(|e| tmux_error(&e))?;
+        .map_err(run_error)?;
 
         Ok(Json(view))
     }
@@ -464,17 +332,31 @@ impl TmuxTools {
     #[tool(
         description = "Wait until a pane writes matching text. Reads the pane's live output \
                        stream, so text that scrolls past between checks is still seen. Prefer \
-                       run_command for commands you are sending yourself: it reports an exit \
+                       run_shell_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
                        not author, such as a server logging that it is ready. The live stream \
                        attaches a client while waiting, changing the session's attached-client \
-                       state.",
+                       state. Each list accepts at most 32 patterns, each at most 4,096 bytes, \
+                       using Rust's linear-time regex engine.",
         title = "Wait For Pane Text",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
+        meta = crate::capability_meta!(
+            Inspect, None,
+            effects = [Observe, Change],
+            outputs = [TmuxMetadata, TerminalContent],
+            secrets = true,
+            untrusted = true,
+            sinks = {
+                "pane" => [TmuxLookup],
+                "patterns" => [Regex],
+                "stop" => [Regex],
+                "regex" => [None],
+                "match_case" => [None],
+                "seconds" => [None]
+            },
+            literalized = [],
+            nested = [],
+            self_bounded = true,
+            always_load = false,
         )
     )]
     pub async fn wait_for_text(
@@ -518,15 +400,13 @@ impl TmuxTools {
                        turns without re-reading the whole screen. The answer says missed=true \
                        if the cursor no longer names retained output, including when the pane \
                        outran the buffer, its live tail was evicted, or the server restarted. \
-                       Starting a tail attaches a retained client, changing the session's \
-                       attached-client state until the tail is evicted or the server stops.",
+                       Starting a tail owns a retained observer until the tail is evicted or \
+                       the server stops.",
         title = "Read New Pane Output",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata, TerminalContent], true, true, {
+            "pane" => [TmuxLookup],
+            "cursor" => [None]
+        })
     )]
     pub async fn capture_since(
         &self,
@@ -573,12 +453,10 @@ impl TmuxTools {
                        `tmux wait-for -S <channel>` to synchronise with work this server \
                        did not start.",
         title = "Wait For Channel",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
+        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+            "channel" => [TmuxState],
+            "seconds" => [None]
+        })
     )]
     pub async fn wait_for_channel(
         &self,
@@ -616,61 +494,285 @@ impl TmuxTools {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use libtmux::test::TestServer;
+    use tokio_util::sync::CancellationToken;
+
     use super::*;
 
-    #[test]
-    fn job_capacity_is_retryable_without_stale_state() {
-        let error = start_error(jobs::StartError::AtCapacity { limit: 3 });
-        let data = error.data.expect("capacity carries metadata");
-
-        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
-        assert_eq!(data["kind"], "capacity");
-        assert_eq!(data["retryable"], true);
-        assert_eq!(data["stale"], false);
-        assert_eq!(data["capacity"], 3);
+    async fn client_count(server: &libtmux::Server) -> usize {
+        server.clients().await.map_or(0, |clients| clients.len())
     }
 
     #[test]
-    fn an_uncertain_start_names_the_retained_job_and_safe_recovery() {
+    fn run_shell_allowlist_is_exact() {
+        for shell in [
+            "ash",
+            "bash",
+            "dash",
+            "ksh",
+            "ksh93",
+            "mksh",
+            "pdksh",
+            "sh",
+            "zsh",
+            "/bin/bash",
+            "-zsh",
+        ] {
+            assert!(
+                known_posix_shell(&libtmux::TmuxText::from(shell)),
+                "{shell}"
+            );
+        }
+        for program in ["", "cat", "fish", "nu", "pwsh", "BASH"] {
+            assert!(
+                !known_posix_shell(&libtmux::TmuxText::from(program)),
+                "{program}"
+            );
+        }
+        assert!(!known_posix_shell(&libtmux::TmuxText::from_bytes([
+            b'b', 0xff
+        ])));
+    }
+
+    async fn configure_dead_transition(pane: &libtmux::Pane) {
+        pane.set_option("remain-on-exit", "on")
+            .await
+            .expect("fixture retains a dead pane");
+        pane.set_hook("pane-died", "wait-for -S mcp-final-pane-died")
+            .await
+            .expect("dead transition is observable");
+    }
+
+    async fn caller_peer_identity(
+        pane: &libtmux::Pane,
+        server: &libtmux::Server,
+    ) -> crate::CallerIdentity {
+        let peer = pane
+            .split(libtmux::SplitOptions::new(libtmux::SplitDirection::Below))
+            .await
+            .expect("caller peer is created");
+        let generation = server.generation().await.expect("server generation");
+        let session = peer.session_id().to_string();
+        let session = session
+            .strip_prefix('$')
+            .expect("tmux session ID has its canonical prefix");
+        crate::CallerIdentity::from_values(
+            Some(
+                format!(
+                    "{},{},{}",
+                    server.socket_path().display(),
+                    generation.pid(),
+                    session
+                )
+                .into(),
+            ),
+            Some(peer.id().to_string().into()),
+        )
+        .expect("caller identity is complete")
+    }
+
+    async fn transition_then_preflight(
+        transition: &str,
+        pane: &mut libtmux::Pane,
+        server: &libtmux::Server,
+        tools: &TmuxTools,
+        source: &str,
+        foreground: &libtmux::TmuxText,
+        lease: &run_request::PaneReservation,
+    ) -> Result<(), ErrorData> {
+        if transition == "caller" {
+            server
+                .window_by_id(pane.window_id())
+                .await
+                .expect("window lookup")
+                .expect("source window exists")
+                .set_option("synchronize-panes", "on")
+                .await
+                .expect("caller peer enters the configured cohort");
+        } else {
+            let command = if transition == "dead" {
+                "exit 0"
+            } else {
+                "exec sleep 30"
+            };
+            let pane_id = pane.id().clone();
+            pane.respawn(Some(command), true)
+                .await
+                .expect("pane begins its final transition");
+            if transition == "dead" {
+                assert_eq!(
+                    server
+                        .wait_for_channel("mcp-final-pane-died", Duration::from_secs(2))
+                        .await
+                        .expect("pane-died notification answers"),
+                    libtmux::ChannelWait::Signalled
+                );
+            } else {
+                libtmux::test::retry_until(Duration::from_secs(2), async || {
+                    server
+                        .pane_by_id(&pane_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|pane| {
+                            pane.current_command()
+                                .is_some_and(|value| value.as_str() == Ok("sleep"))
+                        })
+                })
+                .await
+                .expect("selected socket reports the foreground transition");
+            }
+        }
+        let final_plan = tools
+            .preflight_reserved_pane_input(
+                source,
+                PaneInputReach::Synchronized,
+                MissingSource::ObservedTransition,
+                lease,
+            )
+            .await?;
+        if transition == "foreground" && final_plan.target.current_command() != Some(foreground) {
+            return Err(bad_input(format!(
+                "pane {source} changed foreground command between run checkpoints"
+            )));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_uncertain_start_names_safe_recovery_without_an_unreachable_handle() {
         let source = libtmux::Server::builder()
             .socket_name("conflicting")
             .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
             .build()
             .expect_err("two socket selectors are refused");
-        let error = start_error(jobs::StartError::DispatchUnknown {
-            job: "job-7".to_owned(),
-            cause: jobs::DispatchFailure::Tmux(Box::new(source)),
-        });
+        let error = run_error(run_request::RunError::DispatchUnknown(Box::new(source)));
         let data = error.data.as_ref().expect("the failure carries metadata");
 
         assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
         assert_eq!(data["kind"], "dispatch_unknown");
         assert_eq!(data["retryable"], false);
         assert_eq!(data["stale"], false);
-        assert_eq!(data["job"], "job-7");
-        assert!(error.message.contains("job_status"));
+        assert!(data.get("job").is_none());
+        assert!(!error.message.contains("job-7"));
         assert!(error.message.contains("inspect the pane"));
-        assert!(error.message.contains("retrying automatically is unsafe"));
-        assert!(error.message.contains("forget_job"));
-        assert!(error.message.contains("only discards retained output"));
+        assert!(error.message.contains("Do not retry automatically"));
         assert!(error.message.contains("send_keys"));
     }
 
-    #[test]
-    fn an_explicitly_forgotten_job_is_stale() {
-        let error = unknown_job("job-7");
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one watcher must span each guarded final transition"
+    )]
+    async fn real_tmux_compat_final_preflight_observes_transition_before_dispatch() {
+        for (transition, expected_refusal, expected_kind) in [
+            ("dead", "is dead", "invalid_input"),
+            ("foreground", "changed foreground command", "invalid_input"),
+            ("caller", "refusing to send input", "self_protection"),
+        ] {
+            let guard = TestServer::builder().start().await.expect("tmux starts");
+            let server = guard.server();
+            let session = server
+                .new_session(format!("run-final-{transition}"))
+                .await
+                .expect("session starts");
+            let pane = session.panes().await.expect("panes list").remove(0);
+            if transition == "dead" {
+                configure_dead_transition(&pane).await;
+            }
+            let caller = if transition == "caller" {
+                Some(caller_peer_identity(&pane, server).await)
+            } else {
+                None
+            };
+            let tools = TmuxTools::builder(server.clone()).caller(caller).build();
+            let source = pane.id().to_string();
+            let initial = tools
+                .preflight_pane_input(
+                    &source,
+                    PaneInputReach::Synchronized,
+                    MissingSource::CallerInput,
+                )
+                .await
+                .expect("initial preflight accepts the live pane");
+            let foreground = initial
+                .target
+                .current_command()
+                .cloned()
+                .expect("initial pane reports its foreground command");
+            let executable = server
+                .resolved_tmux_executable()
+                .expect("fixture tmux resolves");
+            let socket = initial.endpoint.clone();
+            let lease = initial.reserve().expect("the fixture pane is unreserved");
+            let final_lease = lease.clone();
+            let baseline_clients = client_count(server).await;
+            let mut transition_pane = pane.clone();
+            let final_check = async {
+                assert_eq!(
+                    client_count(server).await,
+                    baseline_clients + 1,
+                    "{transition}: watcher is attached before the final checkpoint"
+                );
+                transition_then_preflight(
+                    transition,
+                    &mut transition_pane,
+                    server,
+                    &tools,
+                    &source,
+                    &foreground,
+                    &final_lease,
+                )
+                .await
+            };
+            let cancelled = CancellationToken::new();
 
-        assert!(error.message.contains("explicitly forgotten"));
-    }
+            let result = run_request::run(
+                &initial.target,
+                "printf should-not-run",
+                Duration::from_secs(2),
+                false,
+                &cancelled,
+                run_request::RunTransport {
+                    server,
+                    generation: initial.generation,
+                    executable: executable.as_os_str(),
+                    endpoint: &socket,
+                    shell: foreground.as_bytes(),
+                    lease,
+                },
+                final_check,
+            )
+            .await;
 
-    #[test]
-    fn a_stopped_start_does_not_claim_that_the_pane_was_untouched() {
-        let error = start_error(jobs::StartError::WorkerStopped);
-        let data = error.data.as_ref().expect("the failure carries metadata");
-
-        assert_eq!(data["kind"], "startup_stopped");
-        assert_eq!(data["retryable"], false);
-        assert!(error.message.contains("pane input may have been sent"));
+            let Err(run_request::RunError::Guard(error)) = result else {
+                panic!("the final preflight must reject the {transition} transition");
+            };
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+            assert!(error.message.contains(expected_refusal), "{transition}");
+            assert_eq!(
+                error.data.expect("final refusal is classified")["kind"],
+                expected_kind,
+                "{transition}"
+            );
+            let screen = pane.capture().await.expect("refused pane remains readable");
+            assert!(
+                screen.iter().all(|line| !line
+                    .as_bytes()
+                    .windows(b"should-not-run".len())
+                    .any(|part| part == b"should-not-run")),
+                "{transition}: no command payload reached the pane"
+            );
+            assert_eq!(
+                client_count(server).await,
+                baseline_clients,
+                "{transition}: final refusal closes the output watcher"
+            );
+            guard.shutdown().await.expect("tmux fixture shuts down");
+        }
     }
 
     #[test]

@@ -47,6 +47,43 @@ async fn buffers_hold_exact_bytes_and_report_absence() {
 }
 
 #[tokio::test]
+async fn flag_shaped_buffer_data_and_channels_stay_literal() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    server
+        .set_buffer(Some("-literal-buffer"), "-literal-payload")
+        .await
+        .expect("flag-shaped buffer data stays literal");
+    assert_eq!(
+        server.buffer("-literal-buffer").await.expect("read"),
+        Some(b"-literal-payload".to_vec()),
+    );
+
+    server
+        .lock_channel("-literal-lock")
+        .await
+        .expect("a flag-shaped channel locks");
+    server
+        .unlock_channel("-literal-lock")
+        .await
+        .expect("a flag-shaped channel unlocks");
+    server
+        .signal_channel("-literal-signal")
+        .await
+        .expect("a flag-shaped channel signals");
+    assert_eq!(
+        server
+            .wait_for_channel("-literal-signal", Duration::from_secs(5))
+            .await
+            .expect("a flag-shaped channel waits"),
+        ChannelWait::Signalled,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn key_bindings_can_be_added_and_removed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
@@ -1885,14 +1922,15 @@ async fn a_capture_can_keep_the_spaces_tmux_would_trim() {
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
-    let session = server.new_session("trailing").await.expect("session");
-    let pane = session.panes().await.expect("panes").remove(0);
-
-    // Three spaces a program printed, which is what tmux strips.
-    pane.send_keys("printf 'AB   \\n'")
+    // Printing is the pane's initial command; prompt readiness is not part of
+    // this capture assertion.
+    let session = server
+        .new_session(
+            libtmux::NewSessionOptions::new("trailing").command("printf 'AB   \\n'; exec /bin/sh"),
+        )
         .await
-        .expect("keys are sent");
-    pane.send_key_names(["Enter"]).await.expect("the line runs");
+        .expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
 
     retry_until(Duration::from_secs(10), async || {
         pane.capture()

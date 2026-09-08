@@ -1,26 +1,42 @@
 //! Sentinel-bracketed command dispatch and stream scanning.
 
+use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::ops::Range;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-use libtmux::{Error, Pane};
+use libtmux::{CaptureOptions, Error, Pane, Server, ServerGeneration};
 
 use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
 
 use super::{OUTPUT_LIMIT, RunOutcome, RunView};
 
-/// Distinguishes one run's sentinels from another's.
-///
-/// Only has to be unique among the runs this process makes; a sentinel is
-/// already unmistakable in the stream because it carries a real escape byte.
-static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MARKER_PREFIX: &str = "__LIBTMUX_MCP_DONE_";
+const NONCE_ATTEMPTS: usize = 32;
+const PROOF_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const PROOF_RETRY_DELAY: Duration = Duration::from_millis(50);
+const PROOF_RETRY_MAX_DELAY: Duration = Duration::from_secs(1);
+pub(super) const TRAP_DECLARATION_LIMIT: usize = 64 * 1024;
+
+#[cfg(test)]
+tokio::task_local! {
+    /// Prepared shutdowns completed inside one [`observing_prepared_shutdowns`]
+    /// scope. Task-local rather than global: several tests drive the guard
+    /// refusal path concurrently, and a process-wide counter made every
+    /// observation depend on which of them happened to be running.
+    static PREPARED_SHUTDOWNS: std::sync::Arc<AtomicU64>;
+}
 
 /// A pane stream and the sentinels for one command.
 pub(crate) struct Run {
     output: libtmux::control::PaneOutput,
     scanner: Scanner,
-    pane: String,
+    pane: Pane,
 }
 
 /// One immutable delta from a run's collector.
@@ -34,6 +50,98 @@ pub(crate) struct RunProgress<'a> {
     pub(crate) truncated: bool,
 }
 
+/// A collected view and any proof still needed after its watcher closed.
+pub(crate) struct RunCollection {
+    view: RunView,
+    proof: Option<RunProof>,
+}
+
+impl RunCollection {
+    pub(crate) fn into_parts(self) -> (RunView, Option<RunProof>) {
+        (self.view, self.proof)
+    }
+
+    pub(crate) async fn finish_proof(self) {
+        if let Some(proof) = self.proof {
+            proof.wait().await;
+        }
+    }
+}
+
+/// Evidence retained after a watcher transport closes without a marker.
+pub(crate) struct RunProof {
+    pane: Pane,
+    server: Server,
+    generation: ServerGeneration,
+    closing: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum GenerationState {
+    Current,
+    Ended,
+    Ambiguous,
+}
+
+impl RunProof {
+    async fn generation_state(&self) -> GenerationState {
+        match tokio::time::timeout(
+            PROOF_PROBE_TIMEOUT,
+            self.server.require_generation(self.generation),
+        )
+        .await
+        {
+            Ok(Ok(())) => GenerationState::Current,
+            Ok(Err(Error::ServerGenerationChanged { .. } | Error::ServerGone { .. })) => {
+                GenerationState::Ended
+            }
+            Ok(Err(_)) | Err(_) => GenerationState::Ambiguous,
+        }
+    }
+
+    async fn settled(&self) -> bool {
+        match self.generation_state().await {
+            GenerationState::Ended => return true,
+            GenerationState::Ambiguous => return false,
+            GenerationState::Current => {}
+        }
+
+        let (capture, refreshed) = tokio::join!(
+            tokio::time::timeout(
+                PROOF_PROBE_TIMEOUT,
+                self.pane
+                    .capture_with(CaptureOptions::history().join_wrapped()),
+            ),
+            tokio::time::timeout(PROOF_PROBE_TIMEOUT, self.pane.refreshed()),
+        );
+
+        match self.generation_state().await {
+            GenerationState::Ended => return true,
+            GenerationState::Ambiguous => return false,
+            GenerationState::Current => {}
+        }
+
+        let marker = matches!(&capture, Ok(Ok(lines)) if lines.iter().any(|line| {
+            completion_status(line.as_bytes(), &self.closing).is_some()
+        }));
+        let pane_ended = matches!(&refreshed, Ok(Ok(pane)) if pane.is_dead())
+            || matches!(&refreshed, Ok(Err(Error::ObjectGone { .. })))
+            || matches!(&capture, Ok(Err(Error::ObjectGone { .. })));
+        marker || pane_ended
+    }
+
+    pub(crate) async fn wait(self) {
+        let mut delay = PROOF_RETRY_DELAY;
+        loop {
+            if self.settled().await {
+                return;
+            }
+            tokio::time::sleep(delay).await;
+            delay = delay.saturating_mul(2).min(PROOF_RETRY_MAX_DELAY);
+        }
+    }
+}
+
 #[cfg(test)]
 impl RunProgress<'_> {
     pub(super) fn publication_bytes(&self) -> usize {
@@ -44,8 +152,152 @@ impl RunProgress<'_> {
 /// A watched run whose pane has not been changed yet.
 pub(crate) struct PreparedRun {
     pane: Pane,
-    payload: String,
+    frame: PathBuf,
+    staged: OsString,
     run: Run,
+}
+
+/// Why a run could not be prepared before any pane input was sent.
+#[derive(Debug)]
+pub(crate) enum PrepareRunError {
+    Tmux(Error),
+    Frame,
+}
+
+impl From<Error> for PrepareRunError {
+    fn from(error: Error) -> Self {
+        Self::Tmux(error)
+    }
+}
+
+/// Why a collision-free completion frame could not be constructed.
+#[derive(Debug)]
+pub(crate) enum FrameError {
+    TerminalControl,
+    Entropy,
+    Collisions,
+}
+
+pub(super) struct Frame {
+    pub(super) payload: OsString,
+    pub(super) opened: Vec<u8>,
+    pub(super) closed: Vec<u8>,
+    pub(super) nonce: String,
+}
+
+pub(super) struct TrapCapture {
+    pub(super) setup: Vec<u8>,
+    declarations: String,
+    errexit: String,
+    pub(super) status: String,
+    xtrace: String,
+}
+
+fn shell_basename(shell: &[u8]) -> &[u8] {
+    let basename = shell
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or_default();
+    basename.strip_prefix(b"-").unwrap_or(basename)
+}
+
+pub(super) fn inherited_trap_capture(shell: &[u8], nonce: &str) -> Option<TrapCapture> {
+    let shell = shell_basename(shell);
+    if shell != b"bash" && shell != b"zsh" {
+        return None;
+    }
+
+    let declarations = format!("__libtmux_mcp_traps_{nonce}");
+    let errexit = format!("__libtmux_mcp_trap_errexit_{nonce}");
+    let status = format!("__libtmux_mcp_trap_status_{nonce}");
+    let xtrace = format!("__libtmux_mcp_trap_xtrace_{nonce}");
+    let file = format!("__libtmux_mcp_trap_file_{nonce}");
+    let read_owned = format!("__libtmux_mcp_trap_read_owned_{nonce}");
+    let write_owned = format!("__libtmux_mcp_trap_write_owned_{nonce}");
+    let prefix = format!("/tmp/libtmux-mcp-traps-{nonce}");
+    let template = format!("{prefix}.XXXXXX");
+    let template = quote_shell_word(OsStr::new(&template));
+    let prefix = quote_shell_word(OsStr::new(&prefix));
+
+    // Every statement gets its own line. A terminal in canonical mode caps
+    // one input line at `MAX_CANON`, which is 1024 bytes on macOS against
+    // 4096 on Linux, and this frame is typed into a pane rather than piped.
+    // Joined with `; ` the bash setup reached 1715 bytes, so the line could
+    // never be delivered there and the run reported `no_shell` forever.
+    let mut setup = format!(
+        "{declarations}=\n{errexit}=0\n{status}=125\n{xtrace}=0\n\
+         case $- in *e*) {errexit}=1;; esac\n\
+         case $- in *x*) {xtrace}=1; \\set +x;; esac\n\
+         {file}=\n{read_owned}=0\n{write_owned}=0\n"
+    );
+    if shell == b"bash" {
+        let files = format!("__libtmux_mcp_trap_files_{nonce}");
+        let _ = write!(
+            setup,
+            "{files}=()\nif /usr/bin/mktemp {} >/dev/null; then\n",
+            template.to_string_lossy()
+        );
+        let discover = format!("{files}=({}.??????)", prefix.to_string_lossy());
+        setup.push_str("case $- in *f*) \\set +f; ");
+        setup.push_str(&discover);
+        setup.push_str("; \\set -f ;; *) ");
+        setup.push_str(&discover);
+        setup.push_str(" ;; esac\n");
+        setup.push_str("if [ \"${#");
+        setup.push_str(&files);
+        setup.push_str("[@]}\" -eq 1 ]; then\n");
+        setup.push_str(&file);
+        setup.push_str("=\"${");
+        setup.push_str(&files);
+        setup.push_str("[0]}\"\nelif ! /bin/rm -f \"${");
+        setup.push_str(&files);
+        setup.push_str("[@]}\"; then\n");
+        setup.push_str(&status);
+        setup.push_str("=125\nfi\nfi\n");
+    } else {
+        let _ = writeln!(
+            setup,
+            "if /usr/bin/mktemp {} | IFS= \\read -r {file}; then :; else {file}=; fi",
+            template.to_string_lossy()
+        );
+    }
+    let _ = write!(
+        setup,
+        "if [ -n \"${file}\" ] && [ -f \"${file}\" ] && [ -O \"${file}\" ] \
+         && ! ( : >&8 ) 2>/dev/null && ! ( : <&8 ) 2>/dev/null \\
+         && ! ( : >&9 ) 2>/dev/null && ! ( : <&9 ) 2>/dev/null \\
+         && \\exec 8<> \"${file}\" && {write_owned}=1 \\
+         && \\exec 9< \"${file}\" && {read_owned}=1 \\
+         && /bin/rm -f \"${file}\" && {file}=; then\n"
+    );
+    if shell == b"bash" {
+        setup.push_str("if \\trap -p ERR DEBUG >&8; then\n");
+    } else {
+        setup.push_str("if \\trap - $signals[1,-3]; then\nif \\trap >&8; then\n");
+    }
+    let capture_close = if shell == b"zsh" { "fi\n" } else { "" };
+    let _ = write!(
+        setup,
+        "{status}=0\nfi\n{capture_close}fi\n\\
+         if ! \\trap - ERR DEBUG; then {status}=125; fi\n\\
+         if [ \"${write_owned}\" -eq 1 ]; then\n\\
+         if ! \\exec 8>&-; then {status}=125; fi\n{write_owned}=0\nfi\n\\
+         if [ \"${status}\" -eq 0 ] && [ \"${read_owned}\" -eq 1 ]; then\n\\
+         if {declarations}=$(LC_ALL=C /usr/bin/head -c {TRAP_DECLARATION_LIMIT} <&9) \\
+         && [ \"$(LC_ALL=C /usr/bin/head -c 1 <&9 | /usr/bin/wc -c)\" -eq 0 ]; then :\n\\
+         else {declarations}=\n{status}=125\nfi\nfi\n\\
+         if [ \"${read_owned}\" -eq 1 ]; then\n\\
+         if ! \\exec 9<&-; then {status}=125; fi\n{read_owned}=0\nfi\n\\
+         if [ -n \"${file}\" ] && ! /bin/rm -f \"${file}\"; then {status}=125; fi\n"
+    );
+
+    Some(TrapCapture {
+        setup: setup.into_bytes(),
+        declarations,
+        errexit,
+        status,
+        xtrace,
+    })
 }
 
 /// Whether tmux confirmed the line dispatch that starts a watched run.
@@ -75,11 +327,24 @@ fn definitely_not_dispatched(error: &Error) -> bool {
     )
 }
 
+/// Discard a staged frame the pane will never read.
+async fn remove_frame(path: &Path) {
+    let path = path.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(path)).await;
+}
+
 impl PreparedRun {
     /// Send the prepared payload and Enter while retaining its watcher.
     pub(crate) async fn dispatch(self) -> RunDispatch {
-        let Self { pane, payload, run } = self;
-        if let Err(error) = pane.send_line(payload).await {
+        let Self {
+            pane,
+            frame,
+            staged,
+            run,
+        } = self;
+        if let Err(error) = pane.send_line(staged).await {
+            // The frame never reached a shell, so nothing else will remove it.
+            remove_frame(&frame).await;
             if definitely_not_dispatched(&error) {
                 return RunDispatch::NotDispatched(error);
             }
@@ -87,6 +352,361 @@ impl PreparedRun {
         }
         RunDispatch::Confirmed(run)
     }
+
+    /// Close the watcher without sending the prepared pane input.
+    pub(crate) async fn shutdown(self) -> Result<(), Error> {
+        let Self { frame, run, .. } = self;
+        let Run { output, .. } = run;
+        remove_frame(&frame).await;
+        let result = output.shutdown().await;
+        #[cfg(test)]
+        let _ = PREPARED_SHUTDOWNS.try_with(|count| count.fetch_add(1, Ordering::Relaxed));
+        result
+    }
+}
+
+/// Run `future`, reporting how many prepared shutdowns completed inside it.
+///
+/// The count covers this task alone, so a concurrent test driving the same
+/// refusal path cannot inflate it.
+#[cfg(test)]
+pub(crate) async fn observing_prepared_shutdowns<F: Future>(future: F) -> (F::Output, u64) {
+    let count = std::sync::Arc::new(AtomicU64::new(0));
+    let output = PREPARED_SHUTDOWNS
+        .scope(std::sync::Arc::clone(&count), future)
+        .await;
+    (output, count.load(Ordering::Relaxed))
+}
+
+pub(super) fn quote_shell_word(value: &OsStr) -> OsString {
+    let mut quoted = Vec::with_capacity(value.as_bytes().len() + 2);
+    quoted.push(b'\'');
+    for byte in value.as_bytes() {
+        if *byte == b'\'' {
+            quoted.extend_from_slice(b"'\\''");
+        } else {
+            quoted.push(*byte);
+        }
+    }
+    quoted.push(b'\'');
+    OsString::from_vec(quoted)
+}
+
+pub(crate) fn route_path_is_terminal_safe(value: &OsStr) -> bool {
+    !value.as_bytes().iter().any(u8::is_ascii_control)
+}
+
+pub(crate) fn route_is_terminal_safe(executable: &OsStr, socket: &Path) -> bool {
+    route_path_is_terminal_safe(executable) && route_path_is_terminal_safe(socket.as_os_str())
+}
+
+fn display_client(executable: &OsStr, socket: &Path, message: &[u8]) -> Vec<u8> {
+    let mut client = Vec::new();
+    client.extend_from_slice(br"( \exec ");
+    client.extend_from_slice(quote_shell_word(executable).as_bytes());
+    client.extend_from_slice(br" -N -S ");
+    client.extend_from_slice(quote_shell_word(socket.as_os_str()).as_bytes());
+    client.extend_from_slice(b" display-message -p ");
+    client.extend_from_slice(message);
+    client.extend_from_slice(b" )");
+    client
+}
+
+/// Where one run's frame is staged for the pane's shell to read.
+///
+/// Alongside `/tmp/libtmux-mcp-traps-*`, which the trap capture already
+/// writes, so a frame leaves nothing in a new place.
+pub(super) fn frame_path(nonce: &str) -> PathBuf {
+    PathBuf::from(format!("/tmp/libtmux-mcp-frame-{nonce}"))
+}
+
+/// Write the frame where the pane's shell can read it back.
+///
+/// `create_new` is `O_EXCL | O_CREAT`, so this refuses a path that already
+/// exists and cannot be aimed at another file through a planted symlink; the
+/// nonce makes the name unguessable and the mode keeps the command private to
+/// the user running it. Off-thread because a blocking write must not stall the
+/// executor.
+pub(super) async fn stage_frame(path: PathBuf, payload: OsString) -> std::io::Result<()> {
+    // The frame removes itself before anything else. Both readers finish the
+    // whole file before `eval` runs, so by then nothing needs it, and a run
+    // that ends without returning -- `exit`, or a killed pane -- has already
+    // cleaned up. `|| :` keeps a refused unlink from tripping `set -e` or an
+    // ERR trap and stranding the run.
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"/bin/rm -f -- ");
+    frame.extend_from_slice(quote_shell_word(path.as_os_str()).as_bytes());
+    frame.extend_from_slice(b" || :\n");
+    frame.extend_from_slice(payload.as_bytes());
+    frame.push(b'\n');
+
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(&frame)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+/// Build the pane input that loads a staged frame and runs it.
+///
+/// The frame itself is never typed. A pane accepts about 1024 bytes of input
+/// in one burst on macOS and the BSDs, against 4096 on Linux, and drops the
+/// rest: the pty input queue discards whatever a burst adds while the shell
+/// is echoing rather than reading. The frame runs to thousands of bytes, so
+/// it never arrived whole. Sending one `send-keys` per line fails the same
+/// way, because the bound is the burst and not `MAX_CANON` for one line.
+/// This line stays a few hundred bytes whatever the frame holds.
+///
+/// The frame is evaluated, not sourced. `.` gives a sourced file its own
+/// scope for trap inheritance, so `trap -p ERR DEBUG` inside one reports
+/// nothing and the capture restores nothing; the command would then run
+/// without the traps its own shell had. `eval` introduces no scope, so the
+/// frame sees exactly what typing it saw.
+///
+/// How the frame is read matters as much. Under an inherited `DEBUG` trap
+/// that writes to standard output, zsh captures that output into a command
+/// substitution, so `$( cat frame )` hands `eval` the trap's text followed by
+/// the frame and the parse fails. `$(<file)` reads the file without running a
+/// command, which neither trap can precede. dash accepts `$(<file)` and
+/// quietly yields nothing, which would hang the run waiting for a marker, so
+/// every other shell reads through `cat` -- safely, because a shell without
+/// `$(<...)` has no `DEBUG` trap to capture.
+///
+/// The frame removes the file itself, as its first statement, so a command
+/// that never returns still cleans up. See `stage_frame`.
+pub(super) fn staged_line(path: &Path, shell: &[u8], suppress_history: bool) -> OsString {
+    let quoted = quote_shell_word(path.as_os_str());
+    let basename = shell_basename(shell);
+
+    let mut line = Vec::new();
+    if suppress_history {
+        line.push(b' ');
+    }
+    line.extend_from_slice(b"eval \"$(");
+    if basename == b"bash" || basename == b"zsh" {
+        line.extend_from_slice(b"<");
+        line.extend_from_slice(quoted.as_bytes());
+    } else {
+        line.extend_from_slice(b" /bin/cat ");
+        line.extend_from_slice(quoted.as_bytes());
+        line.push(b' ');
+    }
+    line.extend_from_slice(b")\"");
+    OsString::from_vec(line)
+}
+
+fn marker_message(nonce: &str, closing: bool) -> Vec<u8> {
+    let mut message = Vec::new();
+    message.extend_from_slice(b"'__LIBTMUX_MCP_DONE_''");
+    message.extend_from_slice(nonce.as_bytes());
+    if closing {
+        message.extend_from_slice(b"''__:'\"$1\"");
+    } else {
+        message.extend_from_slice(b"''__:BEGIN'");
+    }
+    message
+}
+
+fn append_command_branch(
+    payload: &mut Vec<u8>,
+    command: &OsStr,
+    inherited_xtrace: bool,
+    inherited_errexit: bool,
+    separator: &[u8],
+    opening: &[u8],
+    closing: &[u8],
+) {
+    payload.extend_from_slice(if inherited_errexit {
+        b"*e*)\n\\set +e\nif "
+    } else {
+        b"*)\n\\set +e\nif "
+    });
+    payload.extend_from_slice(separator);
+    payload.extend_from_slice(b" && ");
+    payload.extend_from_slice(opening);
+    payload.extend_from_slice(b"; then\n( ");
+    payload.extend_from_slice(if inherited_errexit {
+        b"\\set -e; \\eval "
+    } else {
+        b"\\set +e; \\eval "
+    });
+    let operand = if inherited_xtrace {
+        let mut operand = OsString::from("\\set -x\n");
+        operand.push(command);
+        operand
+    } else {
+        command.to_os_string()
+    };
+    payload.extend_from_slice(quote_shell_word(&operand).as_bytes());
+    payload.extend_from_slice(b" )\n\\set -- \"$?\"\n");
+    payload.extend_from_slice(separator);
+    payload.push(b'\n');
+    payload.extend_from_slice(closing);
+    payload.extend_from_slice(b"\nfi\n;;\n");
+}
+
+fn render_trapped_payload(
+    command: &OsStr,
+    suppress_history: bool,
+    capture: &TrapCapture,
+    separator: &[u8],
+    opening: &[u8],
+    closing: &[u8],
+) -> OsString {
+    let mut payload = Vec::new();
+    if suppress_history {
+        payload.push(b' ');
+    }
+    payload.extend_from_slice(b"(\n");
+    payload.extend_from_slice(&capture.setup);
+    payload.extend_from_slice(b"\\set +e\nif ");
+    payload.extend_from_slice(separator);
+    payload.extend_from_slice(b" && ");
+    payload.extend_from_slice(opening);
+    payload.extend_from_slice(b"; then\nif [ \"$");
+    payload.extend_from_slice(capture.status.as_bytes());
+    payload.extend_from_slice(b"\" -eq 0 ]; then\n( case \"$");
+    payload.extend_from_slice(capture.errexit.as_bytes());
+    payload.extend_from_slice(b"\" in 1) \\set -e;; *) \\set +e;; esac\n\\eval \"");
+    payload.push(b'$');
+    payload.extend_from_slice(capture.declarations.as_bytes());
+    payload.extend_from_slice(b"\n\"");
+    let mut operand = OsString::from("case \"$");
+    operand.push(&capture.xtrace);
+    operand.push("\" in 1) \\set -x;; esac\n");
+    operand.push(command);
+    payload.extend_from_slice(quote_shell_word(&operand).as_bytes());
+    payload.extend_from_slice(b" )\n\\set -- \"$?\"\nelse\n\\set -- 125\nfi\n");
+    payload.extend_from_slice(separator);
+    payload.push(b'\n');
+    payload.extend_from_slice(closing);
+    payload.extend_from_slice(b"\nfi\n)");
+    OsString::from_vec(payload)
+}
+
+pub(super) fn render_payload(
+    executable: &OsStr,
+    socket: &Path,
+    nonce: &str,
+    shell: &[u8],
+    command: &OsStr,
+    suppress_history: bool,
+) -> OsString {
+    let separator = display_client(executable, socket, b"''");
+    let opening = display_client(executable, socket, &marker_message(nonce, false));
+    let closing = display_client(executable, socket, &marker_message(nonce, true));
+    let trap_capture = inherited_trap_capture(shell, nonce);
+    if let Some(capture) = trap_capture.as_ref() {
+        return render_trapped_payload(
+            command,
+            suppress_history,
+            capture,
+            &separator,
+            &opening,
+            &closing,
+        );
+    }
+    let mut payload = Vec::new();
+    if suppress_history {
+        payload.push(b' ');
+    }
+    payload.extend_from_slice(b"(\ncase $- in\n*x*)\n\\set +x\ncase $- in\n");
+    append_command_branch(
+        &mut payload,
+        command,
+        true,
+        true,
+        &separator,
+        &opening,
+        &closing,
+    );
+    append_command_branch(
+        &mut payload,
+        command,
+        true,
+        false,
+        &separator,
+        &opening,
+        &closing,
+    );
+    payload.extend_from_slice(b"esac\n;;\n*)\ncase $- in\n");
+    append_command_branch(
+        &mut payload,
+        command,
+        false,
+        true,
+        &separator,
+        &opening,
+        &closing,
+    );
+    append_command_branch(
+        &mut payload,
+        command,
+        false,
+        false,
+        &separator,
+        &opening,
+        &closing,
+    );
+    payload.extend_from_slice(b"esac\n;;\nesac\n)");
+    OsString::from_vec(payload)
+}
+
+fn frame_with_nonce(
+    executable: &OsStr,
+    socket: &Path,
+    nonce: &str,
+    shell: &[u8],
+    command: &OsStr,
+    suppress_history: bool,
+) -> Option<Frame> {
+    let marker = format!("{MARKER_PREFIX}{nonce}__").into_bytes();
+    let payload = render_payload(executable, socket, nonce, shell, command, suppress_history);
+    if find(payload.as_bytes(), &marker).is_some() {
+        return None;
+    }
+    let mut opened = marker.clone();
+    opened.extend_from_slice(b":BEGIN");
+    let mut closed = marker;
+    closed.push(b':');
+    Some(Frame {
+        payload,
+        opened,
+        closed,
+        nonce: nonce.to_owned(),
+    })
+}
+
+pub(super) fn frame_with_random(
+    executable: &OsStr,
+    socket: &Path,
+    shell: &[u8],
+    command: &OsStr,
+    suppress_history: bool,
+    mut fill: impl FnMut(&mut [u8]) -> Result<(), getrandom::Error>,
+) -> Result<Frame, FrameError> {
+    if !route_is_terminal_safe(executable, socket) {
+        return Err(FrameError::TerminalControl);
+    }
+    for _ in 0..NONCE_ATTEMPTS {
+        let mut random = [0_u8; 16];
+        fill(&mut random).map_err(|_| FrameError::Entropy)?;
+        let nonce = format!("{:032x}", u128::from_be_bytes(random));
+        if let Some(frame) =
+            frame_with_nonce(executable, socket, &nonce, shell, command, suppress_history)
+        {
+            return Ok(frame);
+        }
+    }
+    Err(FrameError::Collisions)
 }
 
 /// Attach a watcher and construct a run without sending pane input.
@@ -98,86 +718,123 @@ pub(crate) async fn prepare_run(
     pane: &Pane,
     command: &str,
     suppress_history: bool,
-) -> Result<PreparedRun, Error> {
-    let nonce = format!(
-        "{:x}{:x}",
-        std::process::id(),
-        RUN_COUNTER.fetch_add(1, Ordering::Relaxed)
-    );
-    let opened = format!("\x1b_{nonce}s\x1b\\").into_bytes();
-    let closed = format!("\x1b_{nonce}e;").into_bytes();
+    executable: &OsStr,
+    socket: &Path,
+    shell: &[u8],
+) -> Result<PreparedRun, PrepareRunError> {
+    let Frame {
+        payload,
+        opened,
+        closed,
+        nonce,
+    } = frame_with_random(
+        executable,
+        socket,
+        shell,
+        OsStr::new(command),
+        suppress_history,
+        getrandom::fill,
+    )
+    .map_err(|_| PrepareRunError::Frame)?;
+
+    // Staged before the watcher, so a frame that cannot be written costs no
+    // attachment. Only `staged` is ever typed into the pane.
+    let frame = frame_path(&nonce);
+    stage_frame(frame.clone(), payload)
+        .await
+        .map_err(|_| PrepareRunError::Frame)?;
+    let staged = staged_line(&frame, shell, suppress_history);
 
     // Attached before the keys are sent, so no output can arrive unseen.
-    let output = pane.stream_output().await?;
-
-    // The command runs in a subshell: a bare `exit` in it would otherwise end
-    // the pane's own shell. A leading space is how `suppress_history` keeps
-    // the line out of shell history, for shells configured to do that.
-    let lead = if suppress_history { " " } else { "" };
-    let payload = format!(
-        "{lead}printf '\\033_{nonce}s\\033\\\\'; ( {command} ); __tmux_mcp=$?; \
-         printf '\\033_{nonce}e;%d\\033\\\\' \"$__tmux_mcp\"; unset __tmux_mcp"
-    );
+    let output = match pane.stream_output().await {
+        Ok(output) => output,
+        Err(error) => {
+            remove_frame(&frame).await;
+            return Err(error.into());
+        }
+    };
 
     Ok(PreparedRun {
         pane: pane.clone(),
-        payload,
+        frame,
+        staged,
         run: Run {
             output,
             scanner: Scanner::new(opened, closed),
-            pane: pane.id().to_string(),
+            pane: pane.clone(),
         },
     })
 }
 
 impl Run {
+    pub(crate) fn proof(&self, server: Server, generation: ServerGeneration) -> RunProof {
+        RunProof {
+            pane: self.pane.clone(),
+            server,
+            generation,
+            closing: self.scanner.closed.clone(),
+        }
+    }
+
     /// Read until the command ends or the pane closes, publishing as it goes.
     ///
     /// `publish` receives only bytes added to the retained window and how much
     /// of its preceding front to discard. A poller therefore sees progress
     /// without copying the whole window for every pane-stream chunk.
-    pub(crate) async fn collect(mut self, mut publish: impl FnMut(RunProgress<'_>)) -> RunView {
+    pub(crate) async fn collect(
+        mut self,
+        server: Server,
+        generation: ServerGeneration,
+        mut publish: impl FnMut(RunProgress<'_>),
+    ) -> RunCollection {
         while let Some(chunk) = self.output.next_chunk().await {
             let finished = self.scanner.push(&chunk);
             publish(self.scanner.progress());
 
             if let Some(mut view) = finished {
-                view.pane = self.pane.clone();
+                view.pane = self.pane.id().to_string();
                 let _ = self.output.shutdown().await;
-                return view;
+                return RunCollection { view, proof: None };
             }
         }
 
         let view = self
             .scanner
-            .unfinished(RunOutcome::PaneClosed, self.pane.clone());
+            .unfinished(RunOutcome::PaneClosed, self.pane.id().to_string());
+        let proof = RunProof {
+            pane: self.pane,
+            server,
+            generation,
+            closing: self.scanner.closed,
+        };
         let _ = self.output.shutdown().await;
-        view
+        RunCollection {
+            view,
+            proof: Some(proof),
+        }
     }
 }
 
-/// Collects a pane's output and watches it for the sentinels bracketing a run.
+/// Collects a pane's output and watches for exact completion-record lines.
 ///
 /// Separate from the read loop so it can be driven with chunk boundaries in
-/// awkward places. tmux decides where a chunk ends, and the sentinel arriving
-/// split from the status digits that follow it is the case worth proving.
+/// awkward places. tmux decides where a chunk ends, including inside a marker.
 pub(super) struct Scanner {
     opened: Vec<u8>,
     closed: Vec<u8>,
+    max_line: usize,
+    line: Vec<u8>,
+    line_too_long: bool,
+    line_last_was_cr: bool,
+    line_start: usize,
+    /// Start of the line ending immediately before the current line.
+    line_boundary: Option<usize>,
     collected: RetainedBytes,
-    /// How far the search for the opening sentinel has looked.
-    open_scanned: usize,
-    /// How far the search for the closing sentinel has looked.
-    scanned: usize,
-    /// Where the closing sentinel was found, once it has been.
-    ///
-    /// Held rather than searched for again: the status digits that complete
-    /// the block can arrive in a later chunk, and by then the sentinel sits
-    /// behind everything newly scanned.
-    close_at: Option<usize>,
-    /// Where the command's own output begins, once the opening sentinel has
-    /// arrived. An index into `collected`, moved when the front is trimmed.
-    body_at: Option<usize>,
+    /// Absolute offset of the first command-output byte.
+    body_start: Option<usize>,
+    completion: Option<Completion>,
+    /// Absolute offset of the first retained byte.
+    retained_from: usize,
     /// How many bytes of the command's output trimming has dropped.
     body_dropped: u64,
     /// Filter state at the first retained byte of the command's output.
@@ -192,14 +849,20 @@ pub(super) struct Scanner {
 
 impl Scanner {
     pub(super) fn new(opened: Vec<u8>, closed: Vec<u8>) -> Self {
+        let max_line = opened.len().max(closed.len() + 3);
         Self {
             opened,
             closed,
+            max_line,
+            line: Vec::with_capacity(max_line + 1),
+            line_too_long: false,
+            line_last_was_cr: false,
+            line_start: 0,
+            line_boundary: None,
             collected: RetainedBytes::new(),
-            open_scanned: 0,
-            scanned: 0,
-            close_at: None,
-            body_at: None,
+            body_start: None,
+            completion: None,
+            retained_from: 0,
             body_dropped: 0,
             body_checkpoint: TextFilter::new(),
             publish_drop: 0,
@@ -211,32 +874,13 @@ impl Scanner {
 
     /// Take one chunk, and report the run if it completed it.
     pub(super) fn push(&mut self, chunk: &[u8]) -> Option<RunView> {
+        let chunk_at = self.bytes;
         self.bytes = self.bytes.saturating_add(chunk.len());
+        self.scan_lines(chunk, chunk_at);
         let previously_retained = self.collected.len();
         self.collected.append(chunk);
         self.publish_drop = 0;
         self.publish_append = chunk.len();
-
-        if self.body_at.is_none() {
-            let collected = self.collected.as_slice();
-            let from = self
-                .open_scanned
-                .saturating_sub(self.opened.len().saturating_sub(1));
-            self.body_at =
-                find(&collected[from..], &self.opened).map(|at| from + at + self.opened.len());
-            self.open_scanned = collected.len();
-        }
-
-        if self.close_at.is_none() {
-            // Scanning forward only, with an overlap wide enough that a
-            // sentinel split across two chunks is still seen.
-            let from = self
-                .scanned
-                .saturating_sub(self.closed.len().saturating_sub(1));
-            let collected = self.collected.as_slice();
-            self.close_at = find(&collected[from..], &self.closed).map(|at| from + at);
-            self.scanned = collected.len();
-        }
 
         if self.collected.len() > OUTPUT_LIMIT {
             let excess = self.collected.len() - OUTPUT_LIMIT;
@@ -244,50 +888,39 @@ impl Scanner {
             self.publish_append = chunk
                 .len()
                 .saturating_sub(excess.saturating_sub(previously_retained));
-            if let Some(body_at) = self.body_at {
-                // Trimming eats the command's output only once it has eaten
-                // everything before it.
-                let body_excess = excess.saturating_sub(body_at);
-                self.body_checkpoint
-                    .advance(&self.collected.as_slice()[body_at..body_at + body_excess]);
-                self.body_dropped = self.body_dropped.saturating_add(body_excess as u64);
-                self.body_at = Some(body_at.saturating_sub(excess));
-            }
-            self.open_scanned = self.open_scanned.saturating_sub(excess);
-            if let Some(close_at) = self.close_at {
-                if excess <= close_at {
-                    self.close_at = Some(close_at - excess);
-                    self.scanned = self.scanned.saturating_sub(excess);
-                } else {
-                    // A closing marker whose terminator falls more than one
-                    // retained window later cannot be completed from bounded
-                    // state. Resume looking for the wrapper's final marker.
-                    self.close_at = None;
-                    self.scanned = 0;
+            let retained_to = self.retained_from.saturating_add(excess);
+            if let Some(body_start) = self.body_start {
+                let dropped_from = self.retained_from.max(body_start);
+                let dropped_to = retained_to.min(
+                    self.completion
+                        .map_or(retained_to, |completion| completion.body_end),
+                );
+                if dropped_from < dropped_to {
+                    let local_from = dropped_from - self.retained_from;
+                    let local_to = dropped_to - self.retained_from;
+                    self.body_checkpoint
+                        .advance(&self.collected.as_slice()[local_from..local_to]);
+                    self.body_dropped = self
+                        .body_dropped
+                        .saturating_add((dropped_to - dropped_from) as u64);
                 }
-            } else {
-                self.scanned = self.scanned.saturating_sub(excess);
             }
             self.collected.discard(excess);
+            self.retained_from = retained_to;
             self.truncated = true;
         }
         self.collected.settle();
 
-        let at = self.close_at?;
-        let collected = self.collected.as_slice();
-        let completion = completion(collected, at, &self.closed)?;
-        let output = self.body_at.filter(|&from| from <= at).map_or_else(
-            || readable(&collected[..at]),
-            |from| readable_from(&self.body_checkpoint, &collected[from..at], 0),
-        );
+        let completion = self.completion?;
+        let body = self.body_range()?;
+        let output = readable_from(&self.body_checkpoint, &self.collected.as_slice()[body], 0);
         Some(RunView {
             pane: String::new(),
             outcome: RunOutcome::Completed,
-            exit_status: completion.exit_status,
+            exit_status: Some(completion.exit_status),
             output,
             bytes: self.bytes,
             truncated: self.truncated,
-            job: None,
         })
     }
 
@@ -298,9 +931,7 @@ impl Scanner {
         RunProgress {
             appended: &retained[appended_at..],
             discarded: self.publish_drop,
-            body: self
-                .body_at
-                .map(|from| from..self.close_at.unwrap_or(retained.len())),
+            body: self.body_range(),
             body_dropped: self.body_dropped,
             body_checkpoint: &self.body_checkpoint,
             bytes: self.bytes,
@@ -323,19 +954,24 @@ impl Scanner {
         self.collected.as_slice()
     }
 
+    #[cfg(test)]
+    pub(super) fn frame_line_capacity(&self) -> usize {
+        self.line.capacity()
+    }
+
     /// Report a run that stopped without completing.
     pub(super) fn unfinished(&self, outcome: RunOutcome, pane: String) -> RunView {
         // Nothing came back at all: the keys went somewhere that is not a
         // shell prompt. Worth its own answer, because retrying will not help.
         let collected = self.collected.as_slice();
-        let outcome = if outcome == RunOutcome::Deadline && self.body_at.is_none() {
+        let outcome = if outcome == RunOutcome::Deadline && self.body_start.is_none() {
             RunOutcome::NoShell
         } else {
             outcome
         };
-        let output = self.body_at.map_or_else(
+        let output = self.body_range().map_or_else(
             || readable(collected),
-            |from| readable_from(&self.body_checkpoint, &collected[from..], 0),
+            |body| readable_from(&self.body_checkpoint, &collected[body], 0),
         );
 
         RunView {
@@ -345,62 +981,77 @@ impl Scanner {
             output,
             bytes: self.bytes,
             truncated: self.truncated,
-            job: None,
         }
+    }
+
+    fn scan_lines(&mut self, chunk: &[u8], chunk_at: usize) {
+        for (offset, byte) in chunk.iter().copied().enumerate() {
+            let at = chunk_at.saturating_add(offset);
+            if byte == b'\n' {
+                let content_len = self
+                    .line
+                    .len()
+                    .saturating_sub(usize::from(self.line_last_was_cr));
+                if !self.line_too_long && content_len <= self.max_line {
+                    let content = &self.line[..content_len];
+                    if self.body_start.is_none() && content == self.opened {
+                        self.body_start = Some(at.saturating_add(1));
+                    } else if self.body_start.is_some()
+                        && self.completion.is_none()
+                        && let Some(exit_status) = completion_status(content, &self.closed)
+                    {
+                        self.completion = Some(Completion {
+                            body_end: self.line_boundary.unwrap_or(self.line_start),
+                            exit_status,
+                        });
+                    }
+                }
+                let boundary = at.saturating_sub(usize::from(self.line_last_was_cr));
+                self.line.clear();
+                self.line_too_long = false;
+                self.line_last_was_cr = false;
+                self.line_start = at.saturating_add(1);
+                self.line_boundary = Some(boundary);
+            } else {
+                self.line_last_was_cr = byte == b'\r';
+                if !self.line_too_long {
+                    if self.line.len() <= self.max_line {
+                        self.line.push(byte);
+                    } else {
+                        self.line.clear();
+                        self.line_too_long = true;
+                    }
+                }
+            }
+        }
+    }
+
+    fn body_range(&self) -> Option<Range<usize>> {
+        let body_start = self.body_start?;
+        let retained = self.collected.len();
+        let body_end = self.completion.map_or_else(
+            || self.retained_from.saturating_add(retained),
+            |completion| completion.body_end,
+        );
+        let from = body_start.saturating_sub(self.retained_from).min(retained);
+        let to = body_end.saturating_sub(self.retained_from).min(retained);
+        Some(from.min(to)..to)
     }
 }
 
-/// Assemble the answer once the closing sentinel is whole.
-///
-/// Returns `None` while the status digits are still arriving, so the caller
-/// reads more rather than reporting a truncated number.
-#[cfg(test)]
-pub(super) fn finished(
-    collected: &[u8],
-    at: usize,
-    opened: &[u8],
-    closed: &[u8],
-) -> Option<RunView> {
-    let completion = completion(collected, at, closed)?;
-
-    // Everything between the sentinels is the command's own output. The echo
-    // of the typed line sits before the opening sentinel: a shell echoes the
-    // source text, in which the escape is the four characters `\033`, so it
-    // can never be mistaken for the sentinel itself.
-    //
-    // Both sentinels are printed by one command line, so seeing the closing
-    // one without the opening one means trimming dropped it. What is left is
-    // still the command's output, minus its beginning, and reporting it beats
-    // reporting nothing.
-    let body = find(collected, opened).map_or(&collected[..at], |start| {
-        &collected[start + opened.len()..at]
-    });
-
-    Some(RunView {
-        // Filled in by the caller, which is what holds the connection.
-        pane: String::new(),
-        outcome: RunOutcome::Completed,
-        exit_status: completion.exit_status,
-        output: readable(body),
-        bytes: 0,
-        truncated: false,
-        job: None,
-    })
-}
-
+#[derive(Clone, Copy)]
 struct Completion {
-    exit_status: Option<i32>,
+    body_end: usize,
+    exit_status: i32,
 }
 
-fn completion(collected: &[u8], at: usize, closed: &[u8]) -> Option<Completion> {
-    let digits_from = at + closed.len();
-    let terminator = find(&collected[digits_from..], b"\x1b\\")?;
-    let status = std::str::from_utf8(&collected[digits_from..digits_from + terminator])
-        .ok()
-        .and_then(|text| text.trim().parse::<i32>().ok());
-    Some(Completion {
-        exit_status: status,
-    })
+fn completion_status(line: &[u8], closed: &[u8]) -> Option<i32> {
+    let digits = line.strip_prefix(closed)?;
+    if digits.is_empty() || digits.len() > 3 || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let status = std::str::from_utf8(digits).ok()?.parse::<u8>().ok()?;
+    (status.to_string().as_bytes() == digits).then_some(i32::from(status))
 }
 
 /// Render collected bytes as text, with escape sequences removed.

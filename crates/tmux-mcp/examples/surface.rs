@@ -1,44 +1,48 @@
 //! Print what this server offers, without running one.
 //!
-//! Useful for seeing what a client will be shown at each tier, and what an
-//! agent reads before it chooses: the title, what the tool does to the server,
-//! and the shape of its answer.
+//! Useful for seeing what a client will be shown for each toolset selection,
+//! including each tool's controlled description and answer shape.
 //!
 //! ```console
 //! $ cargo run --example surface
-//! $ cargo run --example surface -- destructive
+//! $ cargo run --example surface -- inspect,execute
+//! $ cargo run --example surface -- '' call_read_tools_batch show_environment
 //! ```
+//!
+//! Positional arguments are `toolsets`, `included tools`, and `excluded
+//! tools`. Each is the same comma-separated value accepted by the startup
+//! environment. The empty first argument selects the zero-toolset subset.
 
-use tmux_mcp::{Safety, TmuxTools};
+use tmux_mcp::{Selection, TmuxTools};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tier = std::env::args()
-        .nth(1)
-        .as_deref()
-        .and_then(Safety::parse)
-        .unwrap_or_default();
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let requested = arguments
+        .first()
+        .map_or("inspect,manage,execute,teardown", String::as_str);
+    let included = arguments.get(1).map(String::as_str);
+    let excluded = arguments.get(2).map(String::as_str);
+    let selection = Selection::parse(Some(requested), included, excluded)?;
 
     // A server is needed to build the tools, but nothing here talks to tmux:
     // the surface is decided before any command runs.
     let tools = TmuxTools::builder(libtmux::Server::new()?)
-        .safety(tier)
+        .selection(selection)
         .build();
 
     let offered = tools.offered();
-    println!("{} tools at the {} tier\n", offered.len(), tier.name());
+    println!(
+        "{} tools for toolsets={requested:?} include={included:?} exclude={excluded:?}\n",
+        offered.len()
+    );
 
     for tool in &offered {
-        let hints = tool.annotations.as_ref();
-        let does = if hints.and_then(|h| h.read_only_hint) == Some(true) {
-            "reads"
-        } else if hints.and_then(|h| h.destructive_hint) == Some(true) {
-            "DESTROYS"
-        } else if hints.and_then(|h| h.open_world_hint) == Some(true) {
-            "runs what you give it"
-        } else {
-            "changes"
-        };
+        let capability = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+            .ok_or_else(|| std::io::Error::other("offered tool has no capability row"))?;
         let answers = tool
             .output_schema
             .as_ref()
@@ -51,14 +55,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .unwrap_or_default();
 
-        println!(
-            "{:<22} {:<22} {}",
-            tool.name,
-            does,
-            tool.title.as_deref().unwrap_or("")
-        );
+        println!("{:<22} {}", tool.name, tool.title.as_deref().unwrap_or(""));
+        if let Some(description) = &tool.description {
+            println!("{:<22} {description}", "");
+        }
         if !answers.is_empty() {
             println!("{:<22} answers with: {answers}", "");
+        }
+        println!(
+            "{:<22} toolset={} reach={} effects={} outputs={}",
+            "",
+            capability["toolset"],
+            capability["processReach"],
+            capability["tmuxEffects"],
+            capability["outputClasses"],
+        );
+        let nested = &capability["nestedAuthority"];
+        if nested.as_array().is_some_and(|names| !names.is_empty()) {
+            println!("{:<22} nested authority: {nested}", "");
         }
     }
 

@@ -1,11 +1,413 @@
 use super::*;
 
+use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
+use std::io::Write as _;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::path::Path;
+use std::process::{Command, Stdio};
+
+const FRAME_PREFIX: &str = "__LIBTMUX_MCP_DONE_";
+
 #[test]
 fn finding_a_needle_reports_where_it_starts() {
     assert_eq!(find(b"abcdef", b"cd"), Some(2));
     assert_eq!(find(b"abcdef", b"xy"), None);
     assert_eq!(find(b"ab", b"abcdef"), None);
     assert_eq!(find(b"abc", b""), None);
+}
+
+#[test]
+fn shell_words_preserve_raw_bytes_and_split_apostrophes() {
+    for (input, expected) in [
+        (b"".as_slice(), b"''".as_slice()),
+        (b"plain", b"'plain'"),
+        (b"a'b", b"'a'\\''b'"),
+        (b"line\n\xff", b"'line\n\xff'"),
+    ] {
+        let input = OsString::from_vec(input.to_vec());
+        assert_eq!(quote_shell_word(&input).as_bytes(), expected);
+    }
+}
+
+#[test]
+fn route_words_reject_only_ascii_terminal_control_bytes() {
+    for byte in 0_u8..=u8::MAX {
+        let value = OsString::from_vec(vec![b'x', byte]);
+        assert_eq!(
+            route_path_is_terminal_safe(&value),
+            !(byte <= 0x1f || byte == 0x7f),
+            "byte {byte:#04x}"
+        );
+    }
+}
+
+#[test]
+fn terminal_control_routes_fail_before_entropy() {
+    for (executable, socket) in [
+        (
+            OsString::from_vec(b"tmux-\x03".to_vec()),
+            OsString::from("s"),
+        ),
+        (
+            OsString::from("tmux"),
+            OsString::from_vec(b"s-\x03".to_vec()),
+        ),
+    ] {
+        let mut entropy_called = false;
+        let error = frame_with_random(
+            &executable,
+            Path::new(&socket),
+            b"sh",
+            OsStr::new("true"),
+            false,
+            |bytes| {
+                entropy_called = true;
+                bytes.fill(0);
+                Ok(())
+            },
+        )
+        .err()
+        .unwrap_or_else(|| unreachable!("terminal control must stop framing"));
+
+        assert!(matches!(error, FrameError::TerminalControl));
+        assert!(!entropy_called, "route validation precedes frame creation");
+    }
+}
+
+#[test]
+fn rendered_frame_is_raw_variable_free_and_posix_syntax() {
+    let executable = OsString::from_vec(b"/tmp/tmux-'\xff".to_vec());
+    let socket = OsString::from_vec(b"/tmp/socket-'\xfe".to_vec());
+    let payload = render_payload(
+        &executable,
+        Path::new(&socket),
+        "nonce",
+        b"sh",
+        OsStr::new("printf body # trailing comment"),
+        false,
+    );
+    let bytes = payload.as_bytes();
+
+    assert_eq!(
+        find(bytes, executable.as_bytes()),
+        None,
+        "raw paths are shell quoted"
+    );
+    assert_eq!(
+        bytes
+            .windows(b"run-shell".len())
+            .filter(|w| *w == b"run-shell")
+            .count(),
+        0
+    );
+    assert_eq!(
+        bytes
+            .windows(b"display-message".len())
+            .filter(|w| *w == b"display-message")
+            .count(),
+        16
+    );
+    assert_eq!(find(bytes, b"__LIBTMUX_MCP_DONE_nonce__"), None);
+    assert_eq!(
+        bytes
+            .windows(b"\\set -x\n".len())
+            .filter(|w| *w == b"\\set -x\n")
+            .count(),
+        2
+    );
+    for forbidden in [
+        b"__tmux_mcp".as_slice(),
+        b"/usr/bin/printf",
+        b"command printf",
+    ] {
+        assert_eq!(find(bytes, forbidden), None, "forbidden bookkeeping token");
+    }
+    assert!(
+        find(bytes, b"'\\''").is_some(),
+        "apostrophes are split without loss"
+    );
+    assert!(find(bytes, b"# trailing comment'").is_some());
+
+    let mut child = Command::new("/bin/sh")
+        .arg("-n")
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("POSIX shell starts");
+    child
+        .stdin
+        .take()
+        .expect("syntax checker stdin")
+        .write_all(bytes)
+        .expect("payload is written");
+    assert!(child.wait().expect("syntax checker exits").success());
+}
+
+#[test]
+fn rendered_frame_matches_the_exact_four_branch_snapshot() {
+    let actual = render_payload(
+        OsStr::new("/tmp/tmux"),
+        Path::new("/tmp/socket"),
+        "nonce",
+        b"sh",
+        OsStr::new("printf body # trailing comment"),
+        false,
+    );
+    let separator = r"( \exec '/tmp/tmux' -N -S '/tmp/socket' display-message -p '' )";
+    let opening = r"( \exec '/tmp/tmux' -N -S '/tmp/socket' display-message -p '__LIBTMUX_MCP_DONE_''nonce''__:BEGIN' )";
+    let closing = r#"( \exec '/tmp/tmux' -N -S '/tmp/socket' display-message -p '__LIBTMUX_MCP_DONE_''nonce''__:'"$1" )"#;
+    let expected = format!(
+        r#"(
+case $- in
+*x*)
+\set +x
+case $- in
+*e*)
+\set +e
+if {separator} && {opening}; then
+( \set -e; \eval '\set -x
+printf body # trailing comment' )
+\set -- "$?"
+{separator}
+{closing}
+fi
+;;
+*)
+\set +e
+if {separator} && {opening}; then
+( \set +e; \eval '\set -x
+printf body # trailing comment' )
+\set -- "$?"
+{separator}
+{closing}
+fi
+;;
+esac
+;;
+*)
+case $- in
+*e*)
+\set +e
+if {separator} && {opening}; then
+( \set -e; \eval 'printf body # trailing comment' )
+\set -- "$?"
+{separator}
+{closing}
+fi
+;;
+*)
+\set +e
+if {separator} && {opening}; then
+( \set +e; \eval 'printf body # trailing comment' )
+\set -- "$?"
+{separator}
+{closing}
+fi
+;;
+esac
+;;
+esac
+)"#
+    );
+
+    assert_eq!(actual.as_bytes(), expected.as_bytes());
+    assert_eq!(
+        actual,
+        render_payload(
+            OsStr::new("/tmp/tmux"),
+            Path::new("/tmp/socket"),
+            "nonce",
+            b"dash",
+            OsStr::new("printf body # trailing comment"),
+            false,
+        ),
+        "dash retains the original POSIX frame"
+    );
+}
+
+#[test]
+fn trap_capture_is_bounded_and_preserves_foreign_descriptors() {
+    for (shell, flags) in [
+        ("/bin/bash", ["--noprofile", "--norc"].as_slice()),
+        ("/bin/zsh", ["-f"].as_slice()),
+    ] {
+        if !Path::new(shell).is_file() {
+            continue;
+        }
+        let shell_name = shell.rsplit('/').next().unwrap_or("shell");
+        for (index, (case, action, expected_status, fd8_open)) in [
+            ("ordinary", ": # quoted\n:".to_owned(), 0, false),
+            (
+                "oversized",
+                format!(
+                    "__libtmux_mcp_large='{}'",
+                    "x".repeat(TRAP_DECLARATION_LIMIT + 16)
+                ),
+                125,
+                false,
+            ),
+            ("occupied", ": # occupied".to_owned(), 125, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let nonce = format!("unit{}{}{}", std::process::id(), shell_name, index);
+            let capture = inherited_trap_capture(shell_name.as_bytes(), &nonce)
+                .unwrap_or_else(|| unreachable!("tested shells capture traps"));
+            let mut script = String::new();
+            // The capture refuses to run when descriptor 8 or 9 is already
+            // open, so it never clobbers one it did not open -- which the
+            // `occupied` case below asserts deliberately. That makes an
+            // inherited descriptor indistinguishable from a real failure, and
+            // this binary runs its tests in parallel with each opening tmux
+            // sockets, so whether 8 and 9 are free in the child is a property
+            // of the harness rather than of the capture. Close them first and
+            // the precondition belongs to the test.
+            script.push_str("exec 8>&- 9>&-; ");
+            if fd8_open {
+                script.push_str("exec 8>/dev/null; ");
+            }
+            script.push_str("trap ");
+            script.push_str(&quote_shell_word(OsStr::new(&action)).to_string_lossy());
+            script.push_str(" DEBUG; ");
+            script.push_str(std::str::from_utf8(&capture.setup).expect("capture setup is ASCII"));
+            // Report the status and any temporary file still on disk. The
+            // capture degrades to 125 for every reason it can fail, so a bare
+            // exit code says only that something did -- and this failed once
+            // on the macOS lane and then passed, which is the case that needs
+            // to explain itself.
+            let _ = write!(
+                script,
+                "[ \"${}\" -eq {expected_status} ] || {{ printf 'status=%s leftover=%s\\n' \
+                 \"${}\" \"$(echo /tmp/libtmux-mcp-traps-{nonce}.??????)\" >&2; exit 80; }}; ",
+                capture.status, capture.status
+            );
+            script.push_str(if fd8_open {
+                "( : >&8 ) 2>/dev/null || exit 81; "
+            } else {
+                "! ( : >&8 ) 2>/dev/null || exit 81; "
+            });
+            script
+                .push_str("! ( : <&9 ) 2>/dev/null || exit 82; ! ( : >&9 ) 2>/dev/null || exit 83");
+
+            let output = Command::new(shell)
+                .args(flags)
+                .arg("-c")
+                .arg(script)
+                .output()
+                .unwrap_or_else(|error| panic!("{shell_name}/{case} starts: {error}"));
+            if !output.status.success() {
+                // The capture answers 125 for every reason it can fail, and a
+                // successful one also leaves no temporary file, so neither the
+                // status nor the leftovers separate the causes. Ask the
+                // machine directly, and only when something already failed.
+                // This runs on a lane the author cannot reach, so the failure
+                // has to arrive already diagnosed.
+                let probe = Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(
+                        "printf 'shell=%s\\n' \"$($0 --version 2>&1 | head -1)\"; \
+                         probe=$(/usr/bin/mktemp /tmp/libtmux-mcp-probe.XXXXXX 2>&1) \
+                           && printf 'mktemp=ok:%s\\n' \"$probe\" \
+                           || printf 'mktemp=fail:%s\\n' \"$probe\"; \
+                         [ -f \"$probe\" ] && printf 'created=yes\\n' || printf 'created=no\\n'; \
+                         /bin/rm -f \"$probe\"; \
+                         printf abc | LC_ALL=C /usr/bin/head -c 2 >/dev/null 2>&1 \
+                           && printf 'head_c=ok\\n' || printf 'head_c=unsupported\\n'; \
+                         printf 'tmp=%s\\n' \"$(cd /tmp && pwd -P)\"",
+                    )
+                    .arg(shell)
+                    .output()
+                    .map_or_else(
+                        |error| format!("probe did not run: {error}"),
+                        |probe| String::from_utf8_lossy(&probe.stdout).into_owned(),
+                    );
+                panic!(
+                    "{shell_name}/{case}: status={:?}, stdout={:?}, stderr={:?}, probe={probe:?}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let prefix = format!("libtmux-mcp-traps-{nonce}.");
+            assert!(
+                std::fs::read_dir("/tmp")
+                    .expect("temporary directory is readable")
+                    .all(|entry| !entry
+                        .expect("temporary entry is readable")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(&prefix)),
+                "{shell_name}/{case} left a trap-capture file"
+            );
+        }
+    }
+}
+
+#[test]
+fn random_frames_retry_source_collisions_with_128_bit_nonces() {
+    let collision = format!("{FRAME_PREFIX}{}__", "00".repeat(16));
+    let mut calls = 0;
+    let frame = frame_with_random(
+        OsStr::new("/tmp/tmux"),
+        Path::new("/tmp/socket"),
+        b"sh",
+        OsStr::new(&collision),
+        false,
+        |bytes| {
+            bytes.fill(if calls == 0 { 0 } else { 0x11 });
+            calls += 1;
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|_| unreachable!("the second nonce is collision-free"));
+
+    assert_eq!(calls, 2);
+    let marker_len = FRAME_PREFIX.len() + 32 + 2;
+    assert_eq!(frame.opened.len(), marker_len + ":BEGIN".len());
+    assert_eq!(
+        find(frame.payload.as_bytes(), &frame.opened[..marker_len]),
+        None
+    );
+}
+
+#[test]
+fn random_frame_entropy_failure_is_preflight_failure() {
+    let error = frame_with_random(
+        OsStr::new("/tmp/tmux"),
+        Path::new("/tmp/socket"),
+        b"sh",
+        OsStr::new("true"),
+        false,
+        |_| Err(getrandom::Error::UNSUPPORTED),
+    )
+    .err()
+    .unwrap_or_else(|| unreachable!("entropy failure must stop framing"));
+
+    assert!(matches!(error, FrameError::Entropy));
+}
+
+#[test]
+fn repeated_random_marker_collisions_are_bounded() {
+    let collision = format!("{FRAME_PREFIX}{}__", "00".repeat(16));
+    let mut calls = 0;
+    let error = frame_with_random(
+        OsStr::new("/tmp/tmux"),
+        Path::new("/tmp/socket"),
+        b"sh",
+        OsStr::new(&collision),
+        false,
+        |bytes| {
+            bytes.fill(0);
+            calls += 1;
+            Ok(())
+        },
+    )
+    .err()
+    .unwrap_or_else(|| unreachable!("every candidate collides"));
+
+    assert!(matches!(error, FrameError::Collisions));
+    assert_eq!(calls, 32);
 }
 
 #[test]
@@ -66,9 +468,38 @@ fn an_invalid_literal_is_still_a_literal() {
     assert!(patterns.first_match(b"a(").is_some());
 }
 
+#[test]
+fn pattern_size_is_bounded() {
+    let error = Patterns::compile(&["x".repeat(4097)], false, true)
+        .err()
+        .unwrap_or_else(|| unreachable!("an oversized literal is rejected"));
+
+    assert!(error.1.contains("4096"), "{}", error.1);
+}
+
+#[test]
+fn pattern_count_is_bounded() {
+    let patterns = vec!["x".to_owned(); 33];
+    let error = Patterns::compile(&patterns, false, true)
+        .err()
+        .unwrap_or_else(|| unreachable!("too many patterns are rejected"));
+
+    assert!(error.1.contains("32"), "{}", error.1);
+}
+
+#[test]
+fn aggregate_pattern_size_is_bounded() {
+    let patterns = vec!["x".repeat(4096); 5];
+    let error = Patterns::compile(&patterns, false, true)
+        .err()
+        .unwrap_or_else(|| unreachable!("oversized aggregate patterns are rejected"));
+
+    assert!(error.1.contains("16384"), "{}", error.1);
+}
+
 /// Feed a scanner one run's stream, split at the given byte offsets.
 fn scan(stream: &[u8], splits: &[usize]) -> Option<RunView> {
-    let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());
+    let mut scanner = scanner();
     let mut at = 0;
     let mut finished = None;
     for &next in splits.iter().chain(std::iter::once(&stream.len())) {
@@ -79,15 +510,31 @@ fn scan(stream: &[u8], splits: &[usize]) -> Option<RunView> {
     finished
 }
 
+const MARKER: &[u8] = b"__LIBTMUX_MCP_DONE_0123456789abcdef0123456789abcdef__";
+
+fn scanner() -> Scanner {
+    let mut opened = MARKER.to_vec();
+    opened.extend_from_slice(b":BEGIN");
+    let mut closed = MARKER.to_vec();
+    closed.push(b':');
+    Scanner::new(opened, closed)
+}
+
 fn one_run() -> Vec<u8> {
     let mut stream = Vec::new();
-    stream.extend_from_slice(br"printf '\033_Ns\033\\'; ( echo hi ); ");
-    stream.extend_from_slice(b"\r\n\x1b_Ns\x1b\\hi\r\n\x1b_Ne;42\x1b\\");
+    stream.extend_from_slice(
+        br"display-message -p '__LIBTMUX_MCP_DONE_''0123456789abcdef0123456789abcdef''__:BEGIN'",
+    );
+    stream.extend_from_slice(b"\r\n\r\n");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":BEGIN\r\nhi\r\n\r\n");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":42\r\n");
     stream
 }
 
 #[test]
-fn a_run_arriving_whole_is_read() {
+fn exact_physical_completion_lines_report_status() {
     let view = scan(&one_run(), &[]).unwrap_or_else(|| unreachable!("the run completed"));
 
     assert_eq!(view.exit_status, Some(42));
@@ -96,11 +543,11 @@ fn a_run_arriving_whole_is_read() {
 
 #[test]
 fn scanner_publishes_state_at_a_trimmed_body_start() {
-    let opened = b"\x1b_Ns\x1b\\".to_vec();
-    let mut scanner = Scanner::new(opened.clone(), b"\x1b_Ne;".to_vec());
+    let mut scanner = scanner();
     let mut body = b"\x1b[31mred".to_vec();
     body.resize(OUTPUT_LIMIT + 4, b'x');
-    let mut stream = opened;
+    let mut stream = MARKER.to_vec();
+    stream.extend_from_slice(b":BEGIN\n");
     stream.extend_from_slice(&body);
 
     assert!(scanner.push(&stream).is_none());
@@ -175,16 +622,17 @@ fn scanner_releases_an_oversized_chunk_allocation() {
 
     assert_eq!(scanner.retained().len(), OUTPUT_LIMIT);
     assert!(scanner.physical_capacity() <= OUTPUT_LIMIT + COMPACT_AFTER);
+    assert!(scanner.frame_line_capacity() <= 128);
 }
 
 #[test]
-fn a_close_waiting_for_status_does_not_suspend_trimming() {
-    let opened = b"\x1b_Ns\x1b\\".to_vec();
-    let closed = b"\x1b_Ne;".to_vec();
-    let mut scanner = Scanner::new(opened.clone(), closed.clone());
-    let mut chunk = opened;
+fn an_incomplete_closing_line_does_not_suspend_trimming() {
+    let mut scanner = scanner();
+    let mut chunk = MARKER.to_vec();
+    chunk.extend_from_slice(b":BEGIN\n");
     chunk.resize(OUTPUT_LIMIT + 32, b'x');
-    chunk.extend_from_slice(&closed);
+    chunk.extend_from_slice(MARKER);
+    chunk.extend_from_slice(b":12");
 
     assert!(scanner.push(&chunk).is_none());
 
@@ -193,15 +641,14 @@ fn a_close_waiting_for_status_does_not_suspend_trimming() {
 
 #[test]
 fn completed_output_resumes_at_the_trim_checkpoint() {
-    let opened = b"\x1b_Ns\x1b\\".to_vec();
-    let closed = b"\x1b_Ne;".to_vec();
-    let ending = [closed.as_slice(), b"0\x1b\\"].concat();
+    let ending = [b"\n".as_slice(), MARKER, b":0\n".as_slice()].concat();
     let mut body = b"\x1b[31mred".to_vec();
     body.resize(OUTPUT_LIMIT + 4 - ending.len(), b'x');
-    let mut stream = opened.clone();
+    let mut stream = MARKER.to_vec();
+    stream.extend_from_slice(b":BEGIN\n");
     stream.extend_from_slice(&body);
     stream.extend_from_slice(&ending);
-    let mut scanner = Scanner::new(opened, closed);
+    let mut scanner = scanner();
 
     let view = scanner
         .push(&stream)
@@ -215,14 +662,13 @@ fn completed_output_resumes_at_the_trim_checkpoint() {
 }
 
 #[test]
-fn a_run_split_between_its_sentinel_and_its_status_is_still_read() {
+fn a_run_split_between_its_marker_and_its_status_is_still_read() {
     // tmux decides where a chunk ends. Splitting immediately after the
-    // closing sentinel leaves the status digits for a later chunk, by
-    // which time the sentinel is behind everything newly scanned.
+    // closing prefix leaves the status digits for a later chunk.
     let stream = one_run();
-    let after_sentinel = stream.len() - "42\x1b\\".len();
+    let after_marker = stream.len() - "42\r\n".len();
 
-    let view = scan(&stream, &[after_sentinel])
+    let view = scan(&stream, &[after_marker])
         .unwrap_or_else(|| unreachable!("a split chunk must not lose the run"));
 
     assert_eq!(view.exit_status, Some(42));
@@ -242,8 +688,28 @@ fn a_run_split_at_every_byte_is_still_read() {
 }
 
 #[test]
+fn opening_record_separators_are_not_command_output() {
+    for separator in [b"\n".as_slice(), b"\r\n"] {
+        let mut stream = b"echo source\r\n".to_vec();
+        stream.extend_from_slice(MARKER);
+        stream.extend_from_slice(b":BEGIN");
+        stream.extend_from_slice(separator);
+        stream.extend_from_slice(b"BODY\r\n\r\n");
+        stream.extend_from_slice(MARKER);
+        stream.extend_from_slice(b":0\r\n");
+        let splits: Vec<usize> = (1..stream.len()).collect();
+
+        let view = scan(&stream, &splits)
+            .unwrap_or_else(|| unreachable!("every separator split must complete"));
+
+        assert_eq!(view.exit_status, Some(0));
+        assert_eq!(view.output, "BODY\n");
+    }
+}
+
+#[test]
 fn a_run_that_never_answered_is_reported_as_no_shell() {
-    let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());
+    let mut scanner = scanner();
     assert!(scanner.push(b"some editor drew a screen").is_none());
 
     let view = scanner.unfinished(RunOutcome::Deadline, "%0".to_owned());
@@ -254,8 +720,9 @@ fn a_run_that_never_answered_is_reported_as_no_shell() {
 
 #[test]
 fn a_run_still_going_at_its_deadline_keeps_that_outcome() {
-    let mut scanner = Scanner::new(b"\x1b_Ns\x1b\\".to_vec(), b"\x1b_Ne;".to_vec());
-    assert!(scanner.push(b"\x1b_Ns\x1b\\working").is_none());
+    let mut scanner = scanner();
+    let stream = [MARKER, b":BEGIN\nworking".as_slice()].concat();
+    assert!(scanner.push(&stream).is_none());
 
     let view = scanner.unfinished(RunOutcome::Deadline, "%0".to_owned());
 
@@ -267,64 +734,202 @@ fn a_run_still_going_at_its_deadline_keeps_that_outcome() {
 }
 
 #[test]
-fn a_status_is_read_from_between_the_sentinels() {
-    let opened = b"\x1b_1s\x1b\\";
-    let closed = b"\x1b_1e;";
-    let mut stream = Vec::new();
-    stream.extend_from_slice(b"echo hi\r\n");
-    stream.extend_from_slice(opened);
-    stream.extend_from_slice(b"hi\r\n");
-    stream.extend_from_slice(closed);
-    stream.extend_from_slice(b"7\x1b\\");
-
-    let at = find(&stream, closed).unwrap_or_else(|| unreachable!("the sentinel is present"));
-    let view =
-        finished(&stream, at, opened, closed).unwrap_or_else(|| unreachable!("the block is whole"));
-
-    assert_eq!(view.exit_status, Some(7));
-    assert_eq!(view.output, "hi\n");
-}
-
-#[test]
 fn a_half_arrived_status_is_not_reported() {
-    let opened = b"\x1b_1s\x1b\\";
-    let closed = b"\x1b_1e;";
-    let mut stream = Vec::new();
-    stream.extend_from_slice(opened);
-    stream.extend_from_slice(b"out");
-    stream.extend_from_slice(closed);
-    stream.extend_from_slice(b"12");
-
-    let at = find(&stream, closed).unwrap_or_else(|| unreachable!("the sentinel is present"));
+    let mut scanner = scanner();
+    let stream = [
+        MARKER,
+        b":BEGIN\nout\n".as_slice(),
+        MARKER,
+        b":12".as_slice(),
+    ]
+    .concat();
 
     assert!(
-        finished(&stream, at, opened, closed).is_none(),
+        scanner.push(&stream).is_none(),
         "reading 1 from a status of 12 would be worse than waiting"
     );
 }
 
 #[test]
-fn the_echoed_command_is_not_mistaken_for_a_sentinel() {
-    let opened = b"\x1b_ab1s\x1b\\";
-    let closed = b"\x1b_ab1e;";
+fn marker_lookalikes_are_command_output() {
+    let mut scanner = scanner();
     let mut stream = Vec::new();
-    // What a shell echoes: the source text, where the escape is four
-    // ordinary characters.
-    stream.extend_from_slice(br"printf '\033_ab1s\033\\'; ( echo hi ); ");
-    stream.extend_from_slice(br"printf '\033_ab1e;%d\033\\' $s");
-    stream.extend_from_slice(b"\r\n");
-    stream.extend_from_slice(opened);
-    stream.extend_from_slice(b"hi\r\n");
-    stream.extend_from_slice(closed);
-    stream.extend_from_slice(b"0\x1b\\");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":BEGIN\n");
+    stream.push(b'x');
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":0\n");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":BEGIN suffix\n");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":256\n");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":not-a-status\n\n");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":00\nafter-lookalike\n");
+    stream.extend_from_slice(MARKER);
+    stream.extend_from_slice(b":0\n");
 
-    let at = find(&stream, closed).unwrap_or_else(|| unreachable!("the sentinel is present"));
-    let view =
-        finished(&stream, at, opened, closed).unwrap_or_else(|| unreachable!("the block is whole"));
+    let view = scanner
+        .push(&stream)
+        .unwrap_or_else(|| unreachable!("the exact closing line completes"));
 
-    assert_eq!(
-        view.output, "hi\n",
-        "the echo sits before the opening sentinel and is discarded whole"
-    );
+    assert!(view.output.starts_with("x__LIBTMUX_MCP_DONE_"));
+    assert!(view.output.contains(":BEGIN suffix\n"));
+    assert!(view.output.contains(":256\n"));
+    assert!(view.output.contains(":00\n"));
     assert_eq!(view.exit_status, Some(0));
+}
+
+/// No frame line may exceed a terminal's canonical input limit.
+///
+/// The frame is typed into a pane, not piped, so every line passes through a
+/// terminal in canonical mode. `MAX_CANON` bounds one such line: 1024 bytes
+/// on macOS and the BSDs against 4096 on Linux. A longer line is never
+/// delivered, so the shell waits at its continuation prompt and the run
+/// reports `no_shell` until it times out -- with no error anywhere, because
+/// nothing failed, the input simply never arrived.
+///
+/// Joined with `; `, the bash trap setup reached 1715 bytes and zsh 1115.
+/// Both worked on Linux and neither could work on macOS.
+///
+/// The frame is staged in a tmux buffer now, so its own lines are read over
+/// the socket rather than typed. The gate stays because it is cheap and it
+/// keeps the frame deliverable if staging is ever bypassed.
+#[test]
+fn no_frame_line_exceeds_a_terminal_input_limit() {
+    // macOS and the BSDs, which is the tightest limit this runs against.
+    const MAX_CANON: usize = 1024;
+
+    for shell in [b"sh".as_slice(), b"bash", b"zsh"] {
+        for suppress_history in [false, true] {
+            let payload = render_payload(
+                OsStr::new("/opt/homebrew/bin/tmux"),
+                Path::new("/tmp/libtmux-rs-test/agent-preserves-raw.sock"),
+                "63bdf5760a1f845190b25ac835320917",
+                shell,
+                OsStr::new("printf body # trailing comment"),
+                suppress_history,
+            );
+            let longest = payload
+                .as_bytes()
+                .split(|byte| *byte == b'\n')
+                .map(<[u8]>::len)
+                .max()
+                .unwrap_or(0);
+
+            assert!(
+                longest < MAX_CANON,
+                "{} frame has a {longest}-byte line, over the {MAX_CANON}-byte \
+                 terminal limit; it cannot be typed into a pane on macOS",
+                String::from_utf8_lossy(shell)
+            );
+        }
+    }
+}
+
+/// The typed line must fit a terminal whatever the command weighs.
+///
+/// This is the line that actually reaches the pty, so it answers both limits
+/// that drop pane input: `MAX_CANON` per line, and the pty input queue for a
+/// burst the shell has not drained. It names the tmux binary, the socket and
+/// the buffer, and never the command, so a caller cannot grow it. Before
+/// staging, a 16 KiB command produced a 16 KiB line and was truncated on
+/// Linux too, not only on macOS.
+#[test]
+fn the_typed_line_never_carries_the_command() {
+    // macOS and the BSDs, which is the tightest limit this runs against.
+    const MAX_CANON: usize = 1024;
+
+    let executable = OsStr::new("/opt/homebrew/bin/tmux");
+    let socket = Path::new("/tmp/libtmux-rs-test/agent-preserves-raw.sock");
+    let huge = "printf ".to_owned() + &"z".repeat(16 * 1024);
+
+    for command in [OsStr::new("printf body"), OsStr::new(&huge)] {
+        for suppress_history in [false, true] {
+            let frame = frame_with_random(
+                executable,
+                socket,
+                b"bash",
+                command,
+                suppress_history,
+                |bytes| {
+                    bytes.fill(7);
+                    Ok(())
+                },
+            )
+            .expect("the frame renders");
+
+            let staged = frame_path(&frame.nonce);
+            let line = staged_line(&staged, b"bash", suppress_history);
+            let bytes = line.as_bytes();
+
+            assert!(
+                bytes.len() < MAX_CANON,
+                "the typed line is {} bytes, over the {MAX_CANON}-byte limit",
+                bytes.len()
+            );
+            assert!(!bytes.contains(&b'\n'), "the typed line must stay one line");
+            assert!(
+                find(bytes, b"printf").is_none(),
+                "the command must travel in the buffer, not the typed line"
+            );
+            assert!(
+                find(bytes, staged.as_os_str().as_bytes()).is_some(),
+                "the typed line must name the file holding the frame"
+            );
+        }
+    }
+}
+
+/// A staged frame removes itself, and cannot be aimed at an existing file.
+///
+/// The typed line's trailing removal only runs if the frame returns, so a
+/// command that calls `exit` used to strand its frame in `/tmp`; three were
+/// left behind by one pass of this suite. Both readers consume the whole file
+/// before `eval` runs, so the frame can unlink itself first and cover every
+/// way a run can end.
+#[tokio::test]
+async fn a_staged_frame_removes_itself_and_refuses_an_occupied_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let path = std::env::temp_dir().join(format!(
+        "libtmux-mcp-frame-test-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    stage_frame(path.clone(), OsString::from("( : )"))
+        .await
+        .expect("the frame is staged");
+
+    let staged = std::fs::read(&path).expect("the frame is readable");
+    let first = staged
+        .split(|byte| *byte == b'\n')
+        .next()
+        .expect("the frame has a first line");
+    assert!(
+        find(first, b"/bin/rm").is_some() && find(first, path.as_os_str().as_bytes()).is_some(),
+        "the frame must remove itself first, got {:?}",
+        String::from_utf8_lossy(first)
+    );
+    assert!(
+        find(first, b"|| :").is_some(),
+        "a refused unlink must not trip `set -e` and strand the run"
+    );
+
+    let mode = std::fs::metadata(&path)
+        .expect("the frame is stat-able")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "the command must stay private to its owner");
+
+    // `create_new` is what keeps a planted path from redirecting the write.
+    stage_frame(path.clone(), OsString::from("( : )"))
+        .await
+        .expect_err("an occupied path is refused");
+
+    std::fs::remove_file(&path).expect("the frame is removed");
 }

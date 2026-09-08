@@ -1,10 +1,9 @@
 # Contributing
 
-This repository is a Cargo workspace of four published crates, and the gates
-below are what a change has to pass. It was extracted from the Python libtmux
-repository; its `uv`, `pytest`, `ruff`, and `mypy` conventions do not apply to
-the Rust crates. The `mcp_swap.py` maintenance utility is the exception: `uv`
-supplies its dependencies, and `pytest` tests it under `just check`.
+This repository is a Cargo workspace of four published crates and one private
+developer tool. The gates below are what a change has to pass. It was
+extracted from the Python libtmux repository; its `uv`, `pytest`, `ruff`, and
+`mypy` conventions do not apply here.
 
 For how the prose reads — README, changelog, release notes, commit messages,
 rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
@@ -15,8 +14,7 @@ You need tmux 3.2a or newer on `PATH` and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
 `rust-toolchain.toml` pins the toolchain, so rustup installs it on the first
-cargo command. The gate also needs the two MSRV floors, `uv`, and three Cargo
-tools:
+cargo command. The gate also needs the two MSRV floors and three Cargo tools:
 
 ```console
 $ rustup toolchain install 1.85.0 1.88.0
@@ -25,9 +23,6 @@ $ rustup toolchain install 1.85.0 1.88.0
 ```console
 $ cargo install just cargo-hack cargo-deny
 ```
-
-Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
-separately; Cargo does not manage the Python test environment.
 
 Nightly is needed only for `just api-check`, `just example-coverage-check`,
 and `just fuzz`, none of which are part of the local gate.
@@ -41,7 +36,7 @@ justfile only groups Cargo commands.
 $ cargo build --workspace --all-features
 ```
 
-Four crates, all published:
+Five workspace packages; the four library/server crates are published:
 
 | Crate | What it is |
 | --- | --- |
@@ -49,6 +44,7 @@ Four crates, all published:
 | `crates/libtmux-macros` | `#[derive(Filterable)]`, for downstream structs |
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
+| `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
 
 `tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
 the workspace's: it moves at its own pace, and `rmcp` and `darling` require a

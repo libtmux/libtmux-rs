@@ -443,6 +443,40 @@ impl Server {
         self.core.configuration().executable()
     }
 
+    /// Resolve the configured tmux executable from the captured launch context.
+    ///
+    /// Bare names use the `PATH` captured by [`ServerBuilder::build`]. Relative
+    /// paths use its captured working directory. The returned path preserves a
+    /// configured wrapper or symlink rather than canonicalizing it.
+    ///
+    /// Returns `None` when the configured executable is not on the captured
+    /// `PATH`, so a caller can tell "tmux is missing" from "tmux failed".
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Any absolute path is resolved only if it is a runnable file, so this
+    /// // example names one POSIX guarantees rather than tmux's own location,
+    /// // which varies by platform.
+    /// let server = libtmux::Server::builder()
+    ///     .tmux_executable("/bin/sh")
+    ///     .build()?;
+    /// assert_eq!(
+    ///     server.resolved_tmux_executable(),
+    ///     Some(std::path::PathBuf::from("/bin/sh")),
+    /// );
+    ///
+    /// let missing = libtmux::Server::builder()
+    ///     .tmux_executable("tmux-that-is-not-installed")
+    ///     .build()?;
+    /// assert_eq!(missing.resolved_tmux_executable(), None);
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
+    #[must_use]
+    pub fn resolved_tmux_executable(&self) -> Option<PathBuf> {
+        self.core.configuration().resolved_executable()
+    }
+
     /// Return the captured per-command timeout.
     ///
     /// # Examples
@@ -769,6 +803,7 @@ impl Server {
         if let Some(name) = name {
             command = command.arg("-b").arg(OsString::from(name));
         }
+        command = command.arg("--");
 
         listing::mutate(&self.core, "set-buffer", command.sensitive_arg(data.into())).await
     }
@@ -1194,7 +1229,9 @@ impl Server {
         listing::mutate(
             &self.core,
             "source-file",
-            Command::new("source-file").arg(path.into().into_os_string()),
+            Command::new("source-file")
+                .arg("--")
+                .arg(path.into().into_os_string()),
         )
         .await
     }

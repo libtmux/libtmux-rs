@@ -119,6 +119,15 @@ require_family() {
     esac
 }
 
+normalize_bootstrap_mtimes() {
+    local checkout_epoch="$1"
+
+    {
+        git ls-files -z --cached --others --exclude-standard
+        git ls-files -z --others --ignored --exclude-standard
+    } | xargs -0r touch --no-dereference --date="@$checkout_epoch" --
+}
+
 run_lane() {
     local tag="$1"
     local expected_commit="$2"
@@ -130,6 +139,7 @@ run_lane() {
     local tag_type
     local peeled_commit
     local checkout_commit
+    local checkout_epoch
     local installed_version
     local test_list
 
@@ -157,6 +167,7 @@ run_lane() {
         printf 'tmux %s checkout commit does not match\n' "$tag" >&2
         return 1
     fi
+    checkout_epoch="$(git -C "$source_root" show -s --format=%ct "$checkout_commit")"
 
     if [[ "$source_contract" == "format-catalog" ]]; then
         python3 scripts/format-coverage.py --check-source "$source_root"
@@ -165,6 +176,9 @@ run_lane() {
     (
         cd "$source_root"
         sh autogen.sh
+        # Automake rejects a new conftest when the wall clock steps backward.
+        # Keep this disposable tree at its authenticated commit time instead.
+        normalize_bootstrap_mtimes "$checkout_epoch"
         ./configure --prefix="$install_prefix"
         make -j"$(nproc)"
         make install

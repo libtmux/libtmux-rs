@@ -152,22 +152,6 @@ pub(super) fn bad_input(message: impl Into<String>) -> ErrorData {
     )
 }
 
-/// Report a bounded server resource whose active users fill every slot.
-pub(super) fn at_capacity(limit: usize) -> ErrorData {
-    ErrorData::internal_error(
-        format!(
-            "background job capacity reached: all {limit} jobs are still starting or running; \
-             wait for one to finish or cancel one"
-        ),
-        Some(serde_json::json!({
-            "kind": "capacity",
-            "retryable": true,
-            "stale": false,
-            "capacity": limit,
-        })),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

@@ -106,6 +106,7 @@ fixture-root:
 msrv:
     rustup run 1.85.0 cargo test --locked \
         --package libtmux --package libtmux-macros --package tmux-workspace \
+        --package mcp-swap \
         --all-targets --all-features
     rustup run 1.85.0 cargo hack check --locked \
         --package libtmux --package libtmux-macros \
@@ -113,17 +114,11 @@ msrv:
     rustup run 1.88.0 cargo test --locked \
         --package tmux-mcp --all-targets
 
-# Test the script that points every agent CLI at a build of this server
-#
-# uv supplies pytest and tomlkit without turning this Cargo workspace into a
-# Python project. -c and --confcutdir keep pytest from walking up into a Python
-# project above this directory.
-[doc('Test the script that points every agent CLI at a build of this server')]
+# Test the native tool that points agent CLIs at a build of this server
+[doc('Test the native tool that points agent CLIs at a build of this server')]
 [group: 'test']
 swap-test *args:
-    uv run --no-project --with pytest --with 'tomlkit>=0.13' \
-        python -m pytest scripts/test_mcp_swap.py -c /dev/null --confcutdir=. \
-        --rootdir=. -p no:cacheprovider {{ args }}
+    cargo test --locked --package mcp-swap --all-targets {{ args }}
 
 # Exercise the Linux-only pidfd supervisor without building five tmux releases
 [group: 'test']

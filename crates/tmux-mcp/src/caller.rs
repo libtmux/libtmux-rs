@@ -1,9 +1,9 @@
-//! Where this server is running, and what it must therefore not destroy.
+//! Where this server is running, and what it must not disrupt or destroy.
 //!
 //! tmux sets `TMUX` and `TMUX_PANE` in every process it starts, so an MCP
 //! server launched from a pane can say which pane that is. Two things are
-//! built on that: pane listings say which pane is the caller's own, and direct
-//! kill tools and destructive plan operations refuse it.
+//! built on that: pane listings say which pane is the caller's own, pane input
+//! refuses to reach it, and teardown tools refuse to destroy it.
 //!
 //! A pane id is only unique within one tmux server. `%1` on the socket this
 //! process was started from and `%1` on the socket it was asked about are
@@ -12,6 +12,8 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+use libtmux::ServerGeneration;
 
 use serde::Serialize;
 
@@ -35,14 +37,16 @@ pub enum Relation {
 
 /// The tmux pane hosting this process, as its environment describes it.
 ///
-/// `TMUX` carries `socket_path,server_pid,session_id`; `TMUX_PANE` carries the
-/// pane id. Both are read tolerantly: tmux writes them, but a shell between
-/// tmux and this process may not have passed both along, and a partial
-/// identity is still worth having.
+/// `TMUX` carries `socket_path,server_pid,session_number`; `TMUX_PANE` carries
+/// the pane id. Either both variables form one complete identity or the
+/// context is malformed; only two absent variables mean detached operation.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CallerIdentity {
     socket: Option<PathBuf>,
+    server_pid: Option<u32>,
+    session_id: Option<String>,
     pane_id: Option<String>,
+    malformed: bool,
 }
 
 impl fmt::Debug for CallerIdentity {
@@ -50,9 +54,23 @@ impl fmt::Debug for CallerIdentity {
         formatter
             .debug_struct("CallerIdentity")
             .field("socket", &self.socket.as_ref().map(|_| "<redacted>"))
+            .field("server_pid", &self.server_pid)
+            .field("session_id", &self.session_id)
             .field("pane_id", &self.pane_id)
+            .field("malformed", &self.malformed)
             .finish()
     }
+}
+
+fn canonical_number(value: &str) -> Option<u64> {
+    let parsed = value.parse::<u64>().ok()?;
+    (parsed.to_string() == value).then_some(parsed)
+}
+
+fn canonical_pane_id(value: &str) -> bool {
+    value
+        .parse::<libtmux::PaneId>()
+        .is_ok_and(|parsed| parsed.to_string() == value)
 }
 
 impl CallerIdentity {
@@ -72,40 +90,48 @@ impl CallerIdentity {
     /// without a process-wide environment, which no test can hold alone.
     #[must_use]
     pub fn from_values(tmux: Option<OsString>, pane: Option<OsString>) -> Option<Self> {
-        // An empty variable is not a value. Shells and process managers export
-        // these routinely, and `TMUX_PANE=""` read as a pane id would produce
-        // an identity that matches no pane -- which is worse than having none,
-        // because it looks like the caller is known and simply somewhere else.
-        let pane_id = pane
-            .and_then(|value| value.into_string().ok())
-            .filter(|value| !value.is_empty());
-        let tmux = tmux
-            .and_then(|value| value.into_string().ok())
-            .filter(|value| !value.is_empty());
-        if tmux.is_none() && pane_id.is_none() {
+        let detached = tmux.is_none() && pane.is_none();
+        if detached {
             return None;
         }
 
-        // `TMUX` is `socket_path,server_pid,session_id`. Only the socket is
-        // read: the pid names a process nothing here compares against, and the
-        // session is where this process started rather than where its pane is
-        // now, which a pane moved between sessions would make a lie.
-        //
-        // tmux always writes an absolute path there. A value that is not one
-        // has been mangled by something in between, and a mangled socket is
-        // not evidence of a *different* server — it is no evidence at all.
-        // Dropping it is what routes this identity into the cautious branch of
-        // `may_be_on` rather than letting a garbled variable clear the way to
-        // killing the caller's own pane.
-        let socket = tmux.as_deref().and_then(|tmux| {
-            tmux.split(',')
-                .next()
-                .filter(|field| !field.is_empty())
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-        });
+        let parsed = tmux
+            .and_then(|value| value.into_string().ok())
+            .zip(pane.and_then(|value| value.into_string().ok()))
+            .and_then(|(tmux, pane_id)| {
+                let (socket, suffix) = tmux.rsplit_once(',')?;
+                let (socket, server_pid) = socket.rsplit_once(',')?;
+                let socket = PathBuf::from(socket);
+                let server_pid = canonical_number(server_pid)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value != 0)?;
+                let session =
+                    canonical_number(suffix).and_then(|value| u32::try_from(value).ok())?;
+                if !socket.is_absolute()
+                    || !crate::exec::route_path_is_terminal_safe(socket.as_os_str())
+                    || !canonical_pane_id(&pane_id)
+                {
+                    return None;
+                }
+                Some((socket, server_pid, format!("${session}"), pane_id))
+            });
 
-        Some(Self { socket, pane_id })
+        Some(match parsed {
+            Some((socket, server_pid, session_id, pane_id)) => Self {
+                socket: Some(socket),
+                server_pid: Some(server_pid),
+                session_id: Some(session_id),
+                pane_id: Some(pane_id),
+                malformed: false,
+            },
+            None => Self {
+                socket: None,
+                server_pid: None,
+                session_id: None,
+                pane_id: None,
+                malformed: true,
+            },
+        })
     }
 
     /// The pane this process runs in, when tmux named one.
@@ -120,6 +146,37 @@ impl CallerIdentity {
         self.socket.as_deref()
     }
 
+    pub(crate) fn resolve_on<'a>(
+        &'a self,
+        server_socket: &Path,
+        generation: ServerGeneration,
+        panes: &[libtmux::Pane],
+    ) -> Result<Option<&'a str>, &'static str> {
+        if self.malformed {
+            return Err("malformed");
+        }
+        let (Some(socket), Some(server_pid), Some(session_id), Some(pane_id)) = (
+            self.socket.as_deref(),
+            self.server_pid,
+            self.session_id.as_deref(),
+            self.pane_id.as_deref(),
+        ) else {
+            return Err("incomplete");
+        };
+        if !same_path(socket, server_socket) {
+            return Ok(None);
+        }
+        if server_pid != generation.pid() {
+            return Err("stale server process");
+        }
+        if !panes.iter().any(|pane| {
+            pane.id().to_string() == pane_id && pane.session_id().to_string() == session_id
+        }) {
+            return Err("unresolved pane and session");
+        }
+        Ok(Some(pane_id))
+    }
+
     /// Whether a pane on the given server is provably this process's own.
     ///
     /// Positive only on a confirmed socket match, because this drives an
@@ -128,6 +185,9 @@ impl CallerIdentity {
     /// whole module exists to avoid.
     #[must_use]
     pub fn relation_to(&self, pane_id: &str, server_socket: Option<&Path>) -> Relation {
+        if self.malformed {
+            return Relation::Other;
+        }
         if self.pane_id.as_deref() != Some(pane_id) {
             return Relation::Other;
         }
@@ -140,18 +200,14 @@ impl CallerIdentity {
 
     /// Whether this process might be running on the given server.
     ///
-    /// Deliberately the opposite bias to [`CallerIdentity::relation_to`]. This
-    /// answers "may I destroy things here", so every case it cannot resolve
-    /// answers yes: an identity with no socket, a server whose socket cannot
-    /// be read, or a socket whose path differs but whose name matches. A false
-    /// positive costs one refused command that the operator can run by hand. A
-    /// false negative kills the session the agent is talking through.
-    ///
-    /// The name-only fallback catches a real divergence rather than a
-    /// hypothetical one: `$TMUX_TMPDIR` can differ between this process and
-    /// the shell that started it, leaving two correct paths to one socket.
+    /// Malformed context and an unreadable target socket remain protected.
+    /// Complete identities on a different physical socket are foreign; a
+    /// socket basename alone never authenticates a caller.
     #[must_use]
-    pub fn may_be_on(&self, server_socket: Option<&Path>, socket_name: Option<&str>) -> bool {
+    pub fn may_be_on(&self, server_socket: Option<&Path>, _socket_name: Option<&str>) -> bool {
+        if self.malformed {
+            return true;
+        }
         let Some(caller) = self.socket.as_deref() else {
             // No socket to compare. If tmux named a pane, assume it is here.
             return self.pane_id.is_some();
@@ -162,10 +218,7 @@ impl CallerIdentity {
         if same_path(caller, target) {
             return true;
         }
-        caller
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == socket_name.unwrap_or("default"))
+        false
     }
 }
 
@@ -177,50 +230,48 @@ fn same_socket(caller: Option<&Path>, target: Option<&Path>) -> bool {
     }
 }
 
-/// Compare two paths, resolving symlinks when the filesystem allows it.
-///
-/// Temporary directories are routinely symlinked, so the resolved forms are
-/// what matter. Resolution can fail — the socket may have been removed since —
-/// and an exact match is still a match, so failure falls back to comparing the
-/// paths as written.
+/// Compare physical endpoints, with exact paths as the unavailable fallback.
 fn same_path(left: &Path, right: &Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
+    crate::run_request::same_endpoint(left, right)
 }
 
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
 
     #[test]
-    fn an_empty_variable_is_not_an_identity() {
-        // A process manager that exports TMUX_PANE without a value would
-        // otherwise produce a caller whose pane id matches nothing, which
-        // reads as "known, and elsewhere" rather than "not known".
-        assert!(
-            CallerIdentity::from_values(Some(OsString::from("")), Some(OsString::from("")))
-                .is_none(),
-        );
-        assert!(CallerIdentity::from_values(None, Some(OsString::from(""))).is_none());
-        assert!(CallerIdentity::from_values(Some(OsString::from("")), None).is_none());
+    fn any_present_caller_variable_is_not_detached() {
+        for (tmux, pane) in [
+            (Some(OsString::new()), Some(OsString::new())),
+            (Some(OsString::from("/tmp/socket,1,0")), None),
+            (None, Some(OsString::from("%0"))),
+            (
+                Some(OsString::from("/tmp/socket,not-a-pid,0")),
+                Some(OsString::from("%0")),
+            ),
+        ] {
+            let caller = CallerIdentity::from_values(tmux, pane)
+                .expect("only two absent variables represent a detached caller");
+            assert!(caller.malformed);
+        }
     }
 
     #[test]
-    fn a_pane_without_a_socket_is_still_an_identity() {
-        // Losing TMUX but keeping TMUX_PANE is what a shell that re-execs can
-        // leave behind, and the pane is still worth protecting.
+    fn a_pane_without_a_socket_is_malformed() {
         let caller = CallerIdentity::from_values(None, Some(OsString::from("%3")))
-            .expect("a pane alone identifies something");
-        assert_eq!(caller.pane_id(), Some("%3"));
+            .expect("a present variable is not detached");
+        assert!(caller.malformed);
+        assert_eq!(caller.pane_id(), None);
     }
 
     use super::*;
 
     fn identity(tmux: &str, pane: &str) -> CallerIdentity {
-        CallerIdentity::from_values(Some(tmux.into()), Some(pane.into()))
-            .unwrap_or_else(|| unreachable!("both values are present"))
+        let caller = CallerIdentity::from_values(Some(tmux.into()), Some(pane.into()))
+            .unwrap_or_else(|| unreachable!("both values are present"));
+        assert!(!caller.malformed, "fixture identity is complete");
+        caller
     }
 
     #[test]
@@ -229,20 +280,96 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_without_tmux_is_still_an_identity() {
+    fn a_pane_without_tmux_is_not_usable_identity() {
         let caller = CallerIdentity::from_values(None, Some("%3".into()));
         let caller = caller.unwrap_or_else(|| unreachable!("a pane is present"));
 
-        assert_eq!(caller.pane_id(), Some("%3"));
+        assert!(caller.malformed);
+        assert_eq!(caller.pane_id(), None);
         assert_eq!(caller.socket(), None);
     }
 
     #[test]
     fn tmux_carries_socket_pid_and_session() {
-        let caller = identity("/tmp/tmux-1000/default,48188,10", "%3");
+        let caller = identity("/tmp/tmux-1000/a,comma,48188,10", "%3");
 
-        assert_eq!(caller.socket(), Some(Path::new("/tmp/tmux-1000/default")));
+        assert_eq!(caller.socket(), Some(Path::new("/tmp/tmux-1000/a,comma")));
+        assert_eq!(caller.server_pid, Some(48188));
+        assert_eq!(caller.session_id.as_deref(), Some("$10"));
         assert_eq!(caller.pane_id(), Some("%3"));
+    }
+
+    #[test]
+    fn caller_fields_require_the_exact_tmux_encoding() {
+        for (tmux, pane) in [
+            ("/tmp/socket,0,0", "%0"),
+            ("/tmp/socket,01,0", "%0"),
+            ("/tmp/socket,1,00", "%0"),
+            ("/tmp/socket,1,$0", "%0"),
+            ("/tmp/socket,1,4294967296", "%0"),
+            ("/tmp/socket,1,0", "%00"),
+            ("relative/socket,1,0", "%0"),
+            ("/tmp/socket,1,0,extra", "%0"),
+        ] {
+            let caller = CallerIdentity::from_values(Some(tmux.into()), Some(pane.into()))
+                .expect("present context");
+            assert!(caller.malformed, "{tmux} {pane}");
+        }
+    }
+
+    #[test]
+    fn caller_socket_rejects_ascii_terminal_controls() {
+        for byte in (0..=0x1f).chain([0x7f]) {
+            let mut tmux = b"/tmp/socket-".to_vec();
+            tmux.push(byte);
+            tmux.extend_from_slice(b",1,0");
+            let caller = CallerIdentity::from_values(
+                Some(OsString::from_vec(tmux)),
+                Some(OsString::from("%0")),
+            )
+            .expect("present context");
+            assert!(caller.malformed, "byte {byte:#04x} was accepted");
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_socket_hard_link_resolves_on_the_same_daemon() {
+        let guard = libtmux::test::TestServer::builder()
+            .start()
+            .await
+            .expect("tmux starts");
+        let server = guard.server();
+        let session = server
+            .new_session("caller-hard-link")
+            .await
+            .expect("session starts");
+        let pane = session.panes().await.expect("panes list").remove(0);
+        let generation = server.generation().await.expect("server generation");
+        let alias = server.socket_path().with_file_name("caller-hard-link.sock");
+        std::fs::hard_link(server.socket_path(), &alias).expect("socket hard link is created");
+        let caller = CallerIdentity::from_values(
+            Some(
+                format!(
+                    "{},{},{}",
+                    alias.display(),
+                    generation.pid(),
+                    session.id().as_ref().trim_start_matches('$')
+                )
+                .into(),
+            ),
+            Some(pane.id().as_ref().into()),
+        )
+        .expect("caller context is present");
+        let panes = server.panes().await.expect("pane snapshot");
+
+        assert_eq!(
+            caller
+                .resolve_on(server.socket_path(), generation, &panes)
+                .expect("physical alias is authenticated"),
+            Some(pane.id().as_ref())
+        );
+        std::fs::remove_file(&alias).expect("socket hard link is removed");
+        guard.shutdown().await.expect("tmux fixture shuts down");
     }
 
     #[test]
@@ -269,22 +396,27 @@ mod tests {
     }
 
     #[test]
-    fn a_truncated_tmux_value_keeps_what_it_has() {
-        let caller = identity("/tmp/sock", "%1");
+    fn a_truncated_tmux_value_is_malformed() {
+        let caller = CallerIdentity::from_values(Some("/tmp/sock".into()), Some("%1".into()))
+            .expect("present context");
 
-        assert_eq!(caller.socket(), Some(Path::new("/tmp/sock")));
+        assert!(caller.malformed);
+        assert_eq!(caller.socket(), None);
     }
 
     #[test]
-    fn extra_fields_do_not_disturb_the_socket() {
-        let caller = identity("/tmp/sock,1,$1,extra", "%1");
+    fn extra_fields_make_the_context_malformed() {
+        let caller =
+            CallerIdentity::from_values(Some("/tmp/sock,1,1,extra".into()), Some("%1".into()))
+                .expect("present context");
 
-        assert_eq!(caller.socket(), Some(Path::new("/tmp/sock")));
+        assert!(caller.malformed);
+        assert_eq!(caller.socket(), None);
     }
 
     #[test]
     fn the_same_pane_on_the_same_socket_is_the_callers_own() {
-        let caller = identity("/tmp/sock,1,$0", "%1");
+        let caller = identity("/tmp/sock,1,0", "%1");
 
         assert_eq!(
             caller.relation_to("%1", Some(Path::new("/tmp/sock"))),
@@ -294,7 +426,7 @@ mod tests {
 
     #[test]
     fn the_same_pane_id_on_another_socket_is_not() {
-        let caller = identity("/tmp/sock-a,1,$0", "%1");
+        let caller = identity("/tmp/sock-a,1,0", "%1");
 
         assert_eq!(
             caller.relation_to("%1", Some(Path::new("/tmp/sock-b"))),
@@ -317,7 +449,7 @@ mod tests {
 
     #[test]
     fn a_different_pane_is_other() {
-        let caller = identity("/tmp/sock,1,$0", "%1");
+        let caller = identity("/tmp/sock,1,0", "%1");
 
         assert_eq!(
             caller.relation_to("%2", Some(Path::new("/tmp/sock"))),
@@ -330,9 +462,11 @@ mod tests {
         // tmux writes an absolute path. Anything else reached this process
         // through something that damaged it, and reading it as "a different
         // server" would clear the way to killing the caller's own pane.
-        for mangled in ["garbage-with-no-commas", "relative/path,1,$0", "..,1,$0"] {
-            let caller = identity(mangled, "%1");
+        for mangled in ["garbage-with-no-commas", "relative/path,1,0", "..,1,0"] {
+            let caller = CallerIdentity::from_values(Some(mangled.into()), Some("%1".into()))
+                .expect("present context");
 
+            assert!(caller.malformed);
             assert_eq!(
                 caller.socket(),
                 None,
@@ -363,23 +497,21 @@ mod tests {
 
     #[test]
     fn the_guard_blocks_when_the_target_socket_is_unreadable() {
-        let caller = identity("/tmp/sock,1,$0", "%1");
+        let caller = identity("/tmp/sock,1,0", "%1");
 
         assert!(caller.may_be_on(None, None));
     }
 
     #[test]
-    fn the_guard_accepts_a_name_match_when_paths_diverge() {
-        // Two correct paths to one socket, which is what $TMUX_TMPDIR
-        // divergence between this process and its parent shell produces.
-        let caller = identity("/private/tmp/tmux-1000/work,1,$0", "%1");
+    fn the_guard_does_not_authenticate_a_basename_match() {
+        let caller = identity("/private/tmp/tmux-1000/work,1,0", "%1");
 
-        assert!(caller.may_be_on(Some(Path::new("/tmp/tmux-1000/work")), Some("work")));
+        assert!(!caller.may_be_on(Some(Path::new("/tmp/tmux-1000/work")), Some("work")));
     }
 
     #[test]
     fn the_guard_clears_an_unrelated_server() {
-        let caller = identity("/tmp/tmux-1000/default,1,$0", "%1");
+        let caller = identity("/tmp/tmux-1000/default,1,0", "%1");
 
         assert!(
             !caller.may_be_on(Some(Path::new("/tmp/tmux-1000/other")), Some("other")),

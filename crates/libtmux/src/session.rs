@@ -544,6 +544,7 @@ impl Session {
             Command::new("rename-session")
                 .arg("-t")
                 .arg(self.id().to_string())
+                .arg("--")
                 .arg(name.into()),
         )
         .await?;

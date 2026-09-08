@@ -9,17 +9,21 @@
 //! $ cargo run --example budget
 //! ```
 
-use tmux_mcp::{Safety, TmuxTools};
+use tmux_mcp::{Selection, TmuxTools};
 
 /// How many of the largest tools to name.
 const WORST: usize = 8;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    for tier in [Safety::ReadOnly, Safety::Mutating, Safety::Destructive] {
+    for toolsets in [
+        "inspect",
+        "inspect,manage,execute",
+        "inspect,manage,execute,teardown",
+    ] {
         // Nothing here talks to tmux: the surface is decided before any
         // command runs, so a server is needed only to build the tools.
         let tools = TmuxTools::builder(libtmux::Server::new()?)
-            .safety(tier)
+            .selection(Selection::parse(Some(toolsets), None, None)?)
             .build();
         let offered = tools.offered();
 
@@ -33,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!(
             "{:<12} {:>3} tools  {:>6} B total, {:>6} B of it output schemas",
-            tier.name(),
+            toolsets,
             offered.len(),
             whole,
             outputs,
@@ -41,7 +45,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let tools = TmuxTools::builder(libtmux::Server::new()?)
-        .safety(Safety::Destructive)
+        .selection(Selection::parse(
+            Some("inspect,manage,execute,teardown"),
+            None,
+            None,
+        )?)
         .build();
     let mut sizes: Vec<_> = tools
         .offered()

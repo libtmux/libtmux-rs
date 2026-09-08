@@ -1,224 +1,222 @@
-//! The closed wire grammars advertised to MCP clients.
+//! The startup-frozen public surface and its closed wire grammars.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt as _;
 
-use libtmux::plan::{
-    CapturePane, KillPane, KillWindow, NewSession, NewWindow, Plan, RenameWindow, SelectLayout,
-    SelectPane, SelectWindow, SendKeys, SetEnvironment, SetOption, SplitWindow,
-};
 use serde_json::json;
-use tmux_mcp::{
-    FilterArgs, OptionArgs, ResizePaneArgs, RunPlanArgs, Safety, SelectPaneArgs, SelectWindowArgs,
-    SplitPaneArgs, TmuxTools, TreeFilterArgs,
-};
+use tmux_mcp::{Selection, TmuxTools};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-fn every_operation_plan() -> Plan {
-    let mut plan = Plan::new();
-    let session = plan.add(
-        NewSession::new(OsString::from_vec(vec![0xff]))
-            .start_directory("/tmp")
-            .window_name("first"),
-    );
-    let window = plan.add(
-        NewWindow::new(session)
-            .name("work")
-            .start_directory("/tmp")
-            .command("sleep 30")
-            .environment("MODE", "build")
-            .index(2)
-            .focus(),
-    );
-    let pane = plan.add(
-        SplitWindow::new(window)
-            .horizontal()
-            .start_directory("/tmp")
-            .command("sleep 30")
-            .environment("ROLE", "worker")
-            .focus(),
-    );
-    plan.add(
-        SendKeys::new(pane)
-            .text("cargo test")
-            .keys(["Escape"])
-            .enter(),
-    );
-    plan.add(SelectPane::new(pane));
-    plan.add(SelectWindow::new(window));
-    plan.add(RenameWindow::new(window, "renamed"));
-    plan.add(SetOption::session(session, "status", "off"));
-    plan.add(SetEnvironment::new(session, "CI", "1"));
-    plan.add(SelectLayout::new(window, "even-horizontal"));
-    plan.add(CapturePane::new(pane).escape_sequences());
-    plan.add(KillPane::new(pane));
-    plan.add(KillWindow::new(window));
-    plan
-}
+const INSPECT: &[&str] = &[
+    "list_sessions",
+    "list_windows",
+    "list_panes",
+    "get_server_info",
+    "get_session_info",
+    "get_window_info",
+    "get_pane_info",
+    "capture_pane",
+    "capture_since",
+    "snapshot_pane",
+    "search_panes",
+    "find_pane_by_position",
+    "wait_for_text",
+    "get_tmux_variables",
+    "show_option",
+    "show_environment",
+    "show_hooks",
+    "call_read_tools_batch",
+];
+const MANAGE: &[&str] = &[
+    "rename_session",
+    "rename_window",
+    "select_window",
+    "select_pane",
+    "select_layout",
+    "resize_window",
+    "resize_pane",
+    "move_window",
+    "swap_pane",
+    "set_pane_title",
+    "wait_for_channel",
+    "signal_channel",
+    "set_mouse_enabled",
+    "set_history_limit",
+];
+const EXECUTE: &[&str] = &[
+    "create_session",
+    "create_window",
+    "split_window",
+    "respawn_pane",
+    "run_shell_command",
+    "send_keys",
+    "send_keys_batch",
+    "paste_text",
+    "set_synchronize_panes",
+];
+const TEARDOWN: &[&str] = &[
+    "clear_pane_scrollback",
+    "kill_pane",
+    "kill_window",
+    "kill_session",
+];
 
-fn advertised_operations(schema: &serde_json::Value) -> BTreeSet<&str> {
-    schema["$defs"]["Op"]["oneOf"]
-        .as_array()
-        .expect("Op is a tagged union")
-        .iter()
-        .map(|variant| {
-            let required = variant["required"]
-                .as_array()
-                .expect("an operation requires its tag");
-            assert_eq!(required.len(), 1, "an operation has one tag: {variant}");
-            required[0].as_str().expect("the operation tag is text")
-        })
-        .collect()
-}
-
-fn output_schema(tools: &TmuxTools, name: &str) -> Result<serde_json::Value, Box<dyn Error>> {
-    let tool = tools
-        .offered()
-        .into_iter()
-        .find(|tool| tool.name == name)
-        .ok_or_else(|| std::io::Error::other(format!("{name} is not offered")))?;
-    let schema = tool
-        .output_schema
-        .as_ref()
-        .ok_or_else(|| std::io::Error::other(format!("{name} has no output schema")))?;
-    Ok(serde_json::to_value(schema)?)
+fn tools(toolsets: &str) -> Result<TmuxTools, Box<dyn Error>> {
+    Ok(TmuxTools::builder(libtmux::Server::new()?)
+        .selection(Selection::parse(Some(toolsets), None, None)?)
+        .build())
 }
 
 #[test]
-fn each_safety_tier_advertises_exactly_the_operations_it_accepts() -> TestResult {
-    const READ_ONLY: &[&str] = &["CapturePane"];
-    const MUTATING: &[&str] = &[
-        "CapturePane",
-        "NewSession",
-        "NewWindow",
-        "RenameWindow",
-        "SelectLayout",
-        "SelectPane",
-        "SelectWindow",
-        "SendKeys",
-        "SetEnvironment",
-        "SetOption",
-        "SplitWindow",
+fn every_toolset_permutation_is_exact() -> TestResult {
+    let groups = [
+        ("inspect", INSPECT),
+        ("manage", MANAGE),
+        ("execute", EXECUTE),
+        ("teardown", TEARDOWN),
     ];
-    const DESTRUCTIVE: &[&str] = &[
-        "CapturePane",
-        "KillPane",
-        "KillWindow",
-        "NewSession",
-        "NewWindow",
-        "RenameWindow",
-        "SelectLayout",
-        "SelectPane",
-        "SelectWindow",
-        "SendKeys",
-        "SetEnvironment",
-        "SetOption",
-        "SplitWindow",
-    ];
+    for mask in 0_u8..16 {
+        let selected = groups
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .map(|(_, (name, _))| *name)
+            .collect::<Vec<_>>()
+            .join(",");
+        let expected: BTreeSet<_> = groups
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| mask & (1 << bit) != 0)
+            .flat_map(|(_, (_, names))| names.iter().map(|name| (*name).to_owned()))
+            .collect();
+        let actual: BTreeSet<_> = tools(&selected)?
+            .offered()
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
+            .collect();
 
-    for (tier, expected) in [
-        (Safety::ReadOnly, READ_ONLY),
-        (Safety::Mutating, MUTATING),
-        (Safety::Destructive, DESTRUCTIVE),
+        assert_eq!(actual, expected, "LIBTMUX_TOOLSETS={selected:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn every_advertised_schema_is_valid_and_closed() -> TestResult {
+    let all_tools = tools("inspect,manage,execute,teardown")?;
+    for tool in all_tools.offered() {
+        let input = serde_json::Value::Object((*tool.input_schema).clone());
+        jsonschema::draft202012::meta::validate(&input)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        assert_eq!(input["additionalProperties"], false, "{} input", tool.name);
+        if let Some(output) = tool.output_schema {
+            let output = serde_json::Value::Object((*output).clone());
+            jsonschema::draft202012::meta::validate(&output)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn configured_process_routes_have_no_executable_payload() -> TestResult {
+    let tools = tools("execute")?;
+    for name in [
+        "create_session",
+        "create_window",
+        "split_window",
+        "respawn_pane",
     ] {
-        let tools = TmuxTools::builder(libtmux::Server::new()?)
-            .safety(tier)
-            .build();
         let tool = tools
             .offered()
             .into_iter()
-            .find(|tool| tool.name == "run_plan")
-            .expect("run_plan is offered");
-        let schema = serde_json::to_value(tool.input_schema)?;
-        jsonschema::draft202012::meta::validate(&schema)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let advertised = advertised_operations(&schema);
-
-        assert_eq!(advertised, expected.iter().copied().collect(), "{tier:?}");
-        let validator = jsonschema::draft202012::new(&schema)?;
-        let operations = serde_json::to_value(every_operation_plan())?;
-        for operation in operations.as_array().expect("a plan is an array") {
-            let name = operation
-                .as_object()
-                .and_then(|object| object.keys().next())
-                .expect("an operation has one tag");
-            let arguments = json!({"plan": [operation]});
-            assert_eq!(
-                validator.is_valid(&arguments),
-                expected.contains(&name.as_str()),
-                "{tier:?} admission for {name}",
-            );
+            .find(|tool| tool.name == name)
+            .expect("configured-process route");
+        let properties = tool.input_schema["properties"]
+            .as_object()
+            .expect("object properties");
+        for prohibited in ["command", "environment", "env"] {
+            assert!(!properties.contains_key(prohibited), "{name}: {prohibited}");
         }
     }
-
     Ok(())
 }
 
 #[test]
-fn run_plan_schema_matches_every_operation_and_rejects_malformed_plans() -> TestResult {
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
-        .safety(Safety::Destructive)
-        .build();
-    let tool = tools
+fn foreground_commands_expose_no_retired_job_handle() -> TestResult {
+    let tool = tools("execute")?
         .offered()
         .into_iter()
-        .find(|tool| tool.name == "run_plan")
-        .expect("run_plan is offered");
-    let schema = serde_json::to_value(tool.input_schema)?;
-    jsonschema::draft202012::meta::validate(&schema)
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let validator = jsonschema::draft202012::new(&schema)?;
+        .find(|tool| tool.name == "run_shell_command")
+        .expect("pane-command route");
+    let output = tool.output_schema.expect("typed output");
+    let properties = output["properties"].as_object().expect("object properties");
 
-    let plan = every_operation_plan();
-
-    let valid = json!({
-        "plan": serde_json::to_value(&plan)?,
-        "grouping": "marked",
-    });
-    assert!(validator.is_valid(&valid), "schema rejected {valid}");
-    serde_json::from_value::<RunPlanArgs>(valid)?;
-
-    for malformed in [
-        json!({"plan": {"NewSession": {}}}),
-        json!({"plan": [{"Unknown": {}}]}),
-        json!({"plan": [{"NewSession": {"start_directory": null, "window_name": null}}]}),
-        json!({"plan": [{"NewSession": {"name": "work", "start_directory": null, "window_name": null, "extra": false}}]}),
-        json!({"plan": [{"CapturePane": {"target": {"Id": "not-a-pane"}, "escape_sequences": false}}]}),
-        json!({"plan": [{"CapturePane": {"target": {"Id": "%4294967296"}, "escape_sequences": false}}]}),
-        json!({"plan": [{"SendKeys": {"target": {"Id": "%1"}, "text": null, "keys": "Escape", "enter": false}}]}),
-    ] {
-        assert!(
-            !validator.is_valid(&malformed),
-            "schema accepted malformed arguments: {malformed}",
-        );
-        assert!(
-            serde_json::from_value::<RunPlanArgs>(malformed.clone()).is_err(),
-            "serde accepted malformed arguments: {malformed}",
-        );
-    }
-
+    assert!(!properties.contains_key("job"));
     Ok(())
 }
 
 #[test]
-fn tool_schemas_close_every_documented_choice_vocabulary() -> TestResult {
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
-        .safety(Safety::Destructive)
-        .build();
+fn pane_input_guards_add_no_mode_controls() -> TestResult {
+    let tools = tools("execute")?;
+    for name in [
+        "send_keys",
+        "send_keys_batch",
+        "paste_text",
+        "run_shell_command",
+    ] {
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("pane input route");
+        let properties = tool.input_schema["properties"]
+            .as_object()
+            .expect("object properties");
+        for prohibited in ["force", "cancel_mode", "exit_mode"] {
+            assert!(!properties.contains_key(prohibited), "{name}: {prohibited}");
+        }
+    }
+    Ok(())
+}
 
+#[test]
+fn pane_text_results_also_declare_their_structured_tmux_metadata() -> TestResult {
+    let tools = tools("inspect,execute")?;
+    for name in [
+        "capture_pane",
+        "capture_since",
+        "wait_for_text",
+        "run_shell_command",
+    ] {
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("pane text route");
+        let capability = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+            .expect("capability row");
+
+        assert_eq!(
+            capability["outputClasses"],
+            json!(["tmux-metadata", "terminal-content"]),
+            "{name}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn choice_vocabularies_reject_unknown_values() -> TestResult {
+    let tools = tools("manage,execute")?;
     for (name, valid, invalid) in [
         (
-            "run_plan",
-            json!({"plan": [], "grouping": "marked"}),
-            json!({"plan": [], "grouping": "parallel"}),
-        ),
-        (
-            "split_pane",
+            "split_window",
             json!({"pane": "%1", "direction": "above"}),
             json!({"pane": "%1", "direction": "sideways"}),
         ),
@@ -228,291 +226,408 @@ fn tool_schemas_close_every_documented_choice_vocabulary() -> TestResult {
             json!({"pane": "%1", "direction": "inward", "cells": 1}),
         ),
         (
-            "select_pane",
-            json!({"pane": "%1", "direction": "previous"}),
-            json!({"pane": "%1", "direction": "sideways"}),
-        ),
-        (
             "select_window",
             json!({"window": "@1", "direction": "last"}),
             json!({"window": "@1", "direction": "first"}),
         ),
-        (
-            "show_option",
-            json!({"name": "status", "scope": "pane", "target": "%1"}),
-            json!({"name": "status", "scope": "planet", "target": "%1"}),
-        ),
     ] {
         let tool = tools
             .offered()
             .into_iter()
             .find(|tool| tool.name == name)
-            .unwrap_or_else(|| panic!("{name} is offered"));
-        let schema = serde_json::to_value(tool.input_schema)?;
+            .expect("route");
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
         let validator = jsonschema::draft202012::new(&schema)?;
-
         assert!(validator.is_valid(&valid), "{name} rejected {valid}");
-        assert!(
-            !validator.is_valid(&invalid),
-            "{name} advertised an open vocabulary: {invalid}",
-        );
+        assert!(!validator.is_valid(&invalid), "{name} accepted {invalid}");
     }
-
     Ok(())
 }
 
 #[test]
-fn plan_output_schema_closes_every_documented_choice_vocabulary() -> TestResult {
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
-        .safety(Safety::Destructive)
-        .build();
+fn batch_error_policy_is_a_typed_on_error_enum() -> TestResult {
+    let tools = tools("inspect,execute")?;
+    for name in ["call_read_tools_batch", "send_keys_batch"] {
+        let tool = tools
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .expect("batch route");
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        let properties = schema["properties"].as_object().expect("input properties");
+        let on_error = &properties["on_error"];
+        let enum_schema = on_error["$ref"]
+            .as_str()
+            .and_then(|reference| reference.strip_prefix("#/$defs/"))
+            .map_or(on_error, |name| &schema["$defs"][name]);
+        let values: BTreeSet<_> = enum_schema["enum"]
+            .as_array()
+            .expect("typed on_error enum")
+            .iter()
+            .map(|value| value.as_str().expect("on_error value"))
+            .collect();
 
-    let schema = output_schema(&tools, "run_plan")?;
-    let validator = jsonschema::draft202012::new(&schema)?;
-    let operation = |kind: &str, outcome: &str, attribution: serde_json::Value| {
-        json!({
-            "operations": [{
-                "index": 0,
-                "kind": kind,
-                "outcome": outcome,
-                "attribution": attribution,
-                "value": null,
-            }],
-            "failures": [],
-            "dispatches": 1,
-            "complete": outcome == "complete",
-        })
-    };
-    for kind in [
-        "new-session",
-        "new-window",
-        "split-window",
-        "send-keys",
-        "select-pane",
-        "select-window",
-        "rename-window",
-        "set-option",
-        "set-environment",
-        "select-layout",
-        "capture-pane",
-        "kill-pane",
-        "kill-window",
-    ] {
-        assert!(
-            validator.is_valid(&operation(kind, "complete", json!("per_command"))),
-            "run_plan rejected operation kind {kind}",
-        );
+        assert_eq!(values, BTreeSet::from(["continue", "stop"]), "{name}");
+        assert!(!properties.contains_key("continue_on_error"), "{name}");
     }
-    for (outcome, attribution) in [
-        ("complete", json!("per_command")),
-        ("failed", json!("merged")),
-        ("skipped", serde_json::Value::Null),
-        ("unknown", json!("merged")),
-    ] {
-        assert!(
-            validator.is_valid(&operation("send-keys", outcome, attribution)),
-            "run_plan rejected outcome {outcome}",
-        );
-    }
-    for invalid in [
-        operation("unknown-operation", "complete", json!("per_command")),
-        operation("send-keys", "pending", json!("per_command")),
-        operation("send-keys", "complete", json!("batched")),
-    ] {
-        assert!(
-            !validator.is_valid(&invalid),
-            "run_plan advertised an open output vocabulary: {invalid}",
-        );
-    }
-    let failure = json!({
-        "operations": [],
-        "failures": [{
-            "operations": [0],
-            "attribution": "merged",
-            "kind": "refused",
-            "stderr_bytes": 0,
-            "stderr_withheld": false,
-        }],
-        "dispatches": 1,
-        "complete": false,
-    });
-    assert!(validator.is_valid(&failure), "run_plan rejected {failure}");
-    let mut invalid = failure;
-    invalid["failures"][0]["attribution"] = json!("batched");
-    assert!(
-        !validator.is_valid(&invalid),
-        "run_plan advertised an open failure attribution: {invalid}",
-    );
-
     Ok(())
 }
 
 #[test]
-fn other_output_schemas_close_documented_choice_vocabularies() -> TestResult {
-    let tools = TmuxTools::builder(libtmux::Server::new()?)
-        .safety(Safety::Destructive)
-        .build();
-
+fn pattern_schemas_publish_the_runtime_limits() -> TestResult {
+    let tools = tools("inspect")?;
     for (name, valid, invalid) in [
         (
-            "watch_pane",
-            json!({"pane": "%1", "output": "", "bytes": 0, "stopped": "deadline"}),
-            json!({"pane": "%1", "output": "", "bytes": 0, "stopped": "quiet"}),
+            "search_panes",
+            json!({"pattern": "x".repeat(4096)}),
+            json!({"pattern": "x".repeat(4097)}),
         ),
         (
-            "set_option",
-            json!({"name": "status", "scope": "global-session"}),
-            json!({"name": "status", "scope": "planet"}),
-        ),
-        (
-            "wait_for_channel",
-            json!({"channel": "ready", "outcome": "signalled"}),
-            json!({"channel": "ready", "outcome": "waiting"}),
-        ),
-    ] {
-        let schema = output_schema(&tools, name)?;
-        let validator = jsonschema::draft202012::new(&schema)?;
-        assert!(validator.is_valid(&valid), "{name} rejected {valid}");
-        assert!(
-            !validator.is_valid(&invalid),
-            "{name} advertised an open output vocabulary: {invalid}",
-        );
-    }
-
-    Ok(())
-}
-
-#[test]
-fn public_argument_struct_literals_keep_string_vocabulary_fields() {
-    let _ = RunPlanArgs {
-        plan: Plan::new(),
-        grouping: Some("sequential".into()),
-    };
-    let _ = SplitPaneArgs {
-        pane: "%1".into(),
-        direction: Some("right".into()),
-        percent: None,
-        command: None,
-    };
-    let _ = ResizePaneArgs {
-        pane: "%1".into(),
-        direction: "up".into(),
-        cells: 1,
-    };
-    let _ = SelectPaneArgs {
-        pane: "%1".into(),
-        direction: Some("next".into()),
-    };
-    let _ = SelectWindowArgs {
-        window: "@1".into(),
-        direction: Some("last".into()),
-    };
-    let _ = OptionArgs {
-        name: "status".into(),
-        scope: Some("global-session".into()),
-        target: None,
-        value: None,
-    };
-}
-
-#[test]
-fn portable_filter_schemas_reject_target_field_and_operator_mismatches() -> TestResult {
-    let tools = TmuxTools::builder(libtmux::Server::new()?).build();
-
-    for (name, cases) in [
-        (
-            "find_panes",
-            vec![
-                (
-                    true,
-                    json!({"filter": {"version": 1, "target": "pane", "expr":
-                        {"op": "eq", "field": "pane_active", "value": true}}}),
-                ),
-                (
-                    true,
-                    json!({"filter": {"version": 1, "target": "pane", "expr":
-                    {"op": "and", "args": [
-                        {"op": "contains", "field": "pane_title", "value": "build"},
-                        {"op": "gte", "field": "pane_width", "value": "80"}
-                    ]}}}),
-                ),
-                (
-                    false,
-                    json!({"filter": {"version": 1, "target": "window", "expr":
-                        {"op": "eq", "field": "pane_active", "value": true}}}),
-                ),
-                (
-                    false,
-                    json!({"filter": {"version": 1, "target": "pane", "expr":
-                        {"op": "eq", "field": "not_a_pane_field", "value": true}}}),
-                ),
-                (
-                    false,
-                    json!({"filter": {"version": 1, "target": "pane", "expr":
-                        {"op": "contains", "field": "pane_active", "value": "yes"}}}),
-                ),
-            ],
-        ),
-        (
-            "find_sessions",
-            vec![
-                (
-                    true,
-                    json!({"filter": {"version": 1, "target": "session_tree", "expr": {
-                        "op": "relation", "field": "windows", "quantifier": "any",
-                        "expr": {"op": "relation", "field": "panes", "quantifier": "none",
-                            "expr": {"op": "eq", "field": "pane_dead", "value": true}}
-                    }}}),
-                ),
-                (
-                    false,
-                    json!({"filter": {"version": 1, "target": "session_tree", "expr": {
-                        "op": "relation", "field": "panes", "quantifier": "any",
-                        "expr": {"op": "eq", "field": "pane_dead", "value": true}
-                    }}}),
-                ),
-                (
-                    false,
-                    json!({"filter": {"version": 1, "target": "pane", "expr":
-                        {"op": "eq", "field": "session_name", "value": "build"}}}),
-                ),
-            ],
+            "wait_for_text",
+            json!({"pane": "%1", "patterns": vec!["x"; 32]}),
+            json!({"pane": "%1", "patterns": vec!["x"; 33]}),
         ),
     ] {
         let tool = tools
             .offered()
             .into_iter()
             .find(|tool| tool.name == name)
-            .expect("filter tool is offered");
-        let schema = serde_json::to_value(tool.input_schema)?;
-        let bytes = serde_json::to_vec(&schema)?.len();
-        let ceiling = if name == "find_panes" {
-            8 * 1_024
-        } else {
-            16 * 1_024
-        };
-        assert!(
-            bytes <= ceiling,
-            "{name} schema grew to {bytes} bytes (ceiling {ceiling})",
-        );
-        jsonschema::draft202012::meta::validate(&schema)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
+            .expect("route");
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
         let validator = jsonschema::draft202012::new(&schema)?;
 
-        for (expected, arguments) in cases {
-            let decoded = if name == "find_panes" {
-                serde_json::from_value::<FilterArgs>(arguments.clone()).is_ok()
-            } else {
-                serde_json::from_value::<TreeFilterArgs>(arguments.clone()).is_ok()
-            };
-            assert_eq!(decoded, expected, "typed decoder admission for {arguments}");
-            assert_eq!(
-                validator.is_valid(&arguments),
-                expected,
-                "advertised schema admission for {arguments}",
-            );
-        }
+        assert!(validator.is_valid(&valid), "{name} rejected its limit");
+        assert!(!validator.is_valid(&invalid), "{name} exceeded its limit");
+    }
+    Ok(())
+}
+
+#[test]
+fn tmux_variable_schema_accepts_only_a_bounded_name_list() -> TestResult {
+    let tool = tools("inspect")?
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "get_tmux_variables")
+        .expect("tmux variable route");
+    let schema = serde_json::Value::Object((*tool.input_schema).clone());
+    let validator = jsonschema::draft202012::new(&schema)?;
+
+    assert!(validator.is_valid(&json!({"names": ["session_name"], "pane": "%1"})));
+    for invalid in [
+        json!({"names": []}),
+        json!({"names": vec!["pane_id"; 33]}),
+        json!({"names": ["#{pane_id}"]}),
+        json!({"names": ["pane-id"]}),
+    ] {
+        assert!(!validator.is_valid(&invalid), "accepted {invalid}");
+    }
+    Ok(())
+}
+
+#[test]
+fn read_batch_schema_names_exact_effective_nested_authority() -> TestResult {
+    let eligible: Vec<_> = INSPECT
+        .iter()
+        .copied()
+        .filter(|name| !matches!(*name, "wait_for_text" | "call_read_tools_batch"))
+        .collect();
+    let mut expected: BTreeSet<_> = eligible.iter().copied().collect();
+    expected.remove("capture_pane");
+    let selected = Selection::parse(Some("inspect"), None, Some("capture_pane"))?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let batch = tools
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "call_read_tools_batch")
+        .expect("batch route");
+    let schema = serde_json::Value::Object((*batch.input_schema).clone());
+    let operations = &schema["properties"]["operations"];
+    assert_eq!(operations["minItems"], 1);
+    assert_eq!(operations["maxItems"], 16);
+    let names: BTreeSet<_> = schema["properties"]["operations"]["items"]["oneOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("nested tool enum: {schema}"))
+        .iter()
+        .map(|branch| {
+            branch["properties"]["tool"]["const"]
+                .as_str()
+                .expect("tool name")
+        })
+        .collect();
+
+    assert!(!names.contains("capture_pane"));
+    assert_eq!(names, expected);
+
+    let exclusions = eligible.join(",");
+    let selected = Selection::parse(Some("inspect"), None, Some(&exclusions))?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let batch = tools
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "call_read_tools_batch")
+        .expect("batch route");
+    let schema = serde_json::Value::Object((*batch.input_schema).clone());
+    jsonschema::draft202012::meta::validate(&schema)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let validator = jsonschema::draft202012::new(&schema)?;
+    assert!(!validator.is_valid(&json!({
+        "operations": [{"tool": "list_sessions", "arguments": {}}],
+        "on_error": "stop"
+    })));
+    Ok(())
+}
+
+#[test]
+fn capability_rows_publish_only_schema_keyed_literalization_controls() -> TestResult {
+    let all_tools = tools("inspect,manage,execute,teardown")?;
+
+    for tool in all_tools.offered() {
+        let meta = tool.meta.as_ref().expect("tool metadata");
+        assert!(
+            meta.0.keys().all(|key| !key.contains("internal")),
+            "{}: {:?}",
+            tool.name,
+            meta.0.keys().collect::<Vec<_>>(),
+        );
+        let capability = meta
+            .0
+            .get("com.git-pull.libtmux-mcp/capability")
+            .expect("capability row");
+        let literalization = capability["inputLiteralization"]
+            .as_object()
+            .expect("input literalization");
+        let schema_keys = tool.input_schema["properties"]
+            .as_object()
+            .expect("schema properties");
+
+        assert!(capability.get("inputSinks").is_none(), "{}", tool.name);
+        assert!(
+            capability.get("tmuxFormatControls").is_none(),
+            "{}",
+            tool.name,
+        );
+        assert!(
+            literalization.values().all(|strategy| matches!(
+                strategy.as_str(),
+                Some("double-hash-once" | "validated-variable-name")
+            )),
+            "{}: {literalization:?}",
+            tool.name,
+        );
+        assert!(
+            literalization
+                .keys()
+                .all(|name| schema_keys.contains_key(name)),
+            "{}: {literalization:?}",
+            tool.name,
+        );
     }
 
+    let controls = |name: &str| {
+        let tool = tools("inspect")?
+            .offered()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .ok_or_else(|| format!("missing tool {name}"))?;
+        let capability = tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+            .ok_or_else(|| format!("missing capability row for {name}"))?;
+        Ok::<_, Box<dyn Error>>(capability["inputLiteralization"].clone())
+    };
+    assert_eq!(
+        controls("get_tmux_variables")?["names"],
+        "validated-variable-name"
+    );
+    assert_eq!(controls("show_option")?["name"], "double-hash-once");
+    Ok(())
+}
+
+#[test]
+fn aggregate_only_selection_keeps_native_pruned_operation_schemas() -> TestResult {
+    let selected = Selection::parse(
+        Some(""),
+        Some("call_read_tools_batch"),
+        Some("capture_pane"),
+    )?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let offered = tools.offered();
+    assert_eq!(offered.len(), 1);
+    let batch = &offered[0];
+    assert_eq!(batch.name, "call_read_tools_batch");
+    let capability = batch
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+        .expect("capability row");
+    let authority: BTreeSet<_> = capability["nestedAuthority"]
+        .as_array()
+        .expect("nested authority")
+        .iter()
+        .map(|name| name.as_str().expect("nested name"))
+        .collect();
+    assert_eq!(authority.len(), 15);
+    assert!(!authority.contains("capture_pane"));
+
+    let schema = serde_json::Value::Object((*batch.input_schema).clone());
+    jsonschema::draft202012::meta::validate(&schema)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let validator = jsonschema::draft202012::new(&schema)?;
+    assert!(validator.is_valid(&json!({
+        "operations": [{"tool": "list_sessions", "arguments": {}}],
+        "on_error": "stop"
+    })));
+    assert!(validator.is_valid(&json!({
+        "operations": [{"tool": "get_pane_info", "arguments": {"pane": "%1"}}],
+        "on_error": "stop"
+    })));
+    assert!(!validator.is_valid(&json!({
+        "operations": [{"tool": "get_pane_info", "arguments": {}}],
+        "on_error": "stop"
+    })));
+    assert!(!validator.is_valid(&json!({
+        "operations": [{"tool": "list_sessions", "arguments": {"extra": true}}],
+        "on_error": "stop"
+    })));
+    assert!(!validator.is_valid(&json!({
+        "operations": [{"tool": "capture_pane", "arguments": {"pane": "%1"}}],
+        "on_error": "stop"
+    })));
+    Ok(())
+}
+
+#[test]
+fn empty_aggregate_authority_has_a_valid_impossible_schema() -> TestResult {
+    let eligible = INSPECT
+        .iter()
+        .copied()
+        .filter(|name| !matches!(*name, "wait_for_text" | "call_read_tools_batch"))
+        .collect::<Vec<_>>();
+    let selected = Selection::parse(
+        Some(""),
+        Some("call_read_tools_batch"),
+        Some(&eligible.join(",")),
+    )?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let batch = tools.offered().into_iter().next().expect("batch route");
+    let schema = serde_json::Value::Object((*batch.input_schema).clone());
+    jsonschema::draft202012::meta::validate(&schema)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let validator = jsonschema::draft202012::new(&schema)?;
+    assert!(!validator.is_valid(&json!({
+        "operations": [{"tool": "list_sessions", "arguments": {}}],
+        "on_error": "stop"
+    })));
+    let capability = batch
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+        .expect("capability row");
+    assert_eq!(capability["nestedAuthority"], json!([]));
+    assert_eq!(capability["tmuxEffects"], json!(["observe"]));
+    assert_eq!(capability["outputClasses"], json!([]));
+    Ok(())
+}
+
+#[test]
+fn retired_background_job_subsystem_is_structurally_absent() -> TestResult {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    assert!(!source.join("jobs.rs").exists());
+    assert!(!source.join("jobs").exists());
+
+    let library = std::fs::read_to_string(source.join("lib.rs"))?;
+    let observer = std::fs::read_to_string(source.join("tools/observe.rs"))?;
+    let errors = std::fs::read_to_string(source.join("tools/error.rs"))?;
+    let joined = format!("{library}\n{observer}\n{errors}");
+    for retired in [
+        "mod jobs;",
+        "JobTable",
+        "MAX_JOBS",
+        "background job capacity",
+    ] {
+        assert!(
+            !joined.contains(retired),
+            "retired job token remains: {retired}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn aggregate_effects_and_outputs_follow_pruned_authority() -> TestResult {
+    let inspect = tools("inspect")?;
+    let capture = inspect
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "capture_since")
+        .expect("capture_since route");
+    let capture_capability = capture
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+        .expect("capability row");
+    assert_eq!(capture_capability["tmuxEffects"], json!(["observe"]));
+
+    let selected = Selection::parse(
+        Some(""),
+        Some("call_read_tools_batch"),
+        Some("capture_since"),
+    )?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let batch = tools.offered().into_iter().next().expect("batch route");
+    let capability = batch
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+        .expect("capability row");
+
+    assert_eq!(capability["tmuxEffects"], json!(["observe"]));
+    assert_eq!(
+        capability["outputClasses"],
+        json!([
+            "tmux-metadata",
+            "terminal-content",
+            "process-environment",
+            "configured-command"
+        ])
+    );
+
+    let excluded = INSPECT
+        .iter()
+        .copied()
+        .filter(|name| {
+            !matches!(
+                *name,
+                "wait_for_text" | "call_read_tools_batch" | "capture_since"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let selected = Selection::parse(Some(""), Some("call_read_tools_batch"), Some(&excluded))?;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(selected)
+        .build();
+    let batch = tools.offered().into_iter().next().expect("batch route");
+    let capability = batch
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+        .expect("capability row");
+    assert_eq!(capability["tmuxEffects"], json!(["observe"]));
+    assert_eq!(
+        capability["outputClasses"],
+        json!(["tmux-metadata", "terminal-content"])
+    );
     Ok(())
 }

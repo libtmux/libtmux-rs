@@ -586,9 +586,8 @@ a thing it can say. That is deliberate: the grammar stays per-object so it can
 later compile to tmux's own `-f`, which evaluates against one row.
 
 Cross-object questions are asked by narrowing first, which is what tmux does
-with a target: `Session::panes` and `Window::panes` choose the rows,
-and the expression chooses among them. `tmux-mcp`'s `find_panes` takes both
-for exactly this reason.
+with a target: `Session::panes` and `Window::panes` choose the rows, and the
+expression chooses among them.
 
 Relations are how a parent is asked about, and they need a parent that holds
 its children. A `Session` handle does not: it fetches its windows. The shape
@@ -1701,6 +1700,44 @@ Getting there needed the failure to say more than `ShutdownFailed`, which
 named four different problems. `TestServerError` now carries the step that
 produced it, which is how a fixture on a machine the author does not have is
 debugged at all.
+
+### A pane accepts about a kilobyte of input at once
+
+The MCP server runs a command by typing a completion frame into the user's
+own shell, so the command inherits the environment, traps and directory that
+shell has. The frame is 2.6 KB for `sh` and 4.7 KB for `bash`. On macOS every
+run using it lost most of the frame and then waited for a marker that could
+never arrive.
+
+**The bound is the burst, not the line.** Measured on the macOS lane across
+`sh`, `bash` and `zsh`: a total up to 1024 bytes arrives whole, and past it
+the input is truncated or corrupted outright. Splitting the frame into
+158-byte lines and sending one `send-keys` for each fails identically, so this
+is not `MAX_CANON`, which caps one line at 1024 bytes there against 4096 on
+Linux. It is the pty input queue, which drops whatever a burst adds beyond its
+depth while the shell is busy rather than reading -- and a shell echoing a
+multi-kilobyte command line through its line editor is busy. Linux delivers
+8 KB intact through the same path with the reader stalled for three seconds,
+so nothing about this reproduces there.
+
+Only sending fewer bytes works. The frame is written to a private file and the
+pane is told to read it, which holds the typed line to a few hundred bytes
+whatever the frame contains. The line no longer carries the command either,
+so its length stopped growing with it -- a command over 4 KB used to produce a
+line that Linux truncated too.
+
+**How the pane reads it back is forced, three times over.** Sourcing the file
+with `.` gives it its own scope for trap inheritance, so `trap -p ERR DEBUG`
+inside reports nothing, the capture restores nothing, and the command runs
+without the traps its shell had; `eval` introduces no scope and does not.
+Under an inherited `DEBUG` trap that writes to standard output, zsh captures
+that output into `$( cat frame )` and hands `eval` the trap's text ahead of
+the frame, which then fails to parse; `$(<file)` runs no command for a trap to
+precede. And dash accepts `$(<file)` and quietly yields nothing, which would
+hang a run, so every other shell reads through `cat` -- safely, because a
+shell without `$(<...)` has no `DEBUG` trap to capture.
+
+Each of those three was found by a test that failed, not by reading a manual.
 
 ### The short name belongs to the honest form
 

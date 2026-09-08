@@ -1,20 +1,20 @@
+mod contract;
 mod control;
 mod error;
 mod inspect;
 mod observe;
-mod plan;
+mod pane_input;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
-use libtmux::{CaptureOptions, Command, TmuxText};
+use libtmux::{CaptureOptions, TmuxText};
 use rmcp::handler::server::wrapper::Json;
 use rmcp::model::ErrorData;
 
 use crate::caller::Relation;
 use crate::{
-    Capture, Marks, PaneView, Panes, ServerView, SessionView, Sessions, TmuxTools, WindowView,
-    Windows, resources,
+    Capture, Marks, PaneView, Panes, SessionView, Sessions, TmuxTools, WindowView, Windows,
 };
 
 use error::{bad_input, object_gone, tmux_error};
@@ -55,8 +55,8 @@ enum OptionScope {
 pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<TmuxTools> {
     TmuxTools::inspect_router()
         + TmuxTools::control_router()
+        + TmuxTools::contract_router()
         + TmuxTools::observe_router()
-        + TmuxTools::plan_router()
 }
 
 impl TmuxTools {
@@ -227,8 +227,8 @@ impl TmuxTools {
     }
 
     /// Render panes as the protocol sees them, saying which one is our own.
-    pub(super) async fn render_panes(&self, panes: &[libtmux::Pane]) -> Panes {
-        let socket = self.socket().await;
+    pub(super) fn render_panes(&self, panes: &[libtmux::Pane]) -> Panes {
+        let socket = self.socket();
         let panes: Vec<_> = panes
             .iter()
             .map(|pane| self.pane_view(pane, socket))
@@ -253,58 +253,67 @@ impl TmuxTools {
         }
     }
 
-    /// The socket path tmux itself reports for this server.
+    /// The socket path this process connects through.
+    ///
+    /// Taken from this crate's configuration rather than from
+    /// `#{socket_path}`, for the reasons `pane_input_endpoint` records: tmux
+    /// stores a non-printable byte in the path as an octal escape and
+    /// releases disagree about it, and reading the answer back as lossy UTF-8
+    /// replaced any non-UTF-8 byte regardless of version. Both produced a
+    /// path that matched nothing, which for a caller comparison means failing
+    /// to recognize the caller's own pane.
     ///
     /// Resolved once. Two calls racing compute the same answer, so the loser
     /// discarding its own is harmless.
-    pub(super) async fn socket(&self) -> Option<&Path> {
-        if let Some(cached) = self.socket.get() {
-            return cached.as_deref();
-        }
-
-        let resolved = self
-            .server
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("#{socket_path}"),
-            )
-            .await
-            .ok()
-            .map(|result| result.stdout_lossy().trim().to_owned())
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from);
-
-        // Only a real answer is kept. tmux cannot report a socket before it
-        // has a session, and caching that emptiness would leave every later
-        // caller comparison guessing for the life of the process.
-        if resolved.is_some() {
-            let _ = self.socket.set(resolved);
-            return self.socket.get().and_then(Option::as_deref);
-        }
-        None
+    pub(super) fn socket(&self) -> Option<&Path> {
+        self.socket
+            .get_or_init(|| Some(self.server.socket_path().to_path_buf()))
+            .as_deref()
     }
 
     /// The pane protected as the inherited caller on this server.
     ///
-    /// This errs toward protection when socket evidence is incomplete, so a
-    /// returned pane is not necessarily a confirmed location.
-    pub(super) async fn protected_pane(&self) -> Option<&str> {
-        let caller = self.caller.as_deref()?;
-        let pane = caller.pane_id()?;
-        let socket_name = self.server.socket_name().and_then(|name| name.to_str());
-        caller
-            .may_be_on(self.socket().await, socket_name)
-            .then_some(pane)
+    /// A returned pane has been resolved in the caller's claimed session on
+    /// the selected daemon. Malformed or stale context refuses the operation.
+    pub(super) async fn protected_pane(&self) -> Result<Option<&str>, ErrorData> {
+        if self.caller.is_none() {
+            return Ok(None);
+        }
+        let generation = self.server.generation().await.map_err(|e| tmux_error(&e))?;
+        let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
+        let socket = self.socket().ok_or_else(|| {
+            Self::caller_context_refusal("tmux did not report its selected socket")
+        })?;
+        self.server
+            .require_generation(generation)
+            .await
+            .map_err(|e| tmux_error(&e))?;
+        self.caller_pane_for_snapshot(socket, generation, &panes)
     }
 
-    /// The tools this server offers, after the tier has taken its cut.
+    pub(super) fn caller_pane_for_snapshot<'a>(
+        &'a self,
+        socket: &Path,
+        generation: libtmux::ServerGeneration,
+        panes: &[libtmux::Pane],
+    ) -> Result<Option<&'a str>, ErrorData> {
+        let Some(caller) = self.caller.as_deref() else {
+            return Ok(None);
+        };
+        caller
+            .resolve_on(socket, generation, panes)
+            .map_err(|detail| {
+                Self::caller_context_refusal(&format!("inherited caller context is {detail}"))
+            })
+    }
+
+    /// The tools this server offers after startup selection.
     #[must_use]
     pub fn offered(&self) -> Vec<rmcp::model::Tool> {
         self.tool_router.list_all()
     }
 
-    /// The pane this process runs in, when tmux named one.
+    /// The pane this process runs in, when tmux named a complete identity.
     ///
     /// Reported without checking it against the server, because this is for
     /// saying what the environment claimed rather than for deciding anything.
@@ -313,14 +322,10 @@ impl TmuxTools {
         self.caller.as_ref().and_then(|caller| caller.pane_id())
     }
 
-    /// Refuse a command that may destroy the pane this process talks through.
-    pub(super) fn self_harm(what: &str, own: &str) -> ErrorData {
+    /// Classify a refusal that protects the pane this process talks through.
+    pub(super) fn self_protection(message: String) -> ErrorData {
         ErrorData::invalid_params(
-            format!(
-                "refusing to kill this {what}: pane {own} matches this MCP server's inherited \
-                 caller context, so killing it may end this conversation. Run the command in \
-                 a terminal if that is what you meant."
-            ),
+            message,
             // Its own kind, because this is the server declining rather than
             // tmux: an agent that reads `refused` might reasonably try a
             // different argument, and no argument gets past this one.
@@ -332,87 +337,19 @@ impl TmuxTools {
         )
     }
 
-    /// Answer one resource, doing the same tmux work the matching tool does.
-    ///
-    /// Reusing the renderers keeps a resource and its tool from drifting into
-    /// two descriptions of the same pane.
-    pub(super) async fn read_target(
-        &self,
-        uri: &str,
-        target: resources::Target,
-    ) -> Result<rmcp::model::ReadResourceResult, ErrorData> {
-        use resources::Target;
+    fn caller_context_refusal(detail: &str) -> ErrorData {
+        Self::self_protection(format!(
+            "refusing this operation because {detail}; restart the MCP outside tmux or with a complete current TMUX and TMUX_PANE context"
+        ))
+    }
 
-        match target {
-            Target::Server => {
-                let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
-                resources::json(
-                    uri,
-                    &ServerView {
-                        socket: self
-                            .socket()
-                            .await
-                            .map(|path| path.to_string_lossy().into_owned()),
-                        inherited_caller_pane: self.caller_pane().map(ToOwned::to_owned),
-                        sessions: sessions.len(),
-                    },
-                )
-            }
-            Target::Sessions => {
-                let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &Self::render_sessions(&sessions))
-            }
-            Target::Windows => {
-                let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &Self::render_windows(&windows))
-            }
-            Target::Panes => {
-                let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &self.render_panes(&panes).await)
-            }
-            Target::Session(name) => {
-                // A URI that names one session answers with that session, not
-                // a collection holding it. The list wrapper the tools use is
-                // there because structured tool content has to be an object;
-                // a resource body has no such constraint.
-                let session = self.find_session(&name).await?;
-                let mut rendered = Self::render_sessions(std::slice::from_ref(&session));
-                resources::json(uri, &rendered.sessions.remove(0))
-            }
-            Target::SessionWindows(name) => {
-                let session = self.find_session(&name).await?;
-                let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
-                resources::json(uri, &Self::render_windows(&windows))
-            }
-            Target::Window(name, index) => {
-                let session = self.find_session(&name).await?;
-                let windows = session.windows().await.map_err(|e| tmux_error(&e))?;
-                let window = windows
-                    .into_iter()
-                    .find(|window| window.index().to_string() == index)
-                    .ok_or_else(|| object_gone("window", &format!("{name}:{index}")))?;
-                let mut rendered = Self::render_windows(std::slice::from_ref(&window));
-                resources::json(uri, &rendered.windows.remove(0))
-            }
-            Target::Pane(id) => {
-                let pane = self.find_pane(&id).await?;
-                let mut rendered = self.render_panes(std::slice::from_ref(&pane)).await;
-                resources::json(uri, &rendered.panes.remove(0))
-            }
-            Target::PaneContent(id) => {
-                let pane = self.find_pane(&id).await?;
-                let lines = pane
-                    .capture_with(CaptureOptions::visible())
-                    .await
-                    .map_err(|e| tmux_error(&e))?;
-                let body = lines
-                    .iter()
-                    .map(|line| line.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Ok(resources::text(uri, body))
-            }
-        }
+    /// Refuse a command that may destroy the pane this process talks through.
+    pub(super) fn self_harm(what: &str, own: &str) -> ErrorData {
+        Self::self_protection(format!(
+            "refusing to kill this {what}: pane {own} matches this MCP server's inherited \
+             caller context, so killing it may end this conversation. Run the command in \
+             a terminal if that is what you meant."
+        ))
     }
 
     /// Resolve a window id, reporting an unknown one as invalid input.

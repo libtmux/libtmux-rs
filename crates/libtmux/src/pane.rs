@@ -22,6 +22,10 @@ use crate::{Command, CommandResult, Error, ObjectKind};
 mod observe;
 mod settings;
 
+const fn pane_mode_is_active(count: u32) -> bool {
+    count > 0
+}
+
 /// One tmux pane, as reached through one window link.
 ///
 /// A pane belongs to exactly one window, but that window can be linked into
@@ -63,6 +67,7 @@ fn send_line_command(target: &PaneId, mut text: OsString) -> Command {
         .arg("-t")
         .arg(target.to_string())
         .arg("-l")
+        .arg("--")
         .sensitive_arg(text)
 }
 
@@ -139,6 +144,13 @@ impl Pane {
     #[must_use]
     pub const fn window_id(&self) -> &WindowId {
         self.projection.link_identity().window_id()
+    }
+
+    /// Return the window index for the session through which this pane was
+    /// reached.
+    #[must_use]
+    pub const fn window_index(&self) -> i32 {
+        self.projection.link_identity().window_index()
     }
 
     /// Return the session this handle reached the pane through.
@@ -282,6 +294,18 @@ impl Pane {
         *self.projection.pane().pane_dead()
     }
 
+    /// Report whether tmux has disabled input for this pane.
+    #[must_use]
+    pub fn is_input_disabled(&self) -> bool {
+        *self.projection.pane().pane_input_off()
+    }
+
+    /// Report whether this pane has synchronized input enabled.
+    #[must_use]
+    pub fn is_synchronized(&self) -> bool {
+        *self.projection.pane().pane_synchronized()
+    }
+
     /// Report whether tmux is copying this pane's output to a command.
     ///
     /// [`Self::pipe`] toggles when given no command, so a caller who lost track
@@ -327,7 +351,7 @@ impl Pane {
     /// means the pane has a mode open.
     #[must_use]
     pub fn is_in_mode(&self) -> bool {
-        *self.projection.pane().pane_in_mode() > 0
+        pane_mode_is_active(*self.projection.pane().pane_in_mode())
     }
 
     /// Return the identity of the server this pane belongs to.
@@ -563,6 +587,7 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("-l")
+                .arg("--")
                 .sensitive_arg(keys.into()),
         )
         .await
@@ -598,7 +623,8 @@ impl Pane {
     {
         let mut command = Command::new("send-keys")
             .arg("-t")
-            .arg(self.id().to_string());
+            .arg(self.id().to_string())
+            .arg("--");
         for key in keys {
             command = command.arg(key.into());
         }
@@ -863,7 +889,7 @@ impl Pane {
             .arg("-t")
             .arg(self.id().to_string());
         if let Some(command) = command {
-            pipe = pipe.sensitive_arg(command.into());
+            pipe = pipe.arg("--").sensitive_arg(command.into());
         }
 
         listing::mutate(&self.core, "pipe-pane", pipe).await
@@ -888,7 +914,7 @@ impl Pane {
             respawn = respawn.arg("-k");
         }
         if let Some(command) = command {
-            respawn = respawn.arg(command.into());
+            respawn = respawn.arg("--").arg(command.into());
         }
 
         listing::mutate(&self.core, "respawn-pane", respawn).await?;
@@ -1586,7 +1612,7 @@ fn parse_env_id(value: Option<&OsStr>) -> Result<PaneId, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CaptureOptions, send_line_command};
+    use super::{CaptureOptions, pane_mode_is_active, send_line_command};
     use crate::TmuxVersion;
 
     #[test]
@@ -1615,6 +1641,14 @@ mod tests {
 
             assert_eq!(summary.sensitive_argument_count(), 1);
             assert!(!summary.to_string().contains(secret));
+        }
+    }
+
+    #[test]
+    fn every_nonzero_mode_depth_is_active() {
+        assert!(!pane_mode_is_active(0));
+        for depth in [1, 2, u32::MAX] {
+            assert!(pane_mode_is_active(depth), "mode depth {depth}");
         }
     }
 }
