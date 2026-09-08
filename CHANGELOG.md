@@ -16,6 +16,24 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.10 - 2026-09-07
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.10;
+`tmux-mcp` is 0.1.0-alpha.11, because it was already at alpha.10.
+
+Take this one if you run the MCP server, and especially if you run it on
+macOS, where `run_shell_command` could not deliver its completion frame at
+all and every run waited out its deadline. The tool surface is now frozen
+behind a typed manifest and reported by `tmux://capabilities`, so a caller
+can read what it was given instead of inferring it by trying. Pane input
+fails closed when it cannot prove which pane will receive it, and the
+configuration swapper is a transactional Rust binary in place of a Python
+script that rewrote files where they sat.
+
+Every breaking change here is in the MCP surface. The libraries only gain:
+three pane accessors, the resolved tmux executable, and operand delimiting
+so a value beginning with a dash is not read as a flag.
+
 ### Added
 
 - `LIBTMUX_TOOLSETS`, `LIBTMUX_TOOLS`, and `LIBTMUX_EXCLUDE_TOOLS` freeze an
@@ -149,6 +167,16 @@ full.
 - `run_shell_command` completes normally on tmux 3.3 through 3.4, returning
   output and exit status when the command ends instead of waiting until the
   request deadline.
+
+- `run_shell_command` completes on macOS and the BSDs. A pane accepts about
+  1024 bytes of input in one burst there, against 4096 on Linux, and discards
+  the rest, so the completion frame -- 2.6 KB for `sh` and 4.7 KB for `bash`
+  -- never arrived whole and every run waited out its deadline for a marker
+  that could not come. Sending one line at a time fails the same way, because
+  the bound is the burst rather than any one line, so the frame is staged
+  where the pane reads it back instead of being typed. The typed line no
+  longer carries the command either, and so no longer grows with it: one over
+  4 KB was truncated on Linux too.
 
 ## 0.1.0-alpha.9 - 2026-08-31
 
