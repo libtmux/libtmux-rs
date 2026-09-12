@@ -64,6 +64,45 @@ async fn unknown_targets_are_structured_invalid_input() {
 }
 
 #[tokio::test]
+async fn a_malformed_id_is_bad_input_and_a_padded_one_still_resolves() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = bare_tools(guard.server());
+    tools
+        .create_session(args(serde_json::json!({"name": "work"})))
+        .await
+        .expect("session starts");
+
+    // Text that is not an id cannot become one by looking again, so it is the
+    // caller's mistake rather than state that moved. `%999999` above is the
+    // other case: well formed, and genuinely gone.
+    let error = tools
+        .capture_pane(args(serde_json::json!({"pane": "not-a-pane"})))
+        .await
+        .map(|_| ())
+        .expect_err("a malformed id fails");
+
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    let data = error.data.expect("classification");
+    assert_eq!(data["kind"], "invalid_input");
+    assert_eq!(data["retryable"], false);
+    assert_eq!(data["stale"], false);
+
+    // A tmux id canonicalizes its digits, so `%00` addresses the pane `%0`.
+    // Comparing the rendered string against a listing called that one missing.
+    let pane = json(tools.list_panes().await.expect("panes"))["panes"][0]["id"]
+        .as_str()
+        .expect("a pane id")
+        .to_owned();
+    let padded = format!("%0{}", pane.strip_prefix('%').expect("a pane sigil"));
+    tools
+        .capture_pane(args(serde_json::json!({"pane": padded})))
+        .await
+        .expect("a padded id addresses the same pane");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn capture_can_include_scrollback() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = bare_tools(guard.server());

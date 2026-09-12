@@ -1382,12 +1382,17 @@ pub enum SplitDirection {
 impl SplitDirection {
     /// Return the tmux flags that produce this position.
     pub(crate) const fn flags(self) -> (&'static str, bool) {
-        match self {
-            Self::Above => ("-v", true),
-            Self::Below => ("-v", false),
-            Self::Left => ("-h", true),
-            Self::Right => ("-h", false),
-        }
+        (if self.is_vertical() { "-v" } else { "-h" }, self.before())
+    }
+
+    /// Whether this divides a pane top from bottom rather than side to side.
+    pub(crate) const fn is_vertical(self) -> bool {
+        matches!(self, Self::Above | Self::Below)
+    }
+
+    /// Whether tmux needs `-b` to put the new pane on this side.
+    pub(crate) const fn before(self) -> bool {
+        matches!(self, Self::Above | Self::Left)
     }
 }
 

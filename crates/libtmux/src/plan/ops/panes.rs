@@ -11,8 +11,8 @@ use super::{
     Chainable, Effects, Op, Operation, PaneSlot, PaneTarget, Safety, Scope, Slot, WindowTarget,
 };
 use super::{PANE_FORMAT, Resolver};
-use crate::Command;
 use crate::window::assignment;
+use crate::{Command, SplitDirection};
 
 /// Split a window, making a pane.
 #[derive(Clone)]
@@ -22,6 +22,13 @@ use crate::window::assignment;
 pub struct SplitWindow {
     pub(crate) target: WindowTarget,
     vertical: bool,
+    /// tmux's `-b`, which puts the new pane before the one being divided.
+    ///
+    /// Defaulted rather than required, so a plan serialized before this
+    /// existed still decodes: `deny_unknown_fields` refuses keys it does not
+    /// know, not keys that are absent.
+    #[cfg_attr(feature = "serde", serde(default))]
+    before: bool,
     #[cfg_attr(
         feature = "serde",
         serde(
@@ -68,6 +75,7 @@ impl SplitWindow {
         Self {
             target: target.into(),
             vertical: true,
+            before: false,
             start_directory: None,
             command: None,
             environment: Vec::new(),
@@ -83,9 +91,43 @@ impl SplitWindow {
     }
 
     /// Split side by side rather than one above the other.
+    ///
+    /// Exactly [`SplitDirection::Right`], and defined as it so the two cannot
+    /// disagree. Kept because it is the spelling this operation shipped with.
+    ///
+    /// It sets the side as well as the axis, so it is the whole position
+    /// rather than half of one: `direction(Above).horizontal()` is `Right`,
+    /// not `Left`. Either setter, in either order, leaves one of the four
+    /// positions and never a mix of two.
     #[must_use]
-    pub const fn horizontal(mut self) -> Self {
-        self.vertical = false;
+    pub const fn horizontal(self) -> Self {
+        self.direction(SplitDirection::Right)
+    }
+
+    /// Put the new pane on this side of the one being divided.
+    ///
+    /// The default is [`SplitDirection::Below`], which is tmux's. `Above` and
+    /// `Left` need tmux's `-b`, so they are reachable only through this: with
+    /// [`SplitWindow::horizontal`] alone a plan could ask for two of the four
+    /// positions, while the object API's [`crate::SplitOptions`] has always
+    /// offered all four.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::SplitDirection;
+    /// use libtmux::plan::{NewSession, Plan, SplitWindow};
+    ///
+    /// let mut plan = Plan::new();
+    /// let session = plan.add(NewSession::new("above"));
+    /// plan.add(SplitWindow::new(session.window()).direction(SplitDirection::Above));
+    ///
+    /// assert_eq!(plan.len(), 2);
+    /// ```
+    #[must_use]
+    pub const fn direction(mut self, direction: SplitDirection) -> Self {
+        self.vertical = direction.is_vertical();
+        self.before = direction.before();
         self
     }
 
@@ -128,6 +170,9 @@ impl SplitWindow {
             .arg("-t")
             .arg(self.target.token(resolve)?)
             .arg(if self.vertical { "-v" } else { "-h" });
+        if self.before {
+            command = command.arg("-b");
+        }
         if !self.focus {
             command = command.arg("-d");
         }
@@ -150,6 +195,7 @@ impl fmt::Debug for SplitWindow {
             .debug_struct("SplitWindow")
             .field("target", &self.target)
             .field("vertical", &self.vertical)
+            .field("before", &self.before)
             .field("has_start_directory", &self.start_directory.is_some())
             .field("has_command", &self.command.is_some())
             .field("environment_count", &self.environment.len())
@@ -169,6 +215,14 @@ operation!(
 );
 
 /// Send text or named keys to a pane.
+///
+/// [`SendKeys::text`] and [`SendKeys::keys`] cannot both be set: tmux
+/// resolves every `send-keys` argument against its key table unless `-l`
+/// literalizes it, and `-l` covers every argument of the `send-keys` it sits
+/// on. So literal text and named keys cannot share one `send-keys`, though
+/// two of them still share one tmux invocation under a folding planner.
+/// [`crate::plan::Plan::validate`] rejects a `SendKeys` that carries both,
+/// before a plan runs.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
@@ -215,6 +269,13 @@ impl SendKeys {
     }
 
     /// Send this literal text.
+    ///
+    /// Rendered with tmux's `-l` flag, so every byte is typed rather than
+    /// looked up in the key table first -- text that happens to name a key,
+    /// such as `"Space"`, is typed rather than pressed. `-l` literalizes every
+    /// argument of the `send-keys` it is on, so this cannot be combined with
+    /// [`SendKeys::keys`]: [`crate::plan::Plan::validate`] rejects that
+    /// combination before anything runs.
     #[must_use]
     pub fn text(mut self, text: impl Into<OsString>) -> Self {
         self.text = Some(text.into());
@@ -222,6 +283,11 @@ impl SendKeys {
     }
 
     /// Send named keys such as `C-c` or `Escape`.
+    ///
+    /// Resolved against tmux's key table, which is why this cannot be
+    /// combined with [`SendKeys::text`]: literal text needs `-l`, and `-l`
+    /// would literalize these too. [`crate::plan::Plan::validate`] rejects
+    /// the combination before anything runs.
     #[must_use]
     pub fn keys<K: Into<OsString>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
         self.keys = keys.into_iter().map(Into::into).collect();
@@ -229,29 +295,53 @@ impl SendKeys {
     }
 
     /// Follow the text with Enter.
+    ///
+    /// When literal text is set, Enter is folded into it as a trailing
+    /// carriage return rather than sent as a separate named key -- the same
+    /// dispatch [`crate::Pane::send_line`] uses to submit a line in one
+    /// command. Without text, Enter renders as the named key after
+    /// whatever [`SendKeys::keys`] sends.
     #[must_use]
     pub const fn enter(mut self) -> Self {
         self.enter = true;
         self
     }
 
+    /// Whether this cannot render as one `send-keys`.
+    ///
+    /// Literal text needs `-l`, and `-l` literalizes every argument of the
+    /// same `send-keys`, so a named key cannot survive alongside text. Enter
+    /// is not a named key here: [`SendKeys::render`] folds it into the
+    /// literal payload instead, so it never conflicts.
+    pub(crate) fn text_conflicts_with_keys(&self) -> bool {
+        self.text.is_some() && !self.keys.is_empty()
+    }
+
     pub(crate) fn render(&self, resolve: Resolver<'_>) -> Option<Command> {
         let mut command = Command::new("send-keys")
             .arg("-t")
             .arg(self.target.token(resolve)?);
-        // Everything after `--` is a value, so text that starts with a dash is
-        // typed rather than read as a flag.
-        if self.text.is_some() || !self.keys.is_empty() || self.enter {
-            command = command.arg("--");
-        }
         if let Some(text) = &self.text {
-            command = command.sensitive_arg(text.clone());
-        }
-        for key in &self.keys {
-            command = command.arg(key.clone());
-        }
-        if self.enter {
-            command = command.arg("Enter");
+            // `-l` literalizes every argument of this `send-keys`. Enter is
+            // folded into the payload as a trailing carriage return instead
+            // of the named key `Enter`, matching how `Pane::send_line`
+            // dispatches a line for the object API. A plan carrying `keys`
+            // here as well is rejected by `Plan::validate` before this runs.
+            let mut literal = text.clone();
+            if self.enter {
+                literal.push("\r");
+            }
+            command = command.arg("-l").arg("--").sensitive_arg(literal);
+        } else if !self.keys.is_empty() || self.enter {
+            // Everything after `--` is a value, so a key name that starts
+            // with a dash is typed rather than read as a flag.
+            command = command.arg("--");
+            for key in &self.keys {
+                command = command.arg(key.clone());
+            }
+            if self.enter {
+                command = command.arg("Enter");
+            }
         }
         Some(command)
     }

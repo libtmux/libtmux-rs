@@ -1,4 +1,4 @@
-use super::row::{FormatCodecError, FormatCodecErrorKind};
+use super::row::{FIELD_SEPARATOR, FormatCodecError, FormatCodecErrorKind};
 use super::{
     CLIENT_INFO_SUPPLEMENTS, CLIENT_NAME, FormatDescriptor, InfoPlacement, ListProfile, PANE_ID,
     PANE_INFO_SUPPLEMENTS, SESSION_ID, SESSION_INFO_SUPPLEMENTS, WINDOW_ID,
@@ -309,7 +309,8 @@ impl FormatPlan {
         for descriptor in &descriptors {
             template.push_str("#{q:");
             template.push_str(descriptor.name());
-            template.push_str("}%");
+            template.push('}');
+            template.push(FIELD_SEPARATOR as char);
         }
 
         let dialect = version.dialect();

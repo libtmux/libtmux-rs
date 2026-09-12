@@ -96,17 +96,17 @@ fn plan_at(version: &str, descriptors: Vec<&'static FormatDescriptor>) -> Format
 ///
 /// It carries a field terminator, a row terminator, a `#{q:}` special, a
 /// multibyte character, and two bytes that are invalid UTF-8.
-const ADVERSARIAL_VALUE: [u8; 9] = [0x3a, 0x0a, 0x25, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff];
+const ADVERSARIAL_VALUE: [u8; 9] = [0x3a, 0x0a, 0x3d, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff];
 
 /// The exact stdout tmux 3.2a, 3.6, and 3.7b emit for that value.
 const RAW_Q_WIRE: [u8; 13] = [
-    0x3a, 0x0a, 0x5c, 0x25, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x25, 0x0a,
+    0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x3d, 0x0a,
 ];
 
 /// The exact stdout tmux 3.4 emits for that value.
 const VIS_WIRE: [u8; 19] = [
-    0x3a, 0x0a, 0x5c, 0x25, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x5c, 0x32, 0x30, 0x30, 0x5c, 0x33, 0x37,
-    0x37, 0x25, 0x0a,
+    0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x5c, 0x32, 0x30, 0x30, 0x5c, 0x33, 0x37,
+    0x37, 0x3d, 0x0a,
 ];
 
 #[test]
@@ -188,7 +188,7 @@ fn format_codec_rejects_raw_high_bytes_when_the_daemon_visually_encodes() {
     // The mirrored mismatch: a 3.4 plan reading raw output. The first
     // escape that is not a `#{q:}` special must fail rather than decode.
     let plan = plan_at("3.4", vec![&FIRST]);
-    let mut wire = Vec::from(b"value\\n%".as_slice());
+    let mut wire = Vec::from(b"value\\n=".as_slice());
     wire.push(b'\n');
 
     let error = error(plan.parse_rows(&wire));
@@ -212,7 +212,7 @@ fn format_codec_round_trips_every_byte_through_the_vis_dialect() {
     for byte in 1..=u8::MAX {
         let mut wire = Vec::new();
         encode_like_tmux_vis(byte, &mut wire);
-        wire.push(b'%');
+        wire.push(b'=');
         wire.push(b'\n');
 
         let parsed = rows(&plan, &wire);
@@ -475,7 +475,7 @@ fn format_codec_normal_profiles_store_exact_identity_and_version_evidence() {
         assert_eq!(plan.template().matches("#{q:").count(), selected_count);
         assert!(
             plan.template()
-                .starts_with(&format!("#{{q:{}}}%", baseline.name()))
+                .starts_with(&format!("#{{q:{}}}=", baseline.name()))
         );
         assert_eq!(plan.purpose, PlanPurpose::Intrinsic(baseline.placement()));
     }
@@ -495,14 +495,14 @@ fn format_codec_selector_filters_versions_and_deduplicates_baseline_identity() {
     assert_eq!(POST_BASELINE.placement(), InfoPlacement::CatalogOnly);
 
     let cases: &[(&[u8], &[&FormatDescriptor], &str)] = &[
-        (b"tmux 3.2a\n", &[&SESSION_ID], "#{q:session_id}%"),
+        (b"tmux 3.2a\n", &[&SESSION_ID], "#{q:session_id}="),
         (
             b"tmux 3.3\n",
             &[&SESSION_ID, &POST_BASELINE],
-            "#{q:session_id}%#{q:post_baseline}%",
+            "#{q:session_id}=#{q:post_baseline}=",
         ),
-        (b"tmux master\n", &[&SESSION_ID], "#{q:session_id}%"),
-        (b"tmux next-3.4\n", &[&SESSION_ID], "#{q:session_id}%"),
+        (b"tmux master\n", &[&SESSION_ID], "#{q:session_id}="),
+        (b"tmux next-3.4\n", &[&SESSION_ID], "#{q:session_id}="),
     ];
 
     for (raw, expected, template) in cases {
@@ -567,10 +567,10 @@ fn format_codec_template_has_one_expansion_token_per_descriptor() {
     assert_eq!(FIRST.decoder(), DecoderKind::Text);
     assert_eq!(SECOND.name(), "second");
     assert_eq!(SECOND.decoder(), DecoderKind::Ascii);
-    assert_eq!(template, "#{q:first}%#{q:second}%");
+    assert_eq!(template, "#{q:first}=#{q:second}=");
     assert_eq!(template.matches("#{q:first}").count(), 1);
     assert_eq!(template.matches("#{q:second}").count(), 1);
-    assert_eq!(template.matches('%').count(), 2);
+    assert_eq!(template.matches('=').count(), 2);
     assert!(!template.contains('\n'));
     assert!(!template.contains("length"));
     assert!(!template.contains("separator"));
@@ -583,7 +583,7 @@ fn format_codec_parser_signature_owns_descriptor_order_in_the_plan() {
         &'stdout [u8],
     ) -> Result<Vec<ParsedRow>, FormatCodecError> = FormatPlan::parse_rows;
 
-    let parsed = parse_rows(&plan(vec![&FIRST]), b"value%\n")
+    let parsed = parse_rows(&plan(vec![&FIRST]), b"value=\n")
         .ok()
         .expect("exact parser function accepts raw stdout only");
     assert_eq!(parsed.len(), 1);
@@ -595,7 +595,7 @@ fn format_codec_empty_stdout_and_empty_field_have_distinct_cardinality() {
 
     assert!(rows(&plan, b"").is_empty());
 
-    let parsed = rows(&plan, b"%\n");
+    let parsed = rows(&plan, b"=\n");
     assert_eq!(parsed.len(), 1);
     let mut slots = parsed[0].slots();
     assert_eq!(slots.len(), 1);
@@ -611,7 +611,7 @@ fn format_codec_empty_stdout_and_empty_field_have_distinct_cardinality() {
 #[test]
 fn format_codec_ordinary_punctuation_and_separator_bytes_are_payload() {
     let plan = plan(vec![&FIRST]);
-    let stdout = b":,/]\xe2\x90\x9e%\n";
+    let stdout = b":,/]\xe2\x90\x9e=\n";
     let parsed = rows(&plan, stdout);
     let slot = parsed[0].slots().next().expect("one slot exists");
 
@@ -622,9 +622,9 @@ fn format_codec_ordinary_punctuation_and_separator_bytes_are_payload() {
 fn format_codec_controls_and_non_utf8_bytes_remain_exact_payload() {
     let plan = plan(vec![&FIRST]);
     let cases: &[(&[u8], &[u8])] = &[
-        (b"a\nb\rc%\n", b"a\nb\rc"),
-        (b"\x80\xff%\n", b"\x80\xff"),
-        (b"tail\n%\n", b"tail\n"),
+        (b"a\nb\rc=\n", b"a\nb\rc"),
+        (b"\x80\xff=\n", b"\x80\xff"),
+        (b"tail\n=\n", b"tail\n"),
     ];
 
     for (stdout, expected) in cases {
@@ -638,9 +638,9 @@ fn format_codec_controls_and_non_utf8_bytes_remain_exact_payload() {
 fn format_codec_backslash_consumes_exactly_one_q_special() {
     let plan = plan(vec![&FIRST]);
     let cases: &[(&[u8], &[u8])] = &[
-        (b"\\\\%\n", b"\\"),
-        (b"\\%%\n", b"%"),
-        (b"\\|\\[%\n", b"|["),
+        (b"\\\\=\n", b"\\"),
+        (b"\\%=\n", b"%"),
+        (b"\\|\\[=\n", b"|["),
     ];
 
     for (stdout, expected) in cases {
@@ -658,9 +658,9 @@ fn format_codec_rejects_escapes_tmux_never_emits() {
     let plan = plan(vec![&FIRST]);
 
     for stdout in [
-        b"\\:%\n".as_slice(),
-        b"\\]%\n".as_slice(),
-        b"\\z%\n".as_slice(),
+        b"\\:=\n".as_slice(),
+        b"\\]=\n".as_slice(),
+        b"\\z=\n".as_slice(),
     ] {
         let error = error(plan.parse_rows(stdout));
 
@@ -696,7 +696,7 @@ fn format_codec_tmux_3_2a_q_escape_set_round_trips_exactly() {
     for byte in Q_SHELL_ESCAPED {
         stdout.extend_from_slice(&[b'\\', byte]);
     }
-    stdout.extend_from_slice(b"%\n");
+    stdout.extend_from_slice(b"=\n");
 
     let plan = plan(vec![&FIRST]);
     let parsed = rows(&plan, &stdout);
@@ -707,7 +707,7 @@ fn format_codec_tmux_3_2a_q_escape_set_round_trips_exactly() {
 #[test]
 fn format_codec_multiple_rows_and_fields_preserve_plan_order() {
     let plan = plan(vec![&FIRST, &SECOND]);
-    let parsed = rows(&plan, b"left%right%\nnext%last%\n");
+    let parsed = rows(&plan, b"left=right=\nnext=last=\n");
 
     let pairs = parsed
         .iter()
@@ -741,7 +741,7 @@ fn format_codec_multiple_rows_and_fields_preserve_plan_order() {
 #[test]
 fn format_codec_slots_are_contiguous_ranges_of_one_row_buffer() {
     let plan = plan(vec![&FIRST, &SECOND]);
-    let parsed = rows(&plan, b"a\\%b%tail%\n");
+    let parsed = rows(&plan, b"a\\%b=tail=\n");
     let mut slots = parsed[0].slots();
     let first = slots.next().expect("first slot exists");
     let second = slots.next().expect("second slot exists");
@@ -759,11 +759,11 @@ fn format_codec_reversing_descriptors_reverses_template_and_slot_identity() {
     let forward = plan(vec![&FIRST, &SECOND]);
     let reverse = plan(vec![&SECOND, &FIRST]);
 
-    assert_eq!(forward.template(), "#{q:first}%#{q:second}%");
-    assert_eq!(reverse.template(), "#{q:second}%#{q:first}%");
+    assert_eq!(forward.template(), "#{q:first}=#{q:second}=");
+    assert_eq!(reverse.template(), "#{q:second}=#{q:first}=");
 
-    let forward_rows = rows(&forward, b"a%b%\n");
-    let reverse_rows = rows(&reverse, b"a%b%\n");
+    let forward_rows = rows(&forward, b"a=b=\n");
+    let reverse_rows = rows(&reverse, b"a=b=\n");
     let forward_pairs = forward_rows[0]
         .slots()
         .map(|slot| (slot.descriptor().name(), slot.as_bytes()))
@@ -786,7 +786,7 @@ fn format_codec_reversing_descriptors_reverses_template_and_slot_identity() {
 #[test]
 fn format_codec_embedded_lf_in_a_later_field_is_not_row_cardinality() {
     let plan = plan(vec![&FIRST, &SECOND]);
-    let parsed = rows(&plan, b"a%\nb%\n");
+    let parsed = rows(&plan, b"a=\nb=\n");
     let slots = parsed[0]
         .slots()
         .map(|slot| slot.as_bytes())
@@ -838,7 +838,7 @@ fn format_codec_missing_field_terminator_reports_raw_eof() {
 #[test]
 fn format_codec_final_field_without_row_lf_reports_raw_eof() {
     let mut stdout = sensitive_prefix();
-    stdout.push(b'%');
+    stdout.push(b'=');
     let offset = stdout.len();
     let plan = plan(vec![&FIRST]);
     let error = error(plan.parse_rows(&stdout));
@@ -859,7 +859,7 @@ fn format_codec_final_field_without_row_lf_reports_raw_eof() {
 fn format_codec_crlf_and_extra_slots_are_unexpected_row_terminators() {
     let plan = plan(vec![&FIRST]);
     let mut crlf = sensitive_prefix();
-    crlf.extend_from_slice(b"%\r\n");
+    crlf.extend_from_slice(b"=\r\n");
     let cr_offset = crlf.len() - 2;
     let cr_error = error(plan.parse_rows(&crlf));
     assert_codec_error(
@@ -874,7 +874,7 @@ fn format_codec_crlf_and_extra_slots_are_unexpected_row_terminators() {
     );
 
     let mut extra = sensitive_prefix();
-    extra.extend_from_slice(b"%extra%\n");
+    extra.extend_from_slice(b"=extra=\n");
     let extra_offset = extra.len() - b"extra%\n".len();
     let extra_error = error(plan.parse_rows(&extra));
     assert_codec_error(
@@ -891,7 +891,7 @@ fn format_codec_crlf_and_extra_slots_are_unexpected_row_terminators() {
 
 #[test]
 fn format_codec_valid_row_then_partial_row_reports_later_coordinates() {
-    let mut stdout = b"ok%\n".to_vec();
+    let mut stdout = b"ok=\n".to_vec();
     stdout.extend_from_slice(&sensitive_prefix());
     let offset = stdout.len();
     let plan = plan(vec![&FIRST]);
@@ -913,7 +913,7 @@ fn format_codec_valid_row_then_partial_row_reports_later_coordinates() {
 fn format_codec_multifield_underflow_and_overflow_report_plan_coordinates() {
     let plan = plan(vec![&FIRST, &SECOND]);
     let mut underflow = sensitive_prefix();
-    underflow.push(b'%');
+    underflow.push(b'=');
     let underflow_offset = underflow.len();
     let underflow_error = error(plan.parse_rows(&underflow));
     assert_codec_error(
@@ -928,7 +928,7 @@ fn format_codec_multifield_underflow_and_overflow_report_plan_coordinates() {
     );
 
     let mut overflow = sensitive_prefix();
-    overflow.extend_from_slice(b"%second%extra%\n");
+    overflow.extend_from_slice(b"=second=extra=\n");
     let overflow_offset = overflow.len() - b"extra%\n".len();
     let overflow_error = error(plan.parse_rows(&overflow));
     assert_codec_error(
@@ -947,7 +947,7 @@ fn format_codec_multifield_underflow_and_overflow_report_plan_coordinates() {
 fn format_codec_nul_is_rejected_at_the_earliest_raw_boundary() {
     let plan = plan(vec![&FIRST]);
     let mut ordinary = sensitive_prefix();
-    ordinary.extend_from_slice(b"\0%\n");
+    ordinary.extend_from_slice(b"\0=\n");
     let ordinary_offset = ordinary.len() - 3;
     let ordinary_error = error(plan.parse_rows(&ordinary));
     assert_codec_error(
@@ -962,7 +962,7 @@ fn format_codec_nul_is_rejected_at_the_earliest_raw_boundary() {
     );
 
     let mut escaped = sensitive_prefix();
-    escaped.extend_from_slice(b"\\\0%\n");
+    escaped.extend_from_slice(b"\\\0=\n");
     let escaped_offset = escaped.len() - 3;
     let escaped_error = error(plan.parse_rows(&escaped));
     assert_codec_error(
@@ -998,14 +998,14 @@ fn format_codec_bare_lf_is_not_an_empty_row() {
 fn format_codec_row_terminator_precedence_is_local_to_reached_state() {
     let plan = plan(vec![&FIRST]);
     let cases = [
-        (b"value%\0".as_slice(), FormatCodecErrorKind::EmbeddedNul, 6),
+        (b"value=\0".as_slice(), FormatCodecErrorKind::EmbeddedNul, 6),
         (
-            b"value%\\\0".as_slice(),
+            b"value=\\\0".as_slice(),
             FormatCodecErrorKind::UnexpectedRowTerminator,
             6,
         ),
         (
-            b"value%x\0".as_slice(),
+            b"value=x\0".as_slice(),
             FormatCodecErrorKind::UnexpectedRowTerminator,
             6,
         ),
@@ -1718,7 +1718,7 @@ fn format_catalog_static_requests_preserve_caller_order() {
     }
     assert_eq!(
         plan.template(),
-        "#{q:session_id}%#{q:session_windows}%#{q:session_activity}%"
+        "#{q:session_id}=#{q:session_windows}=#{q:session_activity}="
     );
 }
 
@@ -1787,13 +1787,13 @@ async fn format_compat_run(server: &crate::Server, command: Command) {
 async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transport() {
     use std::os::unix::ffi::OsStringExt as _;
 
-    const OPTION_BYTES: [u8; 9] = [0x3a, 0x0a, 0x25, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff];
+    const OPTION_BYTES: [u8; 9] = [0x3a, 0x0a, 0x3d, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff];
     const EXPECTED_RAW_STDOUT: [u8; 13] = [
-        0x3a, 0x0a, 0x5c, 0x25, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x25, 0x0a,
+        0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x80, 0xff, 0x3d, 0x0a,
     ];
     const EXPECTED_VIS_STDOUT: [u8; 19] = [
-        0x3a, 0x0a, 0x5c, 0x25, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x5c, 0x32, 0x30, 0x30, 0x5c, 0x33,
-        0x37, 0x37, 0x25, 0x0a,
+        0x3a, 0x0a, 0x5c, 0x3d, 0x5c, 0x5c, 0xe2, 0x90, 0x9e, 0x5c, 0x32, 0x30, 0x30, 0x5c, 0x33,
+        0x37, 0x37, 0x3d, 0x0a,
     ];
 
     let (guard, executable) = format_compat_test_server().await;
@@ -1828,7 +1828,7 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
     .await;
 
     let plan = plan(vec![&RAW_FORMAT_BYTES]);
-    assert_eq!(plan.template(), "#{q:@libtmux_format_bytes}%");
+    assert_eq!(plan.template(), "#{q:@libtmux_format_bytes}=");
     assert_eq!(
         plan.template()
             .matches("#{q:@libtmux_format_bytes}")

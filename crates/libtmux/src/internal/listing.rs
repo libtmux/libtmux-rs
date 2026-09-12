@@ -136,7 +136,6 @@ fn decode_error(list_command: &'static str) -> impl Fn(FormatCodecError) -> Erro
     }
 }
 
-/// List sessions.
 /// Record that a lenient listing threw a failure away.
 ///
 /// The lenient forms return an empty vector for "nothing there" and for "the
@@ -165,6 +164,7 @@ pub(crate) fn trace_discarded(list_command: &'static str, error: &Error) {
     );
 }
 
+/// List sessions.
 pub(crate) async fn sessions(core: &Core, filter: Option<&str>) -> Result<Vec<SessionInfo>, Error> {
     const LIST_COMMAND: &str = "list-sessions";
 
@@ -248,6 +248,127 @@ pub(crate) async fn clients(core: &Core, filter: Option<&str>) -> Result<Vec<Cli
     let stdout = list(core, LIST_COMMAND, Scope::Unscoped, filter, plan.template()).await?;
 
     hydrate_client_infos_from_stdout(&plan, &stdout).map_err(decode_error(LIST_COMMAND))
+}
+
+/// The command that renders a format in one client's context.
+const IN_CLIENT: &str = "display-message";
+
+/// Render a listing template in one client's context and hydrate one row.
+///
+/// tmux runs `display-message` through the same format machinery as a list
+/// command, and fills in what the client implies: `format_defaults` takes the
+/// session from the client, the window from that session's current window, and
+/// the pane from that window's active pane. So one round trip returns the whole
+/// snapshot, where asking for an id and then listing the object that owns it
+/// costs two. The row is byte-identical to the matching `list-sessions -f` row,
+/// `#{q:}` escaping included.
+///
+/// `None` when the client is attached to nothing, which is an ordinary state.
+/// The template is wrapped in `#{?session_id,...,}` so tmux expands it to
+/// nothing in that case: a format plan asks for fields that are `Required`, and
+/// hydrating a row of empty ones would report a decode failure for a client
+/// that is simply not attached yet. Nesting is safe because a plan's template
+/// is `#{q:<name>}=` repeated and a tmux format name carries no comma.
+///
+/// This is the one route where a plan's `FIELD_SEPARATOR` must not be `%`.
+/// `display-message` expands through `format_expand_time`
+/// (`cmd-display-message.c:141`), which runs the template through `strftime`
+/// before tmux reads a single `#{`; a list command calls `format_expand`
+/// (`cmd-list-clients.c:99`) and never time-expands. Apple's libc drops the
+/// `%` of a conversion it does not define and keeps the character alone, so a
+/// `%`-separated template would arrive here with its separators eaten and the
+/// row would fail to decode on macOS and nowhere else. The separator is
+/// chosen in `formats/row.rs` to keep this template free of `%` entirely.
+///
+/// Targeted with `-t` rather than `-c`, and that is not a preference.
+/// `display-message`'s option string is `acd:INpt:F:v` on 3.2a, where `c`
+/// carries no colon and so takes no argument: a client name after it becomes a
+/// positional argument, the command exceeds its one-argument maximum, and tmux
+/// answers with a usage error while every format expands empty. `-c` gained its
+/// argument in 3.5a. The usage line on 3.2a advertises `[-c target-client]`
+/// anyway, on the line after the option string that refuses it, so the error
+/// quotes the flag it just rejected and reads as a typo rather than as a
+/// disagreement between tmux's help and its parser.
+///
+/// `-t` resolves a client on every supported release. Verified to report the
+/// target rather than the caller, which the obvious probe cannot show: the
+/// asking process and the client usually share a `TERM`, so a wrong answer is
+/// byte-identical to a right one. With the client attached as
+/// `screen-256color` and the caller at `vt100`, 3.2a and 3.7c both answer
+/// `screen-256color`.
+async fn in_client_context<T>(
+    core: &Core,
+    client: &OsStr,
+    plan: &FormatPlan,
+    hydrate: impl FnOnce(&FormatPlan, &[u8]) -> Result<Vec<T>, FormatCodecError>,
+) -> Result<Option<T>, Error> {
+    let guarded = format!("#{{?session_id,{},}}", plan.template());
+    let result = core
+        .execute(
+            Command::new(IN_CLIENT)
+                .arg("-p")
+                .arg("-t")
+                .arg(client.to_os_string())
+                .arg(OsString::from(guarded)),
+        )
+        .await?;
+
+    if !result.success() {
+        let stderr = result.stderr_lossy();
+        if stderr.trim_end() == crate::error::NO_CURRENT_CLIENT {
+            return Ok(None);
+        }
+        return Err(Error::from_refused_result(IN_CLIENT, &result, None));
+    }
+
+    let stdout = result.stdout();
+    if stdout.strip_suffix(b"\n").unwrap_or(stdout).is_empty() {
+        return Ok(None);
+    }
+
+    Ok(hydrate(plan, stdout)
+        .map_err(decode_error(IN_CLIENT))?
+        .into_iter()
+        .next())
+}
+
+/// The session one client is attached to, in one round trip.
+pub(crate) async fn client_session(
+    core: &Core,
+    client: &OsStr,
+) -> Result<Option<SessionInfo>, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
+
+    in_client_context(core, client, &plan, hydrate_session_infos_from_stdout).await
+}
+
+/// The current window of the session one client is attached to.
+pub(crate) async fn client_window(
+    core: &Core,
+    client: &OsStr,
+) -> Result<Option<WindowProjection>, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = window_projection_plan(&version).map_err(decode_error(IN_CLIENT))?;
+
+    in_client_context(core, client, &plan, |plan, stdout| {
+        hydrate_window_projections_from_stdout(core.configuration().identity(), plan, stdout)
+    })
+    .await
+}
+
+/// The active pane of that window.
+pub(crate) async fn client_pane(
+    core: &Core,
+    client: &OsStr,
+) -> Result<Option<PaneProjection>, Error> {
+    let version = core.capabilities().await?.tmux_version().clone();
+    let plan = pane_projection_plan(&version).map_err(decode_error(IN_CLIENT))?;
+
+    in_client_context(core, client, &plan, |plan, stdout| {
+        hydrate_pane_projections_from_stdout(core.configuration().identity(), plan, stdout)
+    })
+    .await
 }
 
 /// Run a creating command that prints its new object, and hydrate it.
@@ -368,8 +489,9 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{create_session, mutation_failure};
+    use super::{client_session, create_session, mutation_failure};
     use crate::command::{CommandRequest, CommandResult, ProcessStatus, RequestId};
+    use crate::formats::{FIELD_SEPARATOR, FormatPlan, ListProfile};
     use crate::internal::core::Core;
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
     use crate::{Command, Error, ErrorKind};
@@ -402,6 +524,124 @@ mod tests {
         fn shutdown(&self) -> ShutdownFuture {
             ShutdownFuture::new(async { Ok(()) })
         }
+    }
+
+    /// Records the commands a lookup dispatches, answering the version probe.
+    struct CapturingExecutor {
+        commands: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl Executor for CapturingExecutor {
+        fn execute(&self, request: CommandRequest) -> DispatchFuture {
+            // `CommandSummary` truncates each argument at `MAX_DIAGNOSTIC_BYTES`
+            // for safe display; a sessions template has nine fields and runs
+            // past that, so the diagnostic view would hide most separators.
+            // `argv()` is the untruncated argv tmux actually receives.
+            let summary = format!("{:?}", request.argv());
+            let probe = summary.contains("display-message") || summary.contains("list-");
+            self.commands
+                .lock()
+                .expect("the capture lock")
+                .push(summary);
+            let stdout = if probe {
+                Vec::new()
+            } else {
+                b"tmux 3.7b\n".to_vec()
+            };
+            DispatchFuture::new(async move {
+                Ok(CommandResult::new(
+                    request.request_id(),
+                    request.summary().clone(),
+                    ProcessStatus::from_exit_status(ExitStatus::from_raw(0)),
+                    stdout,
+                    Vec::new(),
+                ))
+            })
+        }
+
+        fn shutdown(&self) -> ShutdownFuture {
+            ShutdownFuture::new(async { Ok(()) })
+        }
+    }
+
+    /// Apple's `strftime` rule for a conversion it does not define.
+    ///
+    /// `stdtime/FreeBSD/strftime.c` reaches `default: break;` and then writes
+    /// `*pt++ = *format`, which is the conversion character alone: the `%` was
+    /// consumed to detect the conversion and is never emitted. glibc writes
+    /// both characters, which is exactly why this cannot be observed on Linux
+    /// -- and macOS tests do not run on a pull request, so a live test could
+    /// not catch it either. `%%` is defined, and yields one `%`.
+    fn darwin_strftime(template: &str) -> String {
+        let mut out = String::new();
+        let mut rest = template.chars();
+        while let Some(character) = rest.next() {
+            if character != '%' {
+                out.push(character);
+                continue;
+            }
+            match rest.next() {
+                // `%%` is the one conversion this template means to use.
+                Some('%') => out.push('%'),
+                // Undefined: the conversion character survives, the `%` does not.
+                Some(undefined) => out.push(undefined),
+                None => {}
+            }
+        }
+        out
+    }
+
+    /// A client lookup's template must reach tmux's format parser intact.
+    ///
+    /// `display-message` expands through `strftime` first -- tmux calls
+    /// `format_expand_time` where every listing calls `format_expand` -- and a
+    /// format plan separates its fields with `%`. So the separators are
+    /// conversions as far as `strftime` is concerned, and on Apple's libc they
+    /// are deleted, leaving one unparseable field and a `DecodeListing` for
+    /// every attached client.
+    #[tokio::test]
+    async fn a_client_lookup_template_survives_darwin_strftime() {
+        let executor = Arc::new(CapturingExecutor {
+            commands: std::sync::Mutex::new(Vec::new()),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
+
+        // An empty answer is "attached to nothing", which is a clean `None`
+        // and leaves the dispatched template to inspect.
+        let _ = client_session(&core, std::ffi::OsStr::new("/dev/pts/0")).await;
+
+        let commands = executor.commands.lock().expect("the capture lock").clone();
+        let dispatched = commands
+            .iter()
+            .find(|command| command.contains("#{"))
+            .expect("a lookup dispatches a format template");
+
+        // What tmux time-expands is only a problem for a command that time
+        // expands. A lookup that avoids one has nothing to preserve.
+        if !dispatched.contains("display-message") {
+            return;
+        }
+
+        let field_separator = FIELD_SEPARATOR as char;
+        let expected = FormatPlan::for_profile(
+            ListProfile::Sessions,
+            core.capabilities().await.expect("a version").tmux_version(),
+        );
+        let wanted = expected.template().matches(field_separator).count();
+        assert!(wanted > 0, "a sessions template separates its fields");
+
+        // The strftime pass is skipped whenever the template holds no `%`
+        // (`format.c`'s `strchr(fmt, '%') != NULL` guard), on every libc.
+        assert!(
+            !dispatched.contains('%'),
+            "a lookup template must contain no `%`; sent {dispatched}",
+        );
+
+        let survived = darwin_strftime(dispatched).matches(field_separator).count();
+        assert_eq!(
+            survived, wanted,
+            "every field separator has to survive strftime; sent {dispatched}",
+        );
     }
 
     #[test]

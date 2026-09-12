@@ -404,7 +404,6 @@ impl Plan {
         Ok((result, marked))
     }
 
-    /// Lower one invocation's operations into commands.
     /// Refuse a plan that writes an option where tmux would not keep it.
     ///
     /// The direct path checks this as the write is built. A plan renders its
@@ -437,6 +436,7 @@ impl Plan {
         Ok(())
     }
 
+    /// Lower one invocation's operations into commands.
     fn render_step(
         &self,
         step: &Step,

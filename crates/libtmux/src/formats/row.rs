@@ -12,6 +12,14 @@ use super::{DecoderKind, FormatDescriptor, ListProfile};
 /// compose into one unambiguous grammar.
 pub(super) const QUOTE_SHELL_SPECIALS: &[u8] = b"|&;<>()$`\\\"'*?[# =%";
 
+/// The field separator a format plan's template renders between values.
+///
+/// Not `%`: `display-message` expands its template through `strftime` before
+/// `format_expand`, and a template free of `%` skips that pass entirely
+/// (`format.c`'s `strchr(fmt, '%') != NULL` guard). `=` is in
+/// [`QUOTE_SHELL_SPECIALS`], so `#{q:}` still escapes it inside a value.
+pub(crate) const FIELD_SEPARATOR: u8 = b'=';
+
 #[allow(
     dead_code,
     reason = "modelled and tested; only a projection of it is hydrated today"
@@ -107,7 +115,7 @@ impl FormatPlan {
             if byte == b'\\' {
                 *cursor += 1;
                 Self::decode_escape(stdout, cursor, row, field, descriptor, dialect, bytes)?;
-            } else if byte == b'%' {
+            } else if byte == FIELD_SEPARATOR {
                 *cursor += 1;
                 return Ok(SlotMeta {
                     descriptor,

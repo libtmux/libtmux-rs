@@ -128,9 +128,16 @@ pub enum PlanValidationErrorKind {
     SourceScopeMismatch,
     /// The slot came from a different recorded producer.
     SourceProvenanceMismatch,
+    /// A `SendKeys` carries literal text together with named keys.
+    ///
+    /// This kind is not a cross-step dependency: `step` and `source_step`
+    /// are the same step, and `expected_scope` is that step's own target
+    /// scope rather than a source's.
+    SendKeysTextWithKeys,
 }
 
-/// An invalid dependency between two plan steps.
+/// An invalid dependency between two plan steps, or a step whose own
+/// arguments cannot render as one tmux command.
 ///
 /// No tmux command is dispatched when validation fails.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,29 +199,37 @@ impl PlanValidationError {
 
 impl fmt::Display for PlanValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "plan step {} has an invalid dependency on step {}: ",
-            self.step, self.source_step
-        )?;
         match self.kind {
-            PlanValidationErrorKind::SourceMissing => formatter.write_str("the source is absent"),
-            PlanValidationErrorKind::SourceNotEarlier => {
-                formatter.write_str("the source is not earlier")
-            }
+            PlanValidationErrorKind::SourceMissing => write!(
+                formatter,
+                "plan step {} has an invalid dependency on step {}: the source is absent",
+                self.step, self.source_step,
+            ),
+            PlanValidationErrorKind::SourceNotEarlier => write!(
+                formatter,
+                "plan step {} has an invalid dependency on step {}: the source is not earlier",
+                self.step, self.source_step,
+            ),
             PlanValidationErrorKind::SourceOutputMissing => write!(
                 formatter,
-                "the source does not produce the requested {:?} output",
-                self.expected_scope
+                "plan step {} has an invalid dependency on step {}: the source does not produce the requested {:?} output",
+                self.step, self.source_step, self.expected_scope,
             ),
             PlanValidationErrorKind::SourceScopeMismatch => write!(
                 formatter,
-                "the source output is {:?}, not {:?}",
-                self.source_scope, self.expected_scope
+                "plan step {} has an invalid dependency on step {}: the source output is {:?}, not {:?}",
+                self.step, self.source_step, self.source_scope, self.expected_scope,
             ),
-            PlanValidationErrorKind::SourceProvenanceMismatch => {
-                formatter.write_str("the referenced output belongs to another plan")
-            }
+            PlanValidationErrorKind::SourceProvenanceMismatch => write!(
+                formatter,
+                "plan step {} has an invalid dependency on step {}: the referenced output belongs to another plan",
+                self.step, self.source_step,
+            ),
+            PlanValidationErrorKind::SendKeysTextWithKeys => write!(
+                formatter,
+                "plan step {} sends literal text together with named keys: -l is needed to send the text literally, and -l would literalize the keys too",
+                self.step,
+            ),
         }
     }
 }
@@ -754,6 +769,21 @@ impl Op {
         }
     }
 
+    /// Whether this step's own recorded arguments cannot render as one tmux
+    /// invocation, independent of anything another step did.
+    ///
+    /// This is the other half of what [`Plan::validate`] checks: `slots`
+    /// catches an invalid dependency *between* steps, this catches a step
+    /// whose own fields conflict.
+    fn self_conflict(&self) -> Option<PlanValidationErrorKind> {
+        match self {
+            Self::SendKeys(op) if op.text_conflicts_with_keys() => {
+                Some(PlanValidationErrorKind::SendKeysTextWithKeys)
+            }
+            _ => None,
+        }
+    }
+
     /// The targets this operation resolves before it can render.
     fn slots(&self) -> [Option<SlotUse>; 2] {
         match self {
@@ -944,14 +974,25 @@ impl Plan {
         self.steps.is_empty()
     }
 
-    /// Check every slot before a run can change tmux state.
+    /// Check every step before a run can change tmux state.
     ///
     /// # Errors
     ///
-    /// Returns an error when a slot names an absent or non-earlier step, or
-    /// when that step does not produce the required tmux object.
+    /// Returns an error when a slot names an absent or non-earlier step, when
+    /// that step does not produce the required tmux object, or when a step's
+    /// own arguments cannot render as one tmux command -- such as
+    /// [`SendKeys`] carrying literal text together with named keys.
     pub fn validate(&self) -> Result<(), PlanValidationError> {
         for (step, operation) in self.steps.iter().enumerate() {
+            if let Some(kind) = operation.self_conflict() {
+                return Err(PlanValidationError::new(
+                    step,
+                    step,
+                    kind,
+                    Scope::Pane,
+                    None,
+                ));
+            }
             for slot_use in operation.slots().into_iter().flatten() {
                 let Some(source) = self.steps.get(slot_use.source_step) else {
                     return Err(PlanValidationError::new(

@@ -155,12 +155,12 @@ fn default_value(descriptor: &FormatDescriptor) -> &'static [u8] {
 
 fn push_q_field(stdout: &mut Vec<u8>, value: &[u8]) {
     for byte in value {
-        if matches!(*byte, b'\\' | b'%') {
+        if matches!(*byte, b'\\' | b'%' | b'=') {
             stdout.push(b'\\');
         }
         stdout.push(*byte);
     }
-    stdout.push(b'%');
+    stdout.push(b'=');
 }
 
 fn framed_row(
@@ -272,7 +272,7 @@ fn format_codec_decoder_function_signatures_consume_parsed_slots() {
 #[test]
 fn format_codec_ascii_accepts_controls_and_ascii_boundaries() {
     let plan = plan(vec![&ASCII]);
-    let parsed = rows(&plan, b"\x01A\x7f%\n");
+    let parsed = rows(&plan, b"\x01A\x7f=\n");
     let slot = parsed[0].slots().next().expect("one slot exists");
     let decoded = decode_ascii(slot)
         .ok()
@@ -284,7 +284,7 @@ fn format_codec_ascii_accepts_controls_and_ascii_boundaries() {
 #[test]
 fn format_codec_ascii_rejects_raw_and_utf8_non_ascii_bytes() {
     let plan = plan(vec![&ASCII]);
-    for stdout in [b"\x80%\n".as_slice(), b"\xc3\xa9%\n".as_slice()] {
+    for stdout in [b"\x80=\n".as_slice(), b"\xc3\xa9=\n".as_slice()] {
         let parsed = rows(&plan, stdout);
         let slot = parsed[0].slots().next().expect("one slot exists");
         let error = error(decode_ascii(slot));
@@ -302,7 +302,7 @@ fn format_codec_ascii_error_diagnostics_do_not_retain_slot_payload() {
     stdout.extend_from_slice(&CONTROL_SENTINEL);
     stdout.push(b'_');
     stdout.extend_from_slice(&INVALID_UTF8_SENTINEL);
-    stdout.extend_from_slice(b"%\n");
+    stdout.extend_from_slice(b"=\n");
 
     let plan = plan(vec![&ASCII]);
     let parsed = rows(&plan, &stdout);
@@ -314,7 +314,7 @@ fn format_codec_ascii_error_diagnostics_do_not_retain_slot_payload() {
 #[test]
 fn format_codec_ascii_error_uses_later_raw_row_field_and_slot_offset() {
     let plan = plan(vec![&FIRST_TEXT, &SECOND_ASCII]);
-    let parsed = rows(&plan, b"x%y%\na\\%b%\x80%\n");
+    let parsed = rows(&plan, b"x=y=\na\\%b=\x80=\n");
     let slot = parsed[1]
         .slots()
         .nth(1)
@@ -328,11 +328,11 @@ fn format_codec_ascii_error_uses_later_raw_row_field_and_slot_offset() {
 fn format_codec_text_preserves_empty_controls_and_non_utf8_bytes() {
     let plan = plan(vec![&TEXT]);
     let cases: &[(&[u8], &[u8])] = &[
-        (b"%\n", b""),
-        (b"\n%\n", b"\n"),
-        (b"\r%\n", b"\r"),
-        (b"\x01\x7f%\n", b"\x01\x7f"),
-        (b"\x80\xff%\n", b"\x80\xff"),
+        (b"=\n", b""),
+        (b"\n=\n", b"\n"),
+        (b"\r=\n", b"\r"),
+        (b"\x01\x7f=\n", b"\x01\x7f"),
+        (b"\x80\xff=\n", b"\x80\xff"),
     ];
 
     for (stdout, expected) in cases {
@@ -2173,7 +2173,7 @@ fn descriptor_template(descriptors: &[&'static FormatDescriptor]) -> String {
 
     let mut template = String::new();
     for descriptor in descriptors {
-        write!(&mut template, "#{{q:{}}}%", descriptor.name())
+        write!(&mut template, "#{{q:{}}}=", descriptor.name())
             .expect("writing to a String cannot fail");
     }
     template

@@ -138,6 +138,7 @@ impl LaunchContext {
     }
 
     /// Report whether a bare executable resolves through captured `PATH`.
+    ///
     /// WSL may return `EIO`, rather than `NotFound`, when it does not.
     pub(crate) fn executable_missing_from_path(&self) -> bool {
         let executable = Path::new(&self.executable);

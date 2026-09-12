@@ -836,12 +836,16 @@ impl TmuxTools {
             start_directory,
         }): Parameters<SplitWindowArgs>,
     ) -> Result<Json<PaneView>, ErrorData> {
+        // Parsed from the same table the advertised schema is checked against,
+        // so a word a client is offered is a word this accepts.
         let direction = match direction.as_deref() {
-            None | Some("below") => SplitDirection::Below,
-            Some("above") => SplitDirection::Above,
-            Some("left") => SplitDirection::Left,
-            Some("right") => SplitDirection::Right,
-            Some(other) => return Err(bad_input(format!("unknown split direction {other}"))),
+            None => SplitDirection::Below,
+            Some(word) => crate::schema::split_direction(word).ok_or_else(|| {
+                bad_input(format!(
+                    "direction must be {}, not {word}",
+                    crate::schema::words_or(&crate::schema::split_direction_words())
+                ))
+            })?,
         };
         let mut options = SplitOptions::new(direction);
         if let Some(percent) = percent {
