@@ -1,4 +1,5 @@
 mod args;
+mod bridge;
 mod discovery;
 mod document;
 mod execution;

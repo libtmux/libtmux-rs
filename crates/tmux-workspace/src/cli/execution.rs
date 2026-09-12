@@ -8,7 +8,7 @@ use libtmux::{
 use serde_json::{Value, json};
 
 use super::{
-    CliError, Result, confirm, discovery, document, normalize,
+    CliError, Result, bridge, confirm, discovery, document, normalize,
     output::{Mode, Reporter},
     process,
 };
@@ -23,6 +23,7 @@ struct Effects {
     panes: Vec<String>,
     stage: &'static str,
     script_output: Option<Value>,
+    readiness: bool,
 }
 
 impl Effects {
@@ -122,14 +123,13 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
                 workspace.name.clone_from(name);
             }
         }
-        if workspace.bridge {
-            return Err(CliError::new(
-                "python_bridge_required",
-                "Python plugins/custom builders require the version-checked tmuxp bridge",
-            ));
-        }
         workspaces.push((path, workspace));
     }
+    let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
+        Some(process::python().await?)
+    } else {
+        None
+    };
     let server = server(args)?;
     let mut results = Vec::new();
     let mut last_session = None;
@@ -143,7 +143,16 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
             input: index,
             ..Effects::default()
         };
-        match build(&server, workspace, args, report, &mut effects).await {
+        match build(
+            &server,
+            workspace,
+            args,
+            report,
+            &mut effects,
+            python.as_deref(),
+        )
+        .await
+        {
             Ok((session, reused)) => {
                 let mut result = effects.value();
                 result["input"] = json!(discovery::masked(path));
@@ -225,7 +234,21 @@ async fn build(
     args: &ArgMatches,
     report: &mut Reporter,
     effects: &mut Effects,
+    python: Option<&std::ffi::OsStr>,
 ) -> Result<(Session, bool)> {
+    if workspace.bridge {
+        return build_extension(
+            server,
+            workspace,
+            args,
+            report,
+            effects,
+            python.ok_or_else(|| {
+                CliError::new("python_runtime", "checked Python runtime is missing")
+            })?,
+        )
+        .await;
+    }
     let input = effects.input;
     let append = flag(args, "append");
     let existing = if server.is_alive().await {
@@ -260,31 +283,7 @@ async fn build(
         session
     };
     effects.session = Some(session.clone());
-    if let Some(script) = &workspace.before_script {
-        effects.stage = "before-script";
-        effects.changed = true;
-        let output = process::run(
-            &process::split(script)?,
-            &workspace.script_directory,
-            report,
-        )
-        .await?;
-        effects.script_output = Some(output.value());
-        output.success()?;
-    }
-    effects.stage = "session-options";
-    effects.changed |= !workspace.environment.is_empty()
-        || !workspace.options.is_empty()
-        || !workspace.global_options.is_empty();
-    for (name, value) in &workspace.environment {
-        session.set_environment(name, value).await?;
-    }
-    for (name, value) in &workspace.options {
-        session.set_option(name, value).await?;
-    }
-    for (name, value) in &workspace.global_options {
-        server.set_option(name, value).await?;
-    }
+    configure_session(server, &session, workspace, report, effects).await?;
     let mut bootstrap = if append {
         None
     } else {
@@ -316,6 +315,118 @@ async fn build(
     }
     effects.stage = "completed";
     Ok((session, false))
+}
+
+async fn configure_session(
+    server: &Server,
+    session: &Session,
+    workspace: &normalize::Workspace,
+    report: &mut Reporter,
+    effects: &mut Effects,
+) -> Result<()> {
+    if let Some(script) = &workspace.before_script {
+        effects.stage = "before-script";
+        effects.changed = true;
+        let output = process::run(
+            &process::split(script)?,
+            &workspace.script_directory,
+            report,
+        )
+        .await?;
+        effects.script_output = Some(output.value());
+        output.success()?;
+    }
+    effects.stage = "session-options";
+    effects.changed |= !workspace.environment.is_empty()
+        || !workspace.options.is_empty()
+        || !workspace.global_options.is_empty();
+    for (name, value) in &workspace.environment {
+        session.set_environment(name, value).await?;
+    }
+    for (name, value) in &workspace.options {
+        session.set_option(name, value).await?;
+    }
+    for (name, value) in &workspace.global_options {
+        server.set_option(name, value).await?;
+    }
+    effects.readiness = match workspace.readiness {
+        Some(wait) => wait,
+        None => session
+            .get_option("default-shell")
+            .await?
+            .map_or_else(
+                || std::env::var("SHELL").unwrap_or_default(),
+                |value| value.to_string_lossy().into_owned(),
+            )
+            .contains("zsh"),
+    };
+    Ok(())
+}
+
+async fn build_extension(
+    server: &Server,
+    workspace: &normalize::Workspace,
+    args: &ArgMatches,
+    report: &mut Reporter,
+    effects: &mut Effects,
+    python: &std::ffi::OsStr,
+) -> Result<(Session, bool)> {
+    let append = flag(args, "append");
+    let prior = if append {
+        Some(current_session(server).await?)
+    } else if server.is_alive().await {
+        server.session(&workspace.name).await?
+    } else {
+        None
+    };
+    let mut windows = std::collections::BTreeSet::new();
+    let mut panes = std::collections::BTreeSet::new();
+    if let Some(session) = &prior {
+        for window in session.windows().await? {
+            windows.insert(window.id().to_string());
+            for pane in window.panes().await? {
+                panes.insert(pane.id().to_string());
+            }
+        }
+        effects.session = Some(session.clone());
+    }
+    let request = json!({"path":workspace.source,"session_name":workspace.name,"socket":server.socket_path(),"append":if append {prior.as_ref().map(|s|s.id().to_string())} else {None},"config_file":option(args,"tmux-config"),"colors":if flag(args,"colors256"){Some(256)}else if flag(args,"colors88"){Some(88)}else{None}});
+    effects.stage = "python-extension";
+    let output = bridge::build(python, request, report).await?;
+    effects.script_output = Some(output.value());
+    let current = if append {
+        prior.clone()
+    } else if server.is_alive().await {
+        server.session(&workspace.name).await?
+    } else {
+        None
+    };
+    effects.owned = prior.is_none() && current.is_some();
+    if let Some(session) = &current {
+        effects.session = Some(session.clone());
+        for window in session.windows().await? {
+            if !windows.contains(&window.id().to_string()) {
+                effects.windows.push(window.id().to_string());
+            }
+            for pane in window.panes().await? {
+                if !panes.contains(&pane.id().to_string()) {
+                    effects.panes.push(pane.id().to_string());
+                }
+            }
+        }
+    }
+    effects.changed = effects.owned || !effects.windows.is_empty() || append;
+    output
+        .success()
+        .map_err(|error| CliError::new("python_extension", error.message))?;
+    effects.stage = "completed";
+    let session = current.ok_or_else(|| {
+        CliError::new(
+            "python_extension",
+            "Python builder completed without a session",
+        )
+    })?;
+    Ok((session, !append && prior.is_some()))
 }
 
 async fn build_window(
@@ -394,6 +505,9 @@ async fn build_window(
     let mut active = None;
     for (pane, config) in panes.iter().zip(&config.panes) {
         report.event("pane-created", json!({"input_index":input,"window_index":window_index,"pane_id":pane.id().to_string()}))?;
+        if effects.readiness && config.shell.is_none() {
+            wait_for_prompt(pane, report).await?;
+        }
         for command in &config.commands {
             tokio::time::sleep(command.before).await;
             if command.enter {
@@ -415,6 +529,21 @@ async fn build_window(
         window.set_option(name, value).await?;
     }
     Ok(window)
+}
+
+async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(cursor) = pane.format("#{cursor_x},#{cursor_y}").await {
+            if cursor.to_string_lossy() != "0,0" {
+                return Ok(());
+            }
+        } else {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    report.event("warning", json!({"code":"pane_readiness_timeout","pane_id":pane.id().to_string(),"message":"shell prompt was not observed within two seconds; continuing as tmuxp does"}))
 }
 
 fn dimension(preferred: &str, fallback: &str, default: u32) -> u32 {

@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::{CliError, Result, discovery, document};
 
 pub(super) struct Workspace {
+    pub(super) source: PathBuf,
     pub(super) name: String,
     pub(super) directory: PathBuf,
     pub(super) environment: Vec<(String, String)>,
@@ -15,6 +16,7 @@ pub(super) struct Workspace {
     pub(super) before_script: Option<String>,
     pub(super) script_directory: PathBuf,
     pub(super) bridge: bool,
+    pub(super) readiness: Option<bool>,
     pub(super) windows: Vec<Window>,
 }
 
@@ -196,6 +198,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
             "plugins",
             "workspace_builder",
             "workspace_builder_options",
+            "workspace_builder_paths",
             "config",
             "socket_name",
         ],
@@ -204,6 +207,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     let name = text(&value["session_name"], "session_name")?
         .filter(|v| !v.is_empty())
         .ok_or_else(|| CliError::invalid("session_name is required"))?;
+    let readiness = readiness(&value["workspace_builder_options"])?;
     let directory = directory(
         &value["start_directory"],
         path.parent().unwrap_or_else(|| Path::new(".")),
@@ -221,6 +225,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         .map(|source| window(source, value, &directory, suppress, &mut indexes))
         .collect::<Result<Vec<_>>>()?;
     Ok(Workspace {
+        source: path.to_owned(),
         name,
         script_directory: if value.get("start_directory").is_some() {
             directory.clone()
@@ -233,8 +238,29 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         global_options: pairs(&value["global_options"], true)?,
         before_script: text(&value["before_script"], "before_script")?,
         bridge: value.get("plugins").is_some() || value.get("workspace_builder").is_some(),
+        readiness,
         windows,
     })
+}
+
+fn readiness(options: &Value) -> Result<Option<bool>> {
+    if options.is_null() {
+        return Ok(None);
+    }
+    let value = document::object(options)?
+        .get("pane_readiness")
+        .unwrap_or(&Value::Null);
+    if value.is_null() {
+        return Ok(None);
+    }
+    match document::scalar(value).trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(None),
+        "always" | "true" | "yes" | "on" | "1" => Ok(Some(true)),
+        "never" | "false" | "no" | "off" | "0" => Ok(Some(false)),
+        _ => Err(CliError::invalid(
+            "pane_readiness must be auto, always/true/on/yes/1, or never/false/off/no/0",
+        )),
+    }
 }
 
 fn window(
@@ -384,5 +410,13 @@ mod tests {
         assert_eq!(panes[2].commands[1].after, Duration::ZERO);
         assert_eq!(panes[2].commands[2].after, Duration::ZERO);
         Ok(())
+    }
+
+    #[test]
+    fn invalid_readiness_is_rejected_before_any_backend() {
+        for options in [json!({"pane_readiness":"sometimes"}), json!(["always"])] {
+            let source = json!({"session_name":"demo","workspace_builder_options":options,"windows":[{"panes":["blank"]}]});
+            assert!(workspace(&source, Path::new("/tmp/workspace.yaml")).is_err());
+        }
     }
 }
