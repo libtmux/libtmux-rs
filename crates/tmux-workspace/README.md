@@ -202,6 +202,15 @@ resolve, and this one could not have been published at all until `libtmux`
 shipped the `plan` feature it asks for — which is exactly the kind of thing
 that is invisible from inside the tree.
 
+## CLI bootstrap
+
+`before_script` parses executable and arguments with shell-style quoting.
+An executable starting with `.` resolves from the workspace file's directory;
+absolute executables and commands found through `PATH` retain their meaning.
+The child runs in the session's `start_directory` when set, or the caller's
+working directory otherwise. Arguments retain spaces and empty values, with
+no shell expansion.
+
 ## CLI logging
 
 `tmux-workspace load --log-file PATH` appends JSON records to a regular file.

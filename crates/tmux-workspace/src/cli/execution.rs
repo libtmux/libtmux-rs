@@ -417,12 +417,18 @@ async fn configure_session(
     if let Some(script) = &workspace.before_script {
         effects.stage = "before-script";
         effects.changed = true;
-        let output = process::run(
-            &process::split(script)?,
-            &workspace.script_directory,
-            report,
-        )
-        .await?;
+        let mut argv = process::split(script)?;
+        if let Some(executable) = argv
+            .first_mut()
+            .filter(|value| value.as_encoded_bytes().starts_with(b"."))
+        {
+            let parent = workspace
+                .source
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            *executable = parent.join(&*executable).into_os_string();
+        }
+        let output = process::run(&argv, &workspace.script_directory, report).await?;
         effects.script_output = Some(output.value());
         output.success()?;
         if let Some(target) = borrowed {
