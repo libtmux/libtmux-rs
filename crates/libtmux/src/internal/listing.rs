@@ -270,6 +270,16 @@ const IN_CLIENT: &str = "display-message";
 /// that is simply not attached yet. Nesting is safe because a plan's template
 /// is `#{q:<name>}=` repeated and a tmux format name carries no comma.
 ///
+/// This is the one route where a plan's `FIELD_SEPARATOR` must not be `%`.
+/// `display-message` expands through `format_expand_time`
+/// (`cmd-display-message.c:141`), which runs the template through `strftime`
+/// before tmux reads a single `#{`; a list command calls `format_expand`
+/// (`cmd-list-clients.c:99`) and never time-expands. Apple's libc drops the
+/// `%` of a conversion it does not define and keeps the character alone, so a
+/// `%`-separated template would arrive here with its separators eaten and the
+/// row would fail to decode on macOS and nowhere else. The separator is
+/// chosen in `formats/row.rs` to keep this template free of `%` entirely.
+///
 /// Targeted with `-t` rather than `-c`, and that is not a preference.
 /// `display-message`'s option string is `acd:INpt:F:v` on 3.2a, where `c`
 /// carries no colon and so takes no argument: a client name after it becomes a
