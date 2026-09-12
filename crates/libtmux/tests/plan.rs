@@ -20,7 +20,7 @@ use libtmux::plan::{
     SetOption, SplitWindow, StepReason, WindowTarget,
 };
 use libtmux::test::TestServer;
-use libtmux::{Command, NewSessionOptions, PaneId, PaneWait, Server, WindowId};
+use libtmux::{ChannelWait, Command, NewSessionOptions, PaneId, PaneWait, Server, WindowId};
 
 /// A plan that builds a session and types into the pane it makes.
 fn build_plan(name: &str) -> Plan {
@@ -722,4 +722,110 @@ async fn a_plan_will_not_write_an_option_where_tmux_keeps_another() {
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Text that happens to name a tmux key is typed, not pressed.
+///
+/// `send-keys` resolves every argument against its key table before treating
+/// it as text, so `Space` without `-l` presses the space bar and leaves the
+/// prompt empty. `--` does not help: it stops a leading dash being read as a
+/// flag, and says nothing about key lookup. Every other input in this file --
+/// `true`, `ls`, `clear`, `go` -- is safe by accident, so this case needs its
+/// own test.
+#[tokio::test]
+async fn text_that_names_a_key_is_typed_rather_than_pressed() {
+    let guard = TestServer::new().await.expect("a server");
+    let server = guard.server();
+    let session = server.new_session("literal").await.expect("a session");
+
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let window = session
+            .new_window(&format!("{planner:?}"))
+            .await
+            .expect("a window");
+        let pane = window.panes().await.expect("panes").remove(0);
+
+        let mut plan = Plan::new();
+        // No `.enter()`: the text stays on the prompt line, so the shell never
+        // runs it and the capture reads exactly what tmux typed.
+        plan.add(SendKeys::new(pane.id().clone()).text("Space"));
+        plan.run(server, planner).await.expect("the plan runs");
+
+        assert_eq!(
+            pane.wait_for_text("Space", Duration::from_secs(5))
+                .await
+                .expect("the capture waits"),
+            PaneWait::Arrived,
+            "{planner:?} typed the text rather than pressing the key it names",
+        );
+    }
+
+    guard.shutdown().await.expect("shutdown");
+}
+
+/// `.text(...).enter()` still submits the line.
+///
+/// Enter is folded into the literal payload as a trailing carriage return
+/// rather than sent as the named key `Enter`, so a shell only runs the line
+/// if that byte is interpreted the same way `Pane::send_line` relies on --
+/// `cancelling_a_line_send_cannot_leave_enter_undispatched` in
+/// `tests/mutations.rs` is where that construction is proven to run a
+/// command rather than merely type it. This is the same proof for the
+/// `SendKeys` plan operation.
+#[tokio::test]
+async fn text_followed_by_enter_runs_the_line() {
+    let guard = TestServer::new().await.expect("a server");
+    let server = guard.server();
+    let session = server.new_session("submitted").await.expect("a session");
+
+    for (index, planner) in [Planner::Sequential, Planner::Folding, Planner::Marked]
+        .into_iter()
+        .enumerate()
+    {
+        let window = session
+            .new_window(&format!("{planner:?}"))
+            .await
+            .expect("a window");
+        let pane = window.panes().await.expect("panes").remove(0);
+        let channel = format!("send-keys-enter-ran-{index}");
+
+        let mut plan = Plan::new();
+        plan.add(
+            SendKeys::new(pane.id().clone())
+                .text(format!("tmux wait-for -S {channel}"))
+                .enter(),
+        );
+        plan.run(server, planner).await.expect("the plan runs");
+
+        assert_eq!(
+            server
+                .wait_for_channel(&channel, Duration::from_secs(5))
+                .await
+                .expect("the channel wait can be read"),
+            ChannelWait::Signalled,
+            "{planner:?}: text folded with a trailing carriage return did not run as a line",
+        );
+    }
+
+    guard.shutdown().await.expect("shutdown");
+}
+
+/// `SendKeys` cannot carry literal text and named keys in one invocation:
+/// `-l` is required to type the text, and `-l` would literalize the keys too.
+#[test]
+fn plan_validation_rejects_text_together_with_named_keys() {
+    let pane: PaneId = "%1".parse().expect("a pane id");
+
+    let mut plan = Plan::new();
+    plan.add(SendKeys::new(pane).text("make").keys(["Enter"]));
+
+    let failure = plan
+        .validate()
+        .expect_err("text and named keys cannot share one send-keys");
+    assert_eq!(failure.step(), 0);
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SendKeysTextWithKeys,
+    );
+    assert!(failure.to_string().contains("literal text"), "{failure}");
 }

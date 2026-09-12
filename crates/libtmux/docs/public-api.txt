@@ -2332,6 +2332,7 @@ variant libtmux::plan::Outcome::Skipped
 variant libtmux::plan::Outcome::Unknown
 variant libtmux::plan::PaneTarget::Id
 variant libtmux::plan::PaneTarget::Slot
+variant libtmux::plan::PlanValidationErrorKind::SendKeysTextWithKeys
 variant libtmux::plan::PlanValidationErrorKind::SourceMissing
 variant libtmux::plan::PlanValidationErrorKind::SourceNotEarlier
 variant libtmux::plan::PlanValidationErrorKind::SourceOutputMissing

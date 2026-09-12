@@ -169,6 +169,14 @@ operation!(
 );
 
 /// Send text or named keys to a pane.
+///
+/// [`SendKeys::text`] and [`SendKeys::keys`] cannot both be set: tmux
+/// resolves every `send-keys` argument against its key table unless `-l`
+/// literalizes it, and `-l` covers every argument of the `send-keys` it sits
+/// on. So literal text and named keys cannot share one `send-keys`, though
+/// two of them still share one tmux invocation under a folding planner.
+/// [`crate::plan::Plan::validate`] rejects a `SendKeys` that carries both,
+/// before a plan runs.
 #[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
@@ -215,6 +223,13 @@ impl SendKeys {
     }
 
     /// Send this literal text.
+    ///
+    /// Rendered with tmux's `-l` flag, so every byte is typed rather than
+    /// looked up in the key table first -- text that happens to name a key,
+    /// such as `"Space"`, is typed rather than pressed. `-l` literalizes every
+    /// argument of the `send-keys` it is on, so this cannot be combined with
+    /// [`SendKeys::keys`]: [`crate::plan::Plan::validate`] rejects that
+    /// combination before anything runs.
     #[must_use]
     pub fn text(mut self, text: impl Into<OsString>) -> Self {
         self.text = Some(text.into());
@@ -222,6 +237,11 @@ impl SendKeys {
     }
 
     /// Send named keys such as `C-c` or `Escape`.
+    ///
+    /// Resolved against tmux's key table, which is why this cannot be
+    /// combined with [`SendKeys::text`]: literal text needs `-l`, and `-l`
+    /// would literalize these too. [`crate::plan::Plan::validate`] rejects
+    /// the combination before anything runs.
     #[must_use]
     pub fn keys<K: Into<OsString>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
         self.keys = keys.into_iter().map(Into::into).collect();
@@ -229,29 +249,53 @@ impl SendKeys {
     }
 
     /// Follow the text with Enter.
+    ///
+    /// When literal text is set, Enter is folded into it as a trailing
+    /// carriage return rather than sent as a separate named key -- the same
+    /// dispatch [`crate::Pane::send_line`] uses to submit a line in one
+    /// command. Without text, Enter renders as the named key after
+    /// whatever [`SendKeys::keys`] sends.
     #[must_use]
     pub const fn enter(mut self) -> Self {
         self.enter = true;
         self
     }
 
+    /// Whether this cannot render as one `send-keys`.
+    ///
+    /// Literal text needs `-l`, and `-l` literalizes every argument of the
+    /// same `send-keys`, so a named key cannot survive alongside text. Enter
+    /// is not a named key here: [`SendKeys::render`] folds it into the
+    /// literal payload instead, so it never conflicts.
+    pub(crate) fn text_conflicts_with_keys(&self) -> bool {
+        self.text.is_some() && !self.keys.is_empty()
+    }
+
     pub(crate) fn render(&self, resolve: Resolver<'_>) -> Option<Command> {
         let mut command = Command::new("send-keys")
             .arg("-t")
             .arg(self.target.token(resolve)?);
-        // Everything after `--` is a value, so text that starts with a dash is
-        // typed rather than read as a flag.
-        if self.text.is_some() || !self.keys.is_empty() || self.enter {
-            command = command.arg("--");
-        }
         if let Some(text) = &self.text {
-            command = command.sensitive_arg(text.clone());
-        }
-        for key in &self.keys {
-            command = command.arg(key.clone());
-        }
-        if self.enter {
-            command = command.arg("Enter");
+            // `-l` literalizes every argument of this `send-keys`. Enter is
+            // folded into the payload as a trailing carriage return instead
+            // of the named key `Enter`, matching how `Pane::send_line`
+            // dispatches a line for the object API. A plan carrying `keys`
+            // here as well is rejected by `Plan::validate` before this runs.
+            let mut literal = text.clone();
+            if self.enter {
+                literal.push("\r");
+            }
+            command = command.arg("-l").arg("--").sensitive_arg(literal);
+        } else if !self.keys.is_empty() || self.enter {
+            // Everything after `--` is a value, so a key name that starts
+            // with a dash is typed rather than read as a flag.
+            command = command.arg("--");
+            for key in &self.keys {
+                command = command.arg(key.clone());
+            }
+            if self.enter {
+                command = command.arg("Enter");
+            }
         }
         Some(command)
     }
