@@ -50,7 +50,7 @@ pub enum ServerConfigurationErrorKind {
     InvalidSocketPath,
     /// A config path was empty or contained a NUL byte.
     InvalidConfigPath,
-    /// The requested color mode was neither 88 nor 256 colors.
+    /// The requested color override was not 256 colors.
     InvalidColorMode,
     /// The process working directory could not be captured.
     WorkingDirectoryUnavailable,

@@ -208,13 +208,15 @@ impl ServerBuilder {
         self
     }
 
-    /// Select tmux's 88- or 256-color compatibility mode.
+    /// Request tmux's 256-color compatibility mode.
+    ///
+    /// Other values are rejected by [`Self::build`].
     ///
     /// # Examples
     ///
     /// ```
-    /// let server = libtmux::Server::builder().colors(88).build()?;
-    /// assert_eq!(server.colors(), Some(88));
+    /// let server = libtmux::Server::builder().colors(256).build()?;
+    /// assert_eq!(server.colors(), Some(256));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
     #[must_use = "use the returned builder to retain the color mode"]

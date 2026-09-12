@@ -125,7 +125,7 @@ impl CoreConfiguration {
             .filter(|path| path.is_absolute())
             .ok_or(ServerConfigurationErrorKind::WorkingDirectoryUnavailable)?;
 
-        if !matches!(colors, None | Some(88 | 256)) {
+        if !matches!(colors, None | Some(256)) {
             return Err(ServerConfigurationErrorKind::InvalidColorMode);
         }
 
@@ -170,11 +170,8 @@ impl CoreConfiguration {
             global_argv.push(OsString::from("-f"));
             global_argv.push(path.as_os_str().to_os_string());
         }
-        match colors {
-            Some(88) => global_argv.push(OsString::from("-8")),
-            Some(256) => global_argv.push(OsString::from("-2")),
-            None => {}
-            Some(_) => return Err(ServerConfigurationErrorKind::InvalidColorMode),
+        if colors == Some(256) {
+            global_argv.push(OsString::from("-2"));
         }
         // tmux replaces every byte outside `0x20..=0x7e` with `_` when it does
         // not believe its client speaks UTF-8, and it decides that from the
@@ -573,7 +570,7 @@ mod tests {
         let configuration = resolve(
             &SocketSelection::Path(PathBuf::from("relative-socket;")),
             Some(PathBuf::from("relative-config;")),
-            Some(88),
+            Some(256),
             context(
                 Some(Path::new("/captured/work")),
                 Some(OsStr::new("/captured/bin")),
@@ -592,7 +589,7 @@ mod tests {
                 b"/captured/work/relative-socket;".as_slice(),
                 b"-f".as_slice(),
                 b"/captured/work/relative-config;".as_slice(),
-                b"-8".as_slice(),
+                b"-2".as_slice(),
                 b"-u".as_slice(),
             ]
         );
