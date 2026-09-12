@@ -11,8 +11,8 @@ use super::{
     Chainable, Effects, Op, Operation, PaneSlot, PaneTarget, Safety, Scope, Slot, WindowTarget,
 };
 use super::{PANE_FORMAT, Resolver};
-use crate::Command;
 use crate::window::assignment;
+use crate::{Command, SplitDirection};
 
 /// Split a window, making a pane.
 #[derive(Clone)]
@@ -117,9 +117,11 @@ impl SplitWindow {
     /// let mut plan = Plan::new();
     /// let session = plan.add(NewSession::new("above"));
     /// plan.add(SplitWindow::new(session.window()).direction(SplitDirection::Above));
+    ///
+    /// assert_eq!(plan.len(), 2);
     /// ```
     #[must_use]
-    pub const fn direction(mut self, direction: crate::SplitDirection) -> Self {
+    pub const fn direction(mut self, direction: SplitDirection) -> Self {
         self.vertical = direction.is_vertical();
         self.before = direction.before();
         self
