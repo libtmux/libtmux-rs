@@ -204,6 +204,14 @@ that is invisible from inside the tree.
 
 ## Development
 
+Format edits confined to this package with:
+
+```console
+$ cargo fmt --package tmux-workspace
+```
+
+The full gate checks formatting across the Cargo workspace.
+
 ```console
 $ cargo test -p tmux-workspace
 ```
