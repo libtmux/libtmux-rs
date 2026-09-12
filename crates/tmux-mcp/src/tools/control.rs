@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use libtmux::{Command, CommandChain, Error, NewSessionOptions, ResizeDirection};
+use libtmux::{Command, CommandChain, Error, NewSessionOptions};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
@@ -293,17 +293,12 @@ impl TmuxTools {
             cells,
         }): Parameters<ResizePaneArgs>,
     ) -> Result<Json<Size>, ErrorData> {
-        let direction = match direction.as_str() {
-            "up" => ResizeDirection::Up,
-            "down" => ResizeDirection::Down,
-            "left" => ResizeDirection::Left,
-            "right" => ResizeDirection::Right,
-            other => {
-                return Err(bad_input(format!(
-                    "direction must be up, down, left, or right, not {other}"
-                )));
-            }
-        };
+        let direction = crate::schema::resize_direction(&direction).ok_or_else(|| {
+            bad_input(format!(
+                "direction must be {}, not {direction}",
+                crate::schema::words_or(&crate::schema::resize_direction_words())
+            ))
+        })?;
 
         let mut pane = self.find_pane(&pane).await?;
         pane.resize_by(direction, cells)
