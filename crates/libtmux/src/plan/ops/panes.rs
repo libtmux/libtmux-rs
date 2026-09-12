@@ -92,12 +92,16 @@ impl SplitWindow {
 
     /// Split side by side rather than one above the other.
     ///
-    /// The same as `direction(SplitDirection::Right)`. Kept because it is the
-    /// spelling this operation shipped with.
+    /// Exactly [`SplitDirection::Right`], and defined as it so the two cannot
+    /// disagree. Kept because it is the spelling this operation shipped with.
+    ///
+    /// It sets the side as well as the axis, so it is the whole position
+    /// rather than half of one: `direction(Above).horizontal()` is `Right`,
+    /// not `Left`. Either setter, in either order, leaves one of the four
+    /// positions and never a mix of two.
     #[must_use]
-    pub const fn horizontal(mut self) -> Self {
-        self.vertical = false;
-        self
+    pub const fn horizontal(self) -> Self {
+        self.direction(SplitDirection::Right)
     }
 
     /// Put the new pane on this side of the one being divided.

@@ -915,3 +915,57 @@ fn a_split_recorded_before_the_side_was_addressable_still_decodes() {
     assert!(rendered.contains("-v"), "{rendered}");
     assert!(!rendered.contains("-b"), "{rendered}");
 }
+
+/// Either split setter, in either order, leaves one of the four positions.
+///
+/// `horizontal` used to set only the axis, so it inherited whatever side a
+/// preceding `direction` had asked for: `direction(Above).horizontal()`
+/// rendered `-h -b` and put the pane on the left, against its own
+/// documentation.
+#[test]
+fn a_split_setter_never_leaves_half_a_position() {
+    let window: WindowId = "@1".parse().expect("a window id");
+    let rendered = |split: SplitWindow| {
+        let mut plan = Plan::new();
+        plan.add(split);
+        format!("{:?}", plan.preview())
+    };
+
+    let right = rendered(SplitWindow::new(window.clone()).direction(SplitDirection::Right));
+    let horizontal = rendered(SplitWindow::new(window.clone()).horizontal());
+    assert_eq!(horizontal, right, "horizontal is Right");
+
+    // The order the two setters are applied in cannot change the outcome.
+    for direction in [
+        SplitDirection::Above,
+        SplitDirection::Below,
+        SplitDirection::Left,
+        SplitDirection::Right,
+    ] {
+        assert_eq!(
+            rendered(
+                SplitWindow::new(window.clone())
+                    .direction(direction)
+                    .horizontal()
+            ),
+            right,
+            "direction({direction:?}) then horizontal is Right",
+        );
+        assert_eq!(
+            rendered(
+                SplitWindow::new(window.clone())
+                    .horizontal()
+                    .direction(direction)
+            ),
+            rendered(SplitWindow::new(window.clone()).direction(direction)),
+            "horizontal then direction({direction:?}) is that direction",
+        );
+    }
+
+    // `-b` is the flag that was leaking across the two setters.
+    assert!(!right.contains("-b"), "{right}");
+    assert!(
+        rendered(SplitWindow::new(window).direction(SplitDirection::Left)).contains("-b"),
+        "a Left split still asks for -b",
+    );
+}
