@@ -303,9 +303,10 @@ fn load() -> Command {
         .arg(
             Arg::new("colors88")
                 .short('8')
+                .long("88-colors")
                 .action(ArgAction::SetTrue)
                 .conflicts_with("colors256")
-                .help("Assume 88 terminal colors"),
+                .help("Reject legacy 88-color mode; supported tmux versions require omitting it or using -2"),
         )
         .arg(value("log-file", None, "Write diagnostics to this file"))
         .arg(

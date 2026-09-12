@@ -79,6 +79,20 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let commands = value["command"]["subcommands"].as_array().unwrap();
     assert_eq!(commands.len(), 9);
+    let load = commands.iter().find(|c| c["name"] == "load").unwrap();
+    let colors = load["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "colors88")
+        .unwrap();
+    assert_eq!(colors["long"], "88-colors");
+    assert!(
+        colors["description"]
+            .as_str()
+            .unwrap()
+            .contains("Reject legacy 88-color mode")
+    );
     assert_eq!(
         commands.iter().find(|c| c["name"] == "import").unwrap()["subcommands"]
             .as_array()
@@ -90,6 +104,9 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
         let output = cli(&["--generate", format]);
         assert!(output.status.success(), "{format}: {output:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("tmux-workspace"));
+        if format != "man" {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("88-colors"));
+        }
     }
 }
 
@@ -97,6 +114,9 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
 fn malformed_invocations_fail_before_backend_work() {
     for args in [
         vec!["--json", "load", "-2", "-8", "missing"],
+        vec!["--json", "load", "-8", "-2", "missing"],
+        vec!["--json", "load", "-2", "--88-colors", "missing"],
+        vec!["--json", "load", "--88-colors", "-2", "missing"],
         vec!["load", "--json", "--unknown", "missing"],
         vec!["--json", "import", "teamocil"],
         vec!["import", "tmuxinator", "--ndjson"],
@@ -111,6 +131,123 @@ fn malformed_invocations_fail_before_backend_work() {
         assert!(output.stderr.starts_with(b"{"), "{args:?}: {output:?}");
         assert!(!output.stderr.contains(&0x1b), "{args:?}: {output:?}");
     }
+}
+
+#[test]
+fn legacy_color_mode_is_rejected_before_reading_inputs() {
+    for flag in ["-8", "--88-colors"] {
+        for mode in [None, Some("--json"), Some("--ndjson")] {
+            let mut args = vec!["load", "-d", flag, "missing-first", "missing-second"];
+            args.extend(mode);
+            let output = cli(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+            assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+            assert!(!output.stderr.contains(&0x1b));
+            if mode.is_some() {
+                let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+                assert_eq!(error["code"], "unsupported_color_mode");
+            } else {
+                assert!(String::from_utf8_lossy(&output.stderr).contains("88-color"));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard
+        .server()
+        .new_session(libtmux::NewSessionOptions::new("existing"))
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let trace = directory.path().join("trace");
+    let wrapper = directory.path().join("tmux");
+    let python = directory.path().join("python");
+    std::fs::write(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
+    std::fs::write(
+        &python,
+        "#!/bin/sh\nprintf 'python\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexit 97\n",
+    )
+    .unwrap();
+    for executable in [&wrapper, &python] {
+        std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    for name in ["first", "second", "bridge"] {
+        let mut workspace =
+            serde_json::json!({"session_name":name,"windows":[{"panes":["blank"]}]});
+        if name == "bridge" {
+            workspace["plugins"] = serde_json::json!(["missing_plugin"]);
+        }
+        std::fs::write(
+            directory.path().join(format!("{name}.json")),
+            workspace.to_string(),
+        )
+        .unwrap();
+    }
+    let topology = || {
+        guard.server().cmd(
+            libtmux::Command::new("list-panes")
+                .arg("-a")
+                .arg("-F")
+                .arg("#{session_id}:#{window_id}:#{pane_id}"),
+        )
+    };
+    let before = topology().await.unwrap();
+    assert!(before.success());
+    let run = |options: &[&str], files: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_tmux-workspace"))
+            .args([
+                "load",
+                "-d",
+                "-S",
+                guard.server().socket_path().to_str().unwrap(),
+            ])
+            .args(options)
+            .args(files)
+            .current_dir(directory.path())
+            .env("LIBTMUX_TEST_TMUX", &wrapper)
+            .env("TMUX_WORKSPACE_PYTHON", &python)
+            .env("WORKSPACE_TMUX_TRACE", &trace)
+            .env(
+                "WORKSPACE_REAL_TMUX",
+                std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into()),
+            )
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .output()
+            .unwrap()
+    };
+    for flag in ["-8", "--88-colors"] {
+        for mode in [None, Some("--json"), Some("--ndjson")] {
+            let mut options = vec![flag];
+            options.extend(mode);
+            for last in ["second.json", "bridge.json"] {
+                let output = run(&options, &["first.json", last]);
+                assert_eq!(output.status.code(), Some(2), "{options:?}: {output:?}");
+                assert!(output.stdout.is_empty(), "{output:?}");
+                assert!(!trace.exists(), "validation invoked tmux or Python");
+                assert_eq!(topology().await.unwrap().stdout(), before.stdout());
+            }
+        }
+    }
+    let output = run(&["--json", "-2"], &["first.json", "second.json"]);
+    assert!(output.status.success(), "{output:?}");
+    for name in ["first", "second"] {
+        assert!(guard.server().has_session(name).await.unwrap());
+    }
+    let calls = std::fs::read_to_string(trace).unwrap();
+    assert!(calls.contains("<-2>"), "{calls}");
+    assert!(
+        calls
+            .lines()
+            .all(|line| line == "<-V>" || line.contains("<-2>")),
+        "{calls}"
+    );
+    guard.shutdown().await.unwrap();
 }
 
 #[test]
@@ -610,7 +747,7 @@ async fn python_extension_bridge_builds_and_preserves_borrowed_session_on_failur
     std::fs::write(directory.path().join("extension.json"), config.to_string()).unwrap();
     let socket = guard.server().socket_path().to_str().unwrap();
     let output = at(
-        &["load", "-S", socket, "-d", "--json", "extension.json"],
+        &["load", "-S", socket, "-d", "-2", "--json", "extension.json"],
         directory.path(),
     );
     assert!(output.status.success(), "{output:?}");
