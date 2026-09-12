@@ -12,7 +12,10 @@ use std::process::{Child, Stdio};
 use std::time::Duration;
 
 use libtmux::test::TestServer;
-use libtmux::{Command, NewSessionOptions, NewWindowOptions, Server, SplitDirection, SplitOptions};
+use libtmux::{
+    Command, Error, NewSessionOptions, NewWindowOptions, Server, ServerGoneKind, SplitDirection,
+    SplitOptions,
+};
 use serde_json::Value;
 use tmux_mcp::{CallerIdentity, TmuxTools};
 use tokio_util::sync::CancellationToken;
@@ -342,13 +345,43 @@ async fn split(server: &Server, pane: &str) -> String {
         .to_string()
 }
 
-async fn pane_present(server: &Server, pane: &str) -> bool {
-    server
-        .panes()
-        .await
-        .expect("panes list")
-        .iter()
-        .any(|candidate| candidate.id().to_string() == pane)
+/// What the server can still say about a pane once a run has settled.
+enum PaneFate {
+    /// The pane is still listed, dead process or not.
+    Listed,
+    /// The pane is gone and the server is still answering.
+    Dropped,
+    /// The pane is gone and took the server with it.
+    ServerExited,
+}
+
+/// Ask what became of a pane, treating an exited server as an answer.
+///
+/// A fixture built by [`typing_fixture`] holds one session, one window and one
+/// pane, so that pane is also the server's last. A pane tmux declines to retain
+/// therefore takes the window, the session and the daemon with it, and
+/// `list-panes` answers `no server running on <socket>` rather than an empty
+/// list. That is this question answered -- the pane is certainly not there --
+/// so it is a third outcome rather than a fault, and `.expect()` here turned it
+/// into a panic that read as an unrelated infrastructure flake.
+async fn pane_fate(server: &Server, pane: &str) -> PaneFate {
+    match server.panes().await {
+        Ok(panes) => {
+            if panes
+                .iter()
+                .any(|candidate| candidate.id().to_string() == pane)
+            {
+                PaneFate::Listed
+            } else {
+                PaneFate::Dropped
+            }
+        }
+        Err(Error::ServerGone {
+            kind: ServerGoneKind::NotRunning,
+            ..
+        }) => PaneFate::ServerExited,
+        Err(error) => panic!("panes list: {error}"),
+    }
 }
 
 async fn pane_handle(server: &Server, pane: &str) -> libtmux::Pane {
@@ -1575,6 +1608,46 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A server that exited is an answer about its panes, not a fault.
+///
+/// The settlement test above reaches this branch only when tmux declines to
+/// retain a `remain-on-exit` pane, which is rare and racy: it fired once in CI
+/// against code that had passed the same job minutes earlier. So the branch is
+/// proven here instead, by removing the server outright, which puts
+/// `list-panes` in exactly the state the race produces.
+#[tokio::test]
+async fn real_tmux_compat_a_pane_query_survives_its_server_exiting() {
+    let (guard, _tools, pane) = typing_fixture("pane-fate-server-exit").await;
+    assert!(
+        matches!(pane_fate(guard.server(), &pane).await, PaneFate::Listed),
+        "the fixture pane is listed while the server runs"
+    );
+
+    guard
+        .server()
+        .cmd(Command::new("kill-server"))
+        .await
+        .expect("kill-server runs");
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        guard.server().panes().await.is_err()
+    })
+    .await
+    .expect("the server stops answering");
+
+    assert!(
+        matches!(
+            pane_fate(guard.server(), &pane).await,
+            PaneFate::ServerExited
+        ),
+        "an exited server reports the pane gone rather than panicking"
+    );
+
+    guard
+        .shutdown()
+        .await
+        .expect("the fixture shuts down after its server exited");
+}
+
 #[tokio::test]
 async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
     let (guard, tools, pane) = typing_fixture("run-dead-settlement").await;
@@ -1638,16 +1711,27 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
     // than assumed: a pane that survives must report its dead process, and a
     // pane that did not must have been reported as closed instead of the run
     // claiming it merely ran out of time.
-    if !pane_present(guard.server(), &pane).await {
+    let fate = pane_fate(guard.server(), &pane).await;
+    if !matches!(fate, PaneFate::Listed) {
         assert_ne!(
             outcome, "deadline",
             "a pane that went away must not be reported as a deadline"
         );
-        assert_eq!(
-            clients_settle(guard.server(), baseline_clients).await,
-            baseline_clients,
-            "a closed pane still drops the stalled watcher"
-        );
+        // The watcher invariant is only assertable while there is a server to
+        // count clients on. When the pane took the daemon with it the watcher
+        // cannot have outlived it, which settles the same question more
+        // strongly than the count could, and `client_count` would read 0
+        // against a live baseline and fail a true case.
+        if matches!(fate, PaneFate::Dropped) {
+            assert_eq!(
+                clients_settle(guard.server(), baseline_clients).await,
+                baseline_clients,
+                "a closed pane still drops the stalled watcher"
+            );
+        }
+        // Still shut the fixture down either way: `TestServer::shutdown`
+        // drains the local executor and reaps the daemon and its socket, and
+        // none of that asks tmux anything.
         guard.shutdown().await.expect("tmux fixture shuts down");
         return;
     }
