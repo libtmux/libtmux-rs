@@ -1582,12 +1582,21 @@ fn interrupted_editor_terminates_its_owned_child_group() {
         child.kill().unwrap();
     }
     let output = child.wait_with_output().unwrap();
-    let descendant_alive = Command::new("kill")
-        .args(["-0", &pid])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap()
-        .success();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let descendant_alive = loop {
+        let state = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid])
+            .output()
+            .unwrap();
+        assert!(state.status.success() || state.status.code() == Some(1));
+        let state = String::from_utf8(state.stdout).unwrap();
+        // A killed orphan may remain a zombie until its new parent reaps it.
+        let alive = !state.trim().is_empty() && !state.trim().starts_with('Z');
+        if !alive || std::time::Instant::now() >= deadline {
+            break alive;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
     if descendant_alive {
         let _ = Command::new("kill").args(["-KILL", &pid]).status();
     }
