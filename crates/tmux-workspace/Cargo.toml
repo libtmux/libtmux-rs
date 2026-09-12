@@ -26,6 +26,23 @@ include = [
 libtmux = { workspace = true, features = ["plan"] }
 thiserror.workspace = true
 yaml-rust2 = "0.11.0"
+clap = { version = "4.6.6", optional = true, features = ["env", "string"] }
+clap_complete = { version = "4.6.9", optional = true }
+clap_mangen = { version = "0.3.3", optional = true }
+serde_json = { workspace = true, optional = true }
+fancy-regex = { version = "0.19.0", optional = true }
+tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread", "process", "io-util", "signal", "time"] }
+tempfile = { workspace = true, optional = true }
+rustix = { version = "1.1.4", optional = true, features = ["process"] }
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:clap_complete", "dep:clap_mangen", "dep:serde_json", "dep:fancy-regex", "dep:tokio", "dep:tempfile", "dep:rustix"]
+
+[[bin]]
+name = "tmux-workspace"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [dev-dependencies]
 libtmux = { workspace = true, features = ["derive", "test-support"] }
