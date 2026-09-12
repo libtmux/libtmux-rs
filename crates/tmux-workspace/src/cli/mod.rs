@@ -8,6 +8,7 @@ mod logging;
 mod normalize;
 mod output;
 mod process;
+mod progress;
 mod search;
 
 use std::io::{self, Write};
@@ -106,6 +107,7 @@ pub(super) fn main() -> ExitCode {
                 }
             }
         }));
+    let _ = report.clear_progress();
     match result {
         Ok(()) => {
             report.log_warning();

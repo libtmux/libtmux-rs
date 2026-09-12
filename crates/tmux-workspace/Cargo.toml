@@ -33,11 +33,14 @@ serde_json = { workspace = true, optional = true }
 fancy-regex = { version = "0.19.0", optional = true }
 tokio = { workspace = true, optional = true, features = ["macros", "rt-multi-thread", "process", "io-util", "signal", "time"] }
 tempfile = { workspace = true, optional = true }
-rustix = { version = "1.1.4", optional = true, features = ["fs", "process"] }
+rustix = { version = "1.1.4", optional = true, features = ["fs", "process", "termios"] }
+anstyle-parse = { version = "1.0.0", optional = true, features = ["core"] }
+unicode-width = { version = "0.2.2", optional = true, default-features = false }
+unicode-segmentation = { version = "=1.12.0", optional = true }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:clap_complete", "dep:clap_mangen", "dep:serde_json", "dep:fancy-regex", "dep:tokio", "dep:tempfile", "dep:rustix"]
+cli = ["dep:clap", "dep:clap_complete", "dep:clap_mangen", "dep:serde_json", "dep:fancy-regex", "dep:tokio", "dep:tempfile", "dep:rustix", "dep:anstyle-parse", "dep:unicode-width", "dep:unicode-segmentation"]
 
 [[bin]]
 name = "tmux-workspace"

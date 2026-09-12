@@ -162,6 +162,8 @@ fn chunk(
             "script-output",
             json!({"stream":stream,"text":text,"encoding":"utf-8-with-replacement"}),
         )?;
+    } else if report.progress_output(stream, text)? {
+        return Ok(());
     } else if stream == "stderr" {
         write!(io::stderr(), "{text}")?;
         io::stderr().flush()?;
