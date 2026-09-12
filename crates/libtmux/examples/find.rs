@@ -4,13 +4,25 @@
 //! $ cargo run --example find -- nvim
 //! ```
 
+use libtmux::Pane;
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::{Pane, Server};
+
+#[path = "common/arena.rs"]
+mod arena;
+
+use arena::{ArenaEnvironment, arena_error, arena_evidence, select_server};
+
+const ARENA_ARTIFACT: &str = "rust-find";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wanted = std::env::args().nth(1).unwrap_or_else(|| "sh".to_owned());
-    let server = Server::from_env().or_else(|_| Server::new())?;
+    let environment = ArenaEnvironment::capture();
+    let (server, arena) = select_server(&environment, ARENA_ARTIFACT)?;
+    if arena.is_some() && !server.is_alive().await {
+        server.shutdown().await?;
+        return Err(arena_error("arena server is not alive").into());
+    }
 
     // A typed field handle: comparing this text field to a number would not
     // compile, so the only expressible predicates are ones tmux can answer.
@@ -49,6 +61,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let evidence = if let Some(arena) = &arena {
+        Some(arena_evidence(&server, arena, ARENA_ARTIFACT).await?)
+    } else {
+        None
+    };
     server.shutdown().await?;
+    if let Some(evidence) = evidence {
+        println!("LIBTMUX_ARENA_EVIDENCE={evidence}");
+    }
     Ok(())
 }
