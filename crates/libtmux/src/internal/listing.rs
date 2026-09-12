@@ -136,7 +136,6 @@ fn decode_error(list_command: &'static str) -> impl Fn(FormatCodecError) -> Erro
     }
 }
 
-/// List sessions.
 /// Record that a lenient listing threw a failure away.
 ///
 /// The lenient forms return an empty vector for "nothing there" and for "the
@@ -165,6 +164,7 @@ pub(crate) fn trace_discarded(list_command: &'static str, error: &Error) {
     );
 }
 
+/// List sessions.
 pub(crate) async fn sessions(core: &Core, filter: Option<&str>) -> Result<Vec<SessionInfo>, Error> {
     const LIST_COMMAND: &str = "list-sessions";
 

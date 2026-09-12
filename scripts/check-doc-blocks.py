@@ -13,11 +13,21 @@ A split falling on a sentence boundary reads as prose either way. It leaves a
 structural mark instead: the displaced block lands below an attribute of the
 item above, so a `///` follows a non-doc `#[...]`. Rust accepts that order and
 rustdoc renders it.
+
+A split falling on a sentence boundary *above* the attributes leaves neither
+mark: every line still reads as prose and the block still sits where a doc
+block belongs. What it leaves is a first paragraph holding two sentences, which
+rustdoc renders as one run-on summary. WRITING.md requires the opposite -- "the
+first sentence stands alone" -- so a second sentence on the line after the
+summary is the mark. Both real splits this rule found were a block inserted one
+line too low, which left the item below wearing its neighbour's summary and the
+item further down with none.
 """
 
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 # Lowercase because that is how each spells its own name.
@@ -68,6 +78,46 @@ def blocks_below_an_attribute(lines: list[str]) -> list[tuple[int, str]]:
     return found
 
 
+# A period that ends an abbreviation or a version rather than a sentence.
+NOT_A_SENTENCE_END = re.compile(
+    r"(?:\b[a-z]\.[a-z]\.|\betc\.|\bvs\.|\bcf\.|\bal\.|\bNo\.|\d\.\d\w*\.)$",
+    re.IGNORECASE,
+)
+
+
+def run_on_summaries(lines: list[str]) -> list[tuple[int, str, str]]:
+    """Yield `(line number, summary, intruder)` for a two-sentence summary.
+
+    rustdoc's summary is the first paragraph, so a sentence on the line
+    directly after it joins it. A continuation line is not a second sentence:
+    only a capitalised word starts one, and a blank `///` ends the paragraph
+    before it can.
+    """
+    found = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("///"):
+            continue
+        previous = lines[index - 1].strip() if index else ""
+        if previous.startswith("///"):
+            continue
+
+        body = stripped[3:].strip()
+        if not body.endswith(".") or NOT_A_SENTENCE_END.search(body):
+            continue
+
+        following = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if not following.startswith("///"):
+            continue
+        intruder = following[3:].strip()
+        # A blank `///` closes the paragraph, and a lowercase or symbol start
+        # continues the sentence rather than opening one.
+        if not intruder or not intruder[0].isupper():
+            continue
+        found.append((index + 1, body, intruder))
+    return found
+
+
 def offenders(path: pathlib.Path) -> list[str]:
     reported = []
     lines = path.read_text().splitlines()
@@ -82,6 +132,12 @@ def offenders(path: pathlib.Path) -> list[str]:
 
     for number, body in blocks_below_an_attribute(lines):
         reported.append(f"{path}:{number}: doc sits below an attribute: {body[:72]}")
+
+    for number, body, intruder in run_on_summaries(lines):
+        reported.append(
+            f"{path}:{number}: two sentences in one summary: "
+            f"{body[:48]!r} then {intruder[:48]!r}"
+        )
 
     return reported
 
