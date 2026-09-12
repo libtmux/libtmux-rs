@@ -51,7 +51,8 @@ pub(super) fn server(args: &ArgMatches) -> Result<Server> {
     } else if let Some(name) = option(args, "socket-name") {
         builder = builder.socket_name(name);
     } else if let Ok(context) = std::env::var("TMUX") {
-        if let Some(socket) = context.split(',').next().filter(|s| !s.is_empty()) {
+        if !context.is_empty() {
+            let (socket, _) = tmux_context(&context)?;
             builder = builder.socket_path(socket);
         }
     }
@@ -103,6 +104,16 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
     ))
 }
 
+async fn load_target(args: &ArgMatches) -> Result<(Server, Option<AppendTarget>)> {
+    let server = server(args)?;
+    let borrowed = if flag(args, "append") {
+        Some(append_target(&server).await?)
+    } else {
+        None
+    };
+    Ok((server, borrowed))
+}
+
 pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()> {
     if flag(args, "colors88") {
         return Err(CliError {
@@ -129,14 +140,13 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         }
         workspaces.push((path, workspace));
     }
+    let (server, borrowed) = load_target(args).await?;
     let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
         Some(process::python().await?)
     } else {
         None
     };
-    let server = server(args)?;
-    let mut results = Vec::new();
-    let mut last_session = None;
+    let (mut results, mut last_session) = (Vec::new(), None);
     report.event("started", json!({"inputs":workspaces.len()}))?;
     for (index, (path, workspace)) in workspaces.iter().enumerate() {
         report.event(
@@ -154,6 +164,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
             report,
             &mut effects,
             python.as_deref(),
+            borrowed.as_ref(),
         )
         .await
         {
@@ -204,31 +215,90 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
     Ok(())
 }
 
-async fn current_session(server: &Server) -> Result<Session> {
-    let pane = std::env::var("TMUX_PANE").map_err(|_| {
-        CliError::new(
-            "current_pane_required",
-            "append requires TMUX_PANE identifying the current pane on the selected server",
-        )
-    })?;
+struct AppendTarget {
+    session: Session,
+    identity: (u32, u64),
+}
+
+impl AppendTarget {
+    async fn recheck(&self, server: &Server) -> Result<()> {
+        let observed = target_context(server, self.session.id().as_ref()).await?;
+        if (observed.0, observed.1) != self.identity || &observed.2 != self.session.id() {
+            return Err(append_context(
+                "borrowed daemon or session identity changed",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn append_context(message: impl Into<String>) -> CliError {
+    CliError::new("append_context", message)
+}
+
+fn tmux_context(context: &str) -> Result<(&str, u32)> {
+    let parsed = context.rsplit_once(',').and_then(|(prefix, session)| {
+        session.parse::<u32>().ok()?;
+        let (socket, pid) = prefix.rsplit_once(',')?;
+        let pid = pid.parse::<u32>().ok()?;
+        (!socket.is_empty() && pid > 0).then_some((socket, pid))
+    });
+    parsed.ok_or_else(|| append_context("TMUX must identify a socket, daemon PID, and session"))
+}
+
+async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libtmux::SessionId)> {
     let result = server
         .cmd(
             Command::new("display-message")
                 .arg("-p")
                 .arg("-t")
-                .arg(pane)
-                .arg("#{session_id}"),
+                .arg(target)
+                .arg("#{pid}:#{start_time}:#{session_id}"),
         )
-        .await?;
-    let target = result.stdout_lossy().trim().to_owned();
-    let id = target
-        .parse::<libtmux::SessionId>()
-        .map_err(|error| CliError::new("current_pane_required", error.to_string()))?;
-    server.session_by_id(&id).await?.ok_or_else(|| {
-        CliError::new(
-            "current_pane_required",
-            "current pane has no session on the selected server",
-        )
+        .await
+        .map_err(|error| append_context(error.to_string()))?;
+    let text = result.stdout_lossy();
+    let mut fields = text.trim().split(':');
+    let parsed = (|| {
+        let pid = fields.next()?.parse::<u32>().ok()?;
+        let started = fields.next()?.parse::<u64>().ok()?;
+        let session = fields.next()?.parse::<libtmux::SessionId>().ok()?;
+        (pid > 0 && started > 0 && fields.next().is_none()).then_some((pid, started, session))
+    })();
+    parsed.ok_or_else(|| append_context("target has no live daemon and session identity"))
+}
+
+async fn append_target(server: &Server) -> Result<AppendTarget> {
+    let pane = std::env::var("TMUX_PANE")
+        .map_err(|_| {
+            CliError::new(
+                "current_pane_required",
+                "append requires TMUX_PANE identifying the current pane",
+            )
+        })?
+        .parse::<libtmux::PaneId>()
+        .map_err(|error| append_context(error.to_string()))?;
+    let context = std::env::var("TMUX")
+        .map_err(|_| append_context("append requires the inherited TMUX daemon identity"))?;
+    let (socket, pid) = tmux_context(&context)?;
+    let inherited_server = Server::builder()
+        .socket_path(socket)
+        .tmux_executable(server.tmux_executable())
+        .build()?;
+    let inherited = target_context(&inherited_server, pane.as_ref()).await?;
+    let selected = target_context(server, pane.as_ref()).await?;
+    if inherited.0 != pid || inherited != selected {
+        return Err(append_context(
+            "inherited TMUX and selected endpoint do not identify the same live daemon and session",
+        ));
+    }
+    let session = server
+        .session_by_id(&selected.2)
+        .await?
+        .ok_or_else(|| append_context("current pane session no longer exists"))?;
+    Ok(AppendTarget {
+        session,
+        identity: (selected.0, selected.1),
     })
 }
 
@@ -239,7 +309,13 @@ async fn build(
     report: &mut Reporter,
     effects: &mut Effects,
     python: Option<&std::ffi::OsStr>,
+    borrowed: Option<&AppendTarget>,
 ) -> Result<(Session, bool)> {
+    if let Some(target) = borrowed {
+        effects.session = Some(target.session.clone());
+        effects.stage = "append-validation";
+        target.recheck(server).await?;
+    }
     if workspace.bridge {
         return build_extension(
             server,
@@ -250,25 +326,21 @@ async fn build(
             python.ok_or_else(|| {
                 CliError::new("python_runtime", "checked Python runtime is missing")
             })?,
+            borrowed,
         )
         .await;
     }
     let input = effects.input;
-    let append = flag(args, "append");
-    let existing = if server.is_alive().await {
-        server.session(&workspace.name).await?
-    } else {
-        None
-    };
-    if !append {
-        if let Some(session) = existing {
+    let append = borrowed.is_some();
+    if !append && server.is_alive().await {
+        if let Some(session) = server.session(&workspace.name).await? {
             effects.session = Some(session.clone());
             effects.stage = "reused";
             return Ok((session, true));
         }
     }
-    let session = if append {
-        current_session(server).await?
+    let session = if let Some(target) = borrowed {
+        target.session.clone()
     } else {
         let columns = dimension("TMUXP_DEFAULT_COLUMNS", "COLUMNS", 80);
         let rows = dimension("TMUXP_DEFAULT_ROWS", "ROWS", 24);
@@ -287,7 +359,7 @@ async fn build(
         session
     };
     effects.session = Some(session.clone());
-    configure_session(server, &session, workspace, report, effects).await?;
+    configure_session(server, &session, workspace, report, effects, borrowed).await?;
     let mut bootstrap = if append {
         None
     } else {
@@ -327,6 +399,7 @@ async fn configure_session(
     workspace: &normalize::Workspace,
     report: &mut Reporter,
     effects: &mut Effects,
+    borrowed: Option<&AppendTarget>,
 ) -> Result<()> {
     if let Some(script) = &workspace.before_script {
         effects.stage = "before-script";
@@ -339,6 +412,9 @@ async fn configure_session(
         .await?;
         effects.script_output = Some(output.value());
         output.success()?;
+        if let Some(target) = borrowed {
+            target.recheck(server).await?;
+        }
     }
     effects.stage = "session-options";
     effects.changed |= !workspace.environment.is_empty()
@@ -374,10 +450,11 @@ async fn build_extension(
     report: &mut Reporter,
     effects: &mut Effects,
     python: &std::ffi::OsStr,
+    borrowed: Option<&AppendTarget>,
 ) -> Result<(Session, bool)> {
-    let append = flag(args, "append");
-    let prior = if append {
-        Some(current_session(server).await?)
+    let append = borrowed.is_some();
+    let prior = if let Some(target) = borrowed {
+        Some(target.session.clone())
     } else if server.is_alive().await {
         server.session(&workspace.name).await?
     } else {
@@ -394,7 +471,7 @@ async fn build_extension(
         }
         effects.session = Some(session.clone());
     }
-    let request = json!({"path":workspace.source,"session_name":workspace.name,"socket":server.socket_path(),"append":if append {prior.as_ref().map(|s|s.id().to_string())} else {None},"config_file":option(args,"tmux-config"),"colors":if flag(args,"colors256"){Some(256)}else{None}});
+    let request = json!({"path":workspace.source,"session_name":workspace.name,"socket":server.socket_path(),"append":borrowed.map(|target|target.session.id().to_string()),"append_identity":borrowed.map(|target|format!("{}:{}",target.identity.0,target.identity.1)),"config_file":option(args,"tmux-config"),"colors":if flag(args,"colors256"){Some(256)}else{None}});
     effects.stage = "python-extension";
     let output = bridge::build(python, request, report).await?;
     effects.script_output = Some(output.value());

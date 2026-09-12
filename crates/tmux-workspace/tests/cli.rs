@@ -9,7 +9,22 @@ fn at(arguments: &[&str], directory: &Path) -> Output {
     at_pane(arguments, directory, None)
 }
 
-fn at_pane(arguments: &[&str], directory: &Path, pane: Option<&str>) -> Output {
+fn at_pane(
+    arguments: &[&str],
+    directory: &Path,
+    current: Option<(&libtmux::test::TestServer, &str)>,
+) -> Output {
+    let mut command = command_at(arguments, directory);
+    if let Some((guard, pane)) = current {
+        command.env("TMUX_PANE", pane).env(
+            "TMUX",
+            format!("{},{},0", guard.socket_path().display(), guard.daemon_pid()),
+        );
+    }
+    command.output().unwrap()
+}
+
+fn command_at(arguments: &[&str], directory: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tmux-workspace"));
     command
         .args(arguments)
@@ -19,10 +34,7 @@ fn at_pane(arguments: &[&str], directory: &Path, pane: Option<&str>) -> Output {
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env_remove("TMUX")
         .env_remove("TMUX_PANE");
-    if let Some(pane) = pane {
-        command.env("TMUX_PANE", pane);
-    }
-    command.output().unwrap()
+    command
 }
 
 async fn current_pane(session: &libtmux::Session) -> String {
@@ -37,6 +49,246 @@ async fn current_pane(session: &libtmux::Session) -> String {
         .unwrap()
         .id()
         .to_string()
+}
+
+#[tokio::test]
+async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mutation() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let original = libtmux::test::TestServer::new().await.unwrap();
+    let replacement = libtmux::test::TestServer::new().await.unwrap();
+    let first = original.session("original").await.unwrap();
+    let second = replacement.session("replacement").await.unwrap();
+    let pane = current_pane(&first).await;
+    assert_eq!(pane, current_pane(&second).await);
+    assert_ne!(original.daemon_pid(), replacement.daemon_pid());
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let alias = directory.path().join("inherited");
+    symlink(original.socket_path(), &alias).unwrap();
+    let marker = directory.path().join("python-called");
+    let python = directory.path().join("python-sentinel");
+    std::fs::write(&python, "#!/bin/sh\n: > python-called\nexit 97\n").unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut failures = Vec::new();
+    for retarget in [false, true] {
+        if retarget {
+            std::fs::remove_file(&alias).unwrap();
+            symlink(replacement.socket_path(), &alias).unwrap();
+        }
+        let selected = if retarget {
+            &alias
+        } else {
+            replacement.socket_path()
+        };
+        let live = libtmux::Server::builder()
+            .socket_path(selected)
+            .tmux_executable(original.server().tmux_executable())
+            .build()
+            .unwrap()
+            .cmd(
+                libtmux::Command::new("display-message")
+                    .arg("-p")
+                    .arg("#{pid}"),
+            )
+            .await
+            .unwrap()
+            .stdout_lossy()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+        assert_eq!(live, replacement.daemon_pid());
+        assert_ne!(live, original.daemon_pid());
+        for bridge in [false, true] {
+            let mut config = serde_json::json!({"session_name":"unwanted","windows":[{"window_name":"added","panes":["blank"]}]});
+            if bridge {
+                config["plugins"] = serde_json::json!(["never.Imported"]);
+            }
+            std::fs::write(directory.path().join("workspace.json"), config.to_string()).unwrap();
+            for mode in ["--json", "--ndjson"] {
+                let _ = std::fs::remove_file(&marker);
+                let output = command_at(
+                    &[
+                        "load",
+                        "-S",
+                        selected.to_str().unwrap(),
+                        "--append",
+                        mode,
+                        "workspace.json",
+                    ],
+                    directory.path(),
+                )
+                .env(
+                    "TMUX",
+                    format!("{},{},0", alias.display(), original.daemon_pid()),
+                )
+                .env("TMUX_PANE", &pane)
+                .env("TMUX_WORKSPACE_PYTHON", &python)
+                .output()
+                .unwrap();
+                if output.status.success()
+                    || !output.stdout.is_empty()
+                    || !String::from_utf8_lossy(&output.stderr).contains("append_context")
+                    || marker.exists()
+                {
+                    failures.push(format!("retarget={retarget} bridge={bridge} mode={mode}: {output:?}; Python invoked={}", marker.exists()));
+                }
+            }
+        }
+    }
+    for session in [&first, &second] {
+        if session.windows().await.unwrap().len() != 1 {
+            failures.push(format!("borrowed session {} was mutated", session.id()));
+        }
+    }
+    original.shutdown().await.unwrap();
+    replacement.shutdown().await.unwrap();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
+async fn append_accepts_matching_explicit_and_inherited_comma_socket_paths() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let session = guard.session("borrowed").await.unwrap();
+    let pane = current_pane(&session).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let alias = directory.path().join("socket,with,commas");
+    std::os::unix::fs::symlink(guard.socket_path(), &alias).unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        r#"{"session_name":"ignored","windows":[{"window_name":"added","panes":["blank"]}]}"#,
+    )
+    .unwrap();
+    for explicit in [true, false] {
+        let mut args = vec!["load", "--append", "--json", "workspace.json"];
+        if explicit {
+            args.extend(["-S", alias.to_str().unwrap()]);
+        }
+        let output = command_at(&args, directory.path())
+            .env(
+                "TMUX",
+                format!("{},{},0", alias.display(), guard.daemon_pid()),
+            )
+            .env("TMUX_PANE", &pane)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "explicit={explicit}: {output:?}");
+        let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            document["results"][0]["session_id"],
+            session.id().to_string()
+        );
+        assert_eq!(document["results"][0]["owned_session"], false);
+    }
+    assert_eq!(guard.server().sessions().await.unwrap().len(), 1);
+    assert_eq!(session.windows().await.unwrap().len(), 3);
+    assert!(
+        guard
+            .server()
+            .cmd(
+                libtmux::Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(&pane)
+                    .arg("#{pane_id}")
+            )
+            .await
+            .unwrap()
+            .stdout_lossy()
+            .contains(&pane)
+    );
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn empty_tmux_context_allows_freezing_an_isolated_default_endpoint() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard.session("borrowed").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let sockets = directory
+        .path()
+        .join(format!("tmux-{}", rustix::process::getuid().as_raw()));
+    std::fs::create_dir(&sockets).unwrap();
+    std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink(guard.socket_path(), sockets.join("default")).unwrap();
+    let output = command_at(&["freeze", "borrowed", "--json"], directory.path())
+        .env("TMUX", "")
+        .env("TMUX_TMPDIR", directory.path())
+        .output()
+        .unwrap();
+    guard.shutdown().await.unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+}
+
+#[tokio::test]
+async fn append_rechecks_after_python_runtime_and_before_script() {
+    use std::os::unix::fs::PermissionsExt;
+    for runtime in [false, true] {
+        let original = libtmux::test::TestServer::new().await.unwrap();
+        let replacement = libtmux::test::TestServer::new().await.unwrap();
+        let first = original.session("original").await.unwrap();
+        let second = replacement.session("replacement").await.unwrap();
+        assert_eq!(first.id(), second.id());
+        let pane = current_pane(&first).await;
+        let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+        let alias = directory.path().join("socket");
+        std::os::unix::fs::symlink(original.socket_path(), &alias).unwrap();
+        std::fs::write(directory.path().join("retarget.sh"),
+            "#!/bin/sh\nrm socket\nln -s \"$REPLACEMENT_SOCKET\" socket\nprintf done > script-ran\nprintf 1.74.0\n").unwrap();
+        std::fs::set_permissions(
+            directory.path().join("retarget.sh"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let mut config = serde_json::json!({"session_name":"ignored", "environment":{"AFTER_SCRIPT":"unwanted"},
+            "windows":[{"window_name":"unwanted","panes":["blank"]}]});
+        if !runtime {
+            config["before_script"] = serde_json::json!("sh retarget.sh");
+        }
+        std::fs::write(directory.path().join("workspace.json"), config.to_string()).unwrap();
+        let mut args = vec!["load", "--append", "--json", "workspace.json"];
+        if runtime {
+            config["plugins"] = serde_json::json!(["never.Imported"]);
+            std::fs::write(directory.path().join("extension.json"), config.to_string()).unwrap();
+            args.push("extension.json");
+        }
+        let output = command_at(&args, directory.path())
+            .env(
+                "TMUX",
+                format!("{},{},0", alias.display(), original.daemon_pid()),
+            )
+            .env("TMUX_PANE", pane)
+            .env("REPLACEMENT_SOCKET", replacement.socket_path())
+            .env(
+                "TMUX_WORKSPACE_PYTHON",
+                directory.path().join("retarget.sh"),
+            )
+            .output()
+            .unwrap();
+        assert!(directory.path().join("script-ran").exists(), "{output:?}");
+        let mut changed = false;
+        for session in [&first, &second] {
+            changed |= session.windows().await.unwrap().len() != 1
+                || session
+                    .environment_all()
+                    .await
+                    .unwrap()
+                    .contains_key("AFTER_SCRIPT");
+        }
+        original.shutdown().await.unwrap();
+        replacement.shutdown().await.unwrap();
+        assert!(
+            !output.status.success() && !changed,
+            "runtime={runtime}: {output:?}; changed={changed}"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["errors"][0]["code"], "append_context");
+        assert_eq!(value["status"], if runtime { "error" } else { "partial" });
+        assert_eq!(value["errors"][0]["effects"]["owned_session"], false);
+        assert_eq!(value["errors"][0]["effects"]["session_name"], "original");
+    }
 }
 
 fn cli(arguments: &[&str]) -> Output {
@@ -468,7 +720,7 @@ async fn native_load_freeze_reuse_and_append_preserve_owned_session_state() {
             "append.yaml",
         ],
         directory.path(),
-        Some(&pane),
+        Some((&guard, &pane)),
     );
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
@@ -566,7 +818,7 @@ async fn failed_append_reports_borrowed_session_and_created_ids() {
             "broken.yaml",
         ],
         directory.path(),
-        Some(&pane),
+        Some((&guard, &pane)),
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -768,7 +1020,7 @@ async fn python_extension_bridge_builds_and_preserves_borrowed_session_on_failur
     let output = at_pane(
         &["load", "-S", socket, "--append", "--json", "broken.json"],
         directory.path(),
-        Some(&pane),
+        Some((&guard, &pane)),
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(guard.server().has_session("extension").await.unwrap());
