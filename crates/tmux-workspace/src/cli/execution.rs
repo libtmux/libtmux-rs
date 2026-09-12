@@ -61,9 +61,6 @@ pub(super) fn server(args: &ArgMatches) -> Result<Server> {
     if flag(args, "colors256") {
         builder = builder.colors(256);
     }
-    if flag(args, "colors88") {
-        builder = builder.colors(88);
-    }
     if let Some(executable) = std::env::var_os("LIBTMUX_TEST_TMUX") {
         builder = builder.tmux_executable(executable);
     }
@@ -107,6 +104,13 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
 }
 
 pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()> {
+    if flag(args, "colors88") {
+        return Err(CliError {
+            code: "unsupported_color_mode",
+            message: "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2".into(),
+            status: 2,
+        });
+    }
     if report.machine() && !flag(args, "detached") && !flag(args, "append") {
         return Err(CliError::usage("machine load requires -d or --append"));
     }
@@ -390,7 +394,7 @@ async fn build_extension(
         }
         effects.session = Some(session.clone());
     }
-    let request = json!({"path":workspace.source,"session_name":workspace.name,"socket":server.socket_path(),"append":if append {prior.as_ref().map(|s|s.id().to_string())} else {None},"config_file":option(args,"tmux-config"),"colors":if flag(args,"colors256"){Some(256)}else if flag(args,"colors88"){Some(88)}else{None}});
+    let request = json!({"path":workspace.source,"session_name":workspace.name,"socket":server.socket_path(),"append":if append {prior.as_ref().map(|s|s.id().to_string())} else {None},"config_file":option(args,"tmux-config"),"colors":if flag(args,"colors256"){Some(256)}else{None}});
     effects.stage = "python-extension";
     let output = bridge::build(python, request, report).await?;
     effects.script_output = Some(output.value());
