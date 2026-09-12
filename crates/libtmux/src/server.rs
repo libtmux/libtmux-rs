@@ -966,6 +966,18 @@ impl Server {
     /// escape text introduced by a recursive expansion. Use only validated,
     /// simple `#{field}` lookups with untrusted input.
     ///
+    /// A `%` in the template is a time conversion, not literal text. tmux
+    /// expands this command through `strftime` before it expands `#{}` -- it
+    /// calls `format_expand_time` here and plain `format_expand` for every
+    /// listing -- so `%Y` becomes the year. Write `%%` for a literal `%`.
+    ///
+    /// A `%` followed by something `strftime` does not define is worse than
+    /// surprising: it is not portable. glibc keeps both characters, so the
+    /// template survives; Apple's libc emits the conversion character alone
+    /// and deletes the `%`. So a template separating fields with `%` reads
+    /// back correctly on Linux and comes back unframed on macOS. Separate
+    /// fields with a byte that is not `%`.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::ServerMismatch`] when the pane belongs to another

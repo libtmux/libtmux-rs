@@ -744,7 +744,8 @@ impl Pane {
     ///
     /// This returns `display-message` output instead of showing it in front of
     /// a person with [`Self::display`]. See [`crate::Server::format`] for the
-    /// shell boundary around command and recursive formats.
+    /// shell boundary around command and recursive formats, and for why a `%`
+    /// in the template is a time conversion rather than literal text.
     ///
     /// # Errors
     ///
@@ -880,6 +881,13 @@ impl Pane {
     /// Pipe the pane's output to a shell command.
     ///
     /// Passing `None` stops any pipe already running for this pane.
+    ///
+    /// tmux expands the command as a format, through `strftime` first: it
+    /// calls `format_expand_time` for `pipe-pane` as it does for
+    /// `display-message`. So `#{pane_id}` resolves, and a `%` is a time
+    /// conversion -- `>> log-%Y` writes to a file named for the year. Write
+    /// `%%` for a literal `%`, and see [`crate::Server::format`] for what an
+    /// undefined conversion does differently on macOS.
     ///
     /// # Errors
     ///
