@@ -1585,12 +1585,12 @@ mod tests {
         let mut stdout = Vec::new();
         for descriptor in plan.descriptors_for_test() {
             for byte in default_format_value(descriptor) {
-                if matches!(*byte, b'\\' | b'%') {
+                if matches!(*byte, b'\\' | b'%' | b'=') {
                     stdout.push(b'\\');
                 }
                 stdout.push(*byte);
             }
-            stdout.push(b'%');
+            stdout.push(b'=');
         }
         stdout.push(b'\n');
         stdout

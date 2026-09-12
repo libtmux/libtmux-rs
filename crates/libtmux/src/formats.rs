@@ -11,9 +11,9 @@ pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose};
 use plan::{PlanVersion, TransportDialect, for_profile_selection_test};
 #[cfg(test)]
 use row::QUOTE_SHELL_SPECIALS;
-pub(crate) use row::{FormatCodecError, FormatCodecErrorKind, ParsedRow, ParsedSlot, decode_text};
 #[cfg(test)]
-pub(crate) use row::{FormatCodecPhase, decode_ascii};
+pub(crate) use row::{FIELD_SEPARATOR, FormatCodecPhase, decode_ascii};
+pub(crate) use row::{FormatCodecError, FormatCodecErrorKind, ParsedRow, ParsedSlot, decode_text};
 pub use text::TmuxText;
 
 /// Decoder applied to a parsed format slot.

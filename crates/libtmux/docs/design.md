@@ -384,11 +384,15 @@ The private descriptor catalog records stable field name, semantic owner,
 required context, admitted list profiles, minimum tmux version, decoder, and
 empty-value policy. A `FormatPlan` owns the selected descriptors, rendered
 template, and parser order together. Each requested field is rendered once as
-`#{q:field}%`, and transport bytes are parsed before any newline split or
+`#{q:field}=`, and transport bytes are parsed before any newline split or
 UTF-8 decode. The decoder removes each quoting backslash and treats only the
-template's unescaped `%` as a field terminator; the LF after the final
+template's unescaped `=` as a field terminator; the LF after the final
 terminator ends the row. Value newlines are ordinary payload because rows end
-at a counted terminator rather than at the next LF.
+at a counted terminator rather than at the next LF. The separator is `=`
+rather than `%` because `display-message` expands its template through
+`strftime` before `format_expand`, and only a template free of `%` skips that
+pass; `=` is in tmux's `format_quote_shell` set, so `#{q:}` still escapes it
+inside a value.
 
 `CommandResult` always preserves the exact stdout transport emitted by the
 selected tmux, and the plan decodes it through the dialect its version emits.
