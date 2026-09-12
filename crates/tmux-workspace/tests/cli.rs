@@ -44,6 +44,7 @@ fn cli(arguments: &[&str]) -> Output {
     Command::new(binary)
         .args(arguments)
         .env("PATH", "/nonexistent")
+        .env_remove("LIBTMUX_TEST_TMUX")
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
         .output()
@@ -596,6 +597,44 @@ async fn python_shell_uses_the_checked_console_entrypoint() {
     assert!(output.status.success(), "{output:?}");
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(value["stdout"].as_str().unwrap().ends_with("\nbridge\n"));
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires TMUX_WORKSPACE_PYTHON with tmuxp 1.74.0"]
+async fn python_extension_bridge_builds_and_preserves_borrowed_session_on_failure() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("extension.py"), "from tmuxp.workspace.builder.classic import ClassicWorkspaceBuilder\nfrom tmuxp.plugin import TmuxpPlugin\nclass Plugin(TmuxpPlugin):\n    def before_workspace_builder(self, session):\n        session.set_environment('PLUGIN_CALLED', 'yes')\nclass Builder(ClassicWorkspaceBuilder):\n    def build(self, *args, **kwargs):\n        super().build(*args, **kwargs)\n        self.session.set_environment('BRIDGE_CALLED', 'yes')\n").unwrap();
+    let config = serde_json::json!({"session_name":"extension","workspace_builder":"extension:Builder","plugins":["extension.Plugin"],"workspace_builder_paths":[directory.path()],"windows":[{"window_name":"native","panes":["blank"]}]});
+    std::fs::write(directory.path().join("extension.json"), config.to_string()).unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let output = at(
+        &["load", "-S", socket, "-d", "--json", "extension.json"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let session = guard.server().session("extension").await.unwrap().unwrap();
+    let environment = session.environment_all().await.unwrap();
+    assert_eq!(
+        environment.get("BRIDGE_CALLED"),
+        Some(&libtmux::EnvironmentEntry::Set("yes".into()))
+    );
+    assert_eq!(
+        environment.get("PLUGIN_CALLED"),
+        Some(&libtmux::EnvironmentEntry::Set("yes".into()))
+    );
+    let pane = current_pane(&session).await;
+    let mut broken = config;
+    broken["before_script"] = serde_json::json!("sh -c 'exit 9'");
+    std::fs::write(directory.path().join("broken.json"), broken.to_string()).unwrap();
+    let output = at_pane(
+        &["load", "-S", socket, "--append", "--json", "broken.json"],
+        directory.path(),
+        Some(&pane),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(guard.server().has_session("extension").await.unwrap());
     guard.shutdown().await.unwrap();
 }
 
