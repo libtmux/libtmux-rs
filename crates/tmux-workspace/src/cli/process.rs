@@ -51,6 +51,7 @@ impl ChildOutput {
                 code: "child_failed",
                 message: format!("child process exited with status {}", self.status),
                 status: u8::try_from(self.status).unwrap_or(1),
+                retained_state: None,
             })
         }
     }

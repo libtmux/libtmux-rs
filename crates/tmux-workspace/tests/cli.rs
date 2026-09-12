@@ -788,6 +788,156 @@ async fn load_renames_only_the_last_input_and_retessellates_many_panes() {
 }
 
 #[tokio::test]
+async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
+    use std::os::{fd::OwnedFd, unix::net::UnixStream};
+
+    for status in [0, 9] {
+        let guard = libtmux::test::TestServer::new().await.unwrap();
+        let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+        for name in ["first", "second"] {
+            let mut config =
+                serde_json::json!({"session_name":name,"windows":[{"panes":["blank"]}]});
+            if name == "second" {
+                config["before_script"] = serde_json::json!(format!(
+                    "/bin/sh -c 'printf captured-out; printf captured-err >&2; exit {status}'"
+                ));
+            }
+            std::fs::write(
+                directory.path().join(format!("{name}.json")),
+                config.to_string(),
+            )
+            .unwrap();
+        }
+        let (reader, writer) = UnixStream::pair().unwrap();
+        drop(reader);
+        let output = command_at(
+            &[
+                "load",
+                "-d",
+                "-S",
+                guard.socket_path().to_str().unwrap(),
+                "--json",
+                "first.json",
+                "second.json",
+            ],
+            directory.path(),
+        )
+        .stdin(std::process::Stdio::null())
+        .stdout(OwnedFd::from(writer))
+        .output()
+        .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if status == 0 { 1 } else { status }),
+            "{output:?}"
+        );
+        let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        let retained = &diagnostic["retained_state"];
+        let results = retained["results"].as_array().expect("completed inputs");
+        assert_eq!(
+            results.len(),
+            if status == 0 { 2 } else { 1 },
+            "{diagnostic}"
+        );
+        for result in results {
+            let session = guard
+                .server()
+                .session(result["session_name"].as_str().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result["session_id"], session.id().as_ref());
+        }
+        let second = if status == 0 {
+            &results[1]
+        } else {
+            &retained["errors"][0]["effects"]
+        };
+        assert_eq!(second["script_output"]["child_status"], status);
+        assert_eq!(second["script_output"]["stdout"], "captured-out");
+        assert_eq!(second["script_output"]["stderr"], "captured-err");
+        if status != 0 {
+            assert_eq!(diagnostic["code"], "child_failed");
+            assert!(
+                diagnostic["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("output failed")
+            );
+        }
+        assert!(guard.server().has_session("second").await.unwrap());
+        guard.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn closed_workspace_completed_event_retains_the_completed_input() {
+    use tokio::io::AsyncReadExt;
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let capture = "x".repeat(256 * 1024);
+    std::fs::write(directory.path().join("capture"), &capture).unwrap();
+    std::fs::write(directory.path().join("workspace.json"), serde_json::json!({"session_name":"streamed","before_script":"/bin/cat capture","windows":[{"panes":["blank"]}]}).to_string()).unwrap();
+    let mut child = tokio::process::Command::from(command_at(
+        &[
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--ndjson",
+            "workspace.json",
+        ],
+        directory.path(),
+    ))
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .kill_on_drop(true)
+    .spawn()
+    .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let marker = b"\"event\":\"workspace-completed\"";
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut received = Vec::new();
+        let mut buffer = [0; 1024];
+        loop {
+            let count = stdout.read(&mut buffer).await.unwrap();
+            assert_ne!(count, 0, "workspace-completed event absent");
+            received.extend_from_slice(&buffer[..count]);
+            if received.windows(marker.len()).any(|part| part == marker) {
+                break;
+            }
+            if received.len() > marker.len() {
+                received.drain(..received.len() - marker.len());
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(stdout);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["retained_state"]["errors"][0]["input_index"], 0);
+    assert_eq!(
+        diagnostic["retained_state"]["errors"][0]["effects"]["stage"],
+        "completed"
+    );
+    let results = diagnostic["retained_state"]["results"]
+        .as_array()
+        .expect("completed input");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["script_output"]["stdout"], capture);
+    let session = guard.server().session("streamed").await.unwrap().unwrap();
+    assert_eq!(results[0]["session_id"], session.id().as_ref());
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn failed_append_reports_borrowed_session_and_created_ids() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let session = guard
