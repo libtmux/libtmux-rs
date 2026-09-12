@@ -29,8 +29,22 @@ You may be looking for:
   transport switches, testing
 - [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
   package**, if you want an agent to drive tmux
-- [Examples](crates/libtmux/examples) — six programs that run and clean up
-  after themselves, from reading a server to watching one over control mode
+- [Examples](crates/libtmux/examples) — programs that run and clean up after
+  themselves, each on a socket of its own:
+
+  | Example | What it does |
+  | --- | --- |
+  | [`inspect`](crates/libtmux/examples/inspect.rs) | Report what a tmux server is running. |
+  | [`find`](crates/libtmux/examples/find.rs) | Find panes running a given command, without listing everything by hand. |
+  | [`scratch`](crates/libtmux/examples/scratch.rs) | Build a throwaway session, use it, and leave nothing behind. |
+  | [`watch`](crates/libtmux/examples/watch.rs) | React to what a tmux server does, as it does it. |
+  | [`orchestrate`](crates/libtmux/examples/orchestrate.rs) | Run several jobs in panes and wait for all of them, without polling. |
+  | [`recover`](crates/libtmux/examples/recover.rs) | Tell the failures apart when something disappears under you. |
+  | [`sweep`](crates/libtmux/examples/sweep.rs) | Reap tmux servers left behind by abandoned test fixtures. |
+  | [`matrix`](crates/libtmux/examples/matrix.rs) | One workload, every execution mode, side by side. |
+
+  Each names its own command in its module docs. `just examples` runs every
+  one with the features it needs and checks what it printed.
 - [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
 - [Parity ledger](crates/libtmux/docs/parity.md) — capability-by-capability
   against Python libtmux
