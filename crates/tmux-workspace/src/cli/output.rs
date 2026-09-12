@@ -3,7 +3,7 @@ use std::io::{self, IsTerminal, Write};
 use clap::ArgMatches;
 use serde_json::{Value, json};
 
-use super::{Result, logging::Logger};
+use super::{Result, logging::Logger, progress::Progress};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
@@ -19,6 +19,20 @@ pub(super) struct Reporter {
     terminal: bool,
     command: String,
     pub(super) log: Logger,
+    pub(super) progress: Option<Progress>,
+}
+
+pub(super) fn color_enabled(matches: &ArgMatches, terminal: bool) -> bool {
+    let policy = matches
+        .get_one::<String>("color")
+        .map_or("auto", String::as_str);
+    let nonempty = |name| std::env::var(name).is_ok_and(|value| !value.is_empty());
+    !nonempty("NO_COLOR")
+        && policy != "never"
+        && (policy == "always"
+            || nonempty("FORCE_COLOR")
+            || std::env::var("CLICOLOR_FORCE").is_ok_and(|v| !v.is_empty() && v != "0")
+            || (std::env::var("CLICOLOR").as_deref() != Ok("0") && terminal))
 }
 
 impl Reporter {
@@ -30,23 +44,14 @@ impl Reporter {
         } else {
             Mode::Human
         };
-        let policy = matches
-            .get_one::<String>("color")
-            .map_or("auto", String::as_str);
-        let nonempty = |name| std::env::var(name).is_ok_and(|value| !value.is_empty());
-        let color = mode == Mode::Human
-            && !nonempty("NO_COLOR")
-            && policy != "never"
-            && (policy == "always"
-                || nonempty("FORCE_COLOR")
-                || std::env::var("CLICOLOR_FORCE").is_ok_and(|v| !v.is_empty() && v != "0")
-                || (std::env::var("CLICOLOR").as_deref() != Ok("0") && io::stdout().is_terminal()));
+        let color = mode == Mode::Human && color_enabled(matches, io::stdout().is_terminal());
         Self {
             mode,
             color,
             sequence: 0,
             terminal: false,
             command: command.into(),
+            progress: None,
             log: Logger::new(
                 matches
                     .get_one::<String>("log-level")
@@ -90,6 +95,7 @@ impl Reporter {
     }
 
     pub(super) fn summary(&mut self, event: &str, summary: &Value) -> Result<()> {
+        self.clear_progress()?;
         self.log.event(&self.command, event, summary);
         if self.mode == Mode::Json {
             self.document(summary)?;
@@ -106,6 +112,19 @@ impl Reporter {
 
     pub(super) fn log_chunk(&mut self, stream: &str, text: &str) {
         self.log.chunk(&self.command, stream, text);
+    }
+
+    pub(super) fn clear_progress(&mut self) -> Result<()> {
+        if let Some(progress) = &mut self.progress {
+            progress.clear()?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn progress_output(&mut self, stream: &str, text: &str) -> Result<bool> {
+        self.progress
+            .as_mut()
+            .map_or(Ok(false), |progress| progress.output(stream, text))
     }
 
     pub(super) fn log_error(&mut self, error: &super::CliError) {
@@ -178,6 +197,21 @@ impl Reporter {
                 Ok(())
             }
         }
+    }
+
+    pub(super) fn loaded(&self, results: &Value) -> Result<()> {
+        for result in results.as_array().into_iter().flatten() {
+            self.line(
+                "success",
+                if result["reused"] == true {
+                    "Reused"
+                } else {
+                    "Loaded"
+                },
+                result["session_name"].as_str().unwrap_or(""),
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn line(&self, role: &str, subject: &str, detail: &str) -> Result<()> {

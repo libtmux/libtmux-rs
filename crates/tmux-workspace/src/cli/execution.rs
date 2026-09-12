@@ -146,6 +146,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         return Err(CliError::usage("machine load requires -d or --append"));
     }
     let workspaces = load_inputs(args)?;
+    report.progress = super::progress::Progress::new(args, report.machine())?;
     if let Some(path) = option(args, "log-file") {
         report
             .log
@@ -165,6 +166,9 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
             ..Effects::default()
         };
         let outcome = async {
+            if let Some(progress) = &mut report.progress {
+                progress.start(workspace)?;
+            }
             report.event(
                 "workspace-started",
                 json!({"input_index":index,"input":discovery::masked(path)}),
@@ -184,6 +188,9 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
             result["reused"] = json!(reused);
             results.push(result.clone());
             last_session = Some(session);
+            if let Some(progress) = &mut report.progress {
+                progress.finish(reused, workspace.bridge)?;
+            }
             report.event("workspace-completed", result)
         }
         .await;
@@ -203,17 +210,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
     let outcome = async {
         report.summary("completed", &summary)?;
         if !report.machine() {
-            for result in summary["results"].as_array().into_iter().flatten() {
-                report.line(
-                    "success",
-                    if result["reused"] == true {
-                        "Reused"
-                    } else {
-                        "Loaded"
-                    },
-                    result["session_name"].as_str().unwrap_or(""),
-                )?;
-            }
+            report.loaded(&summary["results"])?;
             std::io::Write::flush(&mut std::io::stdout())?;
             report.log_warning();
             if !flag(args, "detached") && !flag(args, "append") {
@@ -534,6 +531,9 @@ async fn build_window(
     effects: &mut Effects,
     window_index: usize,
 ) -> Result<libtmux::Window> {
+    if let Some(progress) = &mut report.progress {
+        progress.window(window_index + 1, config)?;
+    }
     let input = effects.input;
     effects.stage = "window-creation";
     let first = &config.panes[0];
@@ -600,19 +600,17 @@ async fn build_window(
             .await?;
     }
     let mut active = None;
-    for (pane, config) in panes.iter().zip(&config.panes) {
+    for (pane_index, (pane, config)) in panes.iter().zip(&config.panes).enumerate() {
+        if let Some(progress) = &mut report.progress {
+            progress.pane(pane_index + 1)?;
+        }
         report.event("pane-created", json!({"input_index":input,"window_index":window_index,"pane_id":pane.id().to_string()}))?;
         if effects.readiness && config.shell.is_none() {
             wait_for_prompt(pane, report).await?;
         }
-        for command in &config.commands {
-            tokio::time::sleep(command.before).await;
-            if command.enter {
-                pane.send_line(&command.text).await?;
-            } else {
-                pane.send_keys(&command.text).await?;
-            }
-            tokio::time::sleep(command.after).await;
+        send_commands(pane, &config.commands).await?;
+        if let Some(progress) = &mut report.progress {
+            progress.pane_done()?;
         }
         if config.focus {
             active = Some(pane.clone());
@@ -625,7 +623,23 @@ async fn build_window(
     for (name, value) in &config.options_after {
         window.set_option(name, value).await?;
     }
+    if let Some(progress) = &mut report.progress {
+        progress.window_done()?;
+    }
     Ok(window)
+}
+
+async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand]) -> Result<()> {
+    for command in commands {
+        tokio::time::sleep(command.before).await;
+        if command.enter {
+            pane.send_line(&command.text).await?;
+        } else {
+            pane.send_keys(&command.text).await?;
+        }
+        tokio::time::sleep(command.after).await;
+    }
+    Ok(())
 }
 
 async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<()> {

@@ -313,24 +313,22 @@ fn load() -> Command {
             value(
                 "progress-format",
                 None,
-                "Progress preset (default/minimal/window/pane/verbose) or token template",
-            )
-            .env("TMUXP_PROGRESS_FORMAT"),
+                "Progress preset (default/minimal/window/pane/verbose) or token template; defaults to TMUXP_PROGRESS_FORMAT or default",
+            ),
         )
         .arg(
             value(
                 "progress-lines",
                 None,
-                "Script panel lines: 0 hides, -1 uses terminal height",
+                "Script panel lines: 0 preserves raw streams, -1 uses terminal height (up to 128); overrides TMUXP_PROGRESS_LINES",
             )
             .allow_negative_numbers(true)
             .value_parser(clap::value_parser!(i32).range(-1..))
-            .env("TMUXP_PROGRESS_LINES")
             .default_value("3"),
         )
         .arg(flag(
             "no-progress",
             None,
-            "Disable animated progress; TMUXP_PROGRESS=0 also disables it",
+            "Disable terminal progress; TMUXP_PROGRESS=0 also disables it",
         ))
 }
