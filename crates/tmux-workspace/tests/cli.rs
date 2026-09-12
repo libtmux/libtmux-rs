@@ -648,6 +648,91 @@ fn discovery_and_search_use_workspace_fields_and_case_modes() {
 }
 
 #[tokio::test]
+async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let config_directory = directory.path().join("config directory");
+    let caller = directory.path().join("caller directory");
+    let runtime = config_directory.join("runtime directory");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::create_dir(&caller).unwrap();
+    let config_directory = config_directory.canonicalize().unwrap();
+    let caller = caller.canonicalize().unwrap();
+    let runtime = runtime.canonicalize().unwrap();
+    let script = config_directory.join("bootstrap script");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nrecord=$1\nshift\nprintf '%s\\0' \"$PWD\" \"$#\" \"$@\" > \"$record\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut failures = Vec::new();
+    let mut index = 0;
+    for executable in [
+        "./bootstrap script".to_owned(),
+        "../config directory/bootstrap script".to_owned(),
+        script.to_str().unwrap().to_owned(),
+        "bootstrap script".to_owned(),
+    ] {
+        for start in [
+            None,
+            Some("."),
+            Some("./runtime directory"),
+            runtime.to_str(),
+        ] {
+            let name = format!("bootstrap-{index}");
+            index += 1;
+            let record = directory.path().join(&name);
+            let mut config = serde_json::json!({
+                "session_name": name,
+                "before_script": format!("'{executable}' '{}' 'space argument' '' 'literal$(touch SHOULD_NOT_EXIST)'", record.display()),
+                "windows": [{"panes": ["blank"]}],
+            });
+            if let Some(start) = start {
+                config["start_directory"] = serde_json::json!(start);
+            }
+            let path = config_directory.join("workspace.json");
+            std::fs::write(&path, config.to_string()).unwrap();
+            let mut command = command_at(
+                &[
+                    "load",
+                    "-S",
+                    guard.socket_path().to_str().unwrap(),
+                    "-d",
+                    "--json",
+                    "../config directory/workspace.json",
+                ],
+                &caller,
+            );
+            let mut search_paths = vec![config_directory.clone()];
+            search_paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+            command.env("PATH", std::env::join_paths(search_paths).unwrap());
+            let output = command.output().unwrap();
+            let expected_cwd = match start {
+                None => &caller,
+                Some(".") => &config_directory,
+                Some(_) => &runtime,
+            };
+            let expected = format!(
+                "{}\0{}\0space argument\0\0literal$(touch SHOULD_NOT_EXIST)\0",
+                expected_cwd.display(),
+                3,
+            );
+            let recorded = std::fs::read(&record).ok();
+            if !output.status.success() || recorded.as_deref() != Some(expected.as_bytes()) {
+                failures.push(format!(
+                    "{executable:?} / {start:?}: {output:?}; recorded={recorded:?}"
+                ));
+            }
+        }
+    }
+    guard.shutdown().await.unwrap();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
 async fn native_load_freeze_reuse_and_append_preserve_owned_session_state() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir().unwrap();
