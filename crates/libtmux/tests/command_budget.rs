@@ -156,3 +156,64 @@ async fn walking_down_costs_a_command_for_every_step() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// What it costs to ask a client what it is attached to.
+///
+/// Three accessors, one command each. Each used to cost two: a
+/// `display-message` for the id, then a listing filtered down to that one id.
+/// tmux fills a client's session, that session's current window and that
+/// window's active pane into the same format tree, so the whole snapshot comes
+/// back in the first round trip and the second was never needed.
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
+    let counter = CommandCounter::default();
+    let subscriber = tracing_subscriber::registry().with(counter.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("attached").await.expect("session");
+
+    // A control-mode connection is a client, so the server has one to ask.
+    let control = libtmux::control::ControlMode::attach(server, session.id())
+        .await
+        .expect("a control client");
+    // Also warms the version probe, which is a command of its own the first
+    // time anything asks for it.
+    let client = server
+        .clients()
+        .await
+        .expect("clients")
+        .into_iter()
+        .next()
+        .expect("one client");
+
+    counter.reset();
+    let attached = client.attached_session().await.expect("a session");
+    let session_commands = counter.commands();
+
+    counter.reset();
+    let window = client.attached_window().await.expect("a window");
+    let window_commands = counter.commands();
+
+    counter.reset();
+    let pane = client.attached_pane().await.expect("a pane");
+    let pane_commands = counter.commands();
+
+    // The answer is the point. A cheaper call that returns the wrong object is
+    // not cheaper, so the count is asserted next to what came back.
+    assert_eq!(attached.expect("a session").id(), session.id());
+    assert!(window.is_some(), "the session has a current window");
+    assert!(pane.is_some(), "that window has an active pane");
+
+    assert_eq!(
+        session_commands, 1,
+        "one display-message, no second listing"
+    );
+    assert_eq!(window_commands, 1, "the same for the window");
+    assert_eq!(pane_commands, 1, "and for the pane");
+
+    control.shutdown().await.expect("control shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
