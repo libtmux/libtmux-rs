@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{fmt::Write as _, path::PathBuf};
 
 use clap::ArgMatches;
 use libtmux::{
@@ -114,17 +114,7 @@ async fn load_target(args: &ArgMatches) -> Result<(Server, Option<AppendTarget>)
     Ok((server, borrowed))
 }
 
-pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()> {
-    if flag(args, "colors88") {
-        return Err(CliError {
-            code: "unsupported_color_mode",
-            message: "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2".into(),
-            status: 2,
-        });
-    }
-    if report.machine() && !flag(args, "detached") && !flag(args, "append") {
-        return Err(CliError::usage("machine load requires -d or --append"));
-    }
+fn load_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>> {
     let files = args
         .get_many::<String>("workspace_files")
         .ok_or_else(|| CliError::usage("workspace files are required"))?;
@@ -140,6 +130,22 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         }
         workspaces.push((path, workspace));
     }
+    Ok(workspaces)
+}
+
+pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()> {
+    if flag(args, "colors88") {
+        return Err(CliError {
+            code: "unsupported_color_mode",
+            message: "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2".into(),
+            status: 2,
+            retained_state: None,
+        });
+    }
+    if report.machine() && !flag(args, "detached") && !flag(args, "append") {
+        return Err(CliError::usage("machine load requires -d or --append"));
+    }
+    let workspaces = load_inputs(args)?;
     let (server, borrowed) = load_target(args).await?;
     let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
         Some(process::python().await?)
@@ -149,70 +155,88 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
     let (mut results, mut last_session) = (Vec::new(), None);
     report.event("started", json!({"inputs":workspaces.len()}))?;
     for (index, (path, workspace)) in workspaces.iter().enumerate() {
-        report.event(
-            "workspace-started",
-            json!({"input_index":index,"input":discovery::masked(path)}),
-        )?;
         let mut effects = Effects {
             input: index,
             ..Effects::default()
         };
-        match build(
-            &server,
-            workspace,
-            args,
-            report,
-            &mut effects,
-            python.as_deref(),
-            borrowed.as_ref(),
-        )
-        .await
-        {
-            Ok((session, reused)) => {
-                let mut result = effects.value();
-                result["input"] = json!(discovery::masked(path));
-                result["reused"] = json!(reused);
-                report.event("workspace-completed", result.clone())?;
-                results.push(result);
-                last_session = Some(session);
+        let outcome = async {
+            report.event(
+                "workspace-started",
+                json!({"input_index":index,"input":discovery::masked(path)}),
+            )?;
+            let (session, reused) = build(
+                &server,
+                workspace,
+                args,
+                report,
+                &mut effects,
+                python.as_deref(),
+                borrowed.as_ref(),
+            )
+            .await?;
+            let mut result = effects.value();
+            result["input"] = json!(discovery::masked(path));
+            result["reused"] = json!(reused);
+            results.push(result.clone());
+            last_session = Some(session);
+            report.event("workspace-completed", result)
+        }
+        .await;
+        if let Err(mut error) = outcome {
+            let errors = json!([{"code":error.code,"message":error.message,"input_index":index,"partial_effects":effects.changed,"effects":effects.value()}]);
+            let mut summary = json!({"schema_version":1,"command":"load","status":if effects.changed || !results.is_empty(){"partial"}else{"error"},"errors":errors});
+            summary["results"] = results.into();
+            if let Err(publication) = publish_load(report, "failed", &summary) {
+                let _ = write!(error.message, "; output failed: {publication}");
             }
-            Err(error) => {
-                let partial = effects.changed;
-                let errors = json!([{"code":error.code,"message":error.message,"input_index":index,"partial_effects":partial,"effects":effects.value()}]);
-                if report.mode == Mode::Json {
-                    report.document(&json!({"schema_version":1,"command":"load","status":if partial || !results.is_empty(){"partial"}else{"error"},"results":results,"errors":errors}))?;
-                }
-                report.event("failed", json!({"status":if partial || !results.is_empty(){"partial"}else{"error"},"results":results,"errors":errors}))?;
-                return Err(error);
-            }
+            error.retained_state = Some(summary);
+            return Err(error);
         }
     }
+    let mut summary = json!({"schema_version":1,"command":"load","status":"ok","errors":[]});
+    summary["results"] = results.into();
+    let outcome = async {
+        publish_load(report, "completed", &summary)?;
+        if !report.machine() {
+            for result in summary["results"].as_array().into_iter().flatten() {
+                report.line(
+                    "success",
+                    if result["reused"] == true {
+                        "Reused"
+                    } else {
+                        "Loaded"
+                    },
+                    result["session_name"].as_str().unwrap_or(""),
+                )?;
+            }
+            std::io::Write::flush(&mut std::io::stdout())?;
+            if !flag(args, "detached") && !flag(args, "append") {
+                if let Some(session) = last_session {
+                    attach(&server, &session).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+    .await;
+    outcome.map_err(|mut error: CliError| {
+        error.retained_state = Some(summary);
+        error
+    })
+}
+
+fn publish_load(report: &mut Reporter, event: &str, summary: &Value) -> Result<()> {
     if report.mode == Mode::Json {
-        report.document(&json!({"schema_version":1,"command":"load","status":"ok","results":results,"errors":[]}))?;
+        report.document(summary)?;
     }
     report.event(
-        "completed",
-        json!({"status":"ok","results":results,"errors":[]}),
-    )?;
-    if !report.machine() {
-        for result in &results {
-            report.line(
-                "success",
-                if result["reused"] == true {
-                    "Reused"
-                } else {
-                    "Loaded"
-                },
-                result["session_name"].as_str().unwrap_or(""),
-            )?;
-        }
-        if !flag(args, "detached") && !flag(args, "append") {
-            if let Some(session) = last_session {
-                attach(&server, &session).await?;
-            }
-        }
-    }
-    Ok(())
+        event,
+        if report.mode == Mode::Ndjson {
+            summary.clone()
+        } else {
+            Value::Null
+        },
+    )
 }
 
 struct AppendTarget {

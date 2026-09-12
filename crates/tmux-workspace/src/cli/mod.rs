@@ -23,6 +23,7 @@ struct CliError {
     code: &'static str,
     message: String,
     status: u8,
+    retained_state: Option<serde_json::Value>,
 }
 
 impl CliError {
@@ -31,6 +32,7 @@ impl CliError {
             code,
             message: message.into(),
             status: 1,
+            retained_state: None,
         }
     }
     fn invalid(message: impl Into<String>) -> Self {
@@ -41,6 +43,7 @@ impl CliError {
             code: "usage",
             message: message.into(),
             status: 2,
+            retained_state: None,
         }
     }
 }
@@ -81,7 +84,7 @@ pub(super) fn main() -> ExitCode {
                     ExitCode::from(1)
                 };
             }
-            diagnostic(machine, "usage", &error.to_string());
+            diagnostic(machine, &CliError::usage(error.to_string()));
             return ExitCode::from(2);
         }
     };
@@ -98,7 +101,7 @@ pub(super) fn main() -> ExitCode {
                 result = execute(&matches, &mut report) => result,
                 signal = tokio::signal::ctrl_c() => {
                     signal?;
-                    Err(CliError { code: "interrupted", message: "operation interrupted".into(), status: 130 })
+                    Err(CliError { code: "interrupted", message: "operation interrupted".into(), status: 130, retained_state: None })
                 }
             }
         }));
@@ -106,7 +109,7 @@ pub(super) fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let _ = report.failed(&error);
-            diagnostic(machine, error.code, &error.message);
+            diagnostic(machine, &error);
             ExitCode::from(error.status)
         }
     }
@@ -211,14 +214,17 @@ fn confirm(question: &str) -> Result<()> {
     }
 }
 
-fn diagnostic(machine: bool, code: &str, message: &str) {
+fn diagnostic(machine: bool, error: &CliError) {
     if machine {
-        let _ = writeln!(
-            io::stderr(),
-            "{}",
-            json!({"schema_version":1,"code":code,"message":message})
-        );
+        let mut value = json!({"schema_version":1,"code":error.code,"message":error.message});
+        if let Some(state) = &error.retained_state {
+            value["retained_state"] = state.clone();
+        }
+        let _ = writeln!(io::stderr(), "{value}");
     } else {
-        let _ = writeln!(io::stderr(), "{message}");
+        let _ = writeln!(io::stderr(), "{}", error.message);
+        if let Some(state) = &error.retained_state {
+            let _ = writeln!(io::stderr(), "Retained state: {state}");
+        }
     }
 }
