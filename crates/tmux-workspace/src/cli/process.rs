@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Write};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -16,11 +17,17 @@ const CAPTURE_LIMIT: usize = 1024 * 1024;
 
 struct ChildGroup(Option<rustix::process::Pid>);
 
-impl Drop for ChildGroup {
-    fn drop(&mut self) {
-        if let Some(pid) = self.0 {
+impl ChildGroup {
+    fn terminate(&mut self) {
+        if let Some(pid) = self.0.take() {
             let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
         }
+    }
+}
+
+impl Drop for ChildGroup {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 
@@ -29,11 +36,12 @@ pub(super) struct ChildOutput {
     stdout: String,
     stderr: String,
     truncated: bool,
+    terminal: bool,
 }
 
 impl ChildOutput {
     pub(super) fn value(&self) -> Value {
-        json!({"child_status":self.status,"stdout":self.stdout,"stderr":self.stderr,"truncated":self.truncated,"encoding":"utf-8-with-replacement"})
+        json!({"child_status":self.status,"stdout":self.stdout,"stderr":self.stderr,"truncated":self.truncated,"encoding":"utf-8-with-replacement","terminal":self.terminal})
     }
     pub(super) fn success(&self) -> Result<()> {
         if self.status == 0 {
@@ -170,21 +178,31 @@ pub(super) async fn run(
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| CliError::usage("child executable is missing"))?;
-    let mut child = tokio::process::Command::new(program)
+    let grouped = report.machine() || !io::stdin().is_terminal();
+    let mut command = tokio::process::Command::new(program);
+    command
         .args(arguments)
         .current_dir(directory)
-        .stdin(Stdio::null())
+        .stdin(if report.machine() {
+            Stdio::null()
+        } else {
+            Stdio::inherit()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
-        .kill_on_drop(true)
-        .spawn()?;
-    let _group = ChildGroup(
+        .kill_on_drop(true);
+    if grouped {
+        command.process_group(0);
+    }
+    let mut child = command.spawn()?;
+    let mut group = ChildGroup(if grouped {
         child
             .id()
             .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(rustix::process::Pid::from_raw),
-    );
+            .and_then(rustix::process::Pid::from_raw)
+    } else {
+        None
+    });
     let mut stdout = child
         .stdout
         .take()
@@ -198,11 +216,13 @@ pub(super) async fn run(
         stdout: String::new(),
         stderr: String::new(),
         truncated: false,
+        terminal: false,
     };
     let mut out_buffer = vec![0; 8192];
     let mut err_buffer = vec![0; 8192];
     let (mut out_pending, mut err_pending) = (Vec::new(), Vec::new());
     let (mut out_done, mut err_done, mut status) = (false, false, None);
+    let mut drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(86_400);
     while !out_done || !err_done || status.is_none() {
         tokio::select! {
             read = stdout.read(&mut out_buffer), if !out_done => {
@@ -215,11 +235,58 @@ pub(super) async fn run(
                 let text = decode(&mut err_pending, &err_buffer[..size], err_done);
                 chunk(report, "stderr", &text, &mut output.stderr, &mut output.truncated)?;
             }
-            result = child.wait(), if status.is_none() => { status = Some(result?); }
+            result = child.wait(), if status.is_none() => {
+                status = Some(result?);
+                drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+            }
+            () = tokio::time::sleep_until(drain_deadline), if status.is_some() && (!out_done || !err_done) => {
+                group.terminate();
+                output.truncated = true;
+                break;
+            }
         }
     }
-    output.status = status.and_then(|status| status.code()).unwrap_or(130);
+    output.status = status.map_or(1, exit_status);
+    if output.status == 0 {
+        group.0 = None;
+    }
     Ok(output)
+}
+
+fn exit_status(status: std::process::ExitStatus) -> i32 {
+    status
+        .code()
+        .unwrap_or_else(|| 128 + status.signal().unwrap_or(1))
+}
+
+fn terminal() -> Result<Option<std::fs::File>> {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+    {
+        Ok(terminal) => Ok(Some(terminal)),
+        Err(error) if matches!(error.raw_os_error(), Some(2 | 6 | 25)) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn run_terminal(argv: &[OsString], terminal: std::fs::File) -> Result<ChildOutput> {
+    let status = tokio::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(terminal.try_clone()?)
+        .stdout(terminal.try_clone()?)
+        .stderr(terminal)
+        .kill_on_drop(true)
+        .status()
+        .await?;
+    Ok(ChildOutput {
+        status: exit_status(status),
+        stdout: String::new(),
+        stderr: String::new(),
+        truncated: false,
+        terminal: true,
+    })
 }
 
 pub(super) async fn python() -> Result<OsString> {
@@ -252,11 +319,11 @@ pub(super) async fn python() -> Result<OsString> {
 
 pub(super) async fn shell(options: &ArgMatches, report: &mut Reporter) -> Result<()> {
     let code = options.get_one::<String>("python-code");
-    if code.is_none() && report.machine() {
-        return Err(CliError::usage(
-            "interactive Python shells require a terminal; use -c with machine output",
-        ));
-    }
+    let terminal = if code.is_none() {
+        Some(terminal()?.ok_or_else(|| CliError::usage("interactive Python shell requires a controlling terminal; use -c for captured execution"))?)
+    } else {
+        None
+    };
     let python = python().await?;
     let mut argv: Vec<OsString> = vec![
         python,
@@ -297,27 +364,11 @@ pub(super) async fn shell(options: &ArgMatches, report: &mut Reporter) -> Result
             argv.push(value.into());
         }
     }
-    if code.is_none() {
-        if !io::stdin().is_terminal() {
-            return Err(CliError::new(
-                "terminal_required",
-                "interactive Python shell requires a terminal",
-            ));
-        }
-        let status = tokio::process::Command::new(&argv[0])
-            .args(&argv[1..])
-            .status()
-            .await?;
-        return if status.success() {
-            Ok(())
-        } else {
-            Err(CliError::new(
-                "python_shell",
-                format!("Python shell exited with {status}"),
-            ))
-        };
-    }
-    let output = run(&argv, &std::env::current_dir()?, report).await?;
+    let output = if let Some(terminal) = terminal {
+        run_terminal(&argv, terminal).await?
+    } else {
+        run(&argv, &std::env::current_dir()?, report).await?
+    };
     if report.machine() {
         let mut value = output.value();
         value["schema_version"] = json!(1);
@@ -347,22 +398,14 @@ pub(super) async fn edit(options: &ArgMatches, report: &mut Reporter) -> Result<
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
     let mut argv = split(&editor)?;
     argv.push(source.clone().into_os_string());
+    let output = if let Some(terminal) = terminal()? {
+        run_terminal(&argv, terminal).await?
+    } else {
+        run(&argv, &std::env::current_dir()?, report).await?
+    };
     if !report.machine() {
-        let status = tokio::process::Command::new(&argv[0])
-            .args(&argv[1..])
-            .status()
-            .await?;
-        return if status.success() {
-            Ok(())
-        } else {
-            Err(CliError {
-                code: "editor_failed",
-                message: format!("editor exited with {status}"),
-                status: u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
-            })
-        };
+        return output.success();
     }
-    let output = run(&argv, &std::env::current_dir()?, report).await?;
     let mut value = output.value();
     value["schema_version"] = json!(1);
     value["command"] = json!("edit");

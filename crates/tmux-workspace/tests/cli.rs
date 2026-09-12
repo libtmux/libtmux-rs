@@ -701,3 +701,122 @@ fn interrupted_editor_terminates_its_owned_child_group() {
         "owned editor descendant survived interrupt"
     );
 }
+
+#[test]
+fn machine_editor_uses_a_controlling_terminal_without_contaminating_json() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("workspace.yaml"),
+        "session_name: demo\nwindows: []\n",
+    )
+    .unwrap();
+    let script = r"
+import errno, fcntl, json, os, pathlib, pty, subprocess, sys, termios
+master, slave = pty.openpty()
+def session():
+    os.setsid()
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+env = dict(os.environ, EDITOR='sh -c \'test -t 0 && test -t 1 && printf EDITOR_TTY\' editor')
+with open('result.json', 'wb') as result:
+    child = subprocess.Popen([sys.argv[1], 'edit', 'workspace.yaml', '--json'], stdin=slave, stdout=result, stderr=slave, env=env, preexec_fn=session)
+os.close(slave)
+text = b''
+while True:
+    try:
+        chunk = os.read(master, 4096)
+    except OSError as error:
+        if error.errno == errno.EIO: break
+        raise
+    if not chunk: break
+    text += chunk
+os.close(master)
+assert child.wait(timeout=3) == 0, text
+assert b'EDITOR_TTY' in text, text
+result = json.loads(pathlib.Path('result.json').read_text())
+assert result['terminal'] is True, result
+assert result['stdout'] == '', result
+";
+    let output = Command::new("python3")
+        .args(["-c", script, env!("CARGO_BIN_EXE_tmux-workspace")])
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
+fn exited_editor_cannot_leave_a_descendant_holding_capture_pipes() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("workspace.yaml"),
+        "session_name: demo\nwindows: []\n",
+    )
+    .unwrap();
+    let marker = directory.path().join("child.pid");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_tmux-workspace"))
+        .args(["edit", "workspace.yaml", "--json"])
+        .current_dir(directory.path())
+        .env(
+            "EDITOR",
+            format!(
+                "sh -c 'sleep 30 & echo $! > {}; printf ready' editor",
+                marker.display()
+            ),
+        )
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let completed = child.try_wait().unwrap().is_some();
+    if !completed {
+        child.kill().unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    let pid = std::fs::read_to_string(marker).unwrap();
+    let _ = Command::new("kill")
+        .args(["-KILL", pid.trim()])
+        .stderr(std::process::Stdio::null())
+        .status();
+    assert!(completed && output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["stdout"], "ready");
+    assert_eq!(value["truncated"], true);
+}
+
+#[test]
+fn successful_editor_can_leave_a_background_service_with_closed_streams() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("workspace.yaml"),
+        "session_name: demo\nwindows: []\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_tmux-workspace"))
+        .args(["edit", "workspace.yaml", "--json"])
+        .current_dir(directory.path())
+        .env(
+            "EDITOR",
+            "sh -c 'sleep 30 >/dev/null 2>&1 & echo $!' editor",
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let pid = value["stdout"].as_str().unwrap().trim();
+    let state = Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .unwrap();
+    let _ = Command::new("kill")
+        .args(["-KILL", pid])
+        .stderr(std::process::Stdio::null())
+        .status();
+    assert!(
+        state.status.success() && !state.stdout.starts_with(b"Z"),
+        "{state:?}"
+    );
+}
