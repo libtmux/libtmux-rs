@@ -22,6 +22,13 @@ use crate::window::assignment;
 pub struct SplitWindow {
     pub(crate) target: WindowTarget,
     vertical: bool,
+    /// tmux's `-b`, which puts the new pane before the one being divided.
+    ///
+    /// Defaulted rather than required, so a plan serialized before this
+    /// existed still decodes: `deny_unknown_fields` refuses keys it does not
+    /// know, not keys that are absent.
+    #[cfg_attr(feature = "serde", serde(default))]
+    before: bool,
     #[cfg_attr(
         feature = "serde",
         serde(
@@ -68,6 +75,7 @@ impl SplitWindow {
         Self {
             target: target.into(),
             vertical: true,
+            before: false,
             start_directory: None,
             command: None,
             environment: Vec::new(),
@@ -83,9 +91,37 @@ impl SplitWindow {
     }
 
     /// Split side by side rather than one above the other.
+    ///
+    /// The same as `direction(SplitDirection::Right)`. Kept because it is the
+    /// spelling this operation shipped with.
     #[must_use]
     pub const fn horizontal(mut self) -> Self {
         self.vertical = false;
+        self
+    }
+
+    /// Put the new pane on this side of the one being divided.
+    ///
+    /// The default is [`SplitDirection::Below`], which is tmux's. `Above` and
+    /// `Left` need tmux's `-b`, so they are reachable only through this: with
+    /// [`SplitWindow::horizontal`] alone a plan could ask for two of the four
+    /// positions, while the object API's [`crate::SplitOptions`] has always
+    /// offered all four.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::SplitDirection;
+    /// use libtmux::plan::{NewSession, Plan, SplitWindow};
+    ///
+    /// let mut plan = Plan::new();
+    /// let session = plan.add(NewSession::new("above"));
+    /// plan.add(SplitWindow::new(session.window()).direction(SplitDirection::Above));
+    /// ```
+    #[must_use]
+    pub const fn direction(mut self, direction: crate::SplitDirection) -> Self {
+        self.vertical = direction.is_vertical();
+        self.before = direction.before();
         self
     }
 
@@ -128,6 +164,9 @@ impl SplitWindow {
             .arg("-t")
             .arg(self.target.token(resolve)?)
             .arg(if self.vertical { "-v" } else { "-h" });
+        if self.before {
+            command = command.arg("-b");
+        }
         if !self.focus {
             command = command.arg("-d");
         }
@@ -150,6 +189,7 @@ impl fmt::Debug for SplitWindow {
             .debug_struct("SplitWindow")
             .field("target", &self.target)
             .field("vertical", &self.vertical)
+            .field("before", &self.before)
             .field("has_start_directory", &self.start_directory.is_some())
             .field("has_command", &self.command.is_some())
             .field("environment_count", &self.environment.len())

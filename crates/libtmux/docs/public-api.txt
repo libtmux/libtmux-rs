@@ -819,6 +819,7 @@ function libtmux::plan::Slot::pane: const fn(self) -> libtmux::plan::Slot<libtmu
 function libtmux::plan::Slot::step: const fn(&self) -> usize
 function libtmux::plan::Slot::window: const fn(self) -> libtmux::plan::Slot<libtmux::plan::WindowSlot>
 function libtmux::plan::SplitWindow::command: fn(self, command: impl Into<OsString>) -> Self
+function libtmux::plan::SplitWindow::direction: const fn(self, direction: libtmux::SplitDirection) -> Self
 function libtmux::plan::SplitWindow::environment: fn(self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self
 function libtmux::plan::SplitWindow::focus: const fn(self) -> Self
 function libtmux::plan::SplitWindow::horizontal: const fn(self) -> Self

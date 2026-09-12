@@ -20,7 +20,9 @@ use libtmux::plan::{
     SetOption, SplitWindow, StepReason, WindowTarget,
 };
 use libtmux::test::TestServer;
-use libtmux::{ChannelWait, Command, NewSessionOptions, PaneId, PaneWait, Server, WindowId};
+use libtmux::{
+    ChannelWait, Command, NewSessionOptions, PaneId, PaneWait, Server, SplitDirection, WindowId,
+};
 
 /// A plan that builds a session and types into the pane it makes.
 fn build_plan(name: &str) -> Plan {
@@ -828,4 +830,88 @@ fn plan_validation_rejects_text_together_with_named_keys() {
         PlanValidationErrorKind::SendKeysTextWithKeys,
     );
     assert!(failure.to_string().contains("literal text"), "{failure}");
+}
+
+/// A plan can put a new pane on any of the four sides.
+///
+/// `SplitWindow::horizontal` alone reached two of them: it picks tmux's axis
+/// and leaves `-b` unset, so a plan could ask for below and right and had no
+/// spelling at all for above and left. The object API's `SplitOptions` has
+/// always taken the full `SplitDirection`.
+#[tokio::test]
+async fn a_plan_can_split_on_any_of_the_four_sides() {
+    let guard = TestServer::new().await.expect("a server");
+    let server = guard.server();
+
+    for direction in [
+        SplitDirection::Above,
+        SplitDirection::Below,
+        SplitDirection::Left,
+        SplitDirection::Right,
+    ] {
+        let mut plan = Plan::new();
+        let session = plan.add(NewSession::new(format!("{direction:?}").as_str()));
+        plan.add(SplitWindow::new(session.window()).direction(direction));
+
+        let result = plan
+            .run(server, Planner::Sequential)
+            .await
+            .expect("the plan runs");
+        assert!(result.is_complete(), "{:?}", result.operations());
+
+        let created = result.created(1).expect("the split bound a pane id");
+        let id: PaneId = created
+            .to_str()
+            .expect("a utf-8 pane id")
+            .parse()
+            .expect("a pane id");
+        let pane = server
+            .pane_by_id(&id)
+            .await
+            .expect("the lookup runs")
+            .expect("the pane tmux just made");
+
+        // Splitting a window that holds one full pane leaves two, so the new
+        // one is against the edge it was asked for and away from its opposite.
+        let (against, opposite) = match direction {
+            SplitDirection::Above => (pane.is_at_top(), pane.is_at_bottom()),
+            SplitDirection::Below => (pane.is_at_bottom(), pane.is_at_top()),
+            SplitDirection::Left => (pane.is_at_left(), pane.is_at_right()),
+            SplitDirection::Right => (pane.is_at_right(), pane.is_at_left()),
+        };
+        assert!(against, "a {direction:?} split lands on that side");
+        assert!(!opposite, "a {direction:?} split is not on the far side");
+    }
+
+    guard.shutdown().await.expect("shutdown");
+}
+
+/// A plan serialized before `SplitWindow` grew `before` still decodes.
+///
+/// The struct carries `deny_unknown_fields`, which rejects a key it does not
+/// know and says nothing about one that is absent, so the new field is
+/// defaulted rather than required. Splitting the direction out into an enum
+/// would have renamed `vertical` instead and refused every stored plan.
+#[cfg(feature = "serde")]
+#[test]
+fn a_split_recorded_before_the_side_was_addressable_still_decodes() {
+    // Written by hand rather than by an older build of this crate, so the
+    // absent key is the point rather than an artefact of how it was produced.
+    let stored = r#"[{"SplitWindow":{
+        "target":{"Id":"@1"},
+        "vertical":true,
+        "start_directory":null,
+        "command":null,
+        "environment":[],
+        "focus":false
+    }}]"#;
+
+    let plan: Plan = serde_json::from_str(stored).expect("an older plan deserialises");
+    assert_eq!(plan.len(), 1);
+
+    // `-b` is what the new field renders, and an older plan never asked for
+    // it, so its command must come back byte-identical to what it always was.
+    let rendered = format!("{:?}", plan.preview());
+    assert!(rendered.contains("-v"), "{rendered}");
+    assert!(!rendered.contains("-b"), "{rendered}");
 }
