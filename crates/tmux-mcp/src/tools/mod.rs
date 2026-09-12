@@ -353,24 +353,44 @@ impl TmuxTools {
     }
 
     /// Resolve a window id, reporting an unknown one as invalid input.
+    ///
+    /// The id is parsed before tmux sees it, which buys three things over
+    /// scanning a full listing. tmux matches the id server-side and returns
+    /// the one row. Text that is not an id at all is reported as bad input
+    /// rather than as a window that went away, because an agent told "look
+    /// again" will look again and `not-a-window` will still not be a window.
+    /// And `@01` resolves, where a string comparison against the canonical
+    /// `@1` called it missing.
     pub(super) async fn find_window(&self, id: &str) -> Result<libtmux::Window, ErrorData> {
+        let window: libtmux::WindowId = id.parse().map_err(|error: libtmux::IdParseError| {
+            let sigil = error.expected_sigil();
+            bad_input(format!(
+                "{id} is not a window id: expected {sigil} followed by digits, as in {sigil}1"
+            ))
+        })?;
+
         self.server
-            .windows()
+            .window_by_id(&window)
             .await
             .map_err(|e| tmux_error(&e))?
-            .into_iter()
-            .find(|window| window.id().to_string() == id)
             .ok_or_else(|| object_gone("window", id))
     }
 
     /// Resolve a pane id, reporting an unknown one as invalid input.
+    ///
+    /// Shares the reasoning on [`Self::find_window`].
     pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux::Pane, ErrorData> {
+        let pane: libtmux::PaneId = id.parse().map_err(|error: libtmux::IdParseError| {
+            let sigil = error.expected_sigil();
+            bad_input(format!(
+                "{id} is not a pane id: expected {sigil} followed by digits, as in {sigil}1"
+            ))
+        })?;
+
         self.server
-            .panes()
+            .pane_by_id(&pane)
             .await
             .map_err(|e| tmux_error(&e))?
-            .into_iter()
-            .find(|pane| pane.id().to_string() == id)
             .ok_or_else(|| object_gone("pane", id))
     }
 
