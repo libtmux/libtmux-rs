@@ -18,36 +18,42 @@ set -euo pipefail
 
 readonly dev_root=/tmp/libtmux-rs-dev
 
-# crate | example | features | arguments | stdin driver | must print
+# crate | example | features | arguments | stdin driver | must print | artifact
 #
 # Blank lines and `#` comments are ignored; every other row must name an
 # example that exists, and every example must have a row.
 #
-# The last column is what the example must print, and it answers two questions
-# a leak check cannot.
+# The "must print" column is what the example must print, and it answers two
+# questions a leak check cannot.
 #
-# Containment: `inspect` and `find` resolve their server with
-# `Server::from_env().or_else(|_| Server::new())`, so a `$TMUX` this script
-# failed to set would send them to the reader's own default server -- where
-# they would run perfectly, create nothing, and leave no socket behind to
-# notice. Naming a session this script made can only come from this server.
+# Containment: `inspect` and `find` resolve their server through the shared
+# `examples/common/arena.rs` fallback, which is `Server::from_env().or_else(|_|
+# Server::new())` when no arena is active, so a `$TMUX` this script failed to
+# set would send them to the reader's own default server -- where they would
+# run perfectly, create nothing, and leave no socket behind to notice. Naming
+# a session this script made can only come from this server.
 #
 # Demonstration: an example that runs and shows nothing passes an exit-code
 # check. `find` searched for `sh` against a fixture running the login shell and
 # matched nothing every time; `scratch` printed a line count and none of the
 # session it built. Naming what each is for makes that a failure.
+#
+# The artifact column names the `LIBTMUX_ARENA_ARTIFACT` a row's example
+# answers to; blank means it stays owned-only and never sees an activated
+# descriptor. It threads each example's own identity through an activated
+# lane, rather than leaving every row to share one.
 readonly table="
-libtmux  | inspect  |                                               |    |               | examples
-libtmux  | find     | query                                         | sh |               | in window
-libtmux  | scratch  | test-support                                  |    |               | hello from tmux
-libtmux  | sweep    | test-support                                  |    |               | fixture
-libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket
-libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
-libtmux  | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
-libtmux  | recover  | test-support                                  |    |               | is_object_gone: false
-tmux-mcp | budget   |                                               |    |               | of it output schemas
-tmux-mcp | surface  |                                               |    |               | answers with:
-tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
+libtmux  | inspect  |                                               |    |               | examples                              | rust-inspect
+libtmux  | find     | query                                         | sh |               | in window                              | rust-find
+libtmux  | scratch  | test-support                                  |    |               | hello from tmux                       |
+libtmux  | sweep    | test-support                                  |    |               | fixture                                |
+libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket                    |
+libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true |
+libtmux  | orchestrate | test-support                              |    |               | 3 of 3 jobs finished                  |
+libtmux  | recover  | test-support                                  |    |               | is_object_gone: false                 |
+tmux-mcp | budget   |                                               |    |               | of it output schemas                  |
+tmux-mcp | surface  |                                               |    |               | answers with:                         |
+tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo                             |
 "
 
 rows() {
@@ -110,6 +116,12 @@ tmux -S "$socket" new-window -d -n second sh
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
 export TMUX="$socket,$server_pid,0"
 
+# Never set here, so a plain run is unchanged; a caller who sets it is asking
+# this gate to lend its own fixture and prove the contract.
+if [ -n "${LIBTMUX_ARENA_DESCRIPTOR:-}" ]; then
+    tmux -S "$socket" set-option -g @libtmux_arena_challenge run-examples-gate
+fi
+
 # Whatever nobody is still using. A directory belonging to a run in progress is
 # not a leak even though it is new, and one belonging to a run that is gone is
 # a leak even though it is old, so this asks who owns a thing rather than what
@@ -166,21 +178,45 @@ mcp_handshake() {
 # A driven example measures how long its server takes to answer, and a cold
 # build inside that window reads as a server that never did.
 printf 'building %s examples\n' "$(rows | wc -l | tr -d ' ')"
-while IFS='|' read -r crate name features args driver expect; do
+while IFS='|' read -r crate name features args driver expect artifact; do
     opts=(--quiet --manifest-path "crates/$crate/Cargo.toml" --example "$name")
     if [ -n "$features" ]; then opts+=(--features "$features"); fi
     cargo build "${opts[@]}"
 done < <(rows)
 
 failures=()
-while IFS='|' read -r crate name features args driver expect; do
+while IFS='|' read -r crate name features args driver expect artifact; do
     printf '\n=== example %s/%s\n' "$crate" "$name"
     opts=(--quiet --manifest-path "crates/$crate/Cargo.toml" --example "$name")
     if [ -n "$features" ]; then opts+=(--features "$features"); fi
+
+    # Each row answers to its own artifact, not whatever this script's own
+    # environment carries, so an activated lane cannot let one identity leak
+    # across every example in it. A row with none gets the four variables
+    # blanked rather than passed through, so an example that stays owned-only
+    # can never take a path that might stop a server it did not create.
+    arena_env=()
+    if [ -n "${LIBTMUX_ARENA_DESCRIPTOR:-}" ]; then
+        if [ -n "$artifact" ]; then
+            arena_env=(
+                LIBTMUX_ARENA_ARTIFACT="$artifact"
+                LIBTMUX_SOCKET_PATH="$socket"
+                LIBTMUX_TMUX_BIN=tmux
+            )
+        else
+            arena_env=(
+                LIBTMUX_ARENA_DESCRIPTOR=
+                LIBTMUX_ARENA_ARTIFACT=
+                LIBTMUX_SOCKET_PATH=
+                LIBTMUX_TMUX_BIN=
+            )
+        fi
+    fi
+
     # shellcheck disable=SC2086 # arguments are a field, and are meant to split
     if [ -z "$driver" ]; then
         out="$run_dir/$name.out"
-        if cargo run "${opts[@]}" -- $args </dev/null | tee "$out"; then
+        if env "${arena_env[@]}" cargo run "${opts[@]}" -- $args </dev/null | tee "$out"; then
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
                 printf 'did not print %s\n' "$expect" >&2
                 failures+=("$crate/$name")
@@ -191,7 +227,7 @@ while IFS='|' read -r crate name features args driver expect; do
     else
         out="$run_dir/$name.out"
         : > "$out"
-        if "$driver" "$out" | cargo run "${opts[@]}" -- $args > "$out"; then
+        if "$driver" "$out" | env "${arena_env[@]}" cargo run "${opts[@]}" -- $args > "$out"; then
             printf 'answered %s bytes and shut down cleanly\n' "$(wc -c < "$out" | tr -d ' ')"
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then
                 printf 'did not print %s\n' "$expect" >&2

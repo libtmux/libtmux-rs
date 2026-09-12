@@ -7,103 +7,14 @@
 //! Reads the default server, or the one named by `$TMUX` when run inside a
 //! pane. Changes nothing.
 
-use std::{
-    ffi::{OsStr, OsString},
-    path::PathBuf,
-};
+use libtmux::TmuxText;
 
-use libtmux::{Server, TmuxText};
+#[path = "common/arena.rs"]
+mod arena;
+
+use arena::{ArenaEnvironment, arena_error, arena_evidence, select_server};
 
 const ARENA_ARTIFACT: &str = "rust-inspect";
-
-#[derive(Clone, Debug)]
-struct ArenaEnvironment {
-    descriptor: Option<OsString>,
-    artifact: Option<OsString>,
-    socket_path: Option<OsString>,
-    tmux_executable: Option<OsString>,
-    tmux: Option<OsString>,
-}
-
-impl ArenaEnvironment {
-    fn capture() -> Self {
-        Self {
-            descriptor: std::env::var_os("LIBTMUX_ARENA_DESCRIPTOR"),
-            artifact: std::env::var_os("LIBTMUX_ARENA_ARTIFACT"),
-            socket_path: std::env::var_os("LIBTMUX_SOCKET_PATH"),
-            tmux_executable: std::env::var_os("LIBTMUX_TMUX_BIN"),
-            tmux: std::env::var_os("TMUX"),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct ArenaContract {
-    socket_path: PathBuf,
-    tmux_executable: OsString,
-}
-
-impl ArenaContract {
-    fn from_environment(environment: &ArenaEnvironment) -> Result<Option<Self>, std::io::Error> {
-        if environment
-            .descriptor
-            .as_deref()
-            .is_none_or(OsStr::is_empty)
-        {
-            return Ok(None);
-        }
-
-        if environment.artifact.as_deref() != Some(OsStr::new(ARENA_ARTIFACT)) {
-            return Err(arena_error(
-                "arena descriptor requires LIBTMUX_ARENA_ARTIFACT=rust-inspect",
-            ));
-        }
-        let socket_path = required_arena_value(
-            environment.socket_path.clone(),
-            "arena descriptor requires LIBTMUX_SOCKET_PATH",
-        )?;
-        let tmux_executable = required_arena_value(
-            environment.tmux_executable.clone(),
-            "arena descriptor requires LIBTMUX_TMUX_BIN",
-        )?;
-
-        Ok(Some(Self {
-            socket_path: socket_path.into(),
-            tmux_executable,
-        }))
-    }
-}
-
-fn arena_error(message: &'static str) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
-}
-
-fn required_arena_value(
-    value: Option<OsString>,
-    message: &'static str,
-) -> Result<OsString, std::io::Error> {
-    value
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| arena_error(message))
-}
-
-fn select_server(
-    environment: &ArenaEnvironment,
-) -> Result<(Server, Option<ArenaContract>), Box<dyn std::error::Error>> {
-    let mut arena = ArenaContract::from_environment(environment)?;
-    let server = if let Some(arena) = &mut arena {
-        let server = Server::builder()
-            .socket_path(&arena.socket_path)
-            .tmux_executable(arena.tmux_executable.clone())
-            .build()?;
-        arena.socket_path = server.socket_path().to_path_buf();
-        server
-    } else {
-        Server::from_env_value(environment.tmux.clone()).or_else(|_| Server::new())?
-    };
-
-    Ok((server, arena))
-}
 
 fn show(value: &TmuxText) -> String {
     value.to_string_lossy().into_owned()
@@ -125,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn inspect(
     environment: ArenaEnvironment,
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
-    let (server, arena) = select_server(&environment)?;
+    let (server, arena) = select_server(&environment, ARENA_ARTIFACT)?;
     // Inside a pane, `$TMUX` names the server this process belongs to.
     // Outside one, fall back to the default socket.
     if !server.is_alive().await {
@@ -171,36 +82,12 @@ async fn inspect(
     }
 
     let evidence = if let Some(arena) = &arena {
-        Some(arena_evidence(&server, arena).await?)
+        Some(arena_evidence(&server, arena, ARENA_ARTIFACT).await?)
     } else {
         None
     };
     server.shutdown().await?;
     Ok(evidence)
-}
-
-async fn arena_evidence(
-    server: &Server,
-    arena: &ArenaContract,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    if server.socket_path() != arena.socket_path {
-        return Err(arena_error("arena server resolved a different socket").into());
-    }
-    let challenge = server
-        .get_global_option("@libtmux_arena_challenge")
-        .await?
-        .map(|value| show(&value))
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| arena_error("arena challenge is missing"))?;
-    let server_pid = server.generation().await?.pid();
-
-    Ok(serde_json::json!({
-        "artifact": ARENA_ARTIFACT,
-        "challenge": challenge,
-        "schema": 1,
-        "server_pid": server_pid,
-        "socket_path": server.socket_path(),
-    }))
 }
 
 #[cfg(test)]
@@ -218,9 +105,8 @@ mod tests {
         test::{DaemonState, TestServer},
     };
 
-    use super::{
-        ARENA_ARTIFACT, ArenaContract, ArenaEnvironment, arena_evidence, inspect, select_server,
-    };
+    use super::arena::{ArenaContract, ArenaEnvironment, arena_evidence, select_server};
+    use super::{ARENA_ARTIFACT, inspect};
 
     const CHILD: &str = "LIBTMUX_INSPECT_TEST_CHILD";
 
@@ -321,8 +207,8 @@ mod tests {
         ];
 
         for environment in cases {
-            assert!(ArenaContract::from_environment(&environment).is_err());
-            assert!(select_server(&environment).is_err());
+            assert!(ArenaContract::from_environment(&environment, ARENA_ARTIFACT).is_err());
+            assert!(select_server(&environment, ARENA_ARTIFACT).is_err());
         }
     }
 
@@ -339,7 +225,7 @@ mod tests {
             Some(tmux),
         );
 
-        let (server, arena) = select_server(&environment)?;
+        let (server, arena) = select_server(&environment, ARENA_ARTIFACT)?;
         assert!(arena.is_none());
         assert_eq!(server.socket_path(), guard.socket_path());
         assert_eq!(server.tmux_executable(), OsStr::new("tmux"));
@@ -444,7 +330,11 @@ mod tests {
             tmux_executable: guard.server().tmux_executable().to_os_string(),
         };
 
-        assert!(arena_evidence(&server, &arena).await.is_err());
+        assert!(
+            arena_evidence(&server, &arena, ARENA_ARTIFACT)
+                .await
+                .is_err()
+        );
         server.shutdown().await?;
         guard.shutdown().await?;
         Ok(())
@@ -462,7 +352,11 @@ mod tests {
             tmux_executable: guard.server().tmux_executable().to_os_string(),
         };
 
-        assert!(arena_evidence(&server, &arena).await.is_err());
+        assert!(
+            arena_evidence(&server, &arena, ARENA_ARTIFACT)
+                .await
+                .is_err()
+        );
         server.shutdown().await?;
         guard.shutdown().await?;
         Ok(())
