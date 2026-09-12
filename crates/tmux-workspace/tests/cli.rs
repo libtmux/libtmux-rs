@@ -788,6 +788,363 @@ async fn load_renames_only_the_last_input_and_retessellates_many_panes() {
 }
 
 #[tokio::test]
+async fn load_logging_separates_metadata_from_captures_and_mandatory_errors() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    for (mode, level, status) in [
+        ("human", "info", 0),
+        ("json", "info", 9),
+        ("json", "critical", 9),
+    ] {
+        let name = format!("logged-{mode}-{level}");
+        let log = directory.path().join(format!("{name}.log"));
+        let config = serde_json::json!({"session_name":name,"windows":[{"panes":["blank"]}],"before_script":format!("/bin/sh -c 'printf LOG-STDOUT; printf LOG-STDERR >&2; exit {status}'")});
+        std::fs::write(directory.path().join("workspace.json"), config.to_string()).unwrap();
+        let mut arguments = vec![
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--log-file",
+            log.to_str().unwrap(),
+            "--log-level",
+            level,
+        ];
+        if mode == "json" {
+            arguments.push("--json");
+        }
+        arguments.push("workspace.json");
+        let output = bounded_cli_output(command_at(&arguments, directory.path())).await;
+        assert_eq!(output.status.code(), Some(status), "{output:?}");
+        let records = json_records(&std::fs::read(&log).unwrap());
+        if level == "critical" {
+            assert!(records.is_empty());
+        } else {
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|row| matches!(row["event"].as_str(), Some("completed" | "failed")))
+                    .count(),
+                1
+            );
+        }
+        for (index, record) in records.iter().enumerate() {
+            assert_eq!(record["sequence"], index + 1);
+            assert_eq!(record["command"], "load");
+            let metadata = record.to_string();
+            assert!(
+                !metadata.contains("script_output")
+                    && !metadata.contains("LOG-STDOUT")
+                    && !metadata.contains("LOG-STDERR"),
+                "{record}"
+            );
+        }
+        if mode == "human" {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("LOG-STDOUT"));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("LOG-STDERR"));
+        } else {
+            let values = json_records(&output.stdout);
+            let effects = &values.last().unwrap()["errors"][0]["effects"];
+            assert_eq!(effects["script_output"]["stdout"], "LOG-STDOUT");
+            assert_eq!(effects["script_output"]["stderr"], "LOG-STDERR");
+            assert_eq!(effects["script_output"]["child_status"], status);
+            let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(diagnostic["code"], "child_failed");
+        }
+        assert!(guard.server().has_session(&name).await.unwrap());
+    }
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn load_logging_caps_utf8_per_stream_and_resets_for_the_next_child() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let limit = 1024 * 1024;
+    for (stream, letter) in [("stdout", "a"), ("stderr", "b")] {
+        std::fs::write(
+            directory.path().join(stream),
+            format!("{}éTAIL", letter.repeat(limit - 1)),
+        )
+        .unwrap();
+    }
+    for (name, script) in [
+        ("first", "/bin/sh -c 'cat stdout; cat stderr >&2'"),
+        (
+            "second",
+            "/bin/sh -c 'printf RESET-OUT; printf RESET-ERR >&2'",
+        ),
+    ] {
+        let config = serde_json::json!({"session_name":name,"before_script":script,"windows":[{"panes":["blank"]}]});
+        std::fs::write(
+            directory.path().join(format!("{name}.json")),
+            config.to_string(),
+        )
+        .unwrap();
+    }
+    let output = bounded_cli_output(command_at(
+        &[
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--ndjson",
+            "--log-file",
+            "debug.log",
+            "--log-level",
+            "debug",
+            "first.json",
+            "second.json",
+        ],
+        directory.path(),
+    ))
+    .await;
+    assert!(output.status.success(), "status={:?}", output.status.code());
+    let records = json_records(&std::fs::read(directory.path().join("debug.log")).unwrap());
+    assert_logged_children(&records, limit);
+    let events = json_records(&output.stdout);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|row| row["event"] == "completed")
+            .count(),
+        1
+    );
+    let summary = events.last().unwrap();
+    assert_eq!(summary["results"][0]["script_output"]["truncated"], true);
+    assert_eq!(
+        summary["results"][1]["script_output"]["stdout"],
+        "RESET-OUT"
+    );
+    for name in ["first", "second"] {
+        assert!(guard.server().has_session(name).await.unwrap());
+    }
+    guard.shutdown().await.unwrap();
+}
+
+fn assert_logged_children(records: &[serde_json::Value], limit: usize) {
+    let mut children: [Vec<&serde_json::Value>; 2] = Default::default();
+    let mut index = 0;
+    for record in records {
+        if record["event"] == "workspace-started" {
+            index = usize::try_from(record["data"]["input_index"].as_u64().unwrap()).unwrap();
+        } else if record["event"] == "script-output" {
+            children[index].push(record);
+        }
+    }
+    for (stream, letter, reset) in [("stdout", b'a', "RESET-OUT"), ("stderr", b'b', "RESET-ERR")] {
+        let first: Vec<_> = children[0]
+            .iter()
+            .filter(|row| row["data"]["stream"] == stream)
+            .collect();
+        let text: String = first
+            .iter()
+            .map(|row| row["data"]["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(text.len(), limit - 1);
+        assert!(text.bytes().all(|byte| byte == letter));
+        assert_eq!(
+            first
+                .iter()
+                .filter(|row| row["data"]["truncated"] == true)
+                .count(),
+            1
+        );
+        let second: Vec<_> = children[1]
+            .iter()
+            .filter(|row| row["data"]["stream"] == stream)
+            .collect();
+        let text: String = second
+            .iter()
+            .map(|row| row["data"]["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(text, reset);
+        assert!(second.iter().all(|row| row["data"]["truncated"] == false));
+    }
+    assert_eq!(
+        records
+            .iter()
+            .filter(|row| row["event"] == "completed")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn load_logging_failure_preserves_primary_status_and_diagnostic_order() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let cases = [
+        ("human", 0, "merged", "info"),
+        ("json", 9, "merged", "info"),
+        ("json", 0, "stderr-closed", "info"),
+        ("json", 0, "both-closed", "info"),
+        ("json", 9, "both-closed", "info"),
+        ("json", 9, "merged", "error"),
+    ];
+    for (number, (mode, status, streams, level)) in cases.into_iter().enumerate() {
+        let name = format!("limited-{number}");
+        let config = serde_json::json!({"session_name":name,"before_script":format!("/bin/sh -c 'printf captured; exit {status}'"),"windows":[{"panes":["blank"]}]});
+        std::fs::write(directory.path().join("workspace.json"), config.to_string()).unwrap();
+        let mut arguments = vec![
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--log-file",
+            "limited.log",
+            "--log-level",
+            level,
+        ];
+        let mode_flag = format!("--{mode}");
+        if mode != "human" {
+            arguments.push(&mode_flag);
+        }
+        arguments.push("workspace.json");
+        let (exit, bytes) =
+            file_limited_output(&command_at(&arguments, directory.path()), streams).await;
+        let expected = if streams == "both-closed" && status == 0 {
+            1
+        } else {
+            status
+        };
+        assert_eq!(exit.code(), Some(expected), "mode={mode} streams={streams}");
+        assert_eq!(
+            std::fs::metadata(directory.path().join("limited.log"))
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(guard.server().has_session(&name).await.unwrap());
+        let text = String::from_utf8(bytes).unwrap();
+        let warning = streams == "merged" && level == "info";
+        assert_eq!(
+            text.matches("log file disabled:").count(),
+            usize::from(warning),
+            "mode={mode} streams={streams} level={level}: {text}"
+        );
+        if warning && mode == "human" {
+            assert!(text.find("Loaded").unwrap() < text.find("log file disabled:").unwrap());
+        }
+        if mode != "human" && streams != "both-closed" {
+            let values = json_records(text.as_bytes());
+            let summary = values
+                .iter()
+                .find(|row| row.get("results").is_some())
+                .unwrap();
+            assert_eq!(
+                summary["status"],
+                if status == 0 { "ok" } else { "partial" }
+            );
+            if status != 0 && streams == "merged" {
+                if warning {
+                    let primary = values
+                        .iter()
+                        .position(|row| row["code"] == "child_failed")
+                        .unwrap();
+                    let advisory = values
+                        .iter()
+                        .position(|row| row["code"] == "log_file_failed")
+                        .unwrap();
+                    assert!(primary < advisory);
+                }
+                let diagnostic = values
+                    .iter()
+                    .find(|row| row["code"] == "child_failed")
+                    .unwrap();
+                assert_eq!(
+                    diagnostic["retained_state"]["errors"][0]["effects"]["script_output"]["child_status"],
+                    9
+                );
+            }
+        }
+    }
+    guard.shutdown().await.unwrap();
+}
+
+async fn file_limited_output(
+    original: &Command,
+    streams: &str,
+) -> (std::process::ExitStatus, Vec<u8>) {
+    use std::{
+        io::Read,
+        os::{fd::OwnedFd, unix::net::UnixStream},
+        time::Duration,
+    };
+
+    let mut command = Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            "trap '' XFSZ; ulimit -f 0 || exit 97; exec \"$@\"",
+            "log-limit",
+        ])
+        .arg(original.get_program())
+        .args(original.get_args())
+        .current_dir(original.get_current_dir().unwrap());
+    for (key, value) in original.get_envs() {
+        if let Some(value) = value {
+            command.env(key, value);
+        } else {
+            command.env_remove(key);
+        }
+    }
+    let (mut reader, writer) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let (closed_reader, closed_writer) = UnixStream::pair().unwrap();
+    drop(closed_reader);
+    let stdout = if streams == "both-closed" {
+        closed_writer.try_clone().unwrap()
+    } else {
+        writer.try_clone().unwrap()
+    };
+    let stderr = if streams == "merged" {
+        writer
+    } else {
+        drop(writer);
+        closed_writer
+    };
+    command
+        .stdout(OwnedFd::from(stdout))
+        .stderr(OwnedFd::from(stderr));
+    let mut child = tokio::process::Command::from(command)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let exit = tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    (exit, bytes)
+}
+
+async fn bounded_cli_output(mut command: Command) -> Output {
+    command.stdin(std::process::Stdio::null());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::from(command)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+fn json_records(bytes: &[u8]) -> Vec<serde_json::Value> {
+    std::str::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[tokio::test]
 async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
     use std::os::{fd::OwnedFd, unix::net::UnixStream};
 

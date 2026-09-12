@@ -4,6 +4,7 @@ mod discovery;
 mod document;
 mod execution;
 mod generate;
+mod logging;
 mod normalize;
 mod output;
 mod process;
@@ -106,10 +107,15 @@ pub(super) fn main() -> ExitCode {
             }
         }));
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            report.log_warning();
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             let _ = report.failed(&error);
+            report.log_error(&error);
             diagnostic(machine, &error);
+            report.log_warning();
             ExitCode::from(error.status)
         }
     }

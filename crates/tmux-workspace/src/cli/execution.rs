@@ -146,6 +146,11 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         return Err(CliError::usage("machine load requires -d or --append"));
     }
     let workspaces = load_inputs(args)?;
+    if let Some(path) = option(args, "log-file") {
+        report
+            .log
+            .open(std::path::Path::new(&discovery::expand(path)))?;
+    }
     let (server, borrowed) = load_target(args).await?;
     let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
         Some(process::python().await?)
@@ -186,7 +191,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
             let errors = json!([{"code":error.code,"message":error.message,"input_index":index,"partial_effects":effects.changed,"effects":effects.value()}]);
             let mut summary = json!({"schema_version":1,"command":"load","status":if effects.changed || !results.is_empty(){"partial"}else{"error"},"errors":errors});
             summary["results"] = results.into();
-            if let Err(publication) = publish_load(report, "failed", &summary) {
+            if let Err(publication) = report.summary("failed", &summary) {
                 let _ = write!(error.message, "; output failed: {publication}");
             }
             error.retained_state = Some(summary);
@@ -196,7 +201,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
     let mut summary = json!({"schema_version":1,"command":"load","status":"ok","errors":[]});
     summary["results"] = results.into();
     let outcome = async {
-        publish_load(report, "completed", &summary)?;
+        report.summary("completed", &summary)?;
         if !report.machine() {
             for result in summary["results"].as_array().into_iter().flatten() {
                 report.line(
@@ -210,6 +215,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
                 )?;
             }
             std::io::Write::flush(&mut std::io::stdout())?;
+            report.log_warning();
             if !flag(args, "detached") && !flag(args, "append") {
                 if let Some(session) = last_session {
                     attach(&server, &session).await?;
@@ -223,20 +229,6 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         error.retained_state = Some(summary);
         error
     })
-}
-
-fn publish_load(report: &mut Reporter, event: &str, summary: &Value) -> Result<()> {
-    if report.mode == Mode::Json {
-        report.document(summary)?;
-    }
-    report.event(
-        event,
-        if report.mode == Mode::Ndjson {
-            summary.clone()
-        } else {
-            Value::Null
-        },
-    )
 }
 
 struct AppendTarget {
