@@ -16,6 +16,19 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.11 - 2026-09-12
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.11;
+`tmux-mcp` is 0.1.0-alpha.12, because it was already at alpha.11.
+
+Take this one if you build tmux plans, and especially if a plan of yours sends
+text: `plan::SendKeys::text` documented literal text and did not send it
+literally, so text naming a tmux key was pressed rather than typed. A plan can
+now reach all four sides of a split rather than two, asking a client what it is
+attached to costs one tmux command instead of two, and the MCP tells an agent
+that a malformed target is bad input rather than an object that went away --
+which had been advice to retry something that could never resolve.
+
 ### Fixed
 
 - **Breaking.** `plan::SendKeys::text` sends its text literally, with
