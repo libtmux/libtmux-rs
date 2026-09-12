@@ -16,6 +16,55 @@ full.
 
 ## Unreleased
 
+### Fixed
+
+- **Breaking.** `plan::SendKeys::text` sends its text literally, with
+  `send-keys -l`. It rendered without `-l`, so tmux resolved the argument
+  against its key table first and text naming a key was pressed rather than
+  typed: `Space` pressed the space bar and `BSpace` deleted a character. `--`
+  does not help, because it stops a leading dash being read as a flag and says
+  nothing about key lookup. Text and named keys cannot render as one
+  `send-keys`, so a plan carrying both is now refused by `Plan::validate`
+  instead of sent wrong; send the keys as a second operation. `.enter()` is
+  folded into the payload as a carriage return, the way `Pane::send_line`
+  already submitted a line. (#26)
+
+- `Client::attached_session`, `attached_window` and `attached_pane` cost one
+  tmux command each rather than two. Each read an id and then listed the object
+  that owned it; tmux fills a client's session, that session's current window
+  and that window's active pane into one format tree, so the whole snapshot
+  arrives with the id. The objects returned are unchanged. (#26)
+
+- The MCP reports text that is not an id as `bad_input` rather than as an
+  object that went away, so an agent is no longer told to look again for
+  something that can never resolve. It resolves a pane or window through
+  tmux's own `-f` predicate instead of listing every object and comparing
+  rendered strings, so a padded id such as `%01` now addresses `%1`; a
+  well-formed id for an object that is genuinely gone still reports
+  `object_gone`. (#26)
+
+### Added
+
+- `plan::SplitWindow::direction` takes the same `SplitDirection` the object API
+  takes, so a plan can put a new pane above or to the left of the one it
+  divides rather than only below or beside it. `horizontal` still means
+  `Right`. The side rides on a new defaulted `before` field, so a plan recorded
+  before this decodes unchanged. (#26)
+
+- `Server::format`, `Pane::format` and `Pane::pipe` document that tmux expands
+  `display-message` and `pipe-pane` templates through `strftime` before its own
+  format machinery. A `%` in one of those templates is a time conversion, not a
+  literal, and `%%` is how to pass one through; the conversions a platform
+  leaves undefined differ between glibc and Apple's libc. (#26)
+
+### Changed
+
+- The MCP names the words it accepts when it rejects a split direction, as it
+  already did when rejecting a resize direction. Both lists are generated from
+  the libtmux enums they stand for through an exhaustive match, so a variant
+  added there fails the build rather than going unadvertised. The words a
+  client may send are unchanged. (#26)
+
 ## 0.1.0-alpha.10 - 2026-09-07
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.10;
