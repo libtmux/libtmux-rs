@@ -3,7 +3,7 @@ use std::io::{self, IsTerminal, Write};
 use clap::ArgMatches;
 use serde_json::{Value, json};
 
-use super::Result;
+use super::{Result, logging::Logger};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
@@ -18,6 +18,7 @@ pub(super) struct Reporter {
     sequence: u64,
     terminal: bool,
     command: String,
+    pub(super) log: Logger,
 }
 
 impl Reporter {
@@ -46,6 +47,11 @@ impl Reporter {
             sequence: 0,
             terminal: false,
             command: command.into(),
+            log: Logger::new(
+                matches
+                    .get_one::<String>("log-level")
+                    .map_or("warning", String::as_str),
+            ),
         }
     }
 
@@ -66,6 +72,11 @@ impl Reporter {
     }
 
     pub(super) fn event(&mut self, name: &str, data: Value) -> Result<()> {
+        self.log.event(&self.command, name, &data);
+        self.publish_event(name, data)
+    }
+
+    fn publish_event(&mut self, name: &str, data: Value) -> Result<()> {
         self.terminal |= matches!(name, "completed" | "failed");
         if self.mode == Mode::Ndjson {
             self.sequence += 1;
@@ -76,6 +87,45 @@ impl Reporter {
             self.document(&event)?;
         }
         Ok(())
+    }
+
+    pub(super) fn summary(&mut self, event: &str, summary: &Value) -> Result<()> {
+        self.log.event(&self.command, event, summary);
+        if self.mode == Mode::Json {
+            self.document(summary)?;
+        }
+        self.publish_event(
+            event,
+            if self.mode == Mode::Ndjson {
+                summary.clone()
+            } else {
+                Value::Null
+            },
+        )
+    }
+
+    pub(super) fn log_chunk(&mut self, stream: &str, text: &str) {
+        self.log.chunk(&self.command, stream, text);
+    }
+
+    pub(super) fn log_error(&mut self, error: &super::CliError) {
+        self.log.error(&self.command, error);
+    }
+
+    pub(super) fn log_warning(&mut self) {
+        if let Some(message) = self.log.warning() {
+            let mut errors = io::stderr().lock();
+            if self.machine() {
+                let _ = writeln!(
+                    errors,
+                    "{}",
+                    json!({"schema_version":1,"code":"log_file_failed","severity":"warning","message":message})
+                );
+            } else {
+                let _ = writeln!(errors, "Warning: {message}");
+            }
+            let _ = errors.flush();
+        }
     }
 
     pub(super) fn failed(&mut self, error: &super::CliError) -> Result<()> {

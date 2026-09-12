@@ -153,6 +153,21 @@ resolve, and this one could not have been published at all until `libtmux`
 shipped the `plan` feature it asks for — which is exactly the kind of thing
 that is invisible from inside the tree.
 
+## CLI logging
+
+`tmux-workspace load --log-file PATH` appends JSON records to a regular file.
+New files have owner-only permissions; existing contents and permissions are
+preserved. Invalid destinations, including symlinks, are rejected before tmux
+or Python runs.
+
+`--log-level info` includes load events. `debug` also records child output,
+limited to 1 MiB of decoded UTF-8 per stream per child. Lifecycle records omit
+captured streams, including nested result captures; diagnostic messages are
+preserved. The default is `warning`.
+The level never suppresses command errors or changes their exit status. A later
+file-write failure disables logging and reports one warning after the primary
+result or error, unless the chosen level suppresses warnings.
+
 ## Development
 
 Format edits confined to this package with:

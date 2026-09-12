@@ -13,7 +13,7 @@ use super::{
     output::{Mode, Reporter},
 };
 
-const CAPTURE_LIMIT: usize = 1024 * 1024;
+pub(super) const CAPTURE_LIMIT: usize = 1024 * 1024;
 
 struct ChildGroup(Option<rustix::process::Pid>);
 
@@ -151,6 +151,7 @@ fn chunk(
     if text.is_empty() {
         return Ok(());
     }
+    report.log_chunk(stream, text);
     if retained.len() + text.len() <= CAPTURE_LIMIT {
         retained.push_str(text);
     } else {
@@ -179,6 +180,7 @@ pub(super) async fn run(
     let (program, arguments) = argv
         .split_first()
         .ok_or_else(|| CliError::usage("child executable is missing"))?;
+    report.log.begin_child();
     let grouped = report.machine() || !io::stdin().is_terminal();
     let mut command = tokio::process::Command::new(program);
     command
