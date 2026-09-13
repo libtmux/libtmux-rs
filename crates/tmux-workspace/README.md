@@ -195,16 +195,20 @@ lists keep their `; ` grouping; per-window `pre` lists keep their `&&` grouping
 and require explicit panes. `synchronize: after` enables synchronization after
 command delivery.
 Project lifecycle hooks, endpoint/runtime settings, named panes and synchronization
-before pane creation require the source tool and are refused.
+before pane creation require the source tool and are refused. So is ERB markup:
+tmuxinator expands it through Ruby before parsing, and no native reader does,
+so an unexpanded template fails before output or overwrite.
 
 Teamocil imports accept a named session, ordered windows, directories, layouts,
 window options, pane commands and focus. `commands` lists retain their `; ` grouping;
 legacy `splits` and `cmd` are also accepted. Legacy filters, `clear`, pane widths,
-and active `synchronize-panes` options are refused. Both formats select the first
-pane by default; Teamocil's first explicit focus takes precedence.
+and active `synchronize-panes` options are refused. Teamocil evaluates no
+templates, so `<%` in a Teamocil source is ordinary text and is preserved. Both
+formats select the first pane by default; Teamocil's first explicit focus takes
+precedence.
 
 The imported root is absolute, anchored to the import invocation's directory,
-including when the source omits it. Relative window directories resolve beneath
+including when the source omits it. Relative window directories resolve against
 that root, so saving elsewhere keeps the working directory. Import does not check
 directory existence or require tmux or Python. The selected tmux validates layout
 compatibility during load. Native loads reject document
