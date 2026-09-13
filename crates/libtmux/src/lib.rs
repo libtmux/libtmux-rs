@@ -344,6 +344,7 @@ mod error;
 mod formats;
 pub mod hooks;
 mod internal;
+mod layout;
 mod limits;
 mod options;
 mod pane;
@@ -357,6 +358,14 @@ mod snapshot;
 mod target;
 mod version;
 mod window;
+
+/// Exercise layout validation for fuzzing; not a supported API.
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub fn __fuzz_layout(input: &[u8]) {
+    let _ = layout::accepts(input, 1, false);
+    let _ = layout::accepts(input, 2, true);
+}
 
 #[cfg(feature = "test-support")]
 pub mod test;

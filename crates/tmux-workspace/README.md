@@ -86,6 +86,13 @@ windows:
 }
 ```
 
+Workspace builds and native CLI loads validate every configured layout before
+scripts run or sessions change. Unique name abbreviations use the running
+daemon's version; a cold endpoint uses the selected client. Custom layouts need
+a checksum, a nonempty tree and enough pane cells, with at most 256 nested
+groups. Geometry correction and pruning remain tmux's responsibility. An empty
+layout string leaves the default arrangement in place.
+
 ## See what it would do first
 
 `plan` returns the work without doing any of it, so a caller can print it,

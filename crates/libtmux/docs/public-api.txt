@@ -594,6 +594,7 @@ function libtmux::Server::unset_array_option: async fn(&self, name: &str, index:
 function libtmux::Server::unset_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::validate_layouts: async fn<'a>(&self, layouts: impl IntoIterator<Item = (&'a OsStr, usize)>) -> Result<(), libtmux::Error>
 function libtmux::Server::wait_for_channel: async fn(&self, channel: &str, within: Duration) -> Result<libtmux::ChannelWait, libtmux::Error>
 function libtmux::Server::window_by_id: async fn(&self, id: &libtmux::WindowId) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Server::windows: async fn(&self) -> Result<Vec<libtmux::Window>, libtmux::Error>
@@ -2017,6 +2018,7 @@ struct_field libtmux::Error::ExecutorShutdown::command: libtmux::CommandSummary
 struct_field libtmux::Error::ExecutorShutdown::request_id: u64
 struct_field libtmux::Error::InvalidCommandInput::input: &'static str
 struct_field libtmux::Error::InvalidCommandInput::request_id: u64
+struct_field libtmux::Error::InvalidLayout::reason: &'static str
 struct_field libtmux::Error::InvalidPlan::source: libtmux::plan::PlanValidationError
 struct_field libtmux::Error::InvalidServerConfiguration::kind: libtmux::ServerConfigurationErrorKind
 struct_field libtmux::Error::InvalidVersionOutput::output_len: usize
@@ -2317,6 +2319,7 @@ variant libtmux::Error::DuplicateRequest
 variant libtmux::Error::ExecutableNotFound
 variant libtmux::Error::ExecutorShutdown
 variant libtmux::Error::InvalidCommandInput
+variant libtmux::Error::InvalidLayout
 variant libtmux::Error::InvalidPlan
 variant libtmux::Error::InvalidServerConfiguration
 variant libtmux::Error::InvalidVersionOutput

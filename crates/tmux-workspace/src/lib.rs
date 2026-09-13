@@ -189,7 +189,7 @@ impl<'server> WorkspaceBuilder<'server> {
 
             // Layout is applied once the pane count is final, or tmux would
             // rebalance it away on the next split.
-            if let Some(layout) = config.layout.as_deref() {
+            if let Some(layout) = config.layout.as_deref().filter(|layout| !layout.is_empty()) {
                 plan.add(SelectLayout::new(window, layout));
             }
 
@@ -261,6 +261,15 @@ impl<'server> WorkspaceBuilder<'server> {
     /// Returns an error when a session of the same name exists, or when tmux
     /// refuses any step.
     pub async fn build(&self, workspace: &Workspace) -> Result<Session, BuildError> {
+        self.server
+            .validate_layouts(workspace.windows.iter().filter_map(|window| {
+                window
+                    .layout
+                    .as_deref()
+                    .filter(|layout| !layout.is_empty())
+                    .map(|layout| (std::ffi::OsStr::new(layout), window.panes.len().max(1)))
+            }))
+            .await?;
         let plan = self.plan(workspace);
         // Marked, because a workspace is mostly a creation followed by the
         // typing that decorates it, which is the shape the fold is for.

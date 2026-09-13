@@ -11,6 +11,45 @@ use tmux_workspace::{
     BuildError, ConfigError, PaneConfig, ShellCommand, Workspace, WorkspaceBuilder,
 };
 
+#[tokio::test]
+async fn layout_preflight_precedes_workspace_creation() {
+    let guard = TestServer::new().await.unwrap();
+    let keeper = guard.session("layout-builder-keeper").await.unwrap();
+    let workspace = Workspace::from_yaml(
+        "session_name: layout-invalid\nwindows:\n- layout: b25d,80x24,0,0,0\n  panes: ['true', 'true']\n",
+    ).unwrap();
+    assert!(
+        !WorkspaceBuilder::new(guard.server())
+            .plan(&workspace)
+            .is_empty()
+    );
+    assert!(
+        WorkspaceBuilder::new(guard.server())
+            .build(&workspace)
+            .await
+            .is_err()
+    );
+    let sessions = guard.server().sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id(), keeper.id());
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn layout_preflight_empty_layout_keeps_default() {
+    let guard = TestServer::new().await.unwrap();
+    let workspace = Workspace::from_yaml(
+        "session_name: empty-layout\nwindows:\n- layout: ''\n  panes: ['true', 'true']\n",
+    )
+    .unwrap();
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .unwrap();
+    assert_eq!(session.panes().await.unwrap().len(), 2);
+    guard.shutdown().await.unwrap();
+}
+
 fn text(value: &TmuxText) -> String {
     String::from_utf8(value.as_bytes().to_vec()).expect("fixture values are UTF-8")
 }

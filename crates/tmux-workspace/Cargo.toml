@@ -20,6 +20,7 @@ include = [
     "/src/**/*.rs",
     "/tests/**/*.rs",
     "/tests/fixtures/tmuxp/*",
+    "/tests/fixtures/layout-preflight.json",
 ]
 
 [dependencies]
