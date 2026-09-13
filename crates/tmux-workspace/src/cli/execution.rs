@@ -19,11 +19,55 @@ struct Effects {
     session: Option<Session>,
     owned: bool,
     changed: bool,
+    mutation_started: Option<&'static str>,
     windows: Vec<String>,
     panes: Vec<String>,
     stage: &'static str,
     script_output: Option<Value>,
     readiness: bool,
+}
+
+#[derive(Default)]
+pub(super) struct LoadState {
+    started: bool,
+    current: Option<Effects>,
+    results: Vec<Value>,
+    completed: Option<Value>,
+}
+
+impl LoadState {
+    fn failure(&self, error: &CliError) -> Value {
+        let mut failure = json!({"code":error.code,"message":error.message});
+        let mut partial = !self.results.is_empty();
+        if let Some(effects) = &self.current {
+            let uncertain = error.code == "interrupted" && effects.mutation_started.is_some();
+            partial |= effects.changed || uncertain;
+            failure["input_index"] = json!(effects.input);
+            failure["partial_effects"] = json!(effects.changed);
+            failure["effects"] = effects.value();
+            if uncertain {
+                failure["outcome_unknown"] = json!(true);
+                failure["mutation_stage"] = json!(effects.mutation_started);
+            }
+        }
+        json!({"schema_version":1,"command":"load","status":if partial {"partial"} else {"error"},"errors":[failure],"results":self.results})
+    }
+
+    pub(super) fn interrupted(&self, error: &mut CliError, report: &mut Reporter) {
+        if !self.started {
+            return;
+        }
+        let summary = self
+            .completed
+            .clone()
+            .unwrap_or_else(|| self.failure(error));
+        if self.completed.is_none() {
+            if let Err(publication) = report.summary("failed", &summary) {
+                let _ = write!(error.message, "; output failed: {publication}");
+            }
+        }
+        error.retained_state = Some(summary);
+    }
 }
 
 impl Effects {
@@ -149,7 +193,12 @@ fn native_layouts(
         })
 }
 
-pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()> {
+pub(super) async fn load(
+    args: &ArgMatches,
+    report: &mut Reporter,
+    state: &mut LoadState,
+) -> Result<()> {
+    state.started = true;
     if flag(args, "colors88") {
         return Err(CliError {
             code: "unsupported_color_mode",
@@ -178,13 +227,13 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
     } else {
         None
     };
-    let (mut results, mut last_session) = (Vec::new(), None);
+    let mut last_session = None;
     report.event("started", json!({"inputs":workspaces.len()}))?;
     for (index, (path, workspace)) in workspaces.iter().enumerate() {
-        let mut effects = Effects {
+        let effects = state.current.insert(Effects {
             input: index,
             ..Effects::default()
-        };
+        });
         let outcome = async {
             if let Some(progress) = &mut report.progress {
                 progress.start(workspace)?;
@@ -198,7 +247,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
                 workspace,
                 args,
                 report,
-                &mut effects,
+                effects,
                 python.as_deref(),
                 borrowed.as_ref(),
             )
@@ -206,7 +255,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
             let mut result = effects.value();
             result["input"] = json!(discovery::masked(path));
             result["reused"] = json!(reused);
-            results.push(result.clone());
+            state.results.push(result.clone());
             last_session = Some(session);
             if let Some(progress) = &mut report.progress {
                 progress.finish(reused, workspace.bridge)?;
@@ -215,9 +264,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         }
         .await;
         if let Err(mut error) = outcome {
-            let errors = json!([{"code":error.code,"message":error.message,"input_index":index,"partial_effects":effects.changed,"effects":effects.value()}]);
-            let mut summary = json!({"schema_version":1,"command":"load","status":if effects.changed || !results.is_empty(){"partial"}else{"error"},"errors":errors});
-            summary["results"] = results.into();
+            let summary = state.failure(&error);
             if let Err(publication) = report.summary("failed", &summary) {
                 let _ = write!(error.message, "; output failed: {publication}");
             }
@@ -226,7 +273,8 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         }
     }
     let mut summary = json!({"schema_version":1,"command":"load","status":"ok","errors":[]});
-    summary["results"] = results.into();
+    summary["results"] = state.results.clone().into();
+    state.completed = Some(summary.clone());
     let outcome = async {
         report.summary("completed", &summary)?;
         if !report.machine() {
@@ -377,6 +425,8 @@ async fn build(
     } else {
         let columns = dimension("TMUXP_DEFAULT_COLUMNS", "COLUMNS", 80);
         let rows = dimension("TMUXP_DEFAULT_ROWS", "ROWS", 24);
+        effects.stage = "session-creation";
+        effects.mutation_started = Some(effects.stage);
         let session = server
             .new_session(
                 NewSessionOptions::new(escape_format(&workspace.name))
@@ -437,6 +487,7 @@ async fn configure_session(
     if let Some(script) = &workspace.before_script {
         effects.stage = "before-script";
         effects.changed = true;
+        effects.mutation_started = Some(effects.stage);
         let mut argv = process::split(script)?;
         if let Some(executable) = argv
             .first_mut()
@@ -459,6 +510,9 @@ async fn configure_session(
     effects.changed |= !workspace.environment.is_empty()
         || !workspace.options.is_empty()
         || !workspace.global_options.is_empty();
+    if effects.changed {
+        effects.mutation_started = Some(effects.stage);
+    }
     for (name, value) in &workspace.environment {
         session.set_environment(name, value).await?;
     }
@@ -512,6 +566,7 @@ async fn build_extension(
     }
     let request = json!({"path":workspace.source,"session_name":workspace.name,"socket":server.socket_path(),"append":borrowed.map(|target|target.session.id().to_string()),"append_identity":borrowed.map(|target|format!("{}:{}",target.identity.0,target.identity.1)),"config_file":option(args,"tmux-config"),"colors":if flag(args,"colors256"){Some(256)}else{None}});
     effects.stage = "python-extension";
+    effects.mutation_started = Some(effects.stage);
     let output = bridge::build(python, request, report).await?;
     effects.script_output = Some(output.value());
     let current = if append {
@@ -561,6 +616,7 @@ async fn build_window(
     }
     let input = effects.input;
     effects.stage = "window-creation";
+    effects.mutation_started = Some(effects.stage);
     let first = &config.panes[0];
     let mut options = config
         .name
