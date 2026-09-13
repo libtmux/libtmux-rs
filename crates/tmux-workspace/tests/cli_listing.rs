@@ -9,13 +9,28 @@ use serde_json::{Value, json};
 
 struct Listing {
     root: tempfile::TempDir,
+    _namespace: tempfile::TempDir,
 }
 
 impl Listing {
     fn new() -> Self {
         std::fs::create_dir_all("/tmp/libtmux-rs-test").unwrap();
-        let root = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
-        let fixture = Self { root };
+        let namespace = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+        let physical = namespace.path().join("physical");
+        std::fs::create_dir(&physical).unwrap();
+        #[cfg(unix)]
+        let parent = {
+            let alias = namespace.path().join("alias");
+            std::os::unix::fs::symlink("physical", &alias).unwrap();
+            alias
+        };
+        #[cfg(not(unix))]
+        let parent = physical;
+        let root = tempfile::tempdir_in(parent).unwrap();
+        let fixture = Self {
+            root,
+            _namespace: namespace,
+        };
         for file in [
             "project/child/.tmuxp.json",
             "project/.tmuxp.json",
@@ -40,13 +55,14 @@ impl Listing {
     }
 
     fn run(&self, arguments: &[&str]) -> String {
+        let root = self.root.path().canonicalize().unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_tmux-workspace"))
             .args(arguments)
-            .current_dir(self.root.path().join("project/child"))
+            .current_dir(root.join("project/child"))
             .env_clear()
-            .env("HOME", self.root.path())
-            .env("TMUXP_CONFIGDIR", self.root.path().join("global"))
-            .env("XDG_CONFIG_HOME", self.root.path().join("xdg"))
+            .env("HOME", &root)
+            .env("TMUXP_CONFIGDIR", root.join("global"))
+            .env("XDG_CONFIG_HOME", root.join("xdg"))
             .env("PATH", "/nonexistent")
             .env("TERM", "dumb")
             .stdin(Stdio::null())
