@@ -832,6 +832,349 @@ fn importers_transform_native_source_documents() {
 }
 
 #[test]
+fn importers_preserve_command_groups_and_saved_directory_context() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("saved")).unwrap();
+    for (kind, source, expected) in [
+        (
+            "tmuxinator",
+            serde_json::json!({"name":"demo", "pre_window":["false","echo continued"],
+                "windows":[{"z":["echo first","echo second"]},{"a":{"pre":["echo pre","echo more"],"panes":[["blank","pane"],null]}}]}),
+            serde_json::json!([{"cmd":"echo first"},{"cmd":"echo second"}]),
+        ),
+        (
+            "teamocil",
+            serde_json::json!({"session":{"name":"demo","windows":[{"name":"z","panes":[{"commands":["false","echo second"]}]},{"name":"a","panes":["echo last"]}]}}),
+            serde_json::json!([{"cmd":"false; echo second"}]),
+        ),
+    ] {
+        std::fs::write(directory.path().join("input.json"), source.to_string()).unwrap();
+        let output = command_at(
+            &[
+                "import",
+                kind,
+                "input.json",
+                "--json",
+                "--workspace-format",
+                "json",
+                "--save-to",
+                "saved/workspace.json",
+                "--force",
+            ],
+            directory.path(),
+        )
+        .env("TMUX_WORKSPACE_PYTHON", "/unavailable/python")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+        assert!(output.status.success(), "{kind}: {output:?}");
+        let value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(directory.path().join("saved/workspace.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            value["start_directory"],
+            directory.path().canonicalize().unwrap().to_str().unwrap()
+        );
+        assert_eq!(value["windows"][0]["window_name"], "z");
+        assert_eq!(value["windows"][1]["window_name"], "a");
+        assert_eq!(value["windows"][0]["panes"].as_array().unwrap().len(), 1);
+        assert_eq!(value["windows"][0]["panes"][0]["shell_command"], expected);
+        assert_eq!(value["windows"][0]["panes"][0]["focus"], true);
+        if kind == "tmuxinator" {
+            assert_eq!(
+                value["shell_command_before"],
+                serde_json::json!([{"cmd":"false; echo continued"}])
+            );
+            assert_eq!(
+                value["windows"][1]["shell_command_before"],
+                serde_json::json!([{"cmd":"echo pre && echo more"}])
+            );
+            assert_eq!(
+                value["windows"][1]["panes"][0]["shell_command"],
+                serde_json::json!([{"cmd":"blank"},{"cmd":"pane"}])
+            );
+        }
+    }
+}
+
+#[test]
+fn importers_refuse_unrepresentable_fields_before_output_or_overwrite() {
+    let directory = tempfile::tempdir().unwrap();
+    let base = serde_json::json!({"name":"demo","windows":[{"main":"echo ready"}]});
+    let mut cases = Vec::new();
+    for key in [
+        "pre",
+        "post",
+        "pre_tmux",
+        "on_project_start",
+        "cli_args",
+        "tmux_options",
+        "socket_name",
+        "tmux_command",
+        "rbenv",
+        "unknown",
+    ] {
+        let mut value = base.clone();
+        value[key] = serde_json::json!("unsupported");
+        cases.push(("tmuxinator", value, key));
+    }
+    cases.extend([
+        ("tmuxinator", serde_json::json!({"name":"demo","windows":[{"main":{"panes":[{"title":"echo ready"}]}}]}), "panes[0]"),
+        ("tmuxinator", serde_json::json!({"name":"demo","windows":[{"main":{"synchronize":true,"panes":[null,null]}}]}), "synchronize"),
+        ("tmuxinator", serde_json::json!({"name":"demo","windows":[{"main":null,"other":null}]}), "windows[0]"),
+        ("teamocil", serde_json::json!({"session":{"name":"demo","windows":[{"name":"main","clear":true}]}}), "clear"),
+        ("teamocil", serde_json::json!({"session":{"name":"demo","windows":[{"name":"main","filters":{"after":"echo after"}}]}}), "filters"),
+        ("teamocil", serde_json::json!({"session":{"name":"demo","windows":[{"name":"main","panes":[{"cmd":"echo ready","width":37}]}]}}), "width"),
+        ("teamocil", serde_json::json!({"session":{"name":"demo","windows":[{"name":"main","panes":[{"commands":[42]}]}]}}), "commands"),
+        ("tmuxinator", serde_json::json!({"name":"demo","root":false,"windows":[{"main":null}]}), "root"),
+        ("tmuxinator", serde_json::json!({"name":"demo","project_name":"other","windows":[{"main":null}]}), "name"),
+        ("tmuxinator", serde_json::json!({"windows":[{"main":null}]}), "session_name"),
+        ("tmuxinator", serde_json::json!({"name":"demo","windows":[]}), "window"),
+        ("teamocil", serde_json::json!({"name":"demo","windows":[{"name":42}]}), "window_name"),
+        ("teamocil", serde_json::json!({"name":"demo","windows":[{"focus":"yes"}]}), "focus"),
+        ("teamocil", serde_json::json!({"name":"demo","windows":[{"options":{"@bad":[]}}]}), "@bad"),
+        ("teamocil", serde_json::json!({"name":"demo","windows":[{"panes":[{"cmd":"echo old","commands":["echo new"]}]}]}), "commands"),
+    ]);
+    for (kind, value, key) in cases {
+        std::fs::write(directory.path().join("input.json"), value.to_string()).unwrap();
+        for save in [false, true] {
+            std::fs::write(directory.path().join("kept.json"), "original bytes").unwrap();
+            let mut args = vec!["import", kind, "input.json", "--json"];
+            if save {
+                args.extend(["--save-to", "kept.json", "--force"]);
+            }
+            let output = at(&args, directory.path());
+            assert_eq!(output.status.code(), Some(1), "{kind}/{key}: {output:?}");
+            assert!(output.stdout.is_empty(), "{kind}/{key}: {output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(key),
+                "{kind}/{key}: {output:?}"
+            );
+            assert_eq!(
+                std::fs::read(directory.path().join("kept.json")).unwrap(),
+                b"original bytes"
+            );
+        }
+    }
+}
+
+fn imported_source(kind: &str) -> serde_json::Value {
+    if kind == "tmuxinator" {
+        serde_json::json!({"name":"imported","root":"project root",
+                "pre_window":["false","printf continued > project-pre"],
+                "windows":[{"z":["printf first > order","printf second >> order"]},
+                    {"a":{"root":"window root","pre":["IMPORT_BEFORE=before","IMPORT_BEFORE=${IMPORT_BEFORE}more","false","touch blocked"],
+                        "panes":["printf '%sfinal' \"$IMPORT_BEFORE\" > order",null],"synchronize":"after"}}]})
+    } else {
+        serde_json::json!({"session":{"name":"imported","root":"project root","windows":[
+                {"name":"z","panes":[{"commands":["printf first > order","printf second >> order"]}]},
+                {"name":"a","root":"window root","focus":true,"options":{"@import-option":"kept = value"},
+                    "panes":[{"commands":["false","printf final > order"]},{"commands":[],"focus":true}]}]}})
+    }
+}
+
+async fn imported_state(guard: &libtmux::test::TestServer, kind: &str) -> serde_json::Value {
+    let session = guard.server().session("imported").await.unwrap().unwrap();
+    let windows = session.windows().await.unwrap();
+    let counts = [
+        windows[0].panes().await.unwrap().len(),
+        windows[1].panes().await.unwrap().len(),
+    ];
+    let active = session
+        .active_window()
+        .await
+        .unwrap()
+        .unwrap()
+        .id()
+        .to_string();
+    let focused = windows[1]
+        .active_pane()
+        .await
+        .unwrap()
+        .unwrap()
+        .id()
+        .to_string();
+    let panes = windows[1].panes().await.unwrap();
+    let expected_focus = panes[usize::from(kind == "teamocil")].id().to_string();
+    let option = windows[1]
+        .get_option(if kind == "tmuxinator" {
+            "synchronize-panes"
+        } else {
+            "@import-option"
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    serde_json::json!({"counts":counts,"active":active,"expected_active":windows[usize::from(kind == "teamocil")].id().to_string(),"focused":focused,"expected_focus":expected_focus,"option":option})
+}
+
+fn assert_imported_commands(kind: &str, root: &Path, runtime: &Path) {
+    assert_eq!(
+        std::fs::read_to_string(root.join("order")).unwrap(),
+        "firstsecond"
+    );
+    let expected = if kind == "tmuxinator" {
+        "beforemorefinal"
+    } else {
+        "final"
+    };
+    assert_eq!(
+        std::fs::read_to_string(runtime.join("order")).unwrap(),
+        expected
+    );
+    assert!(!root.join("blocked").exists());
+    assert!(!runtime.join("blocked").exists());
+    if kind == "tmuxinator" {
+        for path in [&root, &runtime] {
+            assert_eq!(
+                std::fs::read_to_string(path.join("project-pre"))
+                    .ok()
+                    .as_deref(),
+                Some("continued"),
+                "project pre_window must continue after false"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn imported_workspaces_load_with_ordered_commands_and_relocated_roots() {
+    for kind in ["tmuxinator", "teamocil"] {
+        let guard = libtmux::test::TestServer::new().await.unwrap();
+        let keeper = guard.session("import-keeper").await.unwrap();
+        let keeper_id = keeper.id().to_string();
+        let keeper_pane = current_pane(&keeper).await;
+        guard
+            .server()
+            .set_global_option("default-shell", "/bin/sh")
+            .await
+            .unwrap();
+        let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+        let root = directory.path().join("project root");
+        let runtime = root.join("window root");
+        let saved = directory.path().join("saved elsewhere");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::create_dir(&saved).unwrap();
+        let source = imported_source(kind);
+        std::fs::write(directory.path().join("input.json"), source.to_string()).unwrap();
+        let output = at(
+            &[
+                "import",
+                kind,
+                "input.json",
+                "--json",
+                "--workspace-format",
+                "json",
+                "--save-to",
+                "saved elsewhere/workspace.json",
+            ],
+            directory.path(),
+        );
+        assert!(output.status.success(), "{kind}: {output:?}");
+        let loaded = at(
+            &[
+                "load",
+                "-d",
+                "--json",
+                "-S",
+                guard.socket_path().to_str().unwrap(),
+                "workspace.json",
+            ],
+            &saved,
+        );
+        let mut observations = None;
+        if loaded.status.success() {
+            for _ in 0..200 {
+                let first = std::fs::read_to_string(root.join("order")).unwrap_or_default();
+                let second = std::fs::read_to_string(runtime.join("order")).unwrap_or_default();
+                if first == "firstsecond" && second.ends_with("final") {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            observations = Some(imported_state(&guard, kind).await);
+        }
+        let before_cleanup = current_pane(&keeper).await;
+        let keeper_after = guard
+            .server()
+            .session("import-keeper")
+            .await
+            .unwrap()
+            .unwrap()
+            .id()
+            .to_string();
+        guard.shutdown().await.unwrap();
+        assert!(loaded.status.success(), "{kind}: {loaded:?}");
+        assert_imported_commands(kind, &root, &runtime);
+        let state = observations.unwrap();
+        assert_eq!(state["counts"], serde_json::json!([1, 2]));
+        assert_eq!(state["active"], state["expected_active"]);
+        assert_eq!(state["focused"], state["expected_focus"]);
+        assert_eq!(
+            state["option"],
+            if kind == "tmuxinator" {
+                "on"
+            } else {
+                "kept = value"
+            }
+        );
+        assert_eq!(before_cleanup, keeper_pane);
+        assert_eq!(keeper_after, keeper_id);
+    }
+}
+
+#[tokio::test]
+async fn native_endpoint_fields_refuse_all_inputs_before_mutation() {
+    for key in ["config", "socket_name"] {
+        let guard = libtmux::test::TestServer::new().await.unwrap();
+        let keeper = guard.session("endpoint-keeper").await.unwrap();
+        let keeper_id = keeper.id().to_string();
+        let pane = current_pane(&keeper).await;
+        let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+        let first = serde_json::json!({"session_name":"first-endpoint","before_script":"touch marker","windows":[{}]});
+        let mut second = serde_json::json!({"session_name":"second-endpoint","windows":[{}]});
+        second[key] = serde_json::json!("not-the-selected-endpoint");
+        std::fs::write(directory.path().join("first.json"), first.to_string()).unwrap();
+        std::fs::write(directory.path().join("second.json"), second.to_string()).unwrap();
+        let output = at(
+            &[
+                "load",
+                "-d",
+                "--json",
+                "-S",
+                guard.socket_path().to_str().unwrap(),
+                "first.json",
+                "second.json",
+            ],
+            directory.path(),
+        );
+        let marker = directory.path().join("marker").exists();
+        let ids: Vec<_> = guard
+            .server()
+            .sessions()
+            .await
+            .unwrap()
+            .iter()
+            .map(|s| s.id().to_string())
+            .collect();
+        let after = current_pane(&keeper).await;
+        guard.shutdown().await.unwrap();
+        assert_eq!(output.status.code(), Some(1), "{key}: {output:?}");
+        assert!(output.stdout.is_empty(), "{key}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(key),
+            "{key}: {output:?}"
+        );
+        assert!(!marker, "{key}: earlier script ran");
+        assert_eq!(ids, [keeper_id]);
+        assert_eq!(after, pane);
+    }
+}
+
+#[test]
 fn discovery_and_search_use_workspace_fields_and_case_modes() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::create_dir(directory.path().join(".tmuxp")).unwrap();
