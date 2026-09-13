@@ -60,7 +60,7 @@
 //! `Drop` is deliberately non-destructive.
 //!
 //! ```no_run
-//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::ScopeError<libtmux::Error>> {
 //! let id = server
 //!     .with_session("throwaway", async |session| {
 //!         session.new_window("build").await?;
@@ -72,10 +72,10 @@
 //! # }
 //! ```
 //!
-//! Setup and teardown failures convert into the operation's own error type,
-//! so there is one `?` rather than two. Once creation succeeds, a cleanup
-//! failure is returned as an after-effect; it owns the replay guidance even
-//! when the operation also failed.
+//! [`ScopeError`] distinguishes creation, operation and cleanup failures.
+//! When both operation and cleanup fail, it retains both errors without
+//! converting the operation's error type. Cleanup errors carry
+//! [`Error::AfterEffect`] because creation already succeeded.
 //!
 //! ## Options carry types
 //!
@@ -322,7 +322,7 @@ pub use command::{Command, CommandChain, CommandResult, CommandSummary};
 #[cfg(feature = "control-mode")]
 pub use error::ControlModeErrorKind;
 pub use error::{
-    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind,
+    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind, ScopeError,
     ServerConfigurationErrorKind, ServerGoneKind,
 };
 pub use formats::TmuxText;

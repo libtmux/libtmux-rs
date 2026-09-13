@@ -1255,28 +1255,21 @@ impl Server {
     /// session whose creation yields a handle is killed while the Tokio
     /// runtime remains active. Ordinary handle `Drop` remains non-destructive.
     ///
-    /// Setup and teardown failures convert into the operation's own error
-    /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and cleanup fail, the cleanup error is returned as
-    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
-    /// creation; the operation error is discarded. When the operation fails
-    /// and cleanup succeeds, its generic error is returned unchanged: the
-    /// scope cannot certify replay safety for arbitrary callback work.
-    /// A canceled caller cannot receive a cleanup error, so tracing is its
-    /// only report.
+    /// [`crate::ScopeError`] retains creation, operation and cleanup failures
+    /// separately. If operation and cleanup both fail, both original errors
+    /// are returned. Cleanup errors carry [`Error::AfterEffect`] because
+    /// creation succeeded. A canceled caller cannot receive a cleanup error;
+    /// the `tracing` feature records that failure while the runtime is active.
     ///
     /// # Errors
     ///
-    /// Returns the operation's error, or a converted [`Error`] when the
-    /// session could not be created or could not be killed after creation.
+    /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
+    /// fails. The operation's error needs no conversion into [`Error`].
     pub async fn with_session<T, E>(
         &self,
         options: impl Into<NewSessionOptions>,
         operation: impl AsyncFnOnce(&Session) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<Error>,
-    {
+    ) -> Result<T, crate::ScopeError<E>> {
         let server = self.clone();
         let options = options.into();
         scoped::run(

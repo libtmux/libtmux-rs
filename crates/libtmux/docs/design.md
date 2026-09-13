@@ -683,6 +683,10 @@ arms cleanup before handing the object to the caller, and keeps cleanup running
 after cancellation. Cleanup needs the Tokio runtime to remain active; ordinary
 cloneable handles remain non-destructive.
 
+`ScopeError<E>` separates creation, operation and cleanup failures. Combined
+failures retain both the caller's generic error and the cleanup `Error`;
+cleanup errors carry `AfterEffect` because creation already succeeded.
+
 If tmux creates an object but the command fails before yielding a decodable
 handle, the scope has no identity to target and cannot compensate for it.
 

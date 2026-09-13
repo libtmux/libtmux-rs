@@ -9,6 +9,9 @@ use crate::version::{ReleaseVersion, TmuxVersion};
 
 mod classification;
 mod refusal;
+mod scoped;
+
+pub use scoped::ScopeError;
 
 /// The category of an invalid [`crate::ServerBuilder`] configuration.
 ///
