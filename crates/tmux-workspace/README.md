@@ -167,6 +167,14 @@ local ancestors before the selected global directory. `--full` includes each
 configuration beneath its file. Human labels and paths escape control
 characters; JSON and NDJSON retain their original values and record shapes.
 
+## CLI extensions
+
+`plugins` accepts a list of strings; an absent or empty list keeps the native
+builder. An absent, null, or empty `workspace_builder` also keeps the native
+builder. A nonempty plugin list or builder string selects the explicit Python
+bridge, which requires tmuxp 1.74.0 and accepts `TMUX_WORKSPACE_PYTHON`.
+Other value types are rejected before any input runs scripts or changes tmux.
+
 ## CLI bootstrap
 
 `before_script` parses executable and arguments with shell-style quoting.
