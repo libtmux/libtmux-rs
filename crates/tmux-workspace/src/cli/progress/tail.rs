@@ -1,11 +1,41 @@
 use std::collections::VecDeque;
 
+#[cfg(not(any(
+    target_os = "cygwin",
+    target_os = "emscripten",
+    target_os = "fuchsia",
+    target_os = "horizon",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+    target_os = "wasi"
+)))]
 const LINE_BYTES: usize = 8192;
 
 #[derive(Default)]
 struct Stream {
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     parser: anstyle_parse::Parser,
     text: String,
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     carriage_return: bool,
 }
 
@@ -26,6 +56,16 @@ impl Tail {
         }
     }
 
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     pub(super) fn append(&mut self, channel: usize, bytes: &[u8]) {
         let stream = &mut self.streams[channel];
         let mut line = Line {
@@ -57,6 +97,16 @@ impl Tail {
     }
 }
 
+#[cfg(not(any(
+    target_os = "cygwin",
+    target_os = "emscripten",
+    target_os = "fuchsia",
+    target_os = "horizon",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+    target_os = "wasi"
+)))]
 struct Line<'a> {
     text: &'a mut String,
     carriage_return: &'a mut bool,
@@ -64,6 +114,16 @@ struct Line<'a> {
     limit: usize,
 }
 
+#[cfg(not(any(
+    target_os = "cygwin",
+    target_os = "emscripten",
+    target_os = "fuchsia",
+    target_os = "horizon",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+    target_os = "wasi"
+)))]
 impl anstyle_parse::Perform for Line<'_> {
     fn print(&mut self, character: char) {
         if character.is_control() {
@@ -94,7 +154,19 @@ impl anstyle_parse::Perform for Line<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    ))
+))]
 mod tests {
     use super::*;
 

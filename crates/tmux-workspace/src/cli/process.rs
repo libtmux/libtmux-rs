@@ -1,35 +1,54 @@
 use std::ffi::OsString;
-use std::io::{self, IsTerminal, Write};
 use std::os::unix::process::ExitStatusExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 
 use clap::ArgMatches;
 use serde_json::{Value, json};
-use tokio::io::AsyncReadExt;
 
 use super::{
     CliError, Result, discovery,
     output::{Mode, Reporter},
 };
 
+#[cfg(not(any(
+    target_os = "cygwin",
+    target_os = "emscripten",
+    target_os = "fuchsia",
+    target_os = "horizon",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+    target_os = "wasi"
+)))]
+#[path = "process/captured.rs"]
+mod captured;
+#[cfg(any(
+    target_os = "cygwin",
+    target_os = "emscripten",
+    target_os = "fuchsia",
+    target_os = "horizon",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+    target_os = "wasi"
+))]
+#[path = "process/uncaptured.rs"]
+mod captured;
+
+pub(super) use captured::{require_support, run};
+
+#[cfg(not(any(
+    target_os = "cygwin",
+    target_os = "emscripten",
+    target_os = "fuchsia",
+    target_os = "horizon",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+    target_os = "wasi"
+)))]
 pub(super) const CAPTURE_LIMIT: usize = 1024 * 1024;
-
-struct ChildGroup(Option<rustix::process::Pid>);
-
-impl ChildGroup {
-    fn terminate(&mut self) {
-        if let Some(pid) = self.0.take() {
-            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-        }
-    }
-}
-
-impl Drop for ChildGroup {
-    fn drop(&mut self) {
-        self.terminate();
-    }
-}
 
 pub(super) struct ChildOutput {
     pub(super) status: i32,
@@ -111,153 +130,6 @@ pub(super) fn split(command: &str) -> Result<Vec<OsString>> {
     Ok(args)
 }
 
-fn decode(pending: &mut Vec<u8>, bytes: &[u8], end: bool) -> String {
-    pending.extend_from_slice(bytes);
-    let mut decoded = String::new();
-    let mut offset = 0;
-    while offset < pending.len() {
-        match std::str::from_utf8(&pending[offset..]) {
-            Ok(text) => {
-                decoded.push_str(text);
-                offset = pending.len();
-            }
-            Err(error) => {
-                let valid = offset + error.valid_up_to();
-                decoded.push_str(&String::from_utf8_lossy(&pending[offset..valid]));
-                offset = valid;
-                if let Some(length) = error.error_len() {
-                    decoded.push('�');
-                    offset += length;
-                } else if end {
-                    decoded.push('�');
-                    offset = pending.len();
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-    pending.drain(..offset);
-    decoded
-}
-
-fn chunk(
-    report: &mut Reporter,
-    stream: &str,
-    text: &str,
-    retained: &mut String,
-    truncated: &mut bool,
-) -> Result<()> {
-    if text.is_empty() {
-        return Ok(());
-    }
-    report.log_chunk(stream, text);
-    if retained.len() + text.len() <= CAPTURE_LIMIT {
-        retained.push_str(text);
-    } else {
-        *truncated = true;
-    }
-    if report.machine() {
-        report.event(
-            "script-output",
-            json!({"stream":stream,"text":text,"encoding":"utf-8-with-replacement"}),
-        )?;
-    } else if report.progress_output(stream, text)? {
-        return Ok(());
-    } else if stream == "stderr" {
-        write!(io::stderr(), "{text}")?;
-        io::stderr().flush()?;
-    } else {
-        write!(io::stdout(), "{text}")?;
-        io::stdout().flush()?;
-    }
-    Ok(())
-}
-
-pub(super) async fn run(
-    argv: &[OsString],
-    directory: &Path,
-    report: &mut Reporter,
-) -> Result<ChildOutput> {
-    let (program, arguments) = argv
-        .split_first()
-        .ok_or_else(|| CliError::usage("child executable is missing"))?;
-    report.log.begin_child();
-    let grouped = report.machine() || !io::stdin().is_terminal();
-    let mut command = tokio::process::Command::new(program);
-    command
-        .args(arguments)
-        .current_dir(directory)
-        .stdin(if report.machine() {
-            Stdio::null()
-        } else {
-            Stdio::inherit()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if grouped {
-        command.process_group(0);
-    }
-    let mut child = command.spawn()?;
-    let mut group = ChildGroup(if grouped {
-        child
-            .id()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(rustix::process::Pid::from_raw)
-    } else {
-        None
-    });
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| CliError::new("child_stream", "child stdout is unavailable"))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| CliError::new("child_stream", "child stderr is unavailable"))?;
-    let mut output = ChildOutput {
-        status: 0,
-        stdout: String::new(),
-        stderr: String::new(),
-        truncated: false,
-        terminal: false,
-    };
-    let mut out_buffer = vec![0; 8192];
-    let mut err_buffer = vec![0; 8192];
-    let (mut out_pending, mut err_pending) = (Vec::new(), Vec::new());
-    let (mut out_done, mut err_done, mut status) = (false, false, None);
-    let mut drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(86_400);
-    while !out_done || !err_done || status.is_none() {
-        tokio::select! {
-            read = stdout.read(&mut out_buffer), if !out_done => {
-                let size = read?; out_done = size == 0;
-                let text = decode(&mut out_pending, &out_buffer[..size], out_done);
-                chunk(report, "stdout", &text, &mut output.stdout, &mut output.truncated)?;
-            }
-            read = stderr.read(&mut err_buffer), if !err_done => {
-                let size = read?; err_done = size == 0;
-                let text = decode(&mut err_pending, &err_buffer[..size], err_done);
-                chunk(report, "stderr", &text, &mut output.stderr, &mut output.truncated)?;
-            }
-            result = child.wait(), if status.is_none() => {
-                status = Some(result?);
-                drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
-            }
-            () = tokio::time::sleep_until(drain_deadline), if status.is_some() && (!out_done || !err_done) => {
-                group.terminate();
-                output.truncated = true;
-                break;
-            }
-        }
-    }
-    output.status = status.map_or(1, exit_status);
-    if output.status == 0 {
-        group.0 = None;
-    }
-    Ok(output)
-}
-
 fn exit_status(status: std::process::ExitStatus) -> i32 {
     status
         .code()
@@ -329,6 +201,9 @@ pub(super) async fn shell(options: &ArgMatches, report: &mut Reporter) -> Result
     } else {
         None
     };
+    if terminal.is_none() {
+        require_support()?;
+    }
     let python = python().await?;
     let mut argv: Vec<OsString> = vec![
         python,
@@ -406,6 +281,7 @@ pub(super) async fn edit(options: &ArgMatches, report: &mut Reporter) -> Result<
     let output = if let Some(terminal) = terminal()? {
         run_terminal(&argv, terminal).await?
     } else {
+        require_support()?;
         run(&argv, &std::env::current_dir()?, report).await?
     };
     if !report.machine() {
@@ -451,17 +327,7 @@ pub(super) async fn diagnostics(report: &Reporter) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode, split};
-
-    #[test]
-    fn decoding_keeps_split_utf8_after_invalid_bytes() {
-        let mut pending = Vec::new();
-        let first = decode(&mut pending, &[0xff, 0xe9], false);
-        let second = decode(&mut pending, &[0x9b, 0xaa], false);
-        assert_eq!(first + &second, "�雪");
-        assert_eq!(decode(&mut pending, &[0xf0, 0x9f], false), "");
-        assert_eq!(decode(&mut pending, &[], true), "�");
-    }
+    use super::split;
 
     #[test]
     fn child_words_preserve_backslashes_inside_double_quotes() -> Result<(), super::CliError> {
