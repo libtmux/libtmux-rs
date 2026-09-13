@@ -10,10 +10,20 @@ use super::Error;
 /// requirement. Cleanup failures retain [`Error::AfterEffect`] because
 /// creation succeeded; an operation error alone makes no replay guarantee.
 ///
-/// `Debug` and `Display` withhold the operation error's contents. Inspect its
-/// variant to retrieve it. [`std::error::Error::source`] exposes creation or
-/// cleanup errors. The operation value is available through its variant,
-/// since its generic type need not implement [`std::error::Error`].
+/// `Debug`, `Display`, and [`std::error::Error`] are implemented for every
+/// `E`, but each only shows the operation value when `E` itself supports it:
+/// `Debug` needs `E: Debug`, `Display` needs `E: Display`, and `Error` needs
+/// both, since it requires them as supertraits. A caller whose `E` has
+/// neither still gets a working scope: the value remains reachable by
+/// matching the variant, and creation and cleanup failures format and chain
+/// regardless.
+///
+/// [`std::error::Error::source`] exposes the cleanup error in
+/// [`Self::Cleanup`] and [`Self::OperationAndCleanup`], and the creation
+/// error in [`Self::Creation`]. It never exposes the operation error: `E`
+/// need not implement [`std::error::Error`] at all, so there is no
+/// `&(dyn Error + 'static)` to hand back even when `Display` can show it.
+/// Match the variant to reach it directly.
 ///
 /// # Examples
 ///
@@ -50,38 +60,42 @@ pub enum ScopeError<E> {
     },
 }
 
-impl<E> fmt::Debug for ScopeError<E> {
+impl<E: fmt::Debug> fmt::Debug for ScopeError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Creation(error) => formatter.debug_tuple("Creation").field(error).finish(),
-            Self::Operation(_) => formatter.write_str("Operation(<redacted>)"),
+            Self::Operation(error) => formatter.debug_tuple("Operation").field(error).finish(),
             Self::Cleanup(error) => formatter.debug_tuple("Cleanup").field(error).finish(),
-            Self::OperationAndCleanup { cleanup, .. } => formatter
+            Self::OperationAndCleanup { operation, cleanup } => formatter
                 .debug_struct("OperationAndCleanup")
-                .field("operation", &"<redacted>")
+                .field("operation", operation)
                 .field("cleanup", cleanup)
                 .finish(),
         }
     }
 }
 
-impl<E> fmt::Display for ScopeError<E> {
+impl<E: fmt::Display> fmt::Display for ScopeError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Creation(error) => write!(formatter, "scoped resource creation failed: {error}"),
-            Self::Operation(_) => formatter.write_str("scoped operation failed"),
+            Self::Operation(error) => write!(formatter, "scoped operation failed: {error}"),
             Self::Cleanup(error) => write!(formatter, "scoped resource cleanup failed: {error}"),
-            Self::OperationAndCleanup { cleanup, .. } => {
-                write!(formatter, "scoped operation and cleanup failed: {cleanup}")
-            }
+            Self::OperationAndCleanup { operation, cleanup } => write!(
+                formatter,
+                "scoped operation failed: {operation}; cleanup also failed: {cleanup}"
+            ),
         }
     }
 }
 
-impl<E> std::error::Error for ScopeError<E> {
+impl<E: fmt::Debug + fmt::Display> std::error::Error for ScopeError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Creation(error) | Self::Cleanup(error) => Some(error),
+            // `E` is not required to implement `Error`, so there is no
+            // `&(dyn Error + 'static)` to return here even though `Debug`
+            // and `Display` can show it.
             Self::Operation(_) => None,
             Self::OperationAndCleanup { cleanup, .. } => Some(cleanup),
         }
