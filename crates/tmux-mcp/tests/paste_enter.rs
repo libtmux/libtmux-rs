@@ -40,12 +40,20 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     // Without this the case is worthless: /bin/sh ignores bracketed-paste
     // markers, so the same defect that is inert under bash runs fine there and
     // the assertion below passes either way. CI's default shell is sh.
-    let running = pane
-        .current_command()
-        .and_then(|command| command.as_str().ok().map(str::to_owned))
-        .unwrap_or_default();
+    let mut running = String::new();
+    let ready = libtmux::test::retry_until(Duration::from_secs(5), async || {
+        let Ok(fresh) = pane.refreshed().await else {
+            return false;
+        };
+        running = fresh
+            .current_command()
+            .and_then(|command| command.as_str().ok().map(str::to_owned))
+            .unwrap_or_default();
+        running.contains("bash")
+    })
+    .await;
     assert!(
-        running.contains("bash"),
+        ready.is_ok(),
         "this case needs a shell that brackets pastes; the pane runs {running:?}",
     );
 
