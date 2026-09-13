@@ -229,6 +229,25 @@ The level never suppresses command errors or changes their exit status. A later
 file-write failure disables logging and reports one warning after the primary
 result or error, unless the chosen level suppresses warnings.
 
+## CLI generation
+
+`--generate schema` exports the command graph, including positional indices,
+arity, aliases, groups, conflicts, and overrides. Schema version 1 retains its
+existing fields. Numeric bounds and overrides come from the same declarations
+that configure the parser; other argument fields use clap reflection. Runtime
+environment rules are labeled separately from parser bindings; current
+environment values are not included in the metadata.
+
+`--generate man` writes one roff manual containing every command and nested
+importer. Completion formats remain `bash`, `zsh`, `fish`, `powershell`, and
+`elvish`. Generation does not require tmux or Python.
+
+With `--json`, generation returns a successful `generate` result containing
+`artifact.format`, `artifact.encoding`, and `artifact.content`. With `--ndjson`,
+it emits one `completed` event carrying that artifact. Content retains the
+exact UTF-8 bytes of human generation, including its final newline. Help
+remains human text with either machine flag.
+
 ## Development
 
 Format edits confined to this package with:
