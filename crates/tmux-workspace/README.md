@@ -224,6 +224,13 @@ builder. A nonempty plugin list or builder string selects the explicit Python
 bridge, which requires tmuxp 1.74.0 and accepts `TMUX_WORKSPACE_PYTHON`.
 Other value types are rejected before any input runs scripts or changes tmux.
 
+Native `workspace_builder_options` accepts only `pane_readiness`; unknown fields
+fail before any input runs scripts or changes tmux. The default is `auto`;
+`always` or `true` waits for readiness, while `never` or `false` disables that
+wait. An absent or null value also selects `auto`. Documents delegated to Python
+retain their additional builder options, and conversion preserves arbitrary
+fields.
+
 ## CLI bootstrap
 
 `before_script` parses executable and arguments with shell-style quoting.
