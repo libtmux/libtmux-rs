@@ -31,7 +31,8 @@ slice gives them a public consumer.
 
 - Listing results are ordered `Vec<T>` snapshots. No collection wrapper is
   exported.
-- `QueryIteratorExt` applies only to `Iterator<Item = &T>`.
+- `QueryIteratorExt` applies to borrowed and owned iterators. `matching()`
+  filters borrowed items; `matching_owned()` moves items without cloning.
 - `Matcher<T>` has a zero-boxing blanket implementation for `Fn(&T) -> bool`.
   Documentation sends inline closures to native `.filter()` because the MSRV
   cannot infer an untyped closure through the blanket matcher bound.
@@ -140,19 +141,24 @@ pub trait Matcher<T> {
     fn matches(&self, candidate: &T) -> bool;
 }
 
-pub trait QueryIteratorExt<'a, T: 'a>:
-    Iterator<Item = &'a T> + Sized
-{
-    fn matching<M: Matcher<T>>(
+pub trait QueryIteratorExt: Iterator + Sized {
+    fn matching<'a, T: 'a, M: Matcher<T>>(
         self,
         matcher: M,
-    ) -> impl Iterator<Item = &'a T>;
+    ) -> impl Iterator<Item = &'a T>
+    where
+        Self: Iterator<Item = &'a T>;
 
-    fn exactly_one(self) -> Result<&'a T, ExactlyOneError>;
+    fn matching_owned<M: Matcher<Self::Item>>(
+        self,
+        matcher: M,
+    ) -> impl Iterator<Item = Self::Item>;
+
+    fn exactly_one(self) -> Result<Self::Item, ExactlyOneError>;
 
     fn one_or_none(
         self,
-    ) -> Result<Option<&'a T>, MultipleItemsError>;
+    ) -> Result<Option<Self::Item>, MultipleItemsError>;
 }
 ```
 
@@ -712,7 +718,7 @@ $ cargo test \
     --test query
 ```
 
-## Task 2: Implement the borrowed iterator kernel
+## Task 2: Implement the iterator kernel
 
 **Files:**
 
@@ -723,16 +729,16 @@ Implement:
 
 - `Matcher<T>::matches(&self, &T) -> bool`;
 - the blanket `Fn(&T) -> bool` implementation;
-- `QueryIteratorExt<'a, T>` for `Iterator<Item = &'a T> + Sized`;
+- `QueryIteratorExt` for every `Iterator`;
 - an opaque `impl Iterator<Item = &'a T>` from `matching()`;
+- an opaque `impl Iterator<Item = Self::Item>` from `matching_owned()`;
 - `ExactlyOneError::{NoItems, MultipleItems}`;
 - exhaustive, source-less `Copy + Eq + Display + Error` implementations for
   both cardinality errors;
 - at-most-two-pull cardinality algorithms.
 
-Do not add a closure-specific matching method, an owned-iterator
-implementation, a prelude, `IntoIterator` bounds, collection methods, or an
-itertools dependency.
+Do not add a closure-specific matching method, a prelude, `IntoIterator`
+bounds, collection methods, or an itertools dependency.
 
 Every public method gets an ordinary executable doctest. Run the focused
 test, doctests, Rust 1.85 check, Clippy, and formatting before continuing.
