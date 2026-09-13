@@ -184,7 +184,11 @@ mod tests {
         .await
         .expect_err("cleanup fails after the scoped operation succeeded");
 
-        let ScopeError::Cleanup { value: (), cleanup: error } = error else {
+        let ScopeError::Cleanup {
+            value: (),
+            cleanup: error,
+        } = error
+        else {
             panic!("cleanup failed after the operation succeeded");
         };
         assert_eq!(error.kind(), ErrorKind::PartialEffect);
