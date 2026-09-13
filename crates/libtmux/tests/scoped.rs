@@ -33,7 +33,7 @@ async fn cleanup_failure_retains_the_owned_operation_error() {
 }
 
 #[allow(clippy::panic, reason = "test assertion helper")]
-fn assert_combined(error: ScopeError<OperationFailure>, witness: &Rc<()>) {
+fn assert_combined(error: ScopeError<(), OperationFailure>, witness: &Rc<()>) {
     let ScopeError::OperationAndCleanup { operation, cleanup } = error else {
         panic!("both errors must be preserved");
     };
@@ -101,20 +101,24 @@ async fn creation_failure_does_not_run_the_operation_or_adopt_an_existing_sessio
 }
 
 #[tokio::test]
-async fn cleanup_failure_after_success_is_a_partial_effect() {
+async fn cleanup_failure_after_success_retains_the_computed_value() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let error = guard
         .server()
         .with_session("cleanup", async |session| {
             session.clone().kill().await.expect("session is killed");
-            Ok::<(), OperationFailure>(())
+            // A value the caller could not recompute after the fact, so
+            // retaining it is the difference this test exists to check.
+            Ok::<u32, OperationFailure>(42)
         })
         .await
         .expect_err("cleanup fails");
-    assert!(matches!(
-        error,
-        ScopeError::Cleanup(Error::AfterEffect { .. })
-    ));
+    let ScopeError::Cleanup { value, cleanup } = error else {
+        panic!("cleanup failed after the operation succeeded");
+    };
+    assert_eq!(value, 42, "the operation's own result must survive");
+    assert_eq!(cleanup.kind(), ErrorKind::PartialEffect);
+    assert!(matches!(cleanup, Error::AfterEffect { .. }));
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -149,7 +153,7 @@ async fn combined_errors_keep_typed_sources_and_show_operation_details() {
         cleanup
     ));
 
-    let error = ScopeError::Operation(std::io::Error::other("operation-secret"));
+    let error: ScopeError<(), _> = ScopeError::Operation(std::io::Error::other("operation-secret"));
     assert!(format!("{error:?} {error}").contains("operation-secret"));
     // `source` still withholds the operation error: its generic type is not
     // required to implement `std::error::Error`, so there is nothing to
