@@ -199,6 +199,41 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
 }
 
 #[tokio::test]
+async fn pane_output_shutdown_reports_the_specific_terminal_error() {
+    // PaneOutput's own Stream and next_chunk stay infallible by design (see
+    // its doc comment): whatever ends the connection collapses into `None`.
+    // shutdown() is where a caller who needs to tell "frame too large" from
+    // "pane finished" looks -- it never touches ControlEvents::poll_next, so
+    // the connection's own JoinHandle is still there to consult when asked.
+    let (commands, _requests) = mpsc::channel(1);
+    let sender = sender(commands, Duration::from_secs(5));
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, _stopped) = watch::channel(());
+    let connection =
+        tokio::spawn(async { Err(Error::control_mode_frame_too_large("test-frame", 42)) });
+    let mut output = PaneOutput::new(
+        "%1".parse().expect("a pane id"),
+        ControlEvents {
+            events: received,
+            stop,
+            connection: Some(connection),
+        },
+        sender,
+    );
+    drop(deliveries);
+
+    assert!(
+        output.next_chunk().await.is_none(),
+        "the stream ends quietly"
+    );
+    let error = output
+        .shutdown()
+        .await
+        .expect_err("the frame-too-large diagnostic survives to shutdown");
+    assert!(matches!(error, Error::ControlModeFrameTooLarge { .. }));
+}
+
+#[tokio::test]
 async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
     let (commands, mut requests) = mpsc::channel(4);
     let sender = sender(commands, Duration::from_secs(5));
