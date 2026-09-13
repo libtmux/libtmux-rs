@@ -237,10 +237,37 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         options: pairs(&value["options"], true)?,
         global_options: pairs(&value["global_options"], true)?,
         before_script: text(&value["before_script"], "before_script")?,
-        bridge: value.get("plugins").is_some() || value.get("workspace_builder").is_some(),
+        bridge: extension_bridge(value)?,
         readiness,
         windows,
     })
+}
+
+fn extension_bridge(value: &Value) -> Result<bool> {
+    let plugins = match value.get("plugins") {
+        None => false,
+        Some(Value::Array(plugins)) => {
+            for (index, plugin) in plugins.iter().enumerate() {
+                if !plugin.is_string() {
+                    return Err(CliError::invalid(format!(
+                        "plugins[{index}] must be a string"
+                    )));
+                }
+            }
+            !plugins.is_empty()
+        }
+        Some(_) => return Err(CliError::invalid("plugins must be a list of strings")),
+    };
+    let builder = match value.get("workspace_builder") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(builder)) => !builder.is_empty(),
+        Some(_) => {
+            return Err(CliError::invalid(
+                "workspace_builder must be a string or null",
+            ));
+        }
+    };
+    Ok(plugins || builder)
 }
 
 fn readiness(options: &Value) -> Result<Option<bool>> {
