@@ -16,6 +16,27 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `TmuxText` names now pass directly to name lookups, so
+  `server.session(session.name())` needs no conversion. Lookups preserve the
+  original bytes. (#28)
+
+### Changed
+
+- **Breaking.** `ControlEvents` and `next_event` now report connection failures
+  during iteration instead of ending silently. Use `event?` in fallible loops;
+  buffered notifications precede one terminal error, and `shutdown` reports any
+  failure not already delivered. (#28)
+- **Breaking.** `with_session`, `with_window` and `with_pane` now report
+  failures through `ScopeError`, retaining both errors when an operation and
+  cleanup fail. Update callers that propagate the scope result, and match
+  `ScopeError::OperationAndCleanup` to recover both values. (#28)
+- **Breaking.** `QueryIteratorExt` now selects owned values without cloning
+  through `matching_owned` and its cardinality helpers. Remove the extension
+  trait's generic arguments and constrain items through `Iterator`; existing
+  borrowed `matching` calls remain unchanged. (#28)
+
 ## 0.1.0-alpha.11 - 2026-09-12
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.11;
