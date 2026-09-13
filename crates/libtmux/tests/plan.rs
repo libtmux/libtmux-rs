@@ -24,6 +24,116 @@ use libtmux::{
     ChannelWait, Command, NewSessionOptions, PaneId, PaneWait, Server, SplitDirection, WindowId,
 };
 
+#[tokio::test]
+async fn layout_preflight_precedes_every_planner_mutation() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-plan-keeper").await.unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    let mut plan = Plan::new();
+    plan.add(SetOption::session(
+        session.id().clone(),
+        "@layout-changed",
+        "yes",
+    ));
+    plan.add(libtmux::plan::SelectLayout::new(
+        window.id().clone(),
+        "not-a-layout",
+    ));
+    assert_eq!(plan.preview().len(), 2);
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let error = plan.run(guard.server(), planner).await.unwrap_err();
+        assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+        assert!(
+            session
+                .get_option("@layout-changed")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    guard.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn layout_preflight_precedes_control_plan_mutation() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-control-keeper").await.unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    let (sender, _events) = libtmux::control::ControlMode::attach(guard.server(), session.id())
+        .await
+        .unwrap()
+        .split();
+    let mut plan = Plan::new();
+    plan.add(SetOption::session(
+        session.id().clone(),
+        "@layout-changed",
+        "yes",
+    ));
+    plan.add(libtmux::plan::SelectLayout::new(
+        window.id().clone(),
+        "not-a-layout",
+    ));
+    let error = plan.run_over_control_mode(&sender).await.unwrap_err();
+    assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+    assert!(
+        session
+            .get_option("@layout-changed")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    guard.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_layout_preflight_control_version() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-control-version").await.unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    let version = guard.server().capabilities().await.unwrap().tmux_version();
+    let modern = version.meets(&libtmux::since::MIRRORED_LAYOUTS);
+    let (sender, _events) = libtmux::control::ControlMode::attach(guard.server(), session.id())
+        .await
+        .unwrap()
+        .split();
+    for (index, layout, valid) in [
+        (0, "main-h", !modern),
+        (1, "main-horizontal-mirrored", modern),
+    ] {
+        let option = format!("@layout-control-{index}");
+        let mut plan = Plan::new();
+        plan.add(SetOption::session(session.id().clone(), &option, "yes"));
+        plan.add(libtmux::plan::SelectLayout::new(
+            window.id().clone(),
+            layout,
+        ));
+        let result = plan.run_over_control_mode(&sender).await;
+        if valid {
+            let result = result.unwrap();
+            assert!(result.is_complete());
+            assert_eq!(
+                result.dispatches(),
+                2,
+                "metadata is not a recorded operation"
+            );
+            assert!(session.get_option(&option).await.unwrap().is_some());
+        } else {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                if modern {
+                    libtmux::ErrorKind::InvalidInput
+                } else {
+                    libtmux::ErrorKind::UnsupportedVersion
+                }
+            );
+            assert!(session.get_option(&option).await.unwrap().is_none());
+        }
+    }
+    guard.shutdown().await.unwrap();
+}
+
 /// A plan that builds a session and types into the pane it makes.
 fn build_plan(name: &str) -> Plan {
     let mut plan = Plan::new();

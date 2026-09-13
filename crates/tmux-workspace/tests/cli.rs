@@ -5,6 +5,151 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[tokio::test]
+async fn layout_preflight_checks_all_inputs_before_scripts_or_append() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("layout-cli-keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let marker = directory.path().join("layout-script");
+    std::fs::write(
+        directory.path().join("first.json"),
+        serde_json::json!({
+            "session_name":"layout-first", "before_script":"touch layout-script",
+            "options":{"@layout-changed":"yes"}, "windows":[{"window_name":"first"}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("second.json"),
+        serde_json::json!({
+            "session_name":"layout-second", "windows":[{
+                "layout":"b25d,80x24,0,0,0", "panes":["blank","blank"]
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    for append in [false, true] {
+        let result = at_pane(
+            &[
+                "load",
+                "first.json",
+                "second.json",
+                if append { "--append" } else { "-d" },
+                "-S",
+                guard.socket_path().to_str().unwrap(),
+                "--json",
+            ],
+            directory.path(),
+            append.then_some((&guard, pane.as_str())),
+        );
+        assert!(!marker.exists(), "earlier input ran a setup script");
+        assert!(!result.status.success(), "invalid layout reported success");
+        let sessions = guard.server().sessions().await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id(), keeper.id());
+        assert!(
+            keeper
+                .get_option("@layout-changed")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_tmux_compat_layout_preflight_corpus_preserves_keeper() {
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/layout-preflight.json")).unwrap();
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("layout-corpus-keeper").await.unwrap();
+    let windows = keeper
+        .windows()
+        .await
+        .unwrap()
+        .iter()
+        .map(|window| window.id().clone())
+        .collect::<Vec<_>>();
+    let panes = keeper
+        .panes()
+        .await
+        .unwrap()
+        .iter()
+        .map(|pane| pane.id().clone())
+        .collect::<Vec<_>>();
+    let version = guard.server().capabilities().await.unwrap().tmux_version();
+    let key = if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+        "3.7c"
+    } else {
+        "3.2a"
+    };
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    for case in corpus.as_array().unwrap() {
+        let count = usize::try_from(case["pane_count"].as_u64().unwrap()).unwrap();
+        std::fs::write(directory.path().join("layout.json"), serde_json::json!({
+            "session_name":"layout-case", "windows":[{"layout":case["layout"], "panes":vec!["blank"; count]}]
+        }).to_string()).unwrap();
+        let result = at(
+            &[
+                "load",
+                "layout.json",
+                "-d",
+                "-S",
+                guard.socket_path().to_str().unwrap(),
+                "--json",
+            ],
+            directory.path(),
+        );
+        assert_eq!(
+            result.status.success(),
+            case["expected_valid"][key].as_bool().unwrap(),
+            "{}: {} {}",
+            case["id"],
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            guard
+                .server()
+                .format(None, "#{pid}")
+                .await
+                .unwrap()
+                .to_string_lossy(),
+            guard.daemon_pid().to_string()
+        );
+        assert_eq!(
+            keeper
+                .windows()
+                .await
+                .unwrap()
+                .iter()
+                .map(|window| window.id().clone())
+                .collect::<Vec<_>>(),
+            windows
+        );
+        assert_eq!(
+            keeper
+                .panes()
+                .await
+                .unwrap()
+                .iter()
+                .map(|pane| pane.id().clone())
+                .collect::<Vec<_>>(),
+            panes
+        );
+        for session in guard.server().sessions().await.unwrap() {
+            if session.id() != keeper.id() {
+                session.kill().await.unwrap();
+            }
+        }
+    }
+    guard.shutdown().await.unwrap();
+}
+
 fn at(arguments: &[&str], directory: &Path) -> Output {
     at_pane(arguments, directory, None)
 }

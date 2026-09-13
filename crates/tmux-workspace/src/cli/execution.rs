@@ -133,6 +133,22 @@ fn load_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>
     Ok(workspaces)
 }
 
+fn native_layouts(
+    workspaces: &[(PathBuf, normalize::Workspace)],
+) -> impl Iterator<Item = (&std::ffi::OsStr, usize)> {
+    workspaces
+        .iter()
+        .filter(|(_, workspace)| !workspace.bridge)
+        .flat_map(|(_, workspace)| workspace.windows.iter())
+        .filter_map(|window| {
+            window
+                .layout
+                .as_deref()
+                .filter(|layout| !layout.is_empty())
+                .map(|layout| (std::ffi::OsStr::new(layout), window.panes.len().max(1)))
+        })
+}
+
 pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()> {
     if flag(args, "colors88") {
         return Err(CliError {
@@ -153,6 +169,7 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
             .open(std::path::Path::new(&discovery::expand(path)))?;
     }
     let (server, borrowed) = load_target(args).await?;
+    server.validate_layouts(native_layouts(&workspaces)).await?;
     let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
         Some(process::python().await?)
     } else {
@@ -391,7 +408,7 @@ async fn build(
     }
     let mut selected = None;
     for (window_index, config) in workspace.windows.iter().enumerate() {
-        let window = build_window(server, &session, config, report, effects, window_index).await?;
+        let window = build_window(&session, config, report, effects, window_index).await?;
         if config.focus || selected.is_none() {
             selected = Some(window);
         }
@@ -530,7 +547,6 @@ async fn build_extension(
 }
 
 async fn build_window(
-    server: &Server,
     session: &Session,
     config: &normalize::Window,
     report: &mut Reporter,
@@ -559,7 +575,7 @@ async fn build_window(
     for (name, value) in &first.environment {
         options = options.environment(name, value);
     }
-    let window = session.new_window(options).await?;
+    let mut window = session.new_window(options).await?;
     effects.changed = true;
     effects.windows.push(window.id().to_string());
     report.event("window-created", json!({"input_index":input,"window_index":window.index(),"window_id":window.id().to_string()}))?;
@@ -585,25 +601,10 @@ async fn build_window(
         let pane = window.split(split).await?;
         effects.panes.push(pane.id().to_string());
         panes.push(pane);
-        server
-            .cmd(
-                Command::new("select-layout")
-                    .arg("-t")
-                    .arg(window.id().to_string())
-                    .arg("tiled"),
-            )
-            .await?;
+        window.select_layout(libtmux::Layout::Tiled).await?;
     }
-    if let Some(layout) = &config.layout {
-        server
-            .cmd(
-                Command::new("select-layout")
-                    .arg("-t")
-                    .arg(window.id().to_string())
-                    .arg("--")
-                    .arg(layout),
-            )
-            .await?;
+    if let Some(layout) = config.layout.as_deref().filter(|layout| !layout.is_empty()) {
+        window.select_layout(layout).await?;
     }
     let mut active = None;
     for (pane_index, (pane, config)) in panes.iter().zip(&config.panes).enumerate() {

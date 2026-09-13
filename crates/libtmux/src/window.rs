@@ -427,11 +427,14 @@ impl Window {
     /// Takes a [`Layout`] tmux knows by name, or a layout string tmux itself
     /// produced through [`LayoutSpec::Saved`]. A `&str`, `String`, or
     /// `OsString` is read as a saved layout, so a caller who already had one
-    /// keeps working.
+    /// keeps working. Strings also accept unique named-layout abbreviations.
+    /// Checksums and nonempty trees are checked before dispatch; tmux owns
+    /// geometry correction and pruning. Nesting is limited to 256 groups.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the layout, and
+    /// Returns [`Error::InvalidLayout`] for unsafe syntax or an ambiguous name,
+    /// an error when tmux refuses the layout, and
     /// [`crate::ErrorKind::UnsupportedVersion`] when a named layout needs a
     /// newer tmux than this endpoint runs. See [`Layout::minimum_release`].
     ///
@@ -461,14 +464,12 @@ impl Window {
     ) -> Result<&mut Self, Error> {
         let layout = layout.into();
         let argument = match &layout {
-            LayoutSpec::Named(named) => {
-                crate::Server::from_core(Arc::clone(&self.core))
-                    .require(named.as_str(), named.minimum_release())
-                    .await?;
-                OsString::from(named.as_str())
-            }
+            LayoutSpec::Named(named) => OsString::from(named.as_str()),
             LayoutSpec::Saved(saved) => saved.clone(),
         };
+        crate::Server::from_core(Arc::clone(&self.core))
+            .validate_layouts([(argument.as_os_str(), 1)])
+            .await?;
 
         listing::mutate(
             &self.core,

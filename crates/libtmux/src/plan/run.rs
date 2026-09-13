@@ -256,9 +256,9 @@ impl PlanResult {
         &self.steps
     }
 
-    /// How many tmux invocations the run cost.
+    /// How many invocations dispatched the recorded plan operations.
     ///
-    /// This is the number the planner changes, and the reason to change it.
+    /// The planner changes this count. Metadata and preflight probes are excluded.
     #[must_use]
     pub const fn dispatches(&self) -> usize {
         self.dispatches
@@ -292,13 +292,20 @@ impl Plan {
     ///
     /// Returns an error when tmux cannot be reached, a process cannot be
     /// captured, a slot dependency is invalid, or a creating operation does
-    /// not return valid IDs. Validation happens before the first command. A
+    /// not return valid IDs, or a layout is invalid. Validation happens before
+    /// the first recorded command. Version-sensitive layouts may query metadata. A
     /// command tmux *refuses* is reported through the returned [`PlanResult`],
     /// not as an error, because a plan may expect one.
     pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.validate_option_scopes()?;
+        server
+            .validate_layouts(self.steps().iter().filter_map(|op| match op {
+                Op::SelectLayout(layout) => Some((layout.layout.as_os_str(), 1)),
+                _ => None,
+            }))
+            .await?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -699,7 +706,8 @@ impl Plan {
     ///
     /// Returns an error when the connection is closed, a command cannot be
     /// written, a slot dependency is invalid, or a creating operation does not
-    /// return valid IDs. Validation happens before the first command. A command
+    /// return valid IDs, or a layout is invalid. Validation happens before the
+    /// first recorded command. Version-sensitive layouts may query metadata. A command
     /// tmux refuses is reported in the [`PlanResult`].
     pub async fn run_over_control_mode(
         &self,
@@ -707,6 +715,27 @@ impl Plan {
     ) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
+        let pending = crate::layout::prepare(self.steps().iter().filter_map(|op| match op {
+            Op::SelectLayout(layout) => Some((layout.layout.as_os_str(), 1)),
+            _ => None,
+        }))?;
+        if !pending.is_empty() {
+            let block = sender.send(crate::layout::version_command()).await?;
+            if let Some(error) = block.refusal_for("display-message") {
+                return Err(error);
+            }
+            let output = block
+                .output()
+                .iter()
+                .flat_map(|line| {
+                    line.as_bytes()
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(b'\n'))
+                })
+                .collect::<Vec<_>>();
+            crate::layout::resolve(&pending, &crate::TmuxVersion::parse_output(&output)?)?;
+        }
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());

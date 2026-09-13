@@ -417,6 +417,14 @@ impl std::error::Error for IdParseError {}
 #[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A layout is unsafe to dispatch or cannot hold the planned panes.
+    #[non_exhaustive]
+    #[error("invalid tmux layout: {reason}")]
+    InvalidLayout {
+        /// A diagnosis without the caller's layout bytes.
+        reason: &'static str,
+    },
+
     /// tmux accepted an effectful step before a later part of the operation
     /// failed.
     ///
@@ -1383,6 +1391,10 @@ impl fmt::Debug for Error {
             Self::InvalidVersionOutput { output_len } => formatter
                 .debug_struct("InvalidVersionOutput")
                 .field("output_len", output_len)
+                .finish(),
+            Self::InvalidLayout { reason } => formatter
+                .debug_struct("InvalidLayout")
+                .field("reason", reason)
                 .finish(),
             Self::UnsupportedTmuxVersion { found, minimum } => formatter
                 .debug_struct("UnsupportedTmuxVersion")

@@ -91,7 +91,8 @@ impl Error {
             Self::UnsupportedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
-            Self::InvalidCommandInput { .. }
+            Self::InvalidLayout { .. }
+            | Self::InvalidCommandInput { .. }
             | Self::ServerMismatch { .. }
             | Self::OptionScopeMismatch { .. } => ErrorKind::InvalidInput,
             #[cfg(feature = "plan")]
@@ -165,6 +166,7 @@ impl Error {
                 ..
             } => true,
             Self::AfterEffect { .. }
+            | Self::InvalidLayout { .. }
             | Self::InvalidServerConfiguration { .. }
             | Self::InvalidVersionOutput { .. }
             | Self::UnsupportedTmuxVersion { .. }

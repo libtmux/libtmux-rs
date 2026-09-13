@@ -9,6 +9,142 @@ use libtmux::test::TestServer;
 use libtmux::{Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
+#[tokio::test]
+async fn layout_preflight_rejects_unsafe_saved_input_before_dispatch() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-keeper").await.unwrap();
+    let mut window = session.active_window().await.unwrap().unwrap();
+    let before = window.layout().to_owned();
+    let error = window.select_layout("not-a-layout").await.unwrap_err();
+    assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+    window.refresh().await.unwrap();
+    assert_eq!(window.layout(), &before);
+    assert_eq!(guard.server().sessions().await.unwrap().len(), 1);
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn layout_preflight_static_inputs_need_no_executable() {
+    use std::ffi::OsStr;
+    let server = libtmux::Server::builder()
+        .tmux_executable("/tmp/libtmux-rs-test/absent-layout-executable")
+        .build()
+        .unwrap();
+    server
+        .validate_layouts([(OsStr::new("t"), 1)])
+        .await
+        .unwrap();
+    let error = server
+        .validate_layouts([
+            (OsStr::new("main-horizontal-mirrored"), 1),
+            (OsStr::new("not-a-layout"), 1),
+        ])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_tmux_compat_layout_preflight_uses_daemon_version() {
+    use std::ffi::OsStr;
+    let guard = TestServer::new().await.unwrap();
+    let keeper = guard.session("layout-version-keeper").await.unwrap();
+    let version = guard.server().format(None, "#{version}").await.unwrap();
+    let version = libtmux::TmuxVersion::parse_output(
+        format!("tmux {}\n", version.to_string_lossy()).as_bytes(),
+    )
+    .unwrap();
+    let executable = std::env::var_os("LIBTMUX_LAYOUT_CLIENT")
+        .unwrap_or_else(|| guard.server().tmux_executable().to_owned());
+    let selected = libtmux::Server::builder()
+        .socket_path(guard.socket_path())
+        .tmux_executable(executable)
+        .build()
+        .unwrap();
+    let client = selected.capabilities().await.unwrap().tmux_version();
+    eprintln!(
+        "layout version check: daemon={}, client={}",
+        version.raw(),
+        client.raw()
+    );
+    let abbreviated = selected.validate_layouts([(OsStr::new("main-h"), 1)]).await;
+    let mirrored = selected
+        .validate_layouts([(OsStr::new("main-horizontal-mirrored"), 1)])
+        .await;
+    if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+        assert_eq!(
+            abbreviated.unwrap_err().kind(),
+            libtmux::ErrorKind::InvalidInput
+        );
+        mirrored.unwrap();
+    } else {
+        abbreviated.unwrap();
+        assert_eq!(
+            mirrored.unwrap_err().kind(),
+            libtmux::ErrorKind::UnsupportedVersion
+        );
+    }
+    assert_eq!(selected.sessions().await.unwrap()[0].id(), keeper.id());
+    selected.shutdown().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_tmux_compat_layout_preflight_cold_and_empty_daemons() {
+    use std::ffi::OsStr;
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-empty").await.unwrap();
+    let observed = guard.server().format(None, "#{version}").await.unwrap();
+    let version = libtmux::TmuxVersion::parse_output(
+        format!("tmux {}\n", observed.to_string_lossy()).as_bytes(),
+    )
+    .unwrap();
+    let layout = if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+        "main-horizontal-m"
+    } else {
+        "main-h"
+    };
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let cold = libtmux::Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(guard.server().tmux_executable())
+        .build()
+        .unwrap();
+    cold.validate_layouts([(OsStr::new(layout), 1)])
+        .await
+        .unwrap();
+    assert!(!directory.path().join("s").exists());
+    cold.shutdown().await.unwrap();
+    guard
+        .server()
+        .cmd(
+            libtmux::Command::new("set-option")
+                .arg("-g")
+                .arg("exit-empty")
+                .arg("off"),
+        )
+        .await
+        .unwrap();
+    session.kill().await.unwrap();
+    guard
+        .server()
+        .validate_layouts([(OsStr::new(layout), 1)])
+        .await
+        .unwrap();
+    assert!(guard.server().sessions().await.unwrap().is_empty());
+    assert_eq!(
+        guard
+            .server()
+            .format(None, "#{pid}")
+            .await
+            .unwrap()
+            .to_string_lossy(),
+        guard.daemon_pid().to_string()
+    );
+    guard.shutdown().await.unwrap();
+}
+
 fn text(value: Option<&TmuxText>) -> Vec<u8> {
     value.expect("tmux reports the value").as_bytes().to_vec()
 }
