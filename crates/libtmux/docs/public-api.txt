@@ -1677,9 +1677,9 @@ impl<'de> Deserialize<'de> for libtmux::plan::SplitWindow
 impl<'de> Deserialize<'de> for libtmux::plan::WindowSlot
 impl<'de> Deserialize<'de> for libtmux::plan::WindowTarget
 impl<'values, T> IntoIterator for &'values libtmux::SparseValues<T>
-impl<E> Debug for libtmux::ScopeError<E>
-impl<E> Display for libtmux::ScopeError<E>
-impl<E> Error for libtmux::ScopeError<E>
+impl<E: fmt::Debug + fmt::Display> Error for libtmux::ScopeError<E>
+impl<E: fmt::Debug> Debug for libtmux::ScopeError<E>
+impl<E: fmt::Display> Display for libtmux::ScopeError<E>
 impl<From, To> Clone for libtmux::query::ManyRelation<From, To>
 impl<From, To> Clone for libtmux::query::OneRelation<From, To>
 impl<From, To> Copy for libtmux::query::ManyRelation<From, To>

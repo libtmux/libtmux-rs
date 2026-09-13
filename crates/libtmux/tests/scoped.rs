@@ -7,6 +7,7 @@ use std::rc::Rc;
 use libtmux::test::TestServer;
 use libtmux::{Error, ErrorKind, NewWindowOptions, ScopeError, SplitDirection, SplitOptions};
 
+#[derive(Debug)]
 struct OperationFailure(Rc<()>);
 
 #[tokio::test]
@@ -26,7 +27,7 @@ async fn cleanup_failure_retains_the_owned_operation_error() {
         2,
         "the result must retain the original operation error after cleanup fails"
     );
-    assert!(format!("{result:?}").contains("<redacted>"));
+    assert!(format!("{result:?}").contains("OperationAndCleanup"));
     assert_combined(result.expect_err("operation and cleanup fail"), &witness);
     assert_eq!(Rc::strong_count(&witness), 1);
 }
@@ -118,20 +119,23 @@ async fn cleanup_failure_after_success_is_a_partial_effect() {
 }
 
 #[tokio::test]
-async fn combined_errors_keep_typed_sources_and_redact_operation_details() {
+async fn combined_errors_keep_typed_sources_and_show_operation_details() {
     use std::error::Error as _;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let error = guard
         .server()
-        .with_session("redaction", async |session| {
+        .with_session("visible-cause", async |session| {
             session.clone().kill().await.expect("session is killed");
             Err::<(), _>(std::io::Error::other("operation-secret"))
         })
         .await
         .expect_err("operation and cleanup fail");
     guard.shutdown().await.expect("tmux fixture shuts down");
-    assert!(!format!("{error:?} {error}").contains("operation-secret"));
+    // `std::io::Error` is `Debug` and `Display`, so both surface the cause a
+    // caller propagating `ScopeError` with `?` would otherwise lose.
+    assert!(format!("{error:?}").contains("operation-secret"));
+    assert!(format!("{error}").contains("operation-secret"));
     let cleanup_source = error.source().expect("cleanup source");
     assert!(cleanup_source.is::<Error>());
     let ScopeError::OperationAndCleanup { operation, cleanup } = &error else {
@@ -146,7 +150,10 @@ async fn combined_errors_keep_typed_sources_and_redact_operation_details() {
     ));
 
     let error = ScopeError::Operation(std::io::Error::other("operation-secret"));
-    assert!(!format!("{error:?} {error}").contains("operation-secret"));
+    assert!(format!("{error:?} {error}").contains("operation-secret"));
+    // `source` still withholds the operation error: its generic type is not
+    // required to implement `std::error::Error`, so there is nothing to
+    // return even though `Display` can show it.
     assert!(error.source().is_none());
     assert!(
         matches!(error, ScopeError::Operation(operation) if operation.to_string() == "operation-secret")

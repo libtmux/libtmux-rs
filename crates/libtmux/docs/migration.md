@@ -59,11 +59,14 @@ assert!(both(&error).is_none());
 ```
 
 Cleanup errors carry `Error::AfterEffect` because resource creation succeeded.
-`Debug` and `Display` redact generic operation values. The standard error
-source is the creation or cleanup `Error`; inspect the operation variant to
-access the generic operation value or its own source chain. This keeps
-`ScopeError<E>` usable with boxed errors and values that do not implement
-`std::error::Error`.
+`Debug` and `Display` show the operation value when `E` implements the
+matching trait, and `std::error::Error` needs both, since it requires them as
+supertraits; a caller whose `E` implements neither still gets a working
+scope, with the value reachable by matching the variant. The standard error
+source is the creation or cleanup `Error`, never the operation value: `E`
+need not implement `std::error::Error` at all, so match the operation variant
+to reach its value or its own source chain. This keeps `ScopeError<E>` usable
+with boxed errors and values that do not implement `std::error::Error`.
 
 ## Owned queries and names
 
