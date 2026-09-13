@@ -28,10 +28,20 @@ full.
   during iteration instead of ending silently. Use `event?` in fallible loops;
   buffered notifications precede one terminal error, and `shutdown` reports any
   failure not already delivered. (#28)
+- **Breaking, runtime-only.** EOF without `%exit` is now `Closed` instead of a
+  clean end, so `ControlEvents::shutdown`, `ControlMode::shutdown`, and
+  `control::PaneOutput::shutdown` return that error where they used to return
+  `Ok(())`. Nothing here changes a signature, so existing code keeps
+  compiling and starts seeing the error the first time a watched connection
+  closes that way, without `%exit` announcing it first. Match
+  `ControlModeErrorKind::Closed` where that end was already treated as
+  ordinary. (#28)
 - **Breaking.** `with_session`, `with_window` and `with_pane` now report
-  failures through `ScopeError`, retaining both errors when an operation and
-  cleanup fail. Update callers that propagate the scope result, and match
-  `ScopeError::OperationAndCleanup` to recover both values. (#28)
+  failures through `ScopeError<T, E>`, retaining both errors when an
+  operation and cleanup fail, and the operation's own result when only
+  cleanup fails. Update callers that propagate the scope result, and match
+  `ScopeError::OperationAndCleanup` or `ScopeError::Cleanup` to recover the
+  values each retains. (#28)
 - **Breaking.** `QueryIteratorExt` now selects owned values without cloning
   through `matching_owned` and its cardinality helpers. Remove the extension
   trait's generic arguments and constrain items through `Iterator`; existing
