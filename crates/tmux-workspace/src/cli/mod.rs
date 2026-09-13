@@ -194,7 +194,11 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
     let source = discovery::resolve(source, importer)?;
     let value = document::read(&source)?;
     let value = match importer {
-        Some(kind) => document::import(kind, &value)?,
+        Some(kind) => {
+            let value = document::import(kind, &value)?;
+            normalize::workspace(&value, &source)?;
+            value
+        }
         None => value,
     };
     let format = options.get_one::<String>("workspace-format").map_or_else(

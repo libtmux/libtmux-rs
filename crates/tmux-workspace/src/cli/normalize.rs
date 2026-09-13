@@ -208,6 +208,15 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         .filter(|v| !v.is_empty())
         .ok_or_else(|| CliError::invalid("session_name is required"))?;
     let bridge = extension_bridge(value)?;
+    if !bridge {
+        for key in ["config", "socket_name"] {
+            if value.get(key).is_some() {
+                return Err(CliError::invalid(format!(
+                    "unsupported execution key workspace.{key}; select the endpoint with CLI flags"
+                )));
+            }
+        }
+    }
     if !bridge && !value["workspace_builder_options"].is_null() {
         keys(
             &value["workspace_builder_options"],
@@ -431,6 +440,18 @@ fn pane(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_fields_require_the_explicit_extension_route() -> Result<()> {
+        for key in ["config", "socket_name"] {
+            let mut value = json!({"session_name":"demo","windows":[{}]});
+            value[key] = json!("endpoint");
+            assert!(workspace(&value, Path::new("/tmp/workspace.yaml")).is_err());
+            value["plugins"] = json!(["custom.Extension"]);
+            assert!(workspace(&value, Path::new("/tmp/workspace.yaml"))?.bridge);
+        }
+        Ok(())
+    }
 
     #[test]
     fn blank_shorthand_does_not_erase_explicit_commands_or_empty_enter() -> Result<()> {
