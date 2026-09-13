@@ -155,7 +155,7 @@ async fn execute(
                 "--generate cannot be combined with a workspace command",
             ));
         }
-        return generate::write(format);
+        return generate::write(format, report);
     }
     let Some((name, options)) = matches.subcommand() else {
         return Err(CliError::usage("select a workspace command; use --help"));
