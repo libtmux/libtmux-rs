@@ -438,16 +438,17 @@ let first = pending.clone().next();
 let collected = pending.collect::<Vec<_>>();
 ```
 
-`QueryIteratorExt` is implemented only for iterators whose item is `&T`.
-`matching()` is lazy and preserves order; `vec.iter().matching(expr)` works,
-while `vec.into_iter().matching(expr)` intentionally does not. `Matcher<T>`
-has a blanket implementation for `Fn(&T) -> bool`, but inline closures use
-native `.filter()` because the blanket bound cannot infer an untyped closure
-parameter on the MSRV.
+`QueryIteratorExt` is implemented for all iterators. `matching()` filters
+borrowed items, while `matching_owned()` borrows each item for the predicate
+and yields the original owned item without requiring `Clone`. Both methods
+are lazy and preserve order. `Matcher<T>` has a blanket implementation for
+`Fn(&T) -> bool`, but inline closures use native `.filter()` because the
+blanket bound cannot infer an untyped closure parameter on the MSRV.
 
 `exactly_one()` inspects at most two items and returns `ExactlyOneError` with
 distinct zero and multiple variants. `one_or_none()` returns `None`, one
-borrowed item, or `MultipleItemsError`. Neither method counts, collects, or
+item, or `MultipleItemsError`. Both methods return the iterator's item type,
+whether borrowed or owned. Neither method counts, collects, or
 exhausts a potentially infinite iterator. Importing both this extension trait
 and `itertools::Itertools` makes the shared `exactly_one` method name
 ambiguous; callers in that uncommon case use trait-qualified syntax.
