@@ -12,6 +12,8 @@ rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
 
 You need tmux 3.2a or newer on `PATH` and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
+The CLI's captured-child support has a narrower binding boundary; see
+[CLI cancellation](../crates/tmux-workspace/README.md#cli-cancellation).
 
 `rust-toolchain.toml` pins the toolchain, so rustup installs it on the first
 cargo command. The gate also needs the two MSRV floors and three Cargo tools:
