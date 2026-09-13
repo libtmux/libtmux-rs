@@ -169,6 +169,22 @@ The child runs in the session's `start_directory` when set, or the caller's
 working directory otherwise. Arguments retain spaces and empty values, with
 no shell expansion.
 
+## CLI cancellation
+
+`SIGINT` and `SIGTERM` interrupt asynchronous CLI work with exit status 130.
+An interrupted load reports completed inputs and acknowledged session,
+window, and pane IDs in its retained state. JSON and NDJSON include the same
+state as the error diagnostic. Changes remain applied; cancellation does not
+roll them back. After a mutating phase begins, `outcome_unknown: true` warns
+that additional effects may have applied without an acknowledged receipt.
+
+Before-script output collects up to 1 MiB per stream, but enters the retained
+state only when the script finishes. Interruption can omit that unfinished
+capture; output already streamed or logged keeps its original destination.
+With terminal stdin, human bootstrap children inherit the foreground process
+group. A signal sent only to the CLI does not guarantee that their descendants
+stop. Machine mode and nonterminal stdin use an owned child process group.
+
 ## CLI logging
 
 `tmux-workspace load --log-file PATH` appends JSON records to a regular file.
