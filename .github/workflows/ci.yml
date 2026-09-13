@@ -54,7 +54,7 @@ jobs:
         with:
           tool: just,cargo-hack,cargo-deny,uv
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: just check
 
@@ -81,7 +81,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # `--no-fail-fast` because this lane runs only on master and bills at ten
       # times a Linux runner. Stopping at the first failing test binary hides
@@ -107,7 +107,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: just api-check
       # Same toolchain and the same rustdoc JSON, so it rides along here
       # rather than paying for a second nightly build.
@@ -136,7 +136,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Fuzz ${{ matrix.target }}
         env:
           TARGET: ${{ matrix.target }}
@@ -180,6 +180,6 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: just compat
