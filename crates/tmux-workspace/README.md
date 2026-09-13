@@ -297,6 +297,49 @@ it emits one `completed` event carrying that artifact. Content retains the
 exact UTF-8 bytes of human generation, including its final newline. Help
 remains human text with either machine flag.
 
+## Inspect a loaded workspace with MCP
+
+Save the opening YAML example as `dev.yaml`. From the repository root,
+install the workspace CLI:
+
+```console
+$ cargo install --locked --path crates/tmux-workspace
+```
+
+Install the MCP executable:
+
+```console
+$ cargo install --locked --path crates/tmux-mcp
+```
+
+Load a workspace on a named tmux endpoint:
+
+```console
+$ tmux-workspace load dev.yaml -d -L dev
+```
+
+Configure your MCP client to launch the server on that endpoint:
+
+```console
+$ LIBTMUX_TOOLSETS=inspect tmux-mcp -L dev
+```
+
+For a socket path, pass the same `-S PATH` to both commands. The MCP server
+also accepts `LIBTMUX_SOCKET` for a name or `LIBTMUX_SOCKET_PATH` for a path.
+Select the tmux executable through `PATH` for both processes.
+
+Discover tools with `tools/list` and read `tmux://capabilities` to confirm the
+resolved socket and enabled tools. `list_sessions` and `list_windows` return
+native IDs; `list_panes` supplies pane IDs for subsequent calls.
+`capture_pane` accepts `{"pane":"%1"}`; `snapshot_pane` adds optional
+`max_lines`. Use an ID returned by discovery. `wait_for_text` accepts `pane`,
+`patterns` and `seconds`; inspection and ping remain responsive during a wait.
+Close the client connection to release MCP resources; the loaded workspace
+remains running. See the [MCP guide][workspace-mcp-guide] for tool contracts,
+cancellation and connection settings.
+
+[workspace-mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/d746b9a5506bb3a9f42cb1401f4568a5d08e77b7/crates/tmux-mcp/README.md
+
 ## Development
 
 Format edits confined to this package with:
