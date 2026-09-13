@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 
 use clap::ArgMatches;
 use serde_json::{Value, json};
@@ -197,26 +199,72 @@ impl Reporter {
                 Ok(())
             }
             Mode::Human => {
+                let mut output = io::stdout().lock();
                 if tree {
-                    self.line(
+                    self.write_line(
+                        &mut output,
                         "heading",
                         "Workspaces",
                         &format!("{} configured directories", directories.len()),
                     )?;
-                }
-                for record in records {
-                    self.line(
-                        "subject",
-                        record["name"].as_str().unwrap_or("workspace"),
-                        record["path"].as_str().unwrap_or(""),
-                    )?;
-                    if let Some(config) = record.get("config") {
-                        write!(io::stdout(), "{}", super::document::encode(config, "yaml")?)?;
+                    self.tree(&mut output, records)?;
+                } else {
+                    for record in records {
+                        self.record(&mut output, record, "", "")?;
                     }
                 }
+                output.flush()?;
                 Ok(())
             }
         }
+    }
+
+    fn tree(&self, output: &mut impl Write, records: &[Value]) -> Result<()> {
+        let mut groups: Vec<(&Path, Vec<&Value>)> = Vec::new();
+        for record in records {
+            let directory = Path::new(record["path"].as_str().unwrap_or(""))
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            if let Some((_, entries)) = groups.iter_mut().find(|(path, _)| *path == directory) {
+                entries.push(record);
+            } else {
+                groups.push((directory, vec![record]));
+            }
+        }
+        for (directory, entries) in groups {
+            self.write_line(output, "heading", &directory.to_string_lossy(), "")?;
+            for (index, record) in entries.iter().enumerate() {
+                let (branch, indent) = if index + 1 == entries.len() {
+                    ("└── ", "    ")
+                } else {
+                    ("├── ", "│   ")
+                };
+                self.record(output, record, branch, indent)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn record(
+        &self,
+        output: &mut impl Write,
+        record: &Value,
+        branch: &str,
+        indent: &str,
+    ) -> Result<()> {
+        write!(output, "{branch}")?;
+        self.write_line(
+            output,
+            "subject",
+            record["name"].as_str().unwrap_or("workspace"),
+            record["path"].as_str().unwrap_or(""),
+        )?;
+        if let Some(config) = record.get("config") {
+            for line in super::document::encode(config, "yaml")?.lines() {
+                writeln!(output, "{indent}{}", terminal_text(line))?;
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn loaded(&self, results: &Value) -> Result<()> {
@@ -235,6 +283,16 @@ impl Reporter {
     }
 
     pub(super) fn line(&self, role: &str, subject: &str, detail: &str) -> Result<()> {
+        self.write_line(&mut io::stdout().lock(), role, subject, detail)
+    }
+
+    fn write_line(
+        &self,
+        output: &mut impl Write,
+        role: &str,
+        subject: &str,
+        detail: &str,
+    ) -> Result<()> {
         let code = match role {
             "heading" => "1;96",
             "subject" => "1;35",
@@ -243,14 +301,31 @@ impl Reporter {
             "error" => "31",
             _ => "36",
         };
+        let subject = terminal_text(subject);
+        let detail = terminal_text(detail);
         if self.color {
             writeln!(
-                io::stdout(),
+                output,
                 "\x1b[{code}m{subject}\x1b[0m  \x1b[36m{detail}\x1b[0m"
             )?;
         } else {
-            writeln!(io::stdout(), "{subject}  {detail}")?;
+            writeln!(output, "{subject}  {detail}")?;
         }
         Ok(())
     }
+}
+
+fn terminal_text(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(char::is_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut safe = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            safe.extend(character.escape_default());
+        } else {
+            safe.push(character);
+        }
+    }
+    Cow::Owned(safe)
 }
