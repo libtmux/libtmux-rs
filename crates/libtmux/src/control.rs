@@ -1037,7 +1037,8 @@ impl ControlEvents {
     ///
     /// Yields one terminal error for transport failure, unexpected EOF, a
     /// frame budget or command deadline being exceeded, executor shutdown,
-    /// or failed connection cleanup.
+    /// or failed connection cleanup. A panic in the connection task resumes
+    /// here instead, since nothing else would report it.
     pub async fn next_event(&mut self) -> Option<Result<Event, Error>> {
         poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
@@ -1062,7 +1063,15 @@ impl ControlEvents {
         while self.events.recv().await.is_some() {}
 
         match self.connection.take() {
-            Some(connection) => connection.await.map_err(|_| Error::control_mode_closed())?,
+            Some(connection) => match connection.await {
+                Ok(outcome) => outcome,
+                // Nothing aborts this task, so a join failure is a panic in
+                // the connection, not a cancellation. Resuming it here, in
+                // the caller's own task, keeps the panic visible instead of
+                // reporting the actor's crash as an ordinary closed
+                // connection a supervisor would retry into a repeat panic.
+                Err(error) => std::panic::resume_unwind(error.into_panic()),
+            },
             None => Ok(()),
         }
     }
@@ -1087,7 +1096,11 @@ impl Stream for ControlEvents {
         Poll::Ready(match outcome {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(Err(error)),
-            Err(_) => Some(Err(Error::control_mode_closed())),
+            // See the matching match arm in `Self::shutdown`: nothing aborts
+            // this task, so a join failure can only be a panic, and hiding
+            // it behind `control_mode_closed` would send a supervisor back
+            // into the same panic instead of surfacing it.
+            Err(error) => std::panic::resume_unwind(error.into_panic()),
         })
     }
 }
