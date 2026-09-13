@@ -195,13 +195,39 @@
 //! # }
 //! ```
 //!
-//! Query extensions intentionally apply only to borrowed iterators:
+//! Use `matching_owned` to move selected items out of their collection:
+//!
+//! ```
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let values = vec![1, 2, 3];
+//! let selected = values
+//!     .into_iter()
+//!     .matching_owned(|candidate: &i32| *candidate > 1)
+//!     .collect::<Vec<_>>();
+//! assert_eq!(selected, [2, 3]);
+//! ```
+//!
+//! Borrowed results cannot outlive their collection:
 //!
 //! ```compile_fail
 //! use libtmux::query::QueryIteratorExt;
 //!
-//! let values = vec![1, 2, 3];
-//! let _ = values.into_iter().matching(|candidate: &i32| *candidate > 1);
+//! let selected = {
+//!     let values = vec![String::from("only")];
+//!     values.iter().exactly_one().unwrap()
+//! };
+//! println!("{selected}");
+//! ```
+//!
+//! Consuming a collection transfers ownership:
+//!
+//! ```compile_fail
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let values = vec![String::from("only")];
+//! let selected = values.into_iter().one_or_none().unwrap();
+//! println!("{values:?} {selected:?}");
 //! ```
 #![cfg_attr(
     feature = "control-mode",
