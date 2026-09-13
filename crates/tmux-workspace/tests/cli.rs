@@ -6,6 +6,70 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 #[tokio::test]
+async fn attached_load_requires_terminal_before_scripts_or_session_mutation() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("terminal-keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let marker = directory.path().join("before-script-ran");
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({
+            "session_name":"terminal-workspace", "before_script":"touch before-script-ran",
+            "windows":[{"panes":["blank"]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let socket = guard.socket_path().to_str().unwrap();
+    for inherited in [false, true] {
+        let output = at_pane(
+            &["load", "workspace.json", "-S", socket],
+            directory.path(),
+            inherited.then_some((&guard, pane.as_str())),
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("attaching requires a terminal"));
+        assert!(!marker.exists(), "terminal refusal ran the setup script");
+        let sessions = guard.server().sessions().await.unwrap();
+        assert_eq!(sessions.len(), 1, "terminal refusal created a session");
+        assert_eq!(sessions[0].id(), keeper.id());
+        assert_eq!(keeper.windows().await.unwrap().len(), 1);
+        assert_eq!(current_pane(&keeper).await, pane);
+    }
+    for append in [false, true] {
+        let output = at_pane(
+            &[
+                "load",
+                "workspace.json",
+                "-S",
+                socket,
+                if append { "--append" } else { "-d" },
+            ],
+            directory.path(),
+            append.then_some((&guard, pane.as_str())),
+        );
+        assert!(output.status.success(), "{output:?}");
+        assert!(marker.exists(), "explicit nonattached load did not run");
+        std::fs::remove_file(&marker).unwrap();
+        if !append {
+            guard
+                .server()
+                .session("terminal-workspace")
+                .await
+                .unwrap()
+                .unwrap()
+                .kill()
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(guard.server().sessions().await.unwrap().len(), 1);
+    assert_eq!(keeper.windows().await.unwrap().len(), 2);
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn layout_preflight_checks_all_inputs_before_scripts_or_append() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("layout-cli-keeper").await.unwrap();
