@@ -230,9 +230,23 @@ that additional effects may have applied without an acknowledged receipt.
 Before-script output collects up to 1 MiB per stream, but enters the retained
 state only when the script finishes. Interruption can omit that unfinished
 capture; output already streamed or logged keeps its original destination.
-With terminal stdin, human bootstrap children inherit the foreground process
-group. A signal sent only to the CLI does not guarantee that their descendants
-stop. Machine mode and nonterminal stdin use an owned child process group.
+Captured children run in an owned process group. Cancellation stops that group,
+including descendants that remain in it. Human bootstrap scripts retain terminal
+stdin and temporarily own its foreground group; exit, failure and cancellation
+restore the original foreground group and terminal settings. Ctrl-Z suspends the
+CLI job after restoring the terminal. Resume it with `fg`; `bg` leaves it stopped
+until its job owns the foreground again. Machine bootstrap stdin remains closed.
+A successful child may leave a background service running once it closes both
+captured streams. Children that deliberately leave the owned group are outside
+this cleanup boundary.
+
+The terminal lifecycle regression runs on Linux; interactive macOS behavior
+has not been executed there. On Unix targets whose current bindings lack the
+required safe, non-reaping child observer, including Cygwin, NetBSD and OpenBSD,
+scripted loads and Python extension loads fail during input preflight, before
+target lookup or mutation. Other captured commands fail before spawning.
+Nonscripted operations retain their existing platform support. This is a
+binding limitation, not a claim that those operating systems lack `waitid`.
 
 ## CLI logging
 
