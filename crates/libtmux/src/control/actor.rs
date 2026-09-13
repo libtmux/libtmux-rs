@@ -422,9 +422,8 @@ impl Connection {
 
             match step {
                 Step::Read(Err(error)) => return Err(error),
-                // tmux hung up, or the watcher asked to stop. Either ends the
-                // connection whatever the other half is doing.
-                Step::Read(Ok(None)) => return Ok(()),
+                // A clean remote close is announced by %exit before EOF.
+                Step::Read(Ok(None)) => return Err(Error::control_mode_closed()),
                 Step::Unwatched { asked: true } => {
                     return Ok(());
                 }

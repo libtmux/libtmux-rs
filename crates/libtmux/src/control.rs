@@ -23,14 +23,14 @@
 //! // is waiting on the connection it stopped reading.
 //! let watcher = tokio::spawn(async move {
 //!     while let Some(event) = events.next_event().await {
-//!         match event {
+//!         match event? {
 //!             Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
 //!             Event::Exit { .. } => break,
 //!             other => println!("{other:?}"),
 //!         }
 //!     }
 //!
-//!     // The stream ending says the connection is over; this says why.
+//!     // Explicit shutdown also closes a connection before stream exhaustion.
 //!     events.shutdown().await
 //! });
 //!
@@ -46,6 +46,7 @@
 //! `examples/watch.rs` is this as a program that runs, against a server it
 //! starts and cleans up.
 
+use std::future::{Future as _, poll_fn};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -492,7 +493,7 @@ impl ControlMode {
             events: ControlEvents {
                 events,
                 stop,
-                connection,
+                connection: Some(connection),
             },
         })
     }
@@ -528,8 +529,10 @@ impl ControlMode {
         self.sender.send(command).await
     }
 
-    /// Return the next notification, or `None` once the connection closes.
-    pub async fn next_event(&mut self) -> Option<Event> {
+    /// Return the next notification or terminal error, then `None`.
+    ///
+    /// See [`ControlEvents::next_event`] for termination and cancellation.
+    pub async fn next_event(&mut self) -> Option<Result<Event, Error>> {
         self.events.next_event().await
     }
 
@@ -537,7 +540,8 @@ impl ControlMode {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection failed before it was closed.
+    /// Returns a connection error that was not already delivered by
+    /// [`Self::next_event`].
     pub async fn shutdown(self) -> Result<(), Error> {
         drop(self.sender);
         self.events.shutdown().await
@@ -831,7 +835,7 @@ impl ControlSender {
     /// // The first report arrives without anything having changed, which is
     /// // what makes a subscription usable for reading the value as well.
     /// while let Some(event) = events.next_event().await {
-    ///     if let Event::SubscriptionChanged { name, value, .. } = event {
+    ///     if let Event::SubscriptionChanged { name, value, .. } = event? {
     ///         assert_eq!(name.as_str()?, "title");
     ///         assert_eq!(value.as_str()?, "watched");
     ///         break;
@@ -992,21 +996,30 @@ enum Delivery {
     Boundary(Boundary),
 }
 
-/// Receives what tmux reports without being asked.
+/// Receives tmux notifications and terminal connection errors.
 ///
-/// This is a [`Stream`], so it composes with `select!`, timeouts, and the rest
-/// of the async ecosystem rather than demanding a loop of its own.
+/// This is a [`Stream<Item = Result<Event, Error>>`](Stream). Notifications
+/// arrive in order. A connection failure follows all buffered notifications
+/// as one `Err`; subsequent polls return `None`. A normal tmux `%exit` arrives
+/// as [`Event::Exit`] and is followed by `None` after cleanup succeeds. EOF
+/// without `%exit` is [`crate::ControlModeErrorKind::Closed`].
+/// [`Server::shutdown`] may discard notifications still waiting for delivery
+/// so an unread stream cannot prevent executor shutdown.
+///
+/// Exhaustion waits for connection cleanup. [`Self::shutdown`] closes early
+/// and returns any terminal error the stream has not already delivered.
 ///
 /// Events are buffered, and a consumer that stops reading eventually stops the
 /// connection reading from tmux, which is the backpressure tmux already
-/// expects from a slow client. Nothing is dropped; commands wait instead. Drop
-/// this handle to opt out of events entirely and the connection runs on.
+/// expects from a slow client. During normal operation nothing is dropped;
+/// commands wait instead. Drop this handle to opt out of events entirely and
+/// the connection runs on.
 #[derive(Debug)]
 pub struct ControlEvents {
     events: mpsc::Receiver<Delivery>,
-    /// Ends the connection when this handle asks, or when it is dropped.
+    /// Requests closure; dropping it leaves remaining senders working.
     stop: watch::Sender<()>,
-    connection: tokio::task::JoinHandle<Result<(), Error>>,
+    connection: Option<tokio::task::JoinHandle<Result<(), Error>>>,
 }
 
 impl ControlEvents {
@@ -1014,27 +1027,32 @@ impl ControlEvents {
         self.events.recv().await
     }
 
-    /// Return the next notification, or `None` once the connection closes.
-    pub async fn next_event(&mut self) -> Option<Event> {
-        loop {
-            match self.next_delivery().await? {
-                Delivery::Event(event) => return Some(event),
-                Delivery::Boundary(_) => {}
-            }
-        }
+    /// Return the next notification or terminal error, then `None`.
+    ///
+    /// Cancelling a pending call consumes neither an event nor a terminal
+    /// diagnostic. Once `None` is returned, subsequent calls also return
+    /// `None`. See [`ControlEvents`] for the EOF and cleanup contract.
+    ///
+    /// # Errors
+    ///
+    /// Yields one terminal error for transport failure, unexpected EOF, a
+    /// frame budget or command deadline being exceeded, executor shutdown,
+    /// or failed connection cleanup.
+    pub async fn next_event(&mut self) -> Option<Result<Event, Error>> {
+        poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
 
     /// End the connection and report how it went.
     ///
-    /// The stream running out says only that the connection is over. This says
-    /// why, which is the difference between a session that ended and a pipe
-    /// that broke. It ends the connection outright rather than waiting for the
-    /// senders, so it is the same call whether the connection is still healthy
-    /// or tmux hung up an hour ago.
+    /// Stops the connection even while command senders remain alive. Unread
+    /// notifications are discarded so cleanup cannot wait on a full buffer.
+    /// If the stream already delivered its terminal error, this succeeds;
+    /// that error is not delivered twice.
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection failed before it was closed.
+    /// Returns a connection or cleanup error not already delivered by the
+    /// stream. Caller-requested closure succeeds when cleanup succeeds.
     pub async fn shutdown(mut self) -> Result<(), Error> {
         let _ = self.stop.send(());
         // Draining releases a connection that is parked handing over an event,
@@ -1043,23 +1061,34 @@ impl ControlEvents {
         self.events.close();
         while self.events.recv().await.is_some() {}
 
-        self.connection
-            .await
-            .map_err(|_| Error::control_mode_closed())?
+        match self.connection.take() {
+            Some(connection) => connection.await.map_err(|_| Error::control_mode_closed())?,
+            None => Ok(()),
+        }
     }
 }
 
 impl Stream for ControlEvents {
-    type Item = Event;
+    type Item = Result<Event, Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Event>> {
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             match std::task::ready!(self.events.poll_recv(context)) {
-                Some(Delivery::Event(event)) => return Poll::Ready(Some(event)),
+                Some(Delivery::Event(event)) => return Poll::Ready(Some(Ok(event))),
                 Some(Delivery::Boundary(_)) => {}
-                None => return Poll::Ready(None),
+                None => break,
             }
         }
+        let Some(connection) = self.connection.as_mut() else {
+            return Poll::Ready(None);
+        };
+        let outcome = std::task::ready!(Pin::new(connection).poll(context));
+        self.connection = None;
+        Poll::Ready(match outcome {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(Err(error)),
+            Err(_) => Some(Err(Error::control_mode_closed())),
+        })
     }
 }
 
@@ -1071,6 +1100,9 @@ const NARROW_DIRTY: u8 = 2;
 ///
 /// Built by [`crate::Pane::stream_output`]. This is a [`Stream`] of the bytes
 /// that pane produced, in order.
+/// Its infallible items combine normal termination and connection failure
+/// into `None`. Call [`Self::shutdown`] to observe any connection error, or
+/// use [`ControlEvents`] to receive errors during iteration.
 ///
 /// tmux is told to send this connection nothing but the watched pane. A
 /// neighbouring pane running `yes` otherwise moves tens of megabytes a second

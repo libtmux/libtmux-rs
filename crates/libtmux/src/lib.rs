@@ -410,3 +410,7 @@ pub use libtmux_macros::Filterable;
 #[cfg(doctest)]
 #[doc = include_str!("../../../README.md")]
 pub struct WorkspaceReadme;
+
+#[cfg(all(doctest, feature = "query", feature = "control-mode"))]
+#[doc = include_str!("../docs/migration.md")]
+pub struct MigrationGuide;
