@@ -60,7 +60,7 @@
 //! `Drop` is deliberately non-destructive.
 //!
 //! ```no_run
-//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::ScopeError<libtmux::Error>> {
+//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::ScopeError<String, libtmux::Error>> {
 //! let id = server
 //!     .with_session("throwaway", async |session| {
 //!         session.new_window("build").await?;

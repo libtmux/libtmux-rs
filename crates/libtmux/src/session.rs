@@ -807,7 +807,7 @@ impl Session {
         &self,
         options: impl Into<NewWindowOptions>,
         operation: impl AsyncFnOnce(&Window) -> Result<T, E>,
-    ) -> Result<T, crate::ScopeError<E>> {
+    ) -> Result<T, crate::ScopeError<T, E>> {
         let session = self.clone();
         let options = options.into();
         scoped::run(

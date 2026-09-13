@@ -798,7 +798,7 @@ impl Window {
         &self,
         options: impl Into<SplitOptions>,
         operation: impl AsyncFnOnce(&Pane) -> Result<T, E>,
-    ) -> Result<T, crate::ScopeError<E>> {
+    ) -> Result<T, crate::ScopeError<T, E>> {
         let window = self.clone();
         let options = options.into();
         scoped::run(

@@ -13,7 +13,7 @@ pub(crate) async fn run<R, T, E, Create, Cleanup, CleanupFuture, Operation>(
     create: Create,
     cleanup: Cleanup,
     operation: Operation,
-) -> Result<T, ScopeError<E>>
+) -> Result<T, ScopeError<T, E>>
 where
     R: Clone + Send + 'static,
     Create: Future<Output = Result<R, Error>> + Send + 'static,
@@ -28,7 +28,10 @@ where
 
     match (outcome, cleanup.finish().await) {
         (outcome, Ok(())) => outcome.map_err(ScopeError::Operation),
-        (Ok(_), Err(error)) => Err(ScopeError::Cleanup(error.after_effect(operation_name))),
+        (Ok(value), Err(error)) => Err(ScopeError::Cleanup {
+            value,
+            cleanup: error.after_effect(operation_name),
+        }),
         (Err(operation), Err(cleanup)) => Err(ScopeError::OperationAndCleanup {
             operation,
             cleanup: cleanup.after_effect(operation_name),
@@ -181,7 +184,7 @@ mod tests {
         .await
         .expect_err("cleanup fails after the scoped operation succeeded");
 
-        let ScopeError::Cleanup(error) = error else {
+        let ScopeError::Cleanup { value: (), cleanup: error } = error else {
             panic!("cleanup failed after the operation succeeded");
         };
         assert_eq!(error.kind(), ErrorKind::PartialEffect);

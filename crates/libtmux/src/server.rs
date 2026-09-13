@@ -1269,7 +1269,7 @@ impl Server {
         &self,
         options: impl Into<NewSessionOptions>,
         operation: impl AsyncFnOnce(&Session) -> Result<T, E>,
-    ) -> Result<T, crate::ScopeError<E>> {
+    ) -> Result<T, crate::ScopeError<T, E>> {
         let server = self.clone();
         let options = options.into();
         scoped::run(
