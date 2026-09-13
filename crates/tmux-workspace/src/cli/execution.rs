@@ -162,6 +162,9 @@ pub(super) async fn load(args: &ArgMatches, report: &mut Reporter) -> Result<()>
         return Err(CliError::usage("machine load requires -d or --append"));
     }
     let workspaces = load_inputs(args)?;
+    if !flag(args, "detached") && !flag(args, "append") {
+        require_attach_terminal()?;
+    }
     report.progress = super::progress::Progress::new(args, report.machine())?;
     if let Some(path) = option(args, "log-file") {
         report
@@ -756,7 +759,7 @@ pub(super) async fn freeze(args: &ArgMatches, report: &Reporter) -> Result<()> {
     Ok(())
 }
 
-async fn attach(server: &Server, session: &Session) -> Result<()> {
+fn require_attach_terminal() -> Result<()> {
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
         return Err(CliError::new(
@@ -764,6 +767,11 @@ async fn attach(server: &Server, session: &Session) -> Result<()> {
             "attaching requires a terminal; use -d",
         ));
     }
+    Ok(())
+}
+
+async fn attach(server: &Server, session: &Session) -> Result<()> {
+    require_attach_terminal()?;
     let action = if std::env::var_os("TMUX").is_some() {
         "switch-client"
     } else {
