@@ -57,7 +57,7 @@ jobs:
         with:
           tool: just,cargo-hack,cargo-deny,uv
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@30268d5a5865a55665e4eced80d01affd53bbc96 # Await nested cleanup
 
       - run: just check
 
@@ -90,7 +90,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@30268d5a5865a55665e4eced80d01affd53bbc96 # Await nested cleanup
 
       # The tag is an assertion about the tree, and an assertion is worth
       # checking: a tag naming a version the manifest does not carry would
