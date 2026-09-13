@@ -16,6 +16,70 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `tmux-workspace` is a native binary for tmuxp workspaces: discovery, loading,
+  capture, conversion and imports, with JSON and NDJSON output, terminal load
+  progress, generated manuals and shell completions. (#27)
+
+- `tmux-workspace freeze` writes only where `--save-to` names it to, and
+  returns the captured document on stdout under `--json` or `--ndjson`. No
+  destination is derived from the session, because tmux allows a session name
+  to hold path separators, so human capture without `--save-to` is a usage
+  error rather than a file somewhere the name implied. (#27)
+
+### Removed
+
+- **Breaking.** `ServerBuilder::colors` no longer accepts `88`, so
+  `Server::builder().colors(88).build()` returns
+  `ServerConfigurationErrorKind::InvalidColorMode` rather than starting tmux
+  with `-8`. No supported tmux release accepts that option. Pass `256` for
+  tmux's `-2`, or omit the override. (#27)
+
+### Fixed
+
+- Tmuxinator imports refuse unexpanded ERB markup before output or overwrite,
+  rather than copying a template into the workspace. Teamocil sources, which no
+  template engine reads, keep such text literally. (#27)
+
+- Workspace imports preserve command grouping, pane order, focus and directory
+  context after saving elsewhere. Unsupported source behavior and invalid native
+  output fail before publication or overwrite. Native loads reject unused
+  document endpoint settings before any input runs scripts or changes tmux. (#27)
+
+- Native workspace loads reject unknown `workspace_builder_options` fields
+  before any input runs scripts or changes tmux. Explicit Python extensions
+  retain their additional builder options. (#27)
+
+- `tmux-workspace --generate` includes every command in one manual and
+  exports positional arity, groups, conflicts, overrides and numeric bounds.
+  JSON and NDJSON output wrap the exact generated artefact; human help and
+  shell completions retain their format. (#27)
+
+- `tmux-workspace ls --tree` groups files by directory and nests `--full`
+  configuration output. Human labels escape control characters; machine
+  records retain their original values. (#27)
+
+- Empty plugin lists and absent, null or empty workspace builders keep the
+  native CLI loader. Invalid extension types fail before any workspace runs
+  scripts or changes tmux; explicit extensions retain the Python bridge. (#27)
+
+- Captured CLI children keep an owned process group through output draining.
+  Bootstrap scripts retain interactive stdin, restore terminal settings and
+  foreground ownership, and stop with the CLI on interruption. Background
+  resume waits for foreground ownership. Targets without safe child-observer
+  bindings reject scripted loads before mutation. (#27)
+
+- `tmux-workspace load` retains acknowledged effects and completed inputs
+  when SIGINT or SIGTERM interrupts it. Both handlers register before work
+  starts. Interrupted mutation phases report unknown outcomes without
+  inventing session IDs or implying rollback. (#27)
+
+- MCP `select_layout` rejects malformed input before window lookup and uses
+  the core's daemon-aware layout guard. Successful replies return tmux's
+  applied saved layout, including when the request uses a name
+  abbreviation. (#27)
+
 ## 0.1.0-alpha.11 - 2026-09-12
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.11;
