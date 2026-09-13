@@ -23,6 +23,16 @@ enum Drawing {
 pub(super) struct Progress {
     size: (u16, u16),
     lines: usize,
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     same_stdout: bool,
     color: bool,
     drawing: Drawing,
@@ -37,6 +47,16 @@ fn geometry() -> Option<(u16, u16)> {
     (size.ws_col >= 2 && size.ws_row >= 2).then_some((size.ws_col, size.ws_row))
 }
 
+#[cfg(not(any(
+    target_os = "cygwin",
+    target_os = "emscripten",
+    target_os = "fuchsia",
+    target_os = "horizon",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "redox",
+    target_os = "wasi"
+)))]
 fn shared_terminal() -> bool {
     if !io::stdout().is_terminal() {
         return false;
@@ -88,6 +108,16 @@ impl Progress {
         Ok(Some(Self {
             size,
             lines,
+            #[cfg(not(any(
+                target_os = "cygwin",
+                target_os = "emscripten",
+                target_os = "fuchsia",
+                target_os = "horizon",
+                target_os = "netbsd",
+                target_os = "openbsd",
+                target_os = "redox",
+                target_os = "wasi"
+            )))]
             same_stdout: shared_terminal(),
             color: output::color_enabled(args, true),
             drawing: Drawing::Ready,
@@ -190,6 +220,16 @@ impl Progress {
         Ok(())
     }
 
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     pub(super) fn output(&mut self, stream: &str, text: &str) -> Result<bool> {
         if !self.unchanged() || (stream == "stdout" && !self.same_stdout) {
             return Ok(false);

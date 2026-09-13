@@ -20,6 +20,7 @@ include = [
     "/src/**/*.rs",
     "/tests/**/*.rs",
     "/tests/fixtures/layout-preflight.json",
+    "/tests/fixtures/terminal_lifecycle.py",
 ]
 
 [dependencies]
@@ -38,9 +39,12 @@ anstyle-parse = { version = "1.0.0", optional = true, features = ["core"] }
 unicode-width = { version = "0.2.2", optional = true, default-features = false }
 unicode-segmentation = { version = "=1.12.0", optional = true }
 
+[target.'cfg(not(any(target_os = "cygwin", target_os = "emscripten", target_os = "fuchsia", target_os = "horizon", target_os = "netbsd", target_os = "openbsd", target_os = "redox", target_os = "wasi")))'.dependencies]
+nix = { workspace = true, optional = true }
+
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:clap_complete", "dep:clap_mangen", "dep:serde_json", "dep:fancy-regex", "dep:tokio", "dep:tempfile", "dep:rustix", "dep:anstyle-parse", "dep:unicode-width", "dep:unicode-segmentation"]
+cli = ["dep:clap", "dep:clap_complete", "dep:clap_mangen", "dep:serde_json", "dep:fancy-regex", "dep:tokio", "dep:tempfile", "dep:rustix", "dep:nix", "dep:anstyle-parse", "dep:unicode-width", "dep:unicode-segmentation"]
 
 [[bin]]
 name = "tmux-workspace"

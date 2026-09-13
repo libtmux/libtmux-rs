@@ -10,7 +10,27 @@ pub(super) struct Logger {
     file: Option<File>,
     failure: Option<String>,
     sequence: u64,
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     script_bytes: [usize; 2],
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     script_truncated: [bool; 2],
 }
 
@@ -43,7 +63,27 @@ impl Logger {
             file: None,
             failure: None,
             sequence: 0,
+            #[cfg(not(any(
+                target_os = "cygwin",
+                target_os = "emscripten",
+                target_os = "fuchsia",
+                target_os = "horizon",
+                target_os = "netbsd",
+                target_os = "openbsd",
+                target_os = "redox",
+                target_os = "wasi"
+            )))]
             script_bytes: [0; 2],
+            #[cfg(not(any(
+                target_os = "cygwin",
+                target_os = "emscripten",
+                target_os = "fuchsia",
+                target_os = "horizon",
+                target_os = "netbsd",
+                target_os = "openbsd",
+                target_os = "redox",
+                target_os = "wasi"
+            )))]
             script_truncated: [false; 2],
         }
     }
@@ -126,11 +166,31 @@ impl Logger {
         }
     }
 
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     pub(super) fn begin_child(&mut self) {
         self.script_bytes = [0; 2];
         self.script_truncated = [false; 2];
     }
 
+    #[cfg(not(any(
+        target_os = "cygwin",
+        target_os = "emscripten",
+        target_os = "fuchsia",
+        target_os = "horizon",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox",
+        target_os = "wasi"
+    )))]
     pub(super) fn chunk(&mut self, command: &str, stream: &str, text: &str) {
         let index = usize::from(stream == "stderr");
         if !self.enabled("debug") || self.script_truncated[index] || text.is_empty() {

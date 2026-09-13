@@ -174,6 +174,12 @@ fn load_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>
         }
         workspaces.push((path, workspace));
     }
+    if workspaces
+        .iter()
+        .any(|(_, workspace)| workspace.before_script.is_some() || workspace.bridge)
+    {
+        process::require_support()?;
+    }
     Ok(workspaces)
 }
 
