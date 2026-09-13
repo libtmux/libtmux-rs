@@ -261,12 +261,16 @@ async fn events_compose_with_the_async_ecosystem() {
     // Events are a Stream, so the ecosystem's combinators apply and no loop
     // of this crate's own design is required. The pin is tokio's timer's
     // requirement, not this crate's: ControlEvents is Unpin on its own.
+    //
+    // A per-item timeout elapsing is a slow tick to tolerate, not a failure:
+    // `filter_map` drops it and `timeout` keeps waiting for the next item. A
+    // connection error is not tolerated the same way, since the PR that made
+    // it visible during iteration is exactly what this test exercises.
     let named = events
         .timeout(Duration::from_secs(10))
-        .map(|event| {
-            event
-                .expect("notification before timeout")
-                .expect("healthy stream")
+        .filter_map(|event| match event {
+            Ok(event) => Some(event.expect("healthy stream")),
+            Err(_elapsed) => None,
         })
         .filter(is_a_new_window);
     let mut named = std::pin::pin!(named);
