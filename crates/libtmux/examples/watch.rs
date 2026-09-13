@@ -73,19 +73,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await???;
-    println!(
-        "{} events arrived while those commands were being sent, on the same socket",
-        seen.len()
-    );
+    // The watcher's own `event?` can end this early -- a connection error is
+    // as reachable here as tmux exiting cleanly. Collecting its outcome
+    // first, rather than propagating it immediately with `?`, means the
+    // teardown below still runs on that path instead of leaking the
+    // throwaway server and its socket file.
+    let outcome: Result<usize, Box<dyn std::error::Error>> = async {
+        let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await???;
+        println!(
+            "{} events arrived while those commands were being sent, on the same socket",
+            seen.len()
+        );
+        drop(commands);
+        events.shutdown().await?;
+        Ok(seen.len())
+    }
+    .await;
 
-    drop(commands);
-    events.shutdown().await?;
     server.kill().await?;
     server.shutdown().await?;
 
     // tmux does not unlink its socket when the server exits, so whatever named
     // one owns removing it.
     std::fs::remove_file(&socket)?;
+
+    outcome?;
     Ok(())
 }
