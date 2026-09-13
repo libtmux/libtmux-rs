@@ -3,7 +3,7 @@ use std::future::Future;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use crate::Error;
+use crate::{Error, ScopeError};
 
 #[cfg(feature = "tracing")]
 use tracing::instrument::WithSubscriber as _;
@@ -13,22 +13,26 @@ pub(crate) async fn run<R, T, E, Create, Cleanup, CleanupFuture, Operation>(
     create: Create,
     cleanup: Cleanup,
     operation: Operation,
-) -> Result<T, E>
+) -> Result<T, ScopeError<E>>
 where
     R: Clone + Send + 'static,
     Create: Future<Output = Result<R, Error>> + Send + 'static,
     Cleanup: FnOnce(R) -> CleanupFuture + Send + 'static,
     CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
     Operation: AsyncFnOnce(&R) -> Result<T, E>,
-    E: From<Error>,
 {
-    let (created, cleanup) = acquire(create, cleanup).await.map_err(E::from)?;
+    let (created, cleanup) = acquire(create, cleanup)
+        .await
+        .map_err(ScopeError::Creation)?;
     let outcome = operation(&created).await;
 
     match (outcome, cleanup.finish().await) {
-        (outcome, Ok(())) => outcome,
-        (Ok(_), Err(error)) => Err(error.after_effect(operation_name).into()),
-        (Err(_), Err(cleanup)) => Err(cleanup.after_effect(operation_name).into()),
+        (outcome, Ok(())) => outcome.map_err(ScopeError::Operation),
+        (Ok(_), Err(error)) => Err(ScopeError::Cleanup(error.after_effect(operation_name))),
+        (Err(operation), Err(cleanup)) => Err(ScopeError::OperationAndCleanup {
+            operation,
+            cleanup: cleanup.after_effect(operation_name),
+        }),
     }
 }
 
@@ -140,7 +144,7 @@ mod tests {
 
     use tokio::sync::Notify;
 
-    use crate::{Command, Error, ErrorKind, ObjectKind};
+    use crate::{Command, Error, ErrorKind, ObjectKind, ScopeError};
 
     #[cfg(feature = "tracing")]
     use tracing::subscriber::Subscriber;
@@ -177,6 +181,9 @@ mod tests {
         .await
         .expect_err("cleanup fails after the scoped operation succeeded");
 
+        let ScopeError::Cleanup(error) = error else {
+            panic!("cleanup failed after the operation succeeded");
+        };
         assert_eq!(error.kind(), ErrorKind::PartialEffect);
         assert!(
             matches!(
@@ -214,8 +221,18 @@ mod tests {
         .await
         .expect_err("both operation and cleanup fail");
 
+        let ScopeError::OperationAndCleanup { operation, cleanup } = error else {
+            panic!("operation and cleanup both failed");
+        };
         assert!(matches!(
-            error,
+            operation,
+            Error::ObjectGone {
+                kind: ObjectKind::Window,
+                ..
+            }
+        ));
+        assert!(matches!(
+            cleanup,
             Error::AfterEffect { operation: "with-window", source }
                 if matches!(*source, Error::Overloaded { .. })
         ));

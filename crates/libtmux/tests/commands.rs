@@ -171,20 +171,10 @@ async fn sourcing_a_file_applies_its_commands() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A caller's own error type, carrying `From<libtmux::Error>`.
-///
-/// That conversion is what lets a scope's setup and teardown failures join
-/// the same channel as the operation's own.
+/// A caller's own error type, without a libtmux conversion.
 #[derive(Debug, PartialEq)]
 enum Failure {
     Deliberate,
-    Tmux(String),
-}
-
-impl From<libtmux::Error> for Failure {
-    fn from(error: libtmux::Error) -> Self {
-        Self::Tmux(error.to_string())
-    }
 }
 
 #[tokio::test]
@@ -202,14 +192,15 @@ async fn scoped_operations_clean_up_after_success_and_failure() {
     assert!(seen.starts_with('$'));
     assert!(server.sessions().await.expect("sessions").is_empty());
 
-    // Failure: the operation's error comes back, and cleanup still ran.
-    // The operation's error comes back directly: one `?`, not two.
     let outcome = server
         .with_session("failing", async |_session| {
             Err::<(), Failure>(Failure::Deliberate)
         })
         .await;
-    assert_eq!(outcome, Err(Failure::Deliberate));
+    assert!(matches!(
+        outcome,
+        Err(libtmux::ScopeError::Operation(Failure::Deliberate))
+    ));
     assert!(
         server.sessions().await.expect("sessions").is_empty(),
         "cleanup runs even when the operation failed",
