@@ -97,7 +97,36 @@ fn copy(value: &Map<String, Value>, result: &mut Value, names: &[(&str, &str)]) 
     }
 }
 
+// Tmuxinator expands ERB before it parses YAML, and nothing here does, so
+// markup that reaches this point would otherwise become a literal command.
+fn reject_template_text(text: &str) -> Result<()> {
+    if text.contains("<%") {
+        return Err(CliError::invalid(
+            "tmuxinator ERB templates are unsupported; expand them before import",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_templates(value: &Value) -> Result<()> {
+    match value {
+        Value::String(text) => reject_template_text(text),
+        Value::Array(values) => values.iter().try_for_each(reject_templates),
+        Value::Object(values) => {
+            for (key, value) in values {
+                reject_template_text(key)?;
+                reject_templates(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(super) fn workspace(kind: &str, source: &Value) -> Result<Value> {
+    if kind == "tmuxinator" {
+        reject_templates(source)?;
+    }
     let source = if kind == "teamocil" && source.get("session").is_some() {
         mapping(source, &["session"], "teamocil")?;
         &source["session"]

@@ -812,9 +812,11 @@ fn conversion_preserves_extension_values_and_protects_existing_files() {
 fn importers_transform_native_source_documents() {
     let directory = tempfile::tempdir().unwrap();
     for (kind, source) in [
+        // Teamocil evaluates no templates, so markup a tmuxinator source
+        // could not carry is ordinary text here and survives the import.
         (
             "teamocil",
-            "session:\n  name: demo\n  windows:\n    - name: editor\n      splits:\n        - cmd: echo hello\n",
+            "session:\n  name: demo\n  windows:\n    - name: editor\n      splits:\n        - cmd: echo <%= literal %>\n",
         ),
         (
             "tmuxinator",
@@ -828,6 +830,12 @@ fn importers_transform_native_source_documents() {
         assert_eq!(value["session_name"], "demo");
         assert_eq!(value["windows"][0]["window_name"], "editor");
         assert_eq!(value["windows"][0]["panes"].as_array().unwrap().len(), 1);
+        if kind == "teamocil" {
+            assert_eq!(
+                value["windows"][0]["panes"][0]["shell_command"][0]["cmd"],
+                "echo <%= literal %>"
+            );
+        }
     }
 }
 
@@ -927,6 +935,9 @@ fn importers_refuse_unrepresentable_fields_before_output_or_overwrite() {
         ("teamocil", serde_json::json!({"session":{"name":"demo","windows":[{"name":"main","filters":{"after":"echo after"}}]}}), "filters"),
         ("teamocil", serde_json::json!({"session":{"name":"demo","windows":[{"name":"main","panes":[{"cmd":"echo ready","width":37}]}]}}), "width"),
         ("teamocil", serde_json::json!({"session":{"name":"demo","windows":[{"name":"main","panes":[{"commands":[42]}]}]}}), "commands"),
+        ("tmuxinator", serde_json::json!({"name":"demo","root":"<%= dynamic_root %>","windows":[{"main":null}]}), "ERB"),
+        ("tmuxinator", serde_json::json!({"name":"demo","windows":[{"main":"echo <%= dynamic_command %>"}]}), "ERB"),
+        ("tmuxinator", serde_json::json!({"name":"demo","windows":[{"<%= dynamic_window %>":null}]}), "ERB"),
         ("tmuxinator", serde_json::json!({"name":"demo","root":false,"windows":[{"main":null}]}), "root"),
         ("tmuxinator", serde_json::json!({"name":"demo","project_name":"other","windows":[{"main":null}]}), "name"),
         ("tmuxinator", serde_json::json!({"windows":[{"main":null}]}), "session_name"),
