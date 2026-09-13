@@ -207,6 +207,14 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     let name = text(&value["session_name"], "session_name")?
         .filter(|v| !v.is_empty())
         .ok_or_else(|| CliError::invalid("session_name is required"))?;
+    let bridge = extension_bridge(value)?;
+    if !bridge && !value["workspace_builder_options"].is_null() {
+        keys(
+            &value["workspace_builder_options"],
+            &["pane_readiness"],
+            "workspace_builder_options",
+        )?;
+    }
     let readiness = readiness(&value["workspace_builder_options"])?;
     let directory = directory(
         &value["start_directory"],
@@ -237,7 +245,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         options: pairs(&value["options"], true)?,
         global_options: pairs(&value["global_options"], true)?,
         before_script: text(&value["before_script"], "before_script")?,
-        bridge: extension_bridge(value)?,
+        bridge,
         readiness,
         windows,
     })
@@ -441,9 +449,38 @@ mod tests {
 
     #[test]
     fn invalid_readiness_is_rejected_before_any_backend() {
-        for options in [json!({"pane_readiness":"sometimes"}), json!(["always"])] {
+        for options in [
+            json!({"pane_readiness":"sometimes"}),
+            json!(["always"]),
+            json!({"pane_readines":"never"}),
+            json!({"pane_readiness":"never", "timeout":1}),
+        ] {
             let source = json!({"session_name":"demo","workspace_builder_options":options,"windows":[{"panes":["blank"]}]});
             assert!(workspace(&source, Path::new("/tmp/workspace.yaml")).is_err());
         }
+    }
+
+    #[test]
+    fn readiness_preserves_native_values_and_extension_fields() -> Result<()> {
+        for (value, expected) in [
+            (Value::Null, None),
+            (json!({}), None),
+            (json!({"pane_readiness":"always"}), Some(true)),
+            (json!({"pane_readiness":false}), Some(false)),
+        ] {
+            let source = json!({"session_name":"demo","workspace_builder_options":value,"windows":[{"panes":["blank"]}]});
+            assert_eq!(
+                workspace(&source, Path::new("workspace.yaml"))?.readiness,
+                expected
+            );
+        }
+        for (plugins, builder) in [
+            (json!(["example.Plugin"]), Value::Null),
+            (json!([]), json!("example:Builder")),
+        ] {
+            let source = json!({"session_name":"demo","plugins":plugins,"workspace_builder":builder,"workspace_builder_options":{"extension_setting":true},"windows":[{"panes":["blank"]}]});
+            assert!(workspace(&source, Path::new("workspace.yaml"))?.bridge);
+        }
+        Ok(())
     }
 }

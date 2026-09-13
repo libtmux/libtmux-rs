@@ -1656,6 +1656,57 @@ fn invalid_execution_models_are_rejected_before_creating_a_server() {
 }
 
 #[tokio::test]
+async fn unknown_readiness_field_refuses_all_inputs_before_mutation() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("readiness-keeper").await.unwrap();
+    let keeper_id = keeper.id().to_string();
+    let pane = current_pane(&keeper).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let marker = directory.path().join("before-script-ran");
+    let first = serde_json::json!({
+        "session_name":"first-readiness", "before_script":"touch before-script-ran",
+        "windows":[{"panes":["blank"]}]
+    });
+    let second = serde_json::json!({
+        "session_name":"second-readiness",
+        "workspace_builder_options":{"pane_readines":"never"},
+        "windows":[{"panes":["blank"]}]
+    });
+    std::fs::write(directory.path().join("first.json"), first.to_string()).unwrap();
+    std::fs::write(directory.path().join("second.json"), second.to_string()).unwrap();
+    let output = at_pane(
+        &[
+            "load",
+            "-d",
+            "--json",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "first.json",
+            "second.json",
+        ],
+        directory.path(),
+        None,
+    );
+    let script_ran = marker.exists();
+    let sessions = guard.server().sessions().await.unwrap();
+    let session_ids: Vec<_> = sessions
+        .iter()
+        .map(|session| session.id().to_string())
+        .collect();
+    let keeper_pane = current_pane(&keeper).await;
+    guard.shutdown().await.unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("workspace_builder_options.pane_readines"),
+        "{output:?}"
+    );
+    assert!(!script_ran, "later invalid input ran the earlier script");
+    assert_eq!(session_ids, [keeper_id]);
+    assert_eq!(keeper_pane, pane);
+}
+
+#[tokio::test]
 async fn bootstrap_output_streams_escaped_records_before_the_child_finishes() {
     use tokio::io::{AsyncBufReadExt, BufReader};
     let guard = libtmux::test::TestServer::new().await.unwrap();
