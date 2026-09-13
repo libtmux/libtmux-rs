@@ -160,6 +160,13 @@ resolve, and this one could not have been published at all until `libtmux`
 shipped the `plan` feature it asks for — which is exactly the kind of thing
 that is invisible from inside the tree.
 
+## CLI listing
+
+`tmux-workspace ls --tree` groups discovered files by their directory, keeping
+local ancestors before the selected global directory. `--full` includes each
+configuration beneath its file. Human labels and paths escape control
+characters; JSON and NDJSON retain their original values and record shapes.
+
 ## CLI bootstrap
 
 `before_script` parses executable and arguments with shell-style quoting.
