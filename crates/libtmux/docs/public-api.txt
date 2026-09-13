@@ -925,9 +925,10 @@ function libtmux::query::ManyRelation::any: fn(self, expression: libtmux::query:
 function libtmux::query::ManyRelation::none: fn(self, expression: libtmux::query::FilterExpr<To>) -> libtmux::query::FilterExpr<From>
 function libtmux::query::Matcher::matches: fn(&self, candidate: &T) -> bool
 function libtmux::query::OneRelation::is: fn(self, expression: libtmux::query::FilterExpr<To>) -> libtmux::query::FilterExpr<From>
-function libtmux::query::QueryIteratorExt::exactly_one: fn(self) -> Result<&'a T, libtmux::query::ExactlyOneError>
-function libtmux::query::QueryIteratorExt::matching: fn<M: libtmux::query::Matcher<T>>(self, matcher: M) -> impl Iterator<Item = &'a T>
-function libtmux::query::QueryIteratorExt::one_or_none: fn(self) -> Result<Option<&'a T>, libtmux::query::MultipleItemsError>
+function libtmux::query::QueryIteratorExt::exactly_one: fn(self) -> Result<<Self as core::iter::traits::iterator::Iterator>::Item, libtmux::query::ExactlyOneError>
+function libtmux::query::QueryIteratorExt::matching: fn<'a, T: 'a, M: libtmux::query::Matcher<T>>(self, matcher: M) -> impl Iterator<Item = &'a T> where Self: Iterator<Item = &'a T>
+function libtmux::query::QueryIteratorExt::matching_owned: fn<M: libtmux::query::Matcher<<Self as core::iter::traits::iterator::Iterator>::Item>>(self, matcher: M) -> impl Iterator<Item = <Self as core::iter::traits::iterator::Iterator>::Item>
+function libtmux::query::QueryIteratorExt::one_or_none: fn(self) -> Result<Option<<Self as core::iter::traits::iterator::Iterator>::Item>, libtmux::query::MultipleItemsError>
 function libtmux::query::TextField::contains: fn(self, value: impl Into<String>) -> libtmux::query::FilterExpr<T>
 function libtmux::query::TextField::contains_ignore_case: fn(self, value: impl Into<String>) -> libtmux::query::FilterExpr<T>
 function libtmux::query::TextField::ends_with: fn(self, value: impl Into<String>) -> libtmux::query::FilterExpr<T>
@@ -1648,7 +1649,6 @@ impl libtmux::query::Filterable for libtmux::Session
 impl libtmux::query::Filterable for libtmux::SessionTree
 impl libtmux::query::Filterable for libtmux::Window
 impl libtmux::query::Filterable for libtmux::WindowTree
-impl<'a, T: 'a, I> libtmux::query::QueryIteratorExt<'a, T> for I where I: Iterator<Item = &'a T> + Sized
 impl<'de, T: libtmux::query::Filterable> Deserialize<'de> for libtmux::query::FilterExpr<T>
 impl<'de, T> Deserialize<'de> for libtmux::plan::Slot<T>
 impl<'de> Deserialize<'de> for libtmux::plan::CapturePane
@@ -1686,6 +1686,7 @@ impl<From, To> Eq for libtmux::query::ManyRelation<From, To>
 impl<From, To> Eq for libtmux::query::OneRelation<From, To>
 impl<From, To> PartialEq for libtmux::query::ManyRelation<From, To>
 impl<From, To> PartialEq for libtmux::query::OneRelation<From, To>
+impl<I: Iterator> libtmux::query::QueryIteratorExt for I
 impl<T, E> Clone for libtmux::query::EnumField<T, E>
 impl<T, E> Copy for libtmux::query::EnumField<T, E>
 impl<T, E> Debug for libtmux::query::EnumField<T, E>
@@ -2119,7 +2120,7 @@ trait libtmux::query::FilterEnum
 trait libtmux::query::FilterSchema: libtmux::query::Filterable
 trait libtmux::query::Filterable: Sized
 trait libtmux::query::Matcher<T>
-trait libtmux::query::QueryIteratorExt<'a, T: 'a>: Iterator<Item = &'a T> + Sized
+trait libtmux::query::QueryIteratorExt: Iterator + Sized
 type_alias libtmux::IndexedHooks = libtmux::SparseValues<libtmux::TmuxText>
 variant libtmux::AccessMode::ReadOnly
 variant libtmux::AccessMode::Write
