@@ -181,7 +181,11 @@ async fn layout_input_shaped_like_a_flag_is_not_obeyed() {
         .await
         .map(|_| ())
         .expect_err("flag-shaped layout is data");
-    assert!(error.message.contains("-E"), "{}", error.message);
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    assert_eq!(
+        error.data,
+        Some(serde_json::json!({"kind": "invalid_input", "retryable": false, "stale": false})),
+    );
     let after: Vec<Value> = json(tools.list_panes().await.expect("panes"))["panes"]
         .as_array()
         .unwrap()
