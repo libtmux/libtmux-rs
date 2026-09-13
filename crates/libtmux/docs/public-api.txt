@@ -962,6 +962,7 @@ function libtmux::test::reap_abandoned_servers: fn(older_than: std::time::Durati
 function libtmux::test::retry_until: async fn(within: std::time::Duration, condition: impl AsyncFnMut() -> bool) -> Result<(), libtmux::test::RetryTimeout>
 function libtmux::test::scaled: fn(base: std::time::Duration) -> std::time::Duration
 function libtmux::test::unique_name: fn(prefix: &str) -> String
+impl AsRef<[u8]> for libtmux::TmuxText
 impl AsRef<str> for libtmux::PaneId
 impl AsRef<str> for libtmux::SessionId
 impl AsRef<str> for libtmux::WindowId
