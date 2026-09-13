@@ -18,6 +18,8 @@ and panes.**
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
+See the [migration notes](docs/migration.md) when upgrading from alpha.11.
+
 ```rust
 use libtmux::test::TestServer;
 
@@ -229,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // subscription reads the value as well as watching it.
     let mut reports = 0;
     while let Some(event) = events.next_event().await {
-        if let Event::SubscriptionChanged { name, value, .. } = event {
+        if let Event::SubscriptionChanged { name, value, .. } = event? {
             println!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
             reports += 1;
             if reports == 1 {

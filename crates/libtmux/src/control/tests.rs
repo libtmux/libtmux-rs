@@ -24,6 +24,37 @@ fn reply(number: u64) -> BlockResult {
     }
 }
 
+#[tokio::test]
+async fn cancelling_a_pending_next_preserves_the_terminal_error() {
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, _stopped) = watch::channel(());
+    let (release, released) = oneshot::channel();
+    let connection = tokio::spawn(async move {
+        released.await.expect("cleanup is released");
+        Err(Error::control_mode_timeout())
+    });
+    let mut events = ControlEvents {
+        events: received,
+        stop,
+        connection: Some(connection),
+    };
+    drop(deliveries);
+    tokio::select! {
+        biased;
+        _ = events.next_event() => panic!("EOF must wait for connection cleanup"),
+        () = std::future::ready(()) => {}
+    }
+    release.send(()).expect("cleanup is waiting");
+    let error = events
+        .next_event()
+        .await
+        .expect("terminal diagnostic")
+        .expect_err("timeout");
+    assert_eq!(error.kind(), ErrorKind::Timeout);
+    assert!(events.next_event().await.is_none());
+    events.shutdown().await.expect("error already delivered");
+}
+
 fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
     let (result, answer) = oneshot::channel();
     let (commit, _commitment) = oneshot::channel();
@@ -179,7 +210,7 @@ async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );
@@ -216,7 +247,7 @@ async fn cancelling_a_snapshot_leaves_consumed_output_in_the_callers_sink() {
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );
@@ -292,7 +323,7 @@ async fn a_snapshot_streams_a_flood_into_caller_owned_storage() {
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );
@@ -365,7 +396,7 @@ async fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );

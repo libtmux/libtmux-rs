@@ -34,6 +34,7 @@ fn is_a_new_window(event: &Event) -> bool {
 /// Control mode reports plenty that a given test did not ask about, and the
 /// exact set differs between tmux releases, so a test names what it wants
 /// rather than asserting on the next event to arrive.
+#[allow(clippy::panic, reason = "test assertion helper")]
 async fn wait_for(
     events: &mut ControlEvents,
     mut wanted: impl FnMut(&Event) -> bool,
@@ -41,8 +42,9 @@ async fn wait_for(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         match tokio::time::timeout_at(deadline, events.next_event()).await {
-            Ok(Some(event)) if wanted(&event) => return Some(event),
-            Ok(Some(_)) => {}
+            Ok(Some(Ok(event))) if wanted(&event) => return Some(event),
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(error))) => panic!("the watched connection failed: {error:?}"),
             Ok(None) | Err(_) => return None,
         }
     }
@@ -78,6 +80,39 @@ async fn commands_travel_down_one_connection() {
     assert_ne!(listed.number(), refused.number());
 
     control.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn stream_reports_server_shutdown_once_before_eof() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard.session("terminal-error").await.expect("session");
+    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+    guard.server().shutdown().await.expect("client shuts down");
+    let error = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let item: Result<Event, libtmux::Error> = events
+                .next()
+                .await
+                .expect("shutdown must be reported before EOF");
+            if let Err(error) = item {
+                break error;
+            }
+        }
+    })
+    .await
+    .expect("the terminal diagnostic arrives");
+    assert!(matches!(error, libtmux::Error::ExecutorShutdown { .. }));
+    assert!(commands.is_closed());
+    assert!(events.next_event().await.is_none());
+    assert!(events.next().await.is_none());
+    events
+        .shutdown()
+        .await
+        .expect("the error was already delivered");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -226,9 +261,15 @@ async fn events_compose_with_the_async_ecosystem() {
     // Events are a Stream, so the ecosystem's combinators apply and no loop
     // of this crate's own design is required. The pin is tokio's timer's
     // requirement, not this crate's: ControlEvents is Unpin on its own.
+    //
+    // A per-item timeout is a slow tick to tolerate; a connection error is
+    // what this test exercises, so it still fails.
     let named = events
         .timeout(Duration::from_secs(10))
-        .filter_map(Result::ok)
+        .filter_map(|event| match event {
+            Ok(event) => Some(event.expect("healthy stream")),
+            Err(_elapsed) => None,
+        })
         .filter(is_a_new_window);
     let mut named = std::pin::pin!(named);
 
@@ -660,7 +701,7 @@ async fn a_muted_pane_never_reaches_this_connection() {
         let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.next_event()).await else {
             break;
         };
-        if let Event::Output { pane, bytes } = &event {
+        if let Event::Output { pane, bytes } = &event.expect("healthy stream") {
             assert_ne!(
                 pane,
                 noisy.id(),
@@ -788,6 +829,7 @@ async fn a_block_carrying_pane_ids_keeps_them_as_output() {
     // The rows must not have been reported as notifications instead.
     let stray = tokio::time::timeout(Duration::from_millis(200), events.next_event()).await;
     if let Ok(Some(event)) = stray {
+        let event = event.expect("healthy stream");
         assert!(
             !matches!(&event, Event::Other { name, .. } if name.chars().all(char::is_numeric)),
             "a pane id was reported as a notification: {event:?}",
@@ -1150,12 +1192,14 @@ async fn real_tmux_compat_muting_a_producing_pane_leaves_the_server_up() {
 ///
 /// tmux coalesces reports to at most once a second, so a caller watching for
 /// one is waiting on that interval rather than on the change itself.
+#[allow(clippy::expect_used, reason = "test assertion helper")]
 async fn next_report(events: &mut ControlEvents, name: &str, within: Duration) -> Option<String> {
     let deadline = tokio::time::Instant::now() + within;
     loop {
         let event = tokio::time::timeout_at(deadline, events.next_event())
             .await
             .ok()??;
+        let event = event.expect("subscription connection remains healthy");
         // Two ifs rather than a let-chain: this crate's floor is 1.85, and
         // let-chains landed in 1.88.
         if let Event::SubscriptionChanged {

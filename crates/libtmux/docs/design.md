@@ -758,7 +758,10 @@ protocol evidence supports that attribution.
 
 The `control-mode` feature opens one tmux connection and keeps it. A task owns
 the pipes; callers hold a `ControlSender` and a `ControlEvents`, which is a
-`Stream`.
+`Stream<Item = Result<Event, Error>>`. Buffered notifications precede one
+terminal error. A clean `%exit` is an event; EOF without it is a connection
+error. Exhaustion waits for cleanup. Explicit `shutdown` closes early and
+returns any terminal error that iteration has not already delivered.
 
 That task is an actor, and this document previously argued against one on the
 grounds that a caller-driven connection buffers and drops nothing out of sight.

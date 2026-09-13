@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let watcher = tokio::spawn(async move {
         let mut seen = Vec::new();
         while let Some(event) = events.next_event().await {
-            match event {
+            match event? {
                 Event::WindowAdded { window } => {
                     println!("  <- window {window} appeared");
                     seen.push(window.to_string());
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
         }
-        (seen, events)
+        Ok::<_, libtmux::Error>((seen, events))
     });
 
     // Meanwhile, drive the server down the same connection. These spawn no
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
 
-    let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await??;
+    let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await???;
     println!(
         "{} events arrived while those commands were being sent, on the same socket",
         seen.len()

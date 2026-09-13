@@ -721,11 +721,11 @@ function libtmux::control::BlockResult::number: const fn(&self) -> u64
 function libtmux::control::BlockResult::output: fn(&self) -> &[libtmux::TmuxText]
 function libtmux::control::BlockResult::refusal_for: fn(&self, operation: &'static str) -> Option<libtmux::Error>
 function libtmux::control::BlockResult::succeeded: const fn(&self) -> bool
-function libtmux::control::ControlEvents::next_event: async fn(&mut self) -> Option<libtmux::control::Event>
+function libtmux::control::ControlEvents::next_event: async fn(&mut self) -> Option<Result<libtmux::control::Event, libtmux::Error>>
 function libtmux::control::ControlEvents::shutdown: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::control::ControlMode::attach: async fn(server: &libtmux::Server, session: &libtmux::SessionId) -> Result<Self, libtmux::Error>
 function libtmux::control::ControlMode::attach_with_limits: async fn(server: &libtmux::Server, session: &libtmux::SessionId, limits: libtmux::ControlLimits) -> Result<Self, libtmux::Error>
-function libtmux::control::ControlMode::next_event: async fn(&mut self) -> Option<libtmux::control::Event>
+function libtmux::control::ControlMode::next_event: async fn(&mut self) -> Option<Result<libtmux::control::Event, libtmux::Error>>
 function libtmux::control::ControlMode::reply_timeout: fn(self, timeout: Duration) -> Self
 function libtmux::control::ControlMode::send: async fn(&self, command: libtmux::Command) -> Result<libtmux::control::BlockResult, libtmux::Error>
 function libtmux::control::ControlMode::shutdown: async fn(self) -> Result<(), libtmux::Error>
