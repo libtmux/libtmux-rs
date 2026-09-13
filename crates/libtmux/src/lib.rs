@@ -208,9 +208,19 @@
 //! assert_eq!(selected, [2, 3]);
 //! ```
 //!
+//! `matching` still needs a borrowed iterator; `into_iter()` does not satisfy
+//! it:
+//!
+//! ```compile_fail,E0271
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let values = vec![1, 2, 3];
+//! let _ = values.into_iter().matching(|candidate: &i32| *candidate > 1);
+//! ```
+//!
 //! Borrowed results cannot outlive their collection:
 //!
-//! ```compile_fail
+//! ```compile_fail,E0597
 //! use libtmux::query::QueryIteratorExt;
 //!
 //! let selected = {
@@ -222,7 +232,7 @@
 //!
 //! Consuming a collection transfers ownership:
 //!
-//! ```compile_fail
+//! ```compile_fail,E0382
 //! use libtmux::query::QueryIteratorExt;
 //!
 //! let values = vec![String::from("only")];
