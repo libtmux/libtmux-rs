@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use libtmux::{CaptureOptions, Error, Pane};
+use libtmux::{CaptureOptions, ControlModeErrorKind, Error, Pane};
 use regex::bytes::Regex;
 use serde::Serialize;
 
@@ -297,7 +297,20 @@ pub(crate) async fn wait_for_text(
     }
 
     let pane_id = output.pane().to_string();
-    output.shutdown().await?;
+    // Ordinary EOF (`Closed`) is tolerated: the pane stopped being read, so
+    // that alone is not a failure. Any other shutdown error -- frame budget,
+    // timeout, executor shutdown -- is real and discards the view above.
+    if let Err(error) = output.shutdown().await
+        && !matches!(
+            error,
+            Error::ControlMode {
+                kind: ControlModeErrorKind::Closed,
+                ..
+            }
+        )
+    {
+        return Err(error);
+    }
 
     Ok(WaitView {
         pane: pane_id,
