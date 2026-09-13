@@ -94,19 +94,23 @@ pub(super) fn main() -> ExitCode {
         &matches,
         matches.subcommand_name().unwrap_or("tmux-workspace"),
     );
-    let result = tokio::runtime::Builder::new_current_thread()
+    let mut load_state = execution::LoadState::default();
+    let mut result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(CliError::from)
-        .and_then(|runtime| runtime.block_on(async {
-            tokio::select! {
-                result = execute(&matches, &mut report) => result,
-                signal = tokio::signal::ctrl_c() => {
-                    signal?;
-                    Err(CliError { code: "interrupted", message: "operation interrupted".into(), status: 130, retained_state: None })
-                }
-            }
-        }));
+        .and_then(|runtime| {
+            runtime.block_on(interruptible(execute(
+                &matches,
+                &mut report,
+                &mut load_state,
+            )))
+        });
+    if let Err(error) = &mut result {
+        if error.code == "interrupted" {
+            load_state.interrupted(error, &mut report);
+        }
+    }
     let _ = report.clear_progress();
     match result {
         Ok(()) => {
@@ -123,7 +127,28 @@ pub(super) fn main() -> ExitCode {
     }
 }
 
-async fn execute(matches: &clap::ArgMatches, report: &mut Reporter) -> Result<()> {
+async fn interruptible(future: impl Future<Output = Result<()>>) -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+    tokio::select! {
+        result = future => return result,
+        _ = interrupt.recv() => {},
+        _ = terminate.recv() => {},
+    }
+    Err(CliError {
+        code: "interrupted",
+        message: "operation interrupted".into(),
+        status: 130,
+        retained_state: None,
+    })
+}
+
+async fn execute(
+    matches: &clap::ArgMatches,
+    report: &mut Reporter,
+    load_state: &mut execution::LoadState,
+) -> Result<()> {
     if let Some(format) = matches.get_one::<String>("generate") {
         if matches.subcommand().is_some() {
             return Err(CliError::usage(
@@ -147,7 +172,7 @@ async fn execute(matches: &clap::ArgMatches, report: &mut Reporter) -> Result<()
             report.records(&records, false, &[], false)
         }
         "convert" => convert(options, None, report),
-        "load" => execution::load(options, report).await,
+        "load" => execution::load(options, report, load_state).await,
         "freeze" => execution::freeze(options, report).await,
         "shell" => process::shell(options, report).await,
         "edit" => process::edit(options, report).await,
@@ -234,5 +259,66 @@ fn diagnostic(machine: bool, error: &CliError) {
         if let Some(state) = &error.retained_state {
             let _ = writeln!(io::stderr(), "Retained state: {state}");
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use std::{process::Stdio, time::Duration};
+
+    #[test]
+    fn signal_handlers_precede_the_first_execution_poll() {
+        for signal in ["SIGINT", "SIGTERM"] {
+            for _ in 0..8 {
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "cli::tests::first_poll_signal_child",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("LIBTMUX_TEST_STARTUP_SIGNAL", signal)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if child.try_wait().unwrap().is_none() {
+                    child.kill().unwrap();
+                }
+                let output = child.wait_with_output().unwrap();
+                assert!(output.status.success(), "{signal}: {output:?}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture raises native signals at the first execution poll"]
+    fn first_poll_signal_child() {
+        let signal = match std::env::var("LIBTMUX_TEST_STARTUP_SIGNAL")
+            .unwrap()
+            .as_str()
+        {
+            "SIGINT" => Some(rustix::process::Signal::INT),
+            "SIGTERM" => Some(rustix::process::Signal::TERM),
+            _ => None,
+        }
+        .expect("signal selected by the parent fixture");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(super::interruptible(async {
+            rustix::process::kill_process(rustix::process::getpid(), signal).unwrap();
+            std::future::pending::<super::Result<()>>().await
+        }));
+        let error = result.unwrap_err();
+        assert_eq!(error.code, "interrupted");
+        assert_eq!(error.status, 130);
     }
 }
