@@ -456,7 +456,7 @@ Search what panes are displaying with Rust's linear-time regex engine. Accept at
 
 ## `select_layout`
 
-Rearrange a window's panes into a named layout, or into a layout string tmux gave you earlier. Use even-horizontal, even-vertical, main-horizontal, main-vertical or tiled. Change tmux state; no client-supplied executable input.
+Change tmux state; no client-supplied executable input. Rearrange a window's panes using a saved tmux layout or a named layout and its unique abbreviation. Names follow the running daemon's version; mirrored main layouts require tmux 3.5. Invalid syntax is refused before window lookup. Return the saved layout tmux actually applied.
 
 - Toolset: `manage`
 - Process reach: `none`
