@@ -125,6 +125,20 @@ async fn layout_preflight_checks_all_inputs_before_scripts_or_append() {
     guard.shutdown().await.unwrap();
 }
 
+#[test]
+fn the_layout_corpus_matches_the_library_copy() {
+    // Each published crate ships its own fixtures, so the corpus cannot be
+    // shared by path; this is what keeps the two copies one corpus.
+    let library = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../libtmux/tests/fixtures/layout-preflight.json");
+    assert_eq!(
+        include_str!("fixtures/layout-preflight.json"),
+        std::fs::read_to_string(&library).unwrap(),
+        "{}",
+        library.display()
+    );
+}
+
 #[tokio::test]
 async fn real_tmux_compat_layout_preflight_corpus_preserves_keeper() {
     let corpus: serde_json::Value =
