@@ -8,12 +8,12 @@
 //! guessing past it.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::str::FromStr as _;
 
 use super::planner::Planner;
-use super::{Op, OperationKind, Part, Plan, Scope, Step};
+use super::{Op, OperationKind, Part, Plan, Scope, Step, WindowTarget};
 use crate::error::ListingDecodeError;
 use crate::formats::FormatCodecError;
 use crate::{
@@ -282,6 +282,37 @@ impl PlanResult {
     }
 }
 
+/// Every recorded layout, paired with the panes its window will hold.
+///
+/// The count is a floor: the window's own pane, plus the splits the plan adds
+/// to it beforehand. tmux refuses a tree with fewer cells than panes, so a
+/// floor can miss such a refusal but never invent one -- a window the plan did
+/// not build may already hold more panes than the plan can see.
+fn layouts(steps: &[Op]) -> impl Iterator<Item = (&OsStr, usize)> {
+    steps.iter().enumerate().filter_map(|(step, op)| match op {
+        Op::SelectLayout(layout) => Some((
+            layout.layout.as_os_str(),
+            panes_in(&steps[..step], &layout.target),
+        )),
+        _ => None,
+    })
+}
+
+fn panes_in(before: &[Op], window: &WindowTarget) -> usize {
+    let mut panes = 1;
+    for op in before {
+        match op {
+            Op::SplitWindow(split) if split.target == *window => panes += 1,
+            // Attributing a killed pane to a window would need tmux, so a plan
+            // that kills one first falls back to the floor rather than risk
+            // refusing a layout that fits.
+            Op::KillPane(_) => return 1,
+            _ => {}
+        }
+    }
+    panes
+}
+
 impl Plan {
     /// Run this plan, grouping it with `planner`.
     ///
@@ -300,12 +331,7 @@ impl Plan {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.validate_option_scopes()?;
-        server
-            .validate_layouts(self.steps().iter().filter_map(|op| match op {
-                Op::SelectLayout(layout) => Some((layout.layout.as_os_str(), 1)),
-                _ => None,
-            }))
-            .await?;
+        server.validate_layouts(layouts(self.steps())).await?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -715,10 +741,7 @@ impl Plan {
     ) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
-        let pending = crate::layout::prepare(self.steps().iter().filter_map(|op| match op {
-            Op::SelectLayout(layout) => Some((layout.layout.as_os_str(), 1)),
-            _ => None,
-        }))?;
+        let pending = crate::layout::prepare(layouts(self.steps()))?;
         if !pending.is_empty() {
             let block = sender.send(crate::layout::version_command()).await?;
             if let Some(error) = block.refusal_for("display-message") {
