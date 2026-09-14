@@ -2052,6 +2052,59 @@ fn invalid_execution_models_are_rejected_before_creating_a_server() {
 }
 
 #[tokio::test]
+async fn unreadable_pane_state_is_reported_as_itself_rather_than_a_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let wrapper = directory.path().join("tmux-no-cursor");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = '#{cursor_x},#{cursor_y}' ]; then\n    echo 'pane probe refused' >&2\n    exit 1\n  fi\ndone\nexec \"$REAL_TMUX\" \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let source = serde_json::json!({
+        "session_name":"unreadable-readiness",
+        "workspace_builder_options":{"pane_readiness":"always"},
+        "windows":[{"panes":["blank"]}]
+    });
+    std::fs::write(directory.path().join("project.json"), source.to_string()).unwrap();
+    let started = std::time::Instant::now();
+    let output = command_at(
+        &[
+            "load",
+            "-d",
+            "--ndjson",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "project.json",
+        ],
+        directory.path(),
+    )
+    .env("LIBTMUX_TEST_TMUX", &wrapper)
+    .env("REAL_TMUX", guard.server().tmux_executable())
+    .output()
+    .unwrap();
+    let elapsed = started.elapsed();
+    guard.shutdown().await.unwrap();
+    let warning = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "warning")
+        .unwrap_or_else(|| panic!("{output:?}"));
+    assert_ne!(warning["code"], "pane_readiness_timeout", "{warning}");
+    assert!(
+        warning["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("pane probe refused"),
+        "{warning}"
+    );
+    assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+}
+
+#[tokio::test]
 async fn unknown_readiness_field_refuses_all_inputs_before_mutation() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("readiness-keeper").await.unwrap();
