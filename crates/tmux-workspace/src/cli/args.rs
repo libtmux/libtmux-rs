@@ -335,11 +335,6 @@ fn load(declarations: &mut Declarations) -> Command {
                 .short('s')
                 .help("Override the workspace's session name"),
         )
-        .arg(flag(
-            "yes",
-            Some('y'),
-            "Accept existing-session confirmations",
-        ))
         .arg(
             Arg::new("detached")
                 .short('d')
