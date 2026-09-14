@@ -46,12 +46,18 @@ fn flag(name: &'static str, short: Option<char>, help: &'static str) -> Arg {
         .long(name)
         .action(ArgAction::SetTrue)
         .help(help);
-    short.map_or(arg.clone(), |s| arg.short(s))
+    match short {
+        Some(short) => arg.short(short),
+        None => arg,
+    }
 }
 
 fn value(name: &'static str, short: Option<char>, help: &'static str) -> Arg {
     let arg = Arg::new(name).long(name).help(help);
-    short.map_or(arg.clone(), |s| arg.short(s))
+    match short {
+        Some(short) => arg.short(short),
+        None => arg,
+    }
 }
 
 fn sockets(command: Command) -> Command {
