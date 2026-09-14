@@ -249,7 +249,8 @@ fn build(declarations: &mut Declarations) -> Command {
         )
         .subcommand(
             sockets(
-                Command::new("freeze").about("Capture a live session; human mode saves a file"),
+                Command::new("freeze")
+                    .about("Capture a live session; human mode requires --save-to"),
             )
             .arg(Arg::new("session_name"))
             .arg(
@@ -263,7 +264,7 @@ fn build(declarations: &mut Declarations) -> Command {
             .arg(value(
                 "save-to",
                 Some('o'),
-                "Save the captured workspace to this file",
+                "Save the captured workspace to this file; required outside machine mode",
             ))
             .arg(flag("yes", Some('y'), "Accept yes/no confirmations"))
             .arg(flag(

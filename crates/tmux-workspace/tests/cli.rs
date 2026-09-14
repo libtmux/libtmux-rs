@@ -432,6 +432,48 @@ async fn empty_tmux_context_allows_freezing_an_isolated_default_endpoint() {
 }
 
 #[tokio::test]
+async fn freeze_never_derives_a_destination_from_a_session_name() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    // tmux rewrites `.` and `:` in a session name on some releases and keeps
+    // `/` on every one, so the separator under test is the one that survives.
+    guard.session("sub/escaped").await.unwrap();
+    guard.session("kept").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let work = directory.path().join("work");
+    std::fs::create_dir_all(work.join("sub")).unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let escaped = at(&["freeze", "-S", socket, "-y", "-q", "sub/escaped"], &work);
+    let plain = at(&["freeze", "-S", socket, "-y", "-q", "kept"], &work);
+    let named = at(
+        &[
+            "freeze",
+            "-S",
+            socket,
+            "-y",
+            "-q",
+            "-o",
+            "kept.yaml",
+            "kept",
+        ],
+        &work,
+    );
+    let machine = at(&["freeze", "-S", socket, "--json", "kept"], &work);
+    guard.shutdown().await.unwrap();
+    for refused in [&escaped, &plain] {
+        assert_eq!(refused.status.code(), Some(2), "{refused:?}");
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("--save-to"),
+            "{refused:?}"
+        );
+    }
+    assert!(!work.join("sub/escaped.yaml").exists());
+    assert!(named.status.success(), "{named:?}");
+    assert!(work.join("kept.yaml").exists());
+    assert!(machine.status.success(), "{machine:?}");
+    assert!(String::from_utf8_lossy(&machine.stdout).contains("kept"));
+}
+
+#[tokio::test]
 async fn append_rechecks_after_python_runtime_and_before_script() {
     use std::os::unix::fs::PermissionsExt;
     for runtime in [false, true] {
