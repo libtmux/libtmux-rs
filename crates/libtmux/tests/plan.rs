@@ -54,6 +54,40 @@ async fn layout_preflight_precedes_every_planner_mutation() {
     guard.shutdown().await.unwrap();
 }
 
+// Two- and three-cell trees. tmux refuses the first for a three-pane window.
+const TWO_CELL_LAYOUT: &str = "89f5,80x24,0,0{39x24,0,0,0,40x24,40,0,1}";
+const THREE_CELL_LAYOUT: &str =
+    "ac5c,80x24,0,0{39x24,0,0,0,40x24,40,0[40x11,40,0,1,40x12,40,12,2]}";
+
+#[tokio::test]
+async fn layout_preflight_counts_the_panes_a_plan_creates() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-plan-panes").await.unwrap();
+    let mut plan = Plan::new();
+    let window = plan.add(NewWindow::new(session.id().clone()));
+    plan.add(SplitWindow::new(window));
+    plan.add(SplitWindow::new(window));
+    plan.add(libtmux::plan::SelectLayout::new(window, TWO_CELL_LAYOUT));
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let error = plan.run(guard.server(), planner).await.unwrap_err();
+        assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+        assert_eq!(session.windows().await.unwrap().len(), 1);
+    }
+
+    let mut plan = Plan::new();
+    let window = plan.add(NewWindow::new(session.id().clone()));
+    plan.add(SplitWindow::new(window));
+    plan.add(SplitWindow::new(window));
+    plan.add(libtmux::plan::SelectLayout::new(window, THREE_CELL_LAYOUT));
+    assert!(
+        plan.run(guard.server(), Planner::Sequential)
+            .await
+            .unwrap()
+            .is_complete()
+    );
+    guard.shutdown().await.unwrap();
+}
+
 #[cfg(feature = "control-mode")]
 #[tokio::test]
 async fn layout_preflight_precedes_control_plan_mutation() {
