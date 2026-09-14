@@ -717,12 +717,15 @@ async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand
 async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<()> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
-        if let Ok(cursor) = pane.format("#{cursor_x},#{cursor_y}").await {
-            if cursor.to_string_lossy() != "0,0" {
-                return Ok(());
+        match pane.format("#{cursor_x},#{cursor_y}").await {
+            Ok(cursor) if cursor.to_string_lossy() != "0,0" => return Ok(()),
+            Ok(_) => {}
+            // A refused probe is a different fact from an unmoved cursor, and
+            // reporting it as the deadline would claim an observation that
+            // never happened.
+            Err(error) => {
+                return report.event("warning", json!({"code":"pane_readiness_unreadable","pane_id":pane.id().to_string(),"message":format!("pane state could not be read: {error}; continuing as tmuxp does")}));
             }
-        } else {
-            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
