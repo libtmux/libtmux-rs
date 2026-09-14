@@ -196,3 +196,33 @@ fn human_listing_escapes_controls_and_preserves_unicode_names() {
             .unwrap()
     );
 }
+
+#[test]
+fn a_global_directory_named_twice_is_reported_once() {
+    let fixture = Listing::new();
+    let root = fixture.root.path().canonicalize().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_tmux-workspace"))
+        .args(["--json", "debug-info"])
+        .current_dir(&root)
+        .env_clear()
+        .env("HOME", &root)
+        .env("TMUXP_CONFIGDIR", root.join(".tmuxp"))
+        .env("XDG_CONFIG_HOME", root.join("xdg"))
+        .env("PATH", "/nonexistent")
+        .env("TERM", "dumb")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let document: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let listed: Vec<&str> = document["workspace_dirs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry.as_str().unwrap())
+        .collect();
+    let mut unique = listed.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), listed.len(), "{listed:?}");
+}
