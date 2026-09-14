@@ -795,10 +795,18 @@ pub(super) async fn freeze(args: &ArgMatches, report: &Reporter) -> Result<()> {
         selected_session(&server, option(args, "session_name").map(String::as_str)).await?;
     let value = capture(&session).await?;
     let format = option(args, "workspace-format").map_or("yaml", String::as_str);
-    let destination = option(args, "save-to").map(PathBuf::from).or_else(|| {
-        (!report.machine())
-            .then(|| PathBuf::from(format!("{}.{}", session.name().to_string_lossy(), format)))
-    });
+    // A destination is never derived from the captured session: tmux lets a
+    // session name hold path separators and traversal, and nobody typed that
+    // name as a path.
+    let destination = match option(args, "save-to") {
+        Some(path) => Some(PathBuf::from(path)),
+        None if report.machine() => None,
+        None => {
+            return Err(CliError::usage(
+                "specify --save-to, or choose --json or --ndjson to capture to stdout",
+            ));
+        }
+    };
     let warnings = [
         "Capture retains live topology, paths, current commands and stored options; original scripts, plugin intent and command history are not recoverable. Invalid UTF-8 is replaced with U+FFFD.",
     ];
