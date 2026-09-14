@@ -81,6 +81,18 @@ fn decode(pending: &mut Vec<u8>, bytes: &[u8], end: bool) -> String {
     decoded
 }
 
+/// Append to a capture until the limit, then stop for good.
+///
+/// Resuming after a dropped chunk would join two runs of output that were
+/// never adjacent, and one boolean cannot say where the gap is.
+fn retain(retained: &mut String, text: &str, truncated: &mut bool) {
+    if *truncated || retained.len() + text.len() > CAPTURE_LIMIT {
+        *truncated = true;
+        return;
+    }
+    retained.push_str(text);
+}
+
 fn chunk(
     report: &mut Reporter,
     stream: &str,
@@ -92,11 +104,7 @@ fn chunk(
         return Ok(());
     }
     report.log_chunk(stream, text);
-    if retained.len() + text.len() <= CAPTURE_LIMIT {
-        retained.push_str(text);
-    } else {
-        *truncated = true;
-    }
+    retain(retained, text, truncated);
     if report.machine() {
         report.event(
             "script-output",
@@ -251,7 +259,19 @@ async fn child_event(
 
 #[cfg(test)]
 mod tests {
-    use super::decode;
+    use super::{CAPTURE_LIMIT, decode, retain};
+
+    #[test]
+    fn a_truncated_capture_stops_appending_rather_than_splicing() {
+        let mut retained = "a".repeat(CAPTURE_LIMIT - 10);
+        let mut truncated = false;
+        retain(&mut retained, &"b".repeat(100), &mut truncated);
+        assert!(truncated);
+        retain(&mut retained, "tail", &mut truncated);
+        assert_eq!(retained.len(), CAPTURE_LIMIT - 10);
+        assert!(retained.ends_with('a'));
+    }
+
     #[test]
     fn decoding_keeps_split_utf8_after_invalid_bytes() {
         let mut pending = Vec::new();
