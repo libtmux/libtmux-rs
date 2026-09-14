@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import statistics
@@ -382,7 +383,7 @@ def main() -> None:
                 "mean_ms": statistics.mean(values),
                 "min_ms": min(values),
                 "max_ms": max(values),
-                "p95_ms": sorted(values)[min(len(values) - 1, int(len(values) * 0.95))],
+                "p95_ms": sorted(values)[math.ceil(0.95 * len(values)) - 1],
             }
             for name, values in timings.items()
         }
