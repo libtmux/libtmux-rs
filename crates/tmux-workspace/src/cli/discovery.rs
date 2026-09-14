@@ -76,7 +76,8 @@ pub(super) fn global_dirs() -> Vec<PathBuf> {
             .join("tmuxp"),
     );
     dirs.push(home().join(".tmuxp"));
-    dirs.dedup();
+    let mut seen = BTreeSet::new();
+    dirs.retain(|path| seen.insert(path.clone()));
     dirs
 }
 
