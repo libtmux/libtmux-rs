@@ -297,11 +297,9 @@ pub(crate) async fn wait_for_text(
     }
 
     let pane_id = output.pane().to_string();
-    // EOF without `%exit` is ordinary here: the pane already stopped being
-    // read, whether because it closed on its own (`PaneClosed`) or because
-    // this loop already got what it was waiting for. Any other shutdown
-    // failure -- a frame budget, a timeout, executor shutdown -- is not, and
-    // must not discard the view already built above.
+    // Ordinary EOF (`Closed`) is tolerated: the pane stopped being read, so
+    // that alone is not a failure. Any other shutdown error -- frame budget,
+    // timeout, executor shutdown -- is real and discards the view above.
     if let Err(error) = output.shutdown().await
         && !matches!(
             error,
