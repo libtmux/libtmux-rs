@@ -47,6 +47,16 @@ full.
   trait's generic arguments and constrain items through `Iterator`; existing
   borrowed `matching` calls remain unchanged. (#28)
 
+### Fixed
+
+- Decoding a `#{q:}` value containing `{`, `}` or a raw newline no longer
+  fails with an invalid-escape error. The unreleased tree reporting itself as
+  `next-3.9` widened tmux's own escaped-byte set to cover all three; no
+  release through 3.7c emits the new escapes, so accepting them decodes every
+  earlier release exactly as before. `window_layout` is the field most
+  callers hit this through, since its value is JSON on that tree and JSON is
+  built from braces. (#28)
+
 ## 0.1.0-alpha.11 - 2026-09-12
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.11;
