@@ -218,6 +218,18 @@ impl Pane {
         *self.projection.pane().pane_height()
     }
 
+    /// Return the pane's left edge, in cells from its window's own left edge.
+    #[must_use]
+    pub fn left(&self) -> i32 {
+        *self.projection.pane().pane_left()
+    }
+
+    /// Return the pane's top edge, in cells from its window's own top edge.
+    #[must_use]
+    pub fn top(&self) -> i32 {
+        *self.projection.pane().pane_top()
+    }
+
     /// Report whether this pane is the active one in its window.
     #[must_use]
     pub fn is_active(&self) -> bool {

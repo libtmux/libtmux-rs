@@ -236,6 +236,7 @@ constant libtmux::since::CAPTURE_LINE_FLAGS: libtmux::ReleaseVersion
 constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS: libtmux::ReleaseVersion
 constant libtmux::since::CLIENTS_HIDE_STOPPED: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
+constant libtmux::since::JSON_LAYOUTS: libtmux::ReleaseVersion
 constant libtmux::since::MIRRORED_LAYOUTS: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_FORMAT_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
@@ -428,6 +429,7 @@ function libtmux::Pane::is_piped: fn(&self) -> bool
 function libtmux::Pane::is_synchronized: fn(&self) -> bool
 function libtmux::Pane::join_into: async fn(self, beside: &Self, options: libtmux::JoinOptions) -> Result<Self, libtmux::Error>
 function libtmux::Pane::kill: async fn(self) -> Result<(), libtmux::Error>
+function libtmux::Pane::left: fn(&self) -> i32
 function libtmux::Pane::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
 function libtmux::Pane::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
 function libtmux::Pane::paste_buffer: async fn(&self, name: Option<&str>) -> Result<(), libtmux::Error>
@@ -453,6 +455,7 @@ function libtmux::Pane::stream_output_with_limits: async fn(&self, limits: libtm
 function libtmux::Pane::swap_with: async fn(&mut self, other: &Self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::title: fn(&self) -> &libtmux::TmuxText
 function libtmux::Pane::toggle_zoom: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::top: fn(&self) -> i32
 function libtmux::Pane::tty: fn(&self) -> &libtmux::TmuxText
 function libtmux::Pane::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
 function libtmux::Pane::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux::Error>
@@ -750,6 +753,7 @@ function libtmux::control::Event::pane: const fn(&self) -> Option<&libtmux::Pane
 function libtmux::control::Event::window: const fn(&self) -> Option<&libtmux::WindowId>
 function libtmux::control::PaneOutput::next_chunk: async fn(&mut self) -> Option<Vec<u8>>
 function libtmux::control::PaneOutput::pane: const fn(&self) -> &libtmux::PaneId
+function libtmux::control::PaneOutput::sender: const fn(&self) -> &libtmux::control::ControlSender
 function libtmux::control::PaneOutput::shutdown: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::control::PaneOutput::snapshot: async fn(&mut self, on_output: impl FnMut(&[u8])) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
 function libtmux::escape_format: fn(text: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
@@ -2192,6 +2196,7 @@ variant libtmux::Error::SupervisorLost
 variant libtmux::Error::Timeout
 variant libtmux::Error::UnreadableAccessRule
 variant libtmux::Error::UnreadableFormatValue
+variant libtmux::Error::UnrecognizedLayout
 variant libtmux::Error::UnsupportedCapability
 variant libtmux::Error::UnsupportedTmuxVersion
 variant libtmux::Error::VersionProbeFailed

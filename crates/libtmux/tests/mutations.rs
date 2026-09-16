@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use libtmux::test::{TestServer, retry_until};
-use libtmux::{Layout, NewSessionOptions, NewWindowOptions};
+use libtmux::{ErrorKind, Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
 fn text(value: Option<&TmuxText>) -> Vec<u8> {
@@ -618,7 +618,7 @@ async fn a_line_send_redacts_input_and_classifies_a_gone_pane() {
     let secret = "sentinel-line-secret";
     let error = stale.send_line(secret).await.expect_err("the pane is gone");
 
-    assert_eq!(error.kind(), libtmux::ErrorKind::ObjectGone);
+    assert_eq!(error.kind(), ErrorKind::ObjectGone);
     let diagnostic = format!("{error:?} {error}");
     assert!(!diagnostic.contains(secret), "{diagnostic}");
 
@@ -1244,7 +1244,7 @@ async fn a_taken_session_name_is_classified_rather_than_a_bare_refusal() {
         matches!(&error, libtmux::Error::SessionExists { name } if name == "taken"),
         "the refusal names what was taken: {error:?}",
     );
-    assert_eq!(error.kind(), libtmux::ErrorKind::Refused);
+    assert_eq!(error.kind(), ErrorKind::Refused);
 
     // The first session is untouched by the refusal.
     assert_eq!(server.sessions().await.expect("sessions").len(), 1);
@@ -1412,6 +1412,212 @@ async fn a_layout_is_named_saved_or_stepped_through() {
 
     window.previous_layout().await.expect("tmux steps back");
     assert_ne!(window.layout().as_bytes(), stepped.as_bytes());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A saved layout with more than two panes restores each pane's own position
+/// only where tmux reports the layout as JSON.
+///
+/// `LayoutSpec::Saved`'s doc says a saved string restores "the exact
+/// arrangement, including which process ended up where" only from
+/// `since::JSON_LAYOUTS` (3.8) onward; below it, the classic checksum-prefixed
+/// string reconstructs the shape but can hand two same-sized cells to each
+/// other's panes. This is tmux's own limitation, matching what the Python
+/// and Go ports found for a saved layout's pane identity, pinned here
+/// per-version rather than asserted as always true or always false.
+#[tokio::test]
+async fn real_tmux_compat_saved_layout_pane_identity_needs_json() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("layout-identity")
+        .await
+        .expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    for _ in 0..3 {
+        window
+            .split(SplitOptions::new(SplitDirection::Below))
+            .await
+            .expect("a pane is added");
+    }
+    // Mirrored presets arrived in 3.5; the unmirrored one is asymmetric too.
+    let asymmetric = if server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::MIRRORED_LAYOUTS)
+    {
+        Layout::MainVerticalMirrored
+    } else {
+        Layout::MainVertical
+    };
+    window
+        .select_layout(asymmetric)
+        .await
+        .expect("tmux arranges four panes asymmetrically");
+
+    let saved = window.layout().to_owned();
+    let before: Vec<(i32, i32, String)> = window
+        .panes()
+        .await
+        .expect("panes list")
+        .iter()
+        .map(|pane| (pane.left(), pane.top(), pane.id().to_string()))
+        .collect();
+
+    window
+        .select_layout(Layout::Tiled)
+        .await
+        .expect("tmux rearranges the panes");
+    window
+        .select_layout(&saved)
+        .await
+        .expect("tmux restores the saved layout");
+
+    let after: Vec<(i32, i32, String)> = window
+        .panes()
+        .await
+        .expect("panes list")
+        .iter()
+        .map(|pane| (pane.left(), pane.top(), pane.id().to_string()))
+        .collect();
+
+    let json_capable = server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::JSON_LAYOUTS);
+
+    if json_capable {
+        assert_eq!(
+            window.layout().as_bytes(),
+            saved.as_bytes(),
+            "a JSON layout restores byte-exact, pane ids included",
+        );
+        assert_eq!(
+            after, before,
+            "each pane returns to the exact cell it saved",
+        );
+    } else {
+        // Below 3.8 the shape always comes back; whether each pane's own id
+        // returns to its own cell depends on whether the live pane-list order
+        // happens to match the saved cell order, which this does not assert
+        // either way -- only that the crate does not overclaim it for this
+        // arrangement, which mirrored layouts are chosen to stress. Compared
+        // as a multiset, since which pane reports which coordinate first is
+        // exactly what is not being asserted here.
+        let mut before_shape: Vec<(i32, i32)> =
+            before.iter().map(|(left, top, _)| (*left, *top)).collect();
+        let mut after_shape: Vec<(i32, i32)> =
+            after.iter().map(|(left, top, _)| (*left, *top)).collect();
+        before_shape.sort_unstable();
+        after_shape.sort_unstable();
+        assert_eq!(
+            after_shape, before_shape,
+            "the geometry is restored either way"
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A value that is not a layout is refused before it reaches tmux.
+///
+/// tmux 3.3 and 3.3a exit on a layout `select-layout` cannot parse, taking
+/// every session on the socket with them, and `--` alone turns `-o` from the
+/// undo flag into exactly such a value. The session surviving is what fails
+/// there without the refusal.
+#[tokio::test]
+async fn a_value_that_is_not_a_layout_is_refused_before_dispatch() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("not-a-layout").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    for value in ["-o", "garbage", "", "next", "0000", "zzzz,80x24,0,0,0"] {
+        let error = window
+            .select_layout(value)
+            .await
+            .expect_err("a value that is not a layout is refused");
+        assert_eq!(error.kind(), ErrorKind::InvalidInput, "{value:?}: {error}");
+    }
+    assert!(
+        server
+            .has_session("not-a-layout")
+            .await
+            .expect("tmux still answers"),
+        "the session survives every refused value",
+    );
+    window
+        .select_layout("tiled")
+        .await
+        .expect("a preset name passed as text still applies");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A JSON-looking saved layout on an old tmux is refused with a version
+/// hint, not just tmux's generic "invalid layout".
+#[tokio::test]
+async fn a_json_layout_on_an_old_tmux_names_the_version_it_needs() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("json-layout").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    let json_capable = server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::JSON_LAYOUTS);
+
+    let error = window
+        .select_layout(r#"{"V":2,"L":[]}"#)
+        .await
+        .expect_err("a bare JSON skeleton is not a real layout either way");
+    let message = error.to_string();
+    if json_capable {
+        // This tmux understands the form; whatever refuses it is tmux's own
+        // validation of the content, not a version gate.
+        assert!(
+            !message.contains("needs tmux"),
+            "a JSON-capable tmux is not refused for its version: {message}",
+        );
+    } else {
+        assert!(
+            message.contains("needs tmux") && message.contains("3.8"),
+            "an old tmux names the release a JSON layout needs: {message}",
+        );
+    }
+
+    // A classic-looking garbage string never mentions a version: it is
+    // refused for its content on every release, the same way named layouts
+    // and other malformed strings already are.
+    let classic_error = window
+        .select_layout("not-a-real-layout")
+        .await
+        .expect_err("garbage is refused");
+    assert!(
+        !classic_error.to_string().contains("needs tmux"),
+        "a non-JSON refusal never claims a version floor: {classic_error}",
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

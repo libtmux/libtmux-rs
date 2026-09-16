@@ -675,6 +675,16 @@ pub enum Error {
         operation: &'static str,
     },
 
+    /// A saved layout value is not a preset name, a classic layout string, or
+    /// a JSON layout.
+    ///
+    /// Refused before dispatch rather than handed to tmux: 3.3 and 3.3a exit
+    /// on a layout `select-layout` cannot parse, destroying every session on
+    /// the socket, and a value such as `-o` is never a layout on any release.
+    /// The rejected value is not retained.
+    #[error("select-layout needs a preset name or a layout tmux reported")]
+    UnrecognizedLayout,
+
     /// A plan has a dependency that cannot be resolved before dispatch.
     #[cfg(feature = "plan")]
     #[error("invalid plan: {source}")]
@@ -1331,6 +1341,7 @@ impl fmt::Debug for Error {
                 .field("declared", declared)
                 .finish(),
             Self::RuntimeNested => formatter.debug_struct("RuntimeNested").finish(),
+            Self::UnrecognizedLayout => formatter.debug_struct("UnrecognizedLayout").finish(),
             Self::InvalidServerConfiguration { kind } => formatter
                 .debug_struct("InvalidServerConfiguration")
                 .field("kind", kind)

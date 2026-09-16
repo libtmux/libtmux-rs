@@ -230,6 +230,60 @@ async fn panes_report_their_window_and_process_details() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// `Pane::left`/`Pane::top` must agree with tmux's own `#{pane_left}` and
+/// `#{pane_top}`, and actually separate two panes a horizontal split placed
+/// side by side.
+#[tokio::test]
+async fn pane_position_matches_the_raw_format_fields() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    new_session(server, "positions").await;
+    run(
+        server,
+        Command::new("split-window")
+            .arg("-t")
+            .arg("positions")
+            .arg("-h")
+            .arg("-d")
+            .arg("sleep 300"),
+    )
+    .await;
+
+    let panes = server.panes().await.expect("panes list");
+    assert_eq!(panes.len(), 2, "the split produced a second pane");
+
+    for pane in &panes {
+        let left = pane
+            .format("#{pane_left}")
+            .await
+            .expect("pane_left reads")
+            .as_str()
+            .expect("pane_left is ASCII")
+            .parse::<i32>()
+            .expect("pane_left is an integer");
+        let top = pane
+            .format("#{pane_top}")
+            .await
+            .expect("pane_top reads")
+            .as_str()
+            .expect("pane_top is ASCII")
+            .parse::<i32>()
+            .expect("pane_top is an integer");
+        assert_eq!(pane.left(), left, "Pane::left must match #{{pane_left}}");
+        assert_eq!(pane.top(), top, "Pane::top must match #{{pane_top}}");
+    }
+
+    // A horizontal split places one pane's left edge at 0 and the other's
+    // strictly to its right, both at the same top.
+    let lefts: Vec<i32> = panes.iter().map(Pane::left).collect();
+    assert_eq!(lefts.iter().min().copied(), Some(0));
+    assert_ne!(lefts[0], lefts[1], "a horizontal split separates the panes");
+    assert_eq!(panes[0].top(), panes[1].top());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn traversal_scopes_each_level_to_its_parent() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

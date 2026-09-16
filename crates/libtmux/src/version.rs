@@ -448,6 +448,23 @@ impl TmuxVersion {
     /// assert!(version.meets(&TmuxVersion::MIN_SUPPORTED));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
+    ///
+    /// The English verb suggests this answers "is a capability available",
+    /// but on a development build it can refuse one that is already there:
+    ///
+    /// ```
+    /// use libtmux::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+    ///
+    /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
+    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    ///
+    /// // `next-3.9`'s tree already has 3.7's behavior, but this clamps every
+    /// // development identifier to the crate's floor, so it says no anyway.
+    /// // `TmuxVersion::has_behavior` is the question that says yes.
+    /// assert!(!next.meets(&capture_line_flags));
+    /// assert!(next.has_behavior(&capture_line_flags));
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
     #[must_use]
     pub fn meets(&self, required: &ReleaseVersion) -> bool {
         match self.release {
@@ -753,4 +770,16 @@ pub mod since {
     /// Below this release `layout_set_lookup` does not carry those names, and
     /// tmux refuses one as it would a typo.
     pub const MIRRORED_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
+
+    /// `window_layout` and `select-layout` using a JSON subset instead of the
+    /// classic checksum-prefixed string, and so [`crate::LayoutSpec::Saved`]
+    /// accepting one.
+    ///
+    /// tmux's own `CHANGES FROM 3.7c TO 3.8` names the release: "Layout
+    /// strings now use a JSON subset format ... The old format is still
+    /// accepted; control mode clients receive old layouts unless they set the
+    /// new-layouts flag." Below this release a JSON string is refused as an
+    /// unrecognised layout, with no hint that the value is simply from a
+    /// newer tmux.
+    pub const JSON_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 8, ReleaseSuffix::FINAL);
 }

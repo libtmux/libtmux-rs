@@ -87,7 +87,7 @@ impl Error {
             | Self::RuntimeUnavailable { .. } => ErrorKind::Unreachable,
             // The call is wrong, not the environment: the same future awaited
             // directly would work.
-            Self::RuntimeNested => ErrorKind::InvalidInput,
+            Self::RuntimeNested | Self::UnrecognizedLayout => ErrorKind::InvalidInput,
             Self::UnsupportedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
@@ -191,6 +191,7 @@ impl Error {
             | Self::LinkGone { .. }
             | Self::RuntimeUnavailable { .. }
             | Self::RuntimeNested
+            | Self::UnrecognizedLayout
             | Self::ServerGone {
                 kind: ServerGoneKind::Lost | ServerGoneKind::Stopped,
                 ..

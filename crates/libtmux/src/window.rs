@@ -467,7 +467,28 @@ impl Window {
                     .await?;
                 OsString::from(named.as_str())
             }
-            LayoutSpec::Saved(saved) => saved.clone(),
+            LayoutSpec::Saved(saved) => {
+                // Checked here rather than left to tmux: 3.3 and 3.3a exit on
+                // a value `select-layout` cannot parse, taking every session on
+                // the socket with them, and `--` does not help -- it turns
+                // `-o` from the undo flag into exactly such a value.
+                let server = crate::Server::from_core(Arc::clone(&self.core));
+                match SavedLayout::classify(saved) {
+                    SavedLayout::Preset(named) => {
+                        server
+                            .require(named.as_str(), named.minimum_release())
+                            .await?;
+                    }
+                    SavedLayout::Classic => {}
+                    SavedLayout::Json => {
+                        server
+                            .require("a JSON layout string", crate::version::since::JSON_LAYOUTS)
+                            .await?;
+                    }
+                    SavedLayout::Unrecognized => return Err(Error::UnrecognizedLayout),
+                }
+                saved.clone()
+            }
         };
 
         listing::mutate(
@@ -1250,8 +1271,18 @@ impl fmt::Display for Layout {
 ///
 /// A [`Layout`] names an arrangement tmux computes. A saved string is one
 /// tmux already computed: [`Window::layout`] reports one, and handing it back
-/// restores that exact arrangement including the pane sizes, which a named
-/// layout cannot express.
+/// restores the pane sizes, which a named layout cannot express.
+///
+/// From [`crate::since::JSON_LAYOUTS`] (3.8) a saved string carries each
+/// pane's id, so the restored arrangement is byte-exact, process for process.
+/// Below that release the classic checksum-prefixed string carries only
+/// sizes and positions: the shape returns, but which pane lands in which cell
+/// depends on whether the live pane list happens to already be in the saved
+/// cell order, which a mirrored or otherwise asymmetric layout can defeat. A
+/// saved string from 3.8+ is refused below it with
+/// [`crate::ErrorKind::UnsupportedVersion`], and a value that is none of a
+/// preset name, a classic string, or JSON with
+/// [`crate::ErrorKind::InvalidInput`], both before dispatch.
 ///
 /// # Examples
 ///
@@ -1332,6 +1363,49 @@ impl From<&TmuxText> for LayoutSpec {
         {
             Self::Saved(OsString::from(saved.to_string_lossy().into_owned()))
         }
+    }
+}
+
+/// The shape of a saved layout value, read before it reaches tmux.
+enum SavedLayout {
+    /// A preset name passed as text rather than as a [`Layout`].
+    Preset(Layout),
+    /// tmux's checksum-prefixed string: four hex digits and a comma.
+    Classic,
+    /// The JSON form tmux reports from [`crate::since::JSON_LAYOUTS`].
+    Json,
+    /// Nothing tmux ever reported, and nothing `select-layout` can parse.
+    Unrecognized,
+}
+
+impl SavedLayout {
+    fn classify(saved: &OsStr) -> Self {
+        let Some(text) = saved.to_str() else {
+            return Self::Unrecognized;
+        };
+        let presets = [
+            Layout::EvenHorizontal,
+            Layout::EvenVertical,
+            Layout::MainHorizontal,
+            Layout::MainHorizontalMirrored,
+            Layout::MainVertical,
+            Layout::MainVerticalMirrored,
+            Layout::Tiled,
+        ];
+        if let Some(named) = presets.into_iter().find(|named| named.as_str() == text) {
+            return Self::Preset(named);
+        }
+        // `layout_parse` reads `%hx,` and insists it consumed exactly five
+        // bytes; tmux itself always writes the checksum as four lowercase
+        // digits.
+        let bytes = text.as_bytes();
+        if bytes.len() > 5 && bytes[..4].iter().all(u8::is_ascii_hexdigit) && bytes[4] == b',' {
+            return Self::Classic;
+        }
+        if text.starts_with('{') {
+            return Self::Json;
+        }
+        Self::Unrecognized
     }
 }
 
