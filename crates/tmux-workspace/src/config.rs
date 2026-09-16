@@ -567,9 +567,11 @@ impl PaneConfig {
     fn write_yaml(&self, out: &mut String) {
         let mut entry = Entry::new("      - ", "        ");
 
-        if let [only] = self.shell_commands.as_slice() {
-            entry.key(out, &format!("shell_command: {}", quoted(only)));
-        } else if !self.shell_commands.is_empty() {
+        // Always a list, even for one command: a bare scalar and a list are
+        // both valid tmuxp input, but reading them back needs one type
+        // rather than a union, and freeze's own contract (SPEC 1 item 5)
+        // requires the list form whenever shell_command is emitted at all.
+        if !self.shell_commands.is_empty() {
             entry.key(out, "shell_command:");
             write_list(out, None, &self.shell_commands, 10);
         }
