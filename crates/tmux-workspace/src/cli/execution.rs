@@ -654,17 +654,25 @@ async fn build_window(
             .ok_or_else(|| CliError::new("pane_missing", "new window has no pane"))?,
     ];
     effects.panes.push(panes[0].id().to_string());
-    for pane in config.panes.iter().skip(1) {
+    // Split the pane the previous split made, not the window: `-t <window>`
+    // always resolves to the window's active pane, and a detached split
+    // never changes which pane that is, so targeting the window on every
+    // iteration keeps dividing pane 0 and pushes each new pane in front of
+    // the last (H1). `panes` always starts with the window's first pane, so
+    // there is always a source to split from.
+    let mut source = panes[0].clone();
+    for pane_config in config.panes.iter().skip(1) {
         let mut split = SplitOptions::new(SplitDirection::Below)
-            .start_directory(escape_format(&pane.directory));
-        if let Some(shell) = &pane.shell {
+            .start_directory(escape_format(&pane_config.directory));
+        if let Some(shell) = &pane_config.shell {
             split = split.command(shell);
         }
-        for (name, value) in &pane.environment {
+        for (name, value) in &pane_config.environment {
             split = split.environment(name, value);
         }
-        let pane = window.split(split).await?;
+        let pane = source.split(split).await?;
         effects.panes.push(pane.id().to_string());
+        source = pane.clone();
         panes.push(pane);
         window.select_layout(libtmux::Layout::Tiled).await?;
     }
