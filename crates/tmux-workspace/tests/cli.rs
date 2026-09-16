@@ -2581,3 +2581,84 @@ async fn load_places_panes_after_the_first_in_config_order() {
 
     guard.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn ndjson_load_emits_completion_events_with_tmux_ids() {
+    // SPEC 2 items 4 and 5: a consumer tracking progress needs to know when a
+    // pane or window finishes, not just when it started, and pane-created /
+    // pane-completed need a session id and a window id (tmux's own ids)
+    // alongside the pane id and the pane's ordinal in the document.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({
+            "session_name":"ndjson-events",
+            "windows":[
+                {"window_name":"one","panes":["blank","blank"]},
+                {"window_name":"two","panes":["blank"]}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let output = at(
+        &["load", "-S", socket, "-d", "--ndjson", "workspace.json"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let events: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+
+    for (name, expected) in [
+        ("window-created", 2),
+        ("window-completed", 2),
+        ("pane-created", 3),
+        ("pane-completed", 3),
+    ] {
+        assert_eq!(
+            events.iter().filter(|event| event["event"] == name).count(),
+            expected,
+            "{name}: {events:#?}"
+        );
+    }
+
+    for event in events
+        .iter()
+        .filter(|event| event["event"] == "pane-created" || event["event"] == "pane-completed")
+    {
+        assert!(
+            event["session_id"].as_str().unwrap().starts_with('$'),
+            "{event}"
+        );
+        assert!(
+            event["window_id"].as_str().unwrap().starts_with('@'),
+            "{event}"
+        );
+        assert!(
+            event["pane_id"].as_str().unwrap().starts_with('%'),
+            "{event}"
+        );
+        assert!(event["pane_index"].is_u64(), "{event}");
+    }
+    for event in events
+        .iter()
+        .filter(|event| event["event"] == "window-created" || event["event"] == "window-completed")
+    {
+        assert!(
+            event["session_id"].as_str().unwrap().starts_with('$'),
+            "{event}"
+        );
+        assert!(
+            event["window_id"].as_str().unwrap().starts_with('@'),
+            "{event}"
+        );
+        assert!(event["window_index"].is_u64(), "{event}");
+    }
+
+    guard.shutdown().await.unwrap();
+}
