@@ -526,7 +526,12 @@ async fn configure_session(
         session.set_option(name, value).await?;
     }
     for (name, value) in &workspace.global_options {
-        server.set_option(name, value).await?;
+        // tmuxp's global_options applies through the session's global
+        // table (`set-option -g`, no session target), which is where an
+        // ordinary option like history-limit lives; the server table
+        // (`set-option -s`) holds only a handful of names such as
+        // buffer-limit and refuses everything else with a scope mismatch.
+        server.set_global_option(name, value).await?;
     }
     // `auto` (no explicit pane_readiness) waits only for zsh, the shell the
     // prompt-redraw wait was added for; every other shell behaves as though
