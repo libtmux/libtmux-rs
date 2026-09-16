@@ -1625,3 +1625,51 @@ windows:
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn freeze_recognizes_a_default_shell_whose_running_name_differs() {
+    // default-shell is a path ("/bin/sh"), but the process tmux actually
+    // runs can report a different name: on macOS /bin/sh is bash, so the
+    // pane's current command is "bash" while default-shell's basename is
+    // "sh". Reproduced on Linux the same way tmux behaves on macOS: an
+    // interactive bash as default-command with sh still the default-shell.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    server
+        .set_global_option("default-command", "/bin/bash -i")
+        .await
+        .expect("override default-command");
+
+    let workspace =
+        Workspace::from_yaml("session_name: shellalias\nwindows:\n  - panes:\n      - blank\n")
+            .expect("the workspace parses");
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    let pane = session.panes().await.expect("panes").remove(0);
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(10), async || {
+        let Ok(refreshed) = pane.refreshed().await else {
+            return false;
+        };
+        refreshed
+            .current_command()
+            .is_some_and(|command| command.to_string_lossy() == "bash")
+    })
+    .await;
+    assert!(settled.is_ok(), "the pane's command settled to bash");
+
+    let frozen = tmux_workspace::freeze(&session)
+        .await
+        .expect("the session freezes");
+
+    assert!(
+        frozen.windows[0].panes[0].shell_commands.is_empty(),
+        "an ordinary interactive shell should omit shell_command even when \
+         its reported name differs from default-shell's basename: {:?}",
+        frozen.windows[0].panes[0].shell_commands
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
