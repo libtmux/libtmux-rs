@@ -76,7 +76,17 @@ pub enum RunOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitOutcome {
-    /// A pattern matched.
+    /// A wanted pattern was already on the pane's screen before this began
+    /// watching, rather than in output that arrived afterward.
+    ///
+    /// A wait only sees what a pane writes after it starts, so this is never
+    /// folded into [`Self::Matched`]: the same pattern sent moments earlier
+    /// with `send_keys` can already be sitting there as the shell's own echo
+    /// of the typed command, and a caller that treated that as a fresh match
+    /// would act before the command it sent had necessarily run. Choosing a
+    /// pattern not already visible waits for one that has not happened yet.
+    PresentAtEntry,
+    /// A pattern matched, in output that arrived after the wait attached.
     Matched,
     /// A stop pattern matched, so the wait ended early.
     Stopped,
@@ -120,12 +130,6 @@ pub struct WaitView {
     pub matched_index: Option<usize>,
     /// The pattern that matched, as it was given.
     pub matched_pattern: Option<String>,
-    /// Whether a success pattern was already on screen when the wait began.
-    ///
-    /// A wait only sees what a pane writes after it starts, so a pattern
-    /// already present will not match. This says so, rather than leaving the
-    /// caller to wait out the deadline wondering.
-    pub present_at_entry: bool,
     /// What the pane wrote, with escape sequences removed.
     pub text: String,
     /// How many bytes arrived, before filtering or truncation.
@@ -251,35 +255,67 @@ pub(crate) async fn wait_for_text_with_limits(
     limits: ControlLimits,
 ) -> Result<WaitView, Error> {
     // Attached first: a pattern that arrives while the screen is being read
-    // must still be seen.
+    // must still be seen. Reading first would lose one that landed between
+    // the capture and the attach, and wait out the deadline over output that
+    // did arrive. One landing in that gap is reported as present at entry
+    // instead, which is still true of the screen.
     let output = pane.stream_output_with_limits(limits).await?;
-    wait_on_output(pane, output, patterns, stops, timeout, cancelled).await
+    if let Some(view) = read_present_at_entry(pane, patterns).await? {
+        // The answer is already in hand; a failure closing a stream nothing
+        // read does not change it.
+        let _ = output.shutdown().await;
+        return Ok(view);
+    }
+    wait_on_output(output, patterns, stops, timeout, cancelled).await
+}
+
+/// Report a wanted pattern already on the pane's screen, before any stream
+/// attaches to watch for one arriving.
+///
+/// See [`WaitOutcome::PresentAtEntry`] for why this is a distinct outcome
+/// from [`WaitOutcome::Matched`] rather than a flag alongside it.
+async fn read_present_at_entry(
+    pane: &Pane,
+    patterns: &Patterns,
+) -> Result<Option<WaitView>, Error> {
+    // No patterns means "wait for anything at all", which nothing already on
+    // screen can pre-empt: there is nothing yet to call present.
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+
+    // A screen that cannot be read is not a reason to refuse to wait; the
+    // same failure surfaces from the attach right after this.
+    let Ok(lines) = pane.capture_with(CaptureOptions::visible()).await else {
+        return Ok(None);
+    };
+    let mut screen = Vec::new();
+    for line in &lines {
+        screen.extend_from_slice(line.as_bytes());
+        screen.push(b'\n');
+    }
+    let Some((index, source)) = patterns.first_match(&screen) else {
+        return Ok(None);
+    };
+
+    Ok(Some(WaitView {
+        pane: pane.id().to_string(),
+        outcome: WaitOutcome::PresentAtEntry,
+        matched_index: Some(index),
+        matched_pattern: Some(source.to_owned()),
+        text: String::from_utf8_lossy(&screen).into_owned(),
+        bytes: screen.len(),
+    }))
 }
 
 /// The read loop [`wait_for_text_with_limits`] runs once attached.
 async fn wait_on_output(
-    pane: &Pane,
     mut output: libtmux::control::PaneOutput,
     patterns: &Patterns,
     stops: &Patterns,
     timeout: Duration,
     cancelled: &CancellationToken,
 ) -> Result<WaitView, Error> {
-    // What is already on screen will never match, because a stream only
-    // carries what comes next. Saying so is cheaper than a wasted deadline.
-    let present_at_entry = match pane.capture_with(CaptureOptions::visible()).await {
-        Ok(lines) => {
-            let mut screen = Vec::new();
-            for line in &lines {
-                screen.extend_from_slice(line.as_bytes());
-                screen.push(b'\n');
-            }
-            patterns.first_match(&screen).is_some()
-        }
-        // A screen that cannot be read is not a reason to refuse to wait.
-        Err(_) => false,
-    };
-
     let mut filter = TextFilter::new();
     let mut text: Vec<u8> = Vec::new();
     let mut bytes = 0usize;
@@ -353,15 +389,41 @@ async fn wait_on_output(
         return Err(error);
     }
 
+    // A chunk can arrive in the same instant the deadline elapses; without
+    // this, that race would report `Deadline` while `text` already holds a
+    // match, which is exactly the shape DOTNET-10 hit in another port.
+    let (outcome, matched_index, matched_pattern) =
+        reconcile_deadline(outcome, matched_index, matched_pattern, patterns, &text);
+
     Ok(WaitView {
         pane: pane_id,
         outcome,
         matched_index,
         matched_pattern,
-        present_at_entry,
         text: String::from_utf8_lossy(&text).into_owned(),
         bytes,
     })
+}
+
+/// Reclassify a timed-out wait as matched when the buffer it is about to
+/// report already contains a pattern.
+///
+/// Only `Deadline` is reconsidered: `Stopped`, `PaneClosed`, and `Cancelled`
+/// already carry their own reason and are returned unchanged.
+fn reconcile_deadline(
+    outcome: WaitOutcome,
+    matched_index: Option<usize>,
+    matched_pattern: Option<String>,
+    patterns: &Patterns,
+    text: &[u8],
+) -> (WaitOutcome, Option<usize>, Option<String>) {
+    if !matches!(outcome, WaitOutcome::Deadline) {
+        return (outcome, matched_index, matched_pattern);
+    }
+    match patterns.first_match(text) {
+        Some((index, source)) => (WaitOutcome::Matched, Some(index), Some(source.to_owned())),
+        None => (outcome, matched_index, matched_pattern),
+    }
 }
 
 #[cfg(test)]

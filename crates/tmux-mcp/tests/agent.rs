@@ -2758,6 +2758,56 @@ async fn wait_and_cursor_tools_observe_live_output() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// `send_keys` then `wait_for_text` for a pattern the typed line's own echo
+/// already shows must not report `matched` (RS-4).
+///
+/// The line is typed without Enter and the wait begins only once the echo is
+/// on screen, so the pattern is present at entry on every run rather than on
+/// whichever runs the shell happened to echo first.
+#[tokio::test]
+async fn send_then_wait_does_not_match_the_commands_own_echo() {
+    let (guard, tools, pane) = typing_fixture("send-then-wait").await;
+
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent");
+    let server = guard.server();
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        server
+            .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
+            .await
+            .is_ok_and(|captured| captured.stdout_lossy().contains("MCPMARKER"))
+    })
+    .await
+    .expect("the shell echoes the typed line");
+
+    let waited = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "patterns": ["MCPMARKER"],
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait answers"),
+    );
+    assert_eq!(
+        waited["outcome"], "present_at_entry",
+        "a pattern already on screen before the wait attached must not read as a fresh match: {waited}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn search_snapshot_and_configuration_reads_are_structured() {
     let (guard, tools, pane) = typing_fixture("inspect").await;

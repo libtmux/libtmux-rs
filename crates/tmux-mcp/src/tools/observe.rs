@@ -334,10 +334,13 @@ impl TmuxTools {
                        stream, so text that scrolls past between checks is still seen. Prefer \
                        run_shell_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
-                       not author, such as a server logging that it is ready. The live stream \
-                       attaches a client while waiting, changing the session's attached-client \
-                       state. Each list accepts at most 32 patterns, each at most 4,096 bytes, \
-                       using Rust's linear-time regex engine.",
+                       not author, such as a server logging that it is ready. A pattern that is a \
+                       substring of a command you just sent with send_keys can already be on \
+                       screen as its echo; outcome present_at_entry reports that rather than \
+                       matched, so a still-pending command does not read as already done. The \
+                       live stream attaches a client while waiting, changing the session's \
+                       attached-client state. Each list accepts at most 32 patterns, each at most \
+                       4,096 bytes, using Rust's linear-time regex engine.",
         title = "Wait For Pane Text",
         meta = crate::capability_meta!(
             Inspect, None,

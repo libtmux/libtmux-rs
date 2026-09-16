@@ -17,6 +17,40 @@ fn finding_a_needle_reports_where_it_starts() {
     assert_eq!(find(b"abc", b""), None);
 }
 
+/// A wait that timed out must not report `Deadline` over a buffer that
+/// already contains a match (a timeout report holding the matched text in
+/// its own `tail`).
+#[test]
+fn reconcile_deadline_promotes_a_match_the_buffer_already_holds() {
+    let patterns = Patterns::compile(&["MARK".to_owned()], false, false).expect("pattern compiles");
+
+    let (outcome, index, pattern) =
+        reconcile_deadline(WaitOutcome::Deadline, None, None, &patterns, b"...MARK...");
+    assert_eq!(outcome, WaitOutcome::Matched);
+    assert_eq!(index, Some(0));
+    assert_eq!(pattern, Some("MARK".to_owned()));
+
+    // A genuine timeout with nothing to reclassify stays a timeout.
+    let (outcome, index, pattern) = reconcile_deadline(
+        WaitOutcome::Deadline,
+        None,
+        None,
+        &patterns,
+        b"nothing here",
+    );
+    assert_eq!(outcome, WaitOutcome::Deadline);
+    assert_eq!(index, None);
+    assert_eq!(pattern, None);
+
+    // A terminal outcome that already carries its own reason is untouched,
+    // even when the buffer also happens to contain a wanted pattern.
+    let (outcome, index, pattern) =
+        reconcile_deadline(WaitOutcome::Cancelled, None, None, &patterns, b"...MARK...");
+    assert_eq!(outcome, WaitOutcome::Cancelled);
+    assert_eq!(index, None);
+    assert_eq!(pattern, None);
+}
+
 #[test]
 fn shell_words_preserve_raw_bytes_and_split_apostrophes() {
     for (input, expected) in [
@@ -986,7 +1020,6 @@ async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() 
     let cancelled = CancellationToken::new();
 
     let error = wait_on_output(
-        &pane,
         output,
         &patterns,
         &stops,
