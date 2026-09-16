@@ -777,6 +777,9 @@ pub(super) async fn capture(session: &Session) -> Result<Value> {
         .options()
         .await?
         .into_iter()
+        // The capturing terminal's size, not anything the workspace
+        // asked for; reloading it would pin every future session to it.
+        .filter(|(name, _)| name != "default-size")
         .map(|(name, value)| (name, option_value(value)))
         .collect::<serde_json::Map<_, _>>();
     if !options.is_empty() {
