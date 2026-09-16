@@ -2707,3 +2707,24 @@ async fn panes_without_a_start_directory_use_the_invocation_directory() {
     );
     guard.shutdown().await.unwrap();
 }
+
+#[test]
+fn teamocil_import_derives_session_name_from_the_filename() {
+    // H6: teamocil's current format has no session name at all -- the
+    // document starts at `windows:`, and the name comes from the file, the
+    // same way cxx, dotnet, java and swift already derive it.
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("teamv1.yml"),
+        "windows:\n  - name: sample-window\n    root: /tmp\n    layout: tiled\n    panes:\n      - cmd: echo one\n      - cmd: [echo two-a, echo two-b]\n        focus: true\n",
+    )
+    .unwrap();
+    let output = at(
+        &["import", "teamocil", "teamv1.yml", "--json"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["session_name"], "teamv1");
+    assert_eq!(value["windows"][0]["window_name"], "sample-window");
+}
