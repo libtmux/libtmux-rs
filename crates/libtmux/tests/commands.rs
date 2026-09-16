@@ -1060,7 +1060,7 @@ async fn dispatch_only_commands_are_accepted() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::PROMPT_HISTORY)
+        .has_behavior(&since::PROMPT_HISTORY)
     {
         cleared.expect("the prompt history is cleared");
     } else {
@@ -1716,7 +1716,7 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CAPTURE_LINE_FLAGS);
+        .has_behavior(&since::CAPTURE_LINE_FLAGS);
 
     if !supported {
         // Below 3.7 tmux accepts no `-F`, and saying so beats an empty answer.
@@ -1811,7 +1811,7 @@ async fn a_suspended_client_is_not_reported_gone() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CLIENTS_HIDE_STOPPED);
+        .has_behavior(&since::CLIENTS_HIDE_STOPPED);
 
     let child = process::Command::new("tmux")
         .arg("-S")
@@ -1971,7 +1971,7 @@ async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CAPTURE_TRIM_BLANK_CELLS);
+        .has_behavior(&since::CAPTURE_TRIM_BLANK_CELLS);
 
     let asked = pane
         .capture_with(CaptureOptions::visible().trim_blank_cells())

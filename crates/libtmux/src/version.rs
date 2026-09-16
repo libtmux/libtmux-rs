@@ -450,6 +450,41 @@ impl TmuxVersion {
         }
     }
 
+    /// Report whether this version's tree carries a capability's behavior.
+    ///
+    /// The shared rule behind `Self::require`: a development identifier
+    /// asks its `behavior_release`, never clamped to the crate's minimum
+    /// supported release. Both this and `require` call it, so they cannot
+    /// drift apart the way two independently written rules could.
+    fn behavior_satisfies(&self, needs: ReleaseVersion) -> bool {
+        self.behavior_release()
+            .is_none_or(|release| release >= needs)
+    }
+
+    /// Report whether this version's tree carries a capability's behavior.
+    ///
+    /// This is `Self::require`'s refusal rule in boolean form, reachable so
+    /// a test predicting which branch `require` takes calls the same rule
+    /// `require` does, rather than an independently derived one that happens
+    /// to agree today. [`Self::meets`] is a different, publicly documented
+    /// rule: it clamps *every* development identifier -- `next-X.Y` included,
+    /// not only a bare `master` -- to "no more than the crate's minimum
+    /// supported release", so it refuses any requirement above that floor
+    /// regardless of what the build's own next-release number is. This reads
+    /// `next-X.Y` as the real release `X.Y` instead, so the two disagree for
+    /// any development build checked against a requirement above the floor:
+    /// [`crate::since`] holds several, and this crate's own tmux-matrix
+    /// probe self-reports `next-3.9`.
+    ///
+    /// Gated behind `test-support` because it exists for that reachability,
+    /// not as a second public capability check callers should choose
+    /// between.
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub fn has_behavior(&self, needs: &ReleaseVersion) -> bool {
+        self.behavior_satisfies(*needs)
+    }
+
     /// Refuse a capability this release is too old for.
     ///
     /// tmux usually accepts an unknown flag and ignores it, so without this
@@ -466,10 +501,7 @@ impl TmuxVersion {
         capability: &'static str,
         needs: ReleaseVersion,
     ) -> Result<(), Error> {
-        if self
-            .behavior_release()
-            .is_some_and(|release| release < needs)
-        {
+        if !self.behavior_satisfies(needs) {
             return Err(Error::UnsupportedCapability {
                 capability,
                 needs,
