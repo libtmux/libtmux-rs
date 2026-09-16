@@ -162,9 +162,8 @@ impl Workspace {
             .as_str()
             .ok_or_else(|| ConfigError::invalid("session_name must be a string"))?
             .to_owned();
-        // tmux stores the name verbatim, then uses `:` and `.` as the window
-        // and pane separators in every `-t` target, so a name that contains
-        // either can be created but never addressed again.
+        // tmux stores the name verbatim; `:` and `.` are `-t`'s window and
+        // pane separators, so a name with either becomes unaddressable.
         if let Some(separator) = session_name.chars().find(|c| matches!(c, ':' | '.')) {
             return Err(ConfigError::invalid(format!(
                 "session_name must not contain {separator:?}; tmux reads it as a target separator and the session could not be addressed afterward"
@@ -575,10 +574,8 @@ impl PaneConfig {
     fn write_yaml(&self, out: &mut String) {
         let mut entry = Entry::new("      - ", "        ");
 
-        // Always a list, even for one command: a bare scalar and a list are
-        // both valid tmuxp input, but reading them back needs one type
-        // rather than a union, and freeze's own contract (SPEC 1 item 5)
-        // requires the list form whenever shell_command is emitted at all.
+        // Always a list, even for one command: a bare scalar round-trips
+        // to a union type instead of one shape.
         if !self.shell_commands.is_empty() {
             entry.key(out, "shell_command:");
             write_list(out, None, &self.shell_commands, 10);

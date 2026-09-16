@@ -526,17 +526,12 @@ async fn configure_session(
         session.set_option(name, value).await?;
     }
     for (name, value) in &workspace.global_options {
-        // tmuxp's global_options applies through the session's global
-        // table (`set-option -g`, no session target), which is where an
-        // ordinary option like history-limit lives; the server table
-        // (`set-option -s`) holds only a handful of names such as
-        // buffer-limit and refuses everything else with a scope mismatch.
+        // tmuxp applies this as `set-option -g` (session table); the
+        // server table (`-s`) refuses most option names outright.
         server.set_global_option(name, value).await?;
     }
-    // `auto` (no explicit pane_readiness) waits only for zsh, the shell the
-    // prompt-redraw wait was added for; every other shell behaves as though
-    // `never` had been written. Commands are still typed into the pane
-    // either way, so a shell that is not waited for still receives them.
+    // `auto` waits for the prompt only when the default shell is zsh;
+    // every other shell behaves as though `never` had been written.
     effects.readiness = match workspace.readiness {
         Some(wait) => wait,
         None => session
@@ -663,12 +658,8 @@ async fn build_window(
             .ok_or_else(|| CliError::new("pane_missing", "new window has no pane"))?,
     ];
     effects.panes.push(panes[0].id().to_string());
-    // Split the pane the previous split made, not the window: `-t <window>`
-    // always resolves to the window's active pane, and a detached split
-    // never changes which pane that is, so targeting the window on every
-    // iteration keeps dividing pane 0 and pushes each new pane in front of
-    // the last (H1). `panes` always starts with the window's first pane, so
-    // there is always a source to split from.
+    // Split from the previous pane, not the window: `-t <window>` always
+    // divides the active pane, which a detached split never changes.
     let mut source = panes[0].clone();
     for pane_config in config.panes.iter().skip(1) {
         let mut split = SplitOptions::new(SplitDirection::Below)
@@ -791,13 +782,8 @@ pub(super) async fn capture(session: &Session) -> Result<Value> {
     if !options.is_empty() {
         value["options"] = json!(options);
     }
-    // Not session.environment_all(): tmux sessions inherit the process
-    // environment they were created under, so that table holds whatever the
-    // caller's shell happened to have -- SSH_AUTH_SOCK, SSH_AGENT_PID,
-    // DISPLAY -- indistinguishably from anything the workspace itself set.
-    // None of it survives a reload on another machine or after a reboot, and
-    // a frozen workspace is a file people commit and share. tmuxp writes no
-    // environment key at all; match that (M11, SPEC 1 item 4).
+    // Not session.environment_all(): a session inherits the caller's whole
+    // process environment, indistinguishable from what the workspace set.
     Ok(value)
 }
 

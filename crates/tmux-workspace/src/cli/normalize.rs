@@ -207,9 +207,8 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     let name = text(&value["session_name"], "session_name")?
         .filter(|v| !v.is_empty())
         .ok_or_else(|| CliError::invalid("session_name is required"))?;
-    // tmux stores the name verbatim, then uses `:` and `.` as the window and
-    // pane separators in every `-t` target, so a name that contains either
-    // can be created but never addressed again (H8).
+    // tmux stores the name verbatim; `:` and `.` are `-t`'s window and pane
+    // separators, so a name with either becomes unaddressable.
     if let Some(separator) = name.chars().find(|c| matches!(c, ':' | '.')) {
         return Err(CliError::invalid(format!(
             "session_name must not contain {separator:?}; tmux reads it as a target separator and the session could not be addressed afterward"
@@ -234,10 +233,8 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     }
     let readiness = readiness(&value["workspace_builder_options"])?;
     // With no start_directory at all, panes start in the invocation
-    // directory, matching tmuxp; go, java and rs used to start them in the
-    // workspace file's directory instead (H9). An explicit start_directory,
-    // relative or not, still resolves against the document's directory —
-    // that part was already correct and is unchanged here.
+    // directory, matching tmuxp; an explicit one still resolves against
+    // the document's directory.
     let directory = if value.get("start_directory").is_some() {
         directory(
             &value["start_directory"],
@@ -456,9 +453,6 @@ mod tests {
 
     #[test]
     fn session_name_rejects_tmux_target_separators() {
-        // tmux stores the name verbatim, then `:` and `.` are the window and
-        // pane separators in every `-t` target, so a name that contains
-        // either can be created but never addressed again (H8).
         for (name, separator) in [("a:b", ':'), ("a.b", '.')] {
             let source = json!({"session_name":name,"windows":[{"panes":["blank"]}]});
             let Err(error) = workspace(&source, Path::new("/tmp/workspace.yaml")) else {

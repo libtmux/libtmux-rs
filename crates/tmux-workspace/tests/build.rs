@@ -107,10 +107,8 @@ fn a_missing_session_name_is_rejected() {
 
 #[test]
 fn a_session_name_tmux_could_not_address_is_rejected() {
-    // Library-level H8: tmux stores the name verbatim, then uses `:` and `.`
-    // as the window and pane separators in every `-t` target, so a name
-    // that contains either can be created but never addressed again -- the
-    // same defect the CLI had, in the code path in front of it.
+    // tmux stores the name verbatim; `:` and `.` are `-t`'s window and
+    // pane separators, so a name with either becomes unaddressable.
     for name in ["a:b", "a.b"] {
         let error = Workspace::from_yaml(&format!("session_name: {name:?}\nwindows: []"))
             .expect_err("an unaddressable session_name should be refused");
@@ -782,9 +780,8 @@ async fn a_name_from_the_file_cannot_run_a_command() {
     // it would otherwise choose what runs.
     let directory = tempfile::tempdir().expect("a temporary directory");
     let marker = directory.path().join("marker");
-    // A session_name payload cannot reuse `directory`: tempfile's default
-    // prefix is dotted, and a `.` in session_name is refused outright as a
-    // tmux target separator (H8), for a reason this test is not about.
+    // A dotted marker path would trip session_name's own refusal of `.`,
+    // for a reason this test is not about, so it gets a dot-free directory.
     let session_directory = tempfile::Builder::new()
         .prefix("session-name-guard")
         .tempdir()
@@ -867,11 +864,8 @@ windows:
 
 #[tokio::test]
 async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
-    // SPEC 1 item 5: a pane running the session's default shell round-trips
-    // as a plain pane when shell_command is omitted; emitting it re-runs the
-    // shell inside itself on reload. A pane running anything else keeps its
-    // command, and -- emitted or not -- the field is always a YAML list,
-    // never a bare scalar, so a consumer never needs a union type for it.
+    // The default shell round-trips with shell_command omitted; emitting
+    // it would reload the shell as an explicit command inside itself.
     use libtmux::SplitDirection;
 
     let guard = TestServer::new().await.expect("tmux starts");
@@ -885,11 +879,9 @@ async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
         .await
         .expect("window lookup")
         .expect("a session has a window");
-    // Typed into an interactive shell, the same way an ordinary
-    // shell_command reaches a pane -- not given as split-window's own
-    // trailing shell-command argument, which tmux runs non-interactively
-    // through the default shell and which some shells (dash included) do
-    // not exec-replace, leaving that shell as pane_current_command forever.
+    // Typed rather than passed as split-window's own command: some
+    // shells (dash) don't exec-replace a `-c` command, which would
+    // leave the wrapping shell as pane_current_command forever.
     let other = window.split(SplitDirection::Below).await.expect("split");
     other.send_line("sleep 300").await.expect("type command");
 
@@ -913,9 +905,7 @@ async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
         "the untouched pane runs the default shell and should omit shell_command: {:?}",
         frozen.windows[0].panes[0].shell_commands
     );
-    // tmux reports only the command name, not its arguments, so this is
-    // what freeze can recover -- the same fidelity every other pane field
-    // already has.
+    // pane_current_command is the command name only, not its arguments.
     assert_eq!(frozen.windows[0].panes[1].shell_commands, ["sleep"]);
 
     let yaml = frozen.to_yaml();
@@ -933,12 +923,9 @@ async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
 
 #[tokio::test]
 async fn library_builder_places_panes_after_the_first_in_config_order() {
-    // Library-level H1: WorkspaceBuilder::plan() split every pane after the
-    // first from the window (SplitWindow::new), which always resolves to
-    // the window's active pane. A detached split never changes which pane
-    // that is, so every split kept dividing pane 0, and tmux inserts each
-    // new pane immediately after its source -- a 4-pane window came out A,
-    // D, C, B instead of A, B, C, D, the same defect the CLI had.
+    // `-t <window>` always divides the active pane, which a detached
+    // split never changes, so splitting the window repeatedly reverses
+    // everything after the first pane.
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
@@ -986,11 +973,8 @@ windows:
 
 #[tokio::test]
 async fn freeze_recognizes_a_default_shell_whose_running_name_differs() {
-    // default-shell is a path ("/bin/sh"), but the process tmux actually
-    // runs can report a different name: on macOS /bin/sh is bash, so the
-    // pane's current command is "bash" while default-shell's basename is
-    // "sh". Reproduced on Linux the same way tmux behaves on macOS: an
-    // interactive bash as default-command with sh still the default-shell.
+    // default-shell is a path, but on macOS /bin/sh runs as bash, so a
+    // bare pane's current command differs from its basename.
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     server

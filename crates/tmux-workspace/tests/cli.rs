@@ -2536,9 +2536,8 @@ fn successful_editor_can_leave_a_background_service_with_closed_streams() {
 
 #[tokio::test]
 async fn load_places_panes_after_the_first_in_config_order() {
-    // H1 regression: tmux inserts a detached split immediately after its
-    // source pane, so retargeting every split at the window (which always
-    // resolves to pane 0) reverses everything but the first pane.
+    // tmux inserts a detached split immediately after its source pane, so
+    // splitting the same target repeatedly reverses everything after it.
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
@@ -2584,10 +2583,8 @@ async fn load_places_panes_after_the_first_in_config_order() {
 
 #[tokio::test]
 async fn ndjson_load_emits_completion_events_with_tmux_ids() {
-    // SPEC 2 items 4 and 5: a consumer tracking progress needs to know when a
-    // pane or window finishes, not just when it started, and pane-created /
-    // pane-completed need a session id and a window id (tmux's own ids)
-    // alongside the pane id and the pane's ordinal in the document.
+    // A streaming consumer needs to know when a pane or window finishes,
+    // and pane-created needs ids to correlate without a second lookup.
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
@@ -2665,9 +2662,8 @@ async fn ndjson_load_emits_completion_events_with_tmux_ids() {
 
 #[tokio::test]
 async fn panes_without_a_start_directory_use_the_invocation_directory() {
-    // H9 / SPEC 1 item 1: with no start_directory anywhere in the document,
-    // tmuxp starts panes in the directory `load` was run from, not the
-    // directory the workspace file lives in.
+    // With no start_directory anywhere, panes should start in the
+    // invocation directory, matching tmuxp.
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let base = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let document_directory = base.path().join("workspaces");
@@ -2710,9 +2706,8 @@ async fn panes_without_a_start_directory_use_the_invocation_directory() {
 
 #[test]
 fn teamocil_import_derives_session_name_from_the_filename() {
-    // H6: teamocil's current format has no session name at all -- the
-    // document starts at `windows:`, and the name comes from the file, the
-    // same way cxx, dotnet, java and swift already derive it.
+    // teamocil's current format has no session name; the document starts
+    // at `windows:`, so the name should come from the file.
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
         directory.path().join("teamv1.yml"),
@@ -2731,11 +2726,8 @@ fn teamocil_import_derives_session_name_from_the_filename() {
 
 #[tokio::test]
 async fn global_options_use_tmuxs_global_session_scope() {
-    // M8: rs applied global_options through the server option table
-    // (`set-option -s`), which refuses most tmuxp global_options keys with
-    // OptionScopeMismatch. tmuxp applies them with `set-option -g` (global
-    // session options) instead, so an ordinary key like history-limit
-    // belongs in the session table's global defaults, not the server's.
+    // global_options must apply through the session's global table
+    // (`set-option -g`); the server table refuses most option names.
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(
@@ -2758,11 +2750,9 @@ async fn global_options_use_tmuxs_global_session_scope() {
             .is_some(),
         "session was created"
     );
-    // tmux keeps the global session table separately from any one session's
-    // overrides: `show-options -t <session>` (no `-g`) answers only that
-    // session's own overrides, so the global table itself is what confirms
-    // this landed as `set-option -g` rather than the session or server
-    // tables.
+    // `show-options -t <session>` (no `-g`) answers only that session's
+    // own overrides, so the global table is what confirms this landed
+    // as `-g` rather than the session or server tables.
     let value = guard
         .server()
         .get_global_option("history-limit")
@@ -2777,10 +2767,8 @@ async fn global_options_use_tmuxs_global_session_scope() {
 
 #[tokio::test]
 async fn freeze_never_carries_the_sessions_environment() {
-    // M11 / SPEC 1 item 4: freeze wrote the session's environment into the
-    // document, including things like SSH_AUTH_SOCK and SSH_AGENT_PID that
-    // do not survive a reload on another machine or after a reboot. tmuxp
-    // writes no environment key at all; match that.
+    // freeze must not carry the session's inherited process environment
+    // (SSH_AUTH_SOCK, SSH_AGENT_PID, ...) into the document.
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let session = guard.session("frozen-env").await.unwrap();
     session
@@ -2801,10 +2789,8 @@ async fn freeze_never_carries_the_sessions_environment() {
 
 #[test]
 fn load_accepts_yes_even_though_it_never_prompts() {
-    // M14 / SPEC 1 item 8: every other port and tmuxp document `-y`/`--yes`
-    // on `load`. rs's `load` never prompts, so the flag is a no-op, but a
-    // script or README line written against any other port must not fail
-    // rs at argument parsing before anything runs.
+    // load never prompts, but every other port and tmuxp accept it, so a
+    // script written against them must not fail rs at argument parsing.
     for flag in ["-y", "--yes"] {
         let output = cli(&["load", flag, "--help"]);
         assert!(output.status.success(), "{flag}: {output:?}");
@@ -2813,9 +2799,8 @@ fn load_accepts_yes_even_though_it_never_prompts() {
 
 #[tokio::test]
 async fn load_accepts_both_options_and_options_after_spellings() {
-    // SPEC 1 item 3: freeze emits window options under options_after
-    // (`automatic-rename: off` only holds when applied after the panes
-    // exist), so load must keep accepting both spellings on a window.
+    // freeze emits window options under options_after, so load must keep
+    // accepting both spellings.
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     std::fs::write(

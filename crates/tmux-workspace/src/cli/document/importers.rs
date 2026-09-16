@@ -149,10 +149,8 @@ pub(super) fn workspace(kind: &str, source: &Value, path: &Path) -> Result<Value
     };
     let map = mapping(source, allowed, kind)?;
     let name = alias(map, &["name", "project_name"], kind)?.clone();
-    // teamocil's current format carries no session name at all: the
-    // document starts at `windows:`, and teamocil itself names the session
-    // after the file. tmuxp leaves session_name null and warns instead; this
-    // matches cxx, dotnet, java and swift, which derive it the same way (H6).
+    // teamocil's current format has no session name; the document starts
+    // at `windows:`, so fall back to the file's own name.
     let name = if kind == "teamocil" && name.is_null() {
         let stem = path.file_stem().and_then(|stem| stem.to_str()).ok_or_else(|| {
             CliError::invalid(

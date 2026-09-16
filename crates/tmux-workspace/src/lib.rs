@@ -176,11 +176,8 @@ impl<'server> WorkspaceBuilder<'server> {
             // one, and the rest are splits.
             //
             // Each split targets the pane the previous one made
-            // (`SplitWindow::from_pane`), not the window: `-t <window>`
-            // always resolves to the window's active pane, and a detached
-            // split never changes which pane that is, so targeting the
-            // window on every iteration would keep dividing pane 0 and push
-            // each new pane in front of the last.
+            // (`SplitWindow::from_pane`): `-t <window>` always divides
+            // the active pane, which a detached split never changes.
             let mut source = window.pane();
             let mut panes = vec![source];
             for pane in config.panes.iter().skip(1) {

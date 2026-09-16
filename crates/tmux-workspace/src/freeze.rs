@@ -61,18 +61,11 @@ use crate::config::{PaneConfig, WindowConfig, Workspace};
 /// # }
 /// ```
 pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
-    // A pane sitting at the session's own default shell restarts as that
-    // same plain shell on reload, which is what it started as. Recording
-    // its command as a shell_command would instead reload the shell as a
-    // pane command, running the shell inside itself. Only a pane running
-    // something else needs to say so.
+    // Omitted for the default shell: recording it would reload the shell
+    // as an explicit pane command, a shell inside a shell.
     //
-    // `#{default-shell}` rather than Session::get_option: tmux keeps
-    // default-shell in the session table, but `show-options -t <session>`
-    // (no `-g`) answers only that session's own override, which is almost
-    // never set -- the value nearly every session actually runs comes from
-    // the global table. A format expands the effective value regardless of
-    // which table holds it.
+    // `#{default-shell}`, not Session::get_option: that answers only a
+    // session's own override, and default-shell is rarely set there.
     let default_shell_text = session.format("#{default-shell}").await?;
     let default_shell = Some(default_shell_text.to_string_lossy())
         .filter(|value| !value.is_empty())
@@ -144,15 +137,9 @@ fn basename(text: &str) -> &str {
     text.rsplit('/').next().unwrap_or(text)
 }
 
-/// Interactive shells common enough that a bare pane running one is almost
-/// certainly sitting at its prompt, whatever `default-shell`'s basename says.
-///
-/// A basename comparison alone is not reliable: on macOS `/bin/sh` is bash,
-/// so `default-shell /bin/sh` still leaves a bare pane reporting `bash` as
-/// its current command, and the comparison would otherwise treat it as a
-/// pane running an explicit command and freeze `shell_command: ["bash"]`
-/// into a document whose pane had no command at all. The `default-shell`
-/// comparison still covers anything not on this list.
+/// Interactive shells common enough that a bare pane is almost certainly at
+/// its prompt, regardless of `default-shell`'s basename -- which disagrees
+/// on macOS, where `/bin/sh` is bash.
 const ORDINARY_SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ash", "ksh", "mksh", "fish", "csh", "tcsh",
 ];
