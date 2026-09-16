@@ -2798,3 +2798,15 @@ async fn freeze_never_carries_the_sessions_environment() {
     assert!(value.get("environment").is_none(), "{value}");
     guard.shutdown().await.unwrap();
 }
+
+#[test]
+fn load_accepts_yes_even_though_it_never_prompts() {
+    // M14 / SPEC 1 item 8: every other port and tmuxp document `-y`/`--yes`
+    // on `load`. rs's `load` never prompts, so the flag is a no-op, but a
+    // script or README line written against any other port must not fail
+    // rs at argument parsing before anything runs.
+    for flag in ["-y", "--yes"] {
+        let output = cli(&["load", flag, "--help"]);
+        assert!(output.status.success(), "{flag}: {output:?}");
+    }
+}

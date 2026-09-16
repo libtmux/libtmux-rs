@@ -348,6 +348,14 @@ fn load(declarations: &mut Declarations) -> Command {
                 .action(ArgAction::SetTrue)
                 .help("Load without attaching; required by machine mode unless appending"),
         )
+        // load never prompts, so this is a no-op; every other port and
+        // tmuxp document it, and a script written against any of them
+        // must not fail rs at argument parsing (M14).
+        .arg(flag(
+            "yes",
+            Some('y'),
+            "Accept confirmations; load never prompts",
+        ))
         .arg(flag(
             "append",
             Some('a'),
