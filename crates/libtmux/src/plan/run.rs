@@ -300,16 +300,9 @@ fn layouts(steps: &[Op]) -> impl Iterator<Item = (&OsStr, usize)> {
 }
 
 fn panes_in(before: &[Op], window: &WindowTarget) -> usize {
-    // Building a layout one split at a time targets the pane a previous
-    // split just made (`SplitWindow::from_pane`), not the window itself, so
-    // counting only `SplitWindow`s that name the window directly would miss
-    // every split after the first. Track which pane identities -- (creating
-    // step, which of its outputs) -- trace back to this window, starting
-    // from the window's own implicit first pane. Producer identity is not
-    // part of that comparison: within one plan's own step list, a (step,
-    // part) pair already names one object unambiguously, and reconstructing
-    // the real producer a later `Plan::add` would assign is not possible
-    // from a step list alone.
+    // A split may target a pane an earlier step made, not just the window,
+    // so track which pane identities (creating step, which output) trace
+    // back to this window, seeded from its own implicit first pane.
     let mut known: Vec<(usize, Part)> = window
         .slot()
         .map(|first| (first.source_step, Part::FirstPane))
