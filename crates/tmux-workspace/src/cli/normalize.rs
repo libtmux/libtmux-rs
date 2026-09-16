@@ -233,10 +233,19 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         )?;
     }
     let readiness = readiness(&value["workspace_builder_options"])?;
-    let directory = directory(
-        &value["start_directory"],
-        path.parent().unwrap_or_else(|| Path::new(".")),
-    )?;
+    // With no start_directory at all, panes start in the invocation
+    // directory, matching tmuxp; go, java and rs used to start them in the
+    // workspace file's directory instead (H9). An explicit start_directory,
+    // relative or not, still resolves against the document's directory —
+    // that part was already correct and is unchanged here.
+    let directory = if value.get("start_directory").is_some() {
+        directory(
+            &value["start_directory"],
+            path.parent().unwrap_or_else(|| Path::new(".")),
+        )?
+    } else {
+        std::env::current_dir()?
+    };
     let suppress = boolean(&value["suppress_history"], true, "suppress_history")?;
     let source_windows = value["windows"]
         .as_array()
@@ -252,11 +261,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     Ok(Workspace {
         source: path.to_owned(),
         name,
-        script_directory: if value.get("start_directory").is_some() {
-            directory.clone()
-        } else {
-            std::env::current_dir()?
-        },
+        script_directory: directory.clone(),
         directory,
         environment: pairs(&value["environment"], false)?,
         options: pairs(&value["options"], true)?,
