@@ -70,6 +70,130 @@ async fn attached_load_requires_terminal_before_scripts_or_session_mutation() {
 }
 
 #[tokio::test]
+async fn load_sizes_a_created_session_from_tmuxp_environment_variables() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("ws.json"),
+        serde_json::json!({"session_name":"sized","windows":[{"panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &[
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--json",
+            "ws.json",
+        ],
+        directory.path(),
+    )
+    // The invoking terminal, when there is one, still wins over these; the
+    // test's own stdout is a captured pipe, so it never is one here.
+    .env("TMUXP_DEFAULT_COLUMNS", "111")
+    .env("TMUXP_DEFAULT_ROWS", "33")
+    .env_remove("COLUMNS")
+    .env_remove("LINES")
+    .env_remove("ROWS")
+    .env_remove("TMUXP_DETECT_TERMINAL_SIZE")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let session = guard.server().session("sized").await.unwrap().unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    assert_eq!(
+        window
+            .format("#{window_width}x#{window_height}")
+            .await
+            .unwrap()
+            .to_string_lossy(),
+        "111x33"
+    );
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn load_passes_no_explicit_size_when_detection_is_disabled() {
+    // With TMUXP_DETECT_TERMINAL_SIZE disabled, the session is not pinned to
+    // TMUXP_DEFAULT_COLUMNS/ROWS or the 80x24 fallback: no -x/-y reaches
+    // new-session at all, so tmux sizes it from the server's own
+    // default-size instead.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard
+        .server()
+        .cmd(
+            libtmux::Command::new("set-option")
+                .arg("-g")
+                .arg("default-size")
+                .arg("222x55"),
+        )
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("ws.json"),
+        serde_json::json!({"session_name":"undetected","windows":[{"panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &[
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--json",
+            "ws.json",
+        ],
+        directory.path(),
+    )
+    .env("TMUXP_DEFAULT_COLUMNS", "111")
+    .env("TMUXP_DEFAULT_ROWS", "33")
+    .env("TMUXP_DETECT_TERMINAL_SIZE", "0")
+    .env_remove("COLUMNS")
+    .env_remove("LINES")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let session = guard.server().session("undetected").await.unwrap().unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    assert_eq!(
+        window
+            .format("#{window_width}x#{window_height}")
+            .await
+            .unwrap()
+            .to_string_lossy(),
+        "222x55",
+        "TMUXP_DEFAULT_COLUMNS/ROWS should not apply once detection is off"
+    );
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn load_rejects_an_out_of_range_dimension_before_any_target_lookup() {
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("ws.json"),
+        serde_json::json!({"session_name":"never","windows":[{"panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &["load", "-d", "-S", "does-not-matter", "ws.json"],
+        directory.path(),
+    )
+    .env("TMUXP_DEFAULT_COLUMNS", "not-a-number")
+    .env_remove("COLUMNS")
+    .output()
+    .unwrap();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("TMUXP_DEFAULT_COLUMNS"),
+        "{output:?}"
+    );
+}
+
+#[tokio::test]
 async fn layout_preflight_checks_all_inputs_before_scripts_or_append() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("layout-cli-keeper").await.unwrap();
@@ -485,6 +609,30 @@ async fn freeze_never_derives_a_destination_from_a_session_name() {
     assert!(work.join("kept.yaml").exists());
     assert!(machine.status.success(), "{machine:?}");
     assert!(String::from_utf8_lossy(&machine.stdout).contains("kept"));
+}
+
+#[tokio::test]
+async fn freeze_save_to_never_prompts_even_without_a_terminal_or_yes() {
+    // command_at's Output::output() gives the child a piped, non-tty stdin,
+    // so this alone already proves --save-to needs no --yes to succeed.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard.session("scripted").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let output = at(
+        &[
+            "freeze",
+            "-S",
+            guard.server().socket_path().to_str().unwrap(),
+            "-q",
+            "-o",
+            "scripted.yaml",
+            "scripted",
+        ],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(directory.path().join("scripted.yaml").exists());
+    guard.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1519,7 +1667,11 @@ async fn load_logging_separates_metadata_from_captures_and_mandatory_errors() {
         }
         arguments.push("workspace.json");
         let output = bounded_cli_output(command_at(&arguments, directory.path())).await;
-        assert_eq!(output.status.code(), Some(status), "{output:?}");
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(status != 0)),
+            "{output:?}"
+        );
         let records = json_records(&std::fs::read(&log).unwrap());
         if level == "critical" {
             assert!(records.is_empty());
@@ -1553,9 +1705,12 @@ async fn load_logging_separates_metadata_from_captures_and_mandatory_errors() {
             assert_eq!(effects["script_output"]["stderr"], "LOG-STDERR");
             assert_eq!(effects["script_output"]["child_status"], status);
             let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-            assert_eq!(diagnostic["code"], "child_failed");
+            assert_eq!(diagnostic["code"], "script_failed");
         }
-        assert!(guard.server().has_session(&name).await.unwrap());
+        assert_eq!(
+            guard.server().has_session(&name).await.unwrap(),
+            status == 0
+        );
     }
     guard.shutdown().await.unwrap();
 }
@@ -1707,11 +1862,7 @@ async fn load_logging_failure_preserves_primary_status_and_diagnostic_order() {
         arguments.push("workspace.json");
         let (exit, bytes) =
             file_limited_output(&command_at(&arguments, directory.path()), streams).await;
-        let expected = if streams == "both-closed" && status == 0 {
-            1
-        } else {
-            status
-        };
+        let expected = i32::from(status != 0 || streams == "both-closed");
         assert_eq!(exit.code(), Some(expected), "mode={mode} streams={streams}");
         assert_eq!(
             std::fs::metadata(directory.path().join("limited.log"))
@@ -1719,7 +1870,10 @@ async fn load_logging_failure_preserves_primary_status_and_diagnostic_order() {
                 .len(),
             0
         );
-        assert!(guard.server().has_session(&name).await.unwrap());
+        assert_eq!(
+            guard.server().has_session(&name).await.unwrap(),
+            status == 0
+        );
         let text = String::from_utf8(bytes).unwrap();
         let warning = streams == "merged" && level == "info";
         assert_eq!(
@@ -1744,7 +1898,7 @@ async fn load_logging_failure_preserves_primary_status_and_diagnostic_order() {
                 if warning {
                     let primary = values
                         .iter()
-                        .position(|row| row["code"] == "child_failed")
+                        .position(|row| row["code"] == "script_failed")
                         .unwrap();
                     let advisory = values
                         .iter()
@@ -1754,7 +1908,7 @@ async fn load_logging_failure_preserves_primary_status_and_diagnostic_order() {
                 }
                 let diagnostic = values
                     .iter()
-                    .find(|row| row["code"] == "child_failed")
+                    .find(|row| row["code"] == "script_failed")
                     .unwrap();
                 assert_eq!(
                     diagnostic["retained_state"]["errors"][0]["effects"]["script_output"]["child_status"],
@@ -1887,11 +2041,7 @@ async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
         .stdout(OwnedFd::from(writer))
         .output()
         .unwrap();
-        assert_eq!(
-            output.status.code(),
-            Some(if status == 0 { 1 } else { status }),
-            "{output:?}"
-        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
         let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
         let retained = &diagnostic["retained_state"];
         let results = retained["results"].as_array().expect("completed inputs");
@@ -1918,7 +2068,7 @@ async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
         assert_eq!(second["script_output"]["stdout"], "captured-out");
         assert_eq!(second["script_output"]["stderr"], "captured-err");
         if status != 0 {
-            assert_eq!(diagnostic["code"], "child_failed");
+            assert_eq!(diagnostic["code"], "script_failed");
             assert!(
                 diagnostic["message"]
                     .as_str()
@@ -1926,9 +2076,40 @@ async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
                     .contains("output failed")
             );
         }
-        assert!(guard.server().has_session("second").await.unwrap());
+        assert_eq!(
+            guard.server().has_session("second").await.unwrap(),
+            status == 0
+        );
         guard.shutdown().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn failing_before_script_removes_the_owned_session_and_reads_as_one_sentence() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("bf.yaml"),
+        "session_name: bsfail\nbefore_script: /bin/sh -c 'exit 3'\nwindows:\n  - panes: [echo x]\n",
+    )
+    .unwrap();
+    let output = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "bf.yaml",
+        ],
+        directory.path(),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(!guard.server().has_session("bsfail").await.unwrap());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Human mode: one sentence, no machine record and no escaped newline.
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(!stderr.contains('{') && !stderr.contains("\\n"), "{stderr}");
+    guard.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -2047,6 +2228,73 @@ async fn failed_append_reports_borrowed_session_and_created_ids() {
     guard.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn append_leaves_the_client_on_its_window_unless_one_appended_window_focuses() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let session = guard
+        .server()
+        .new_session(libtmux::NewSessionOptions::new("owner"))
+        .await
+        .unwrap();
+    let original = session.active_window().await.unwrap().unwrap();
+    let pane = current_pane(&session).await;
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("append.yaml"),
+        "session_name: ignored\nwindows:\n  - window_name: one\n    panes: [blank]\n  - window_name: two\n    panes: [blank]\n",
+    )
+    .unwrap();
+    let output = at_pane(
+        &[
+            "load",
+            "-S",
+            guard.server().socket_path().to_str().unwrap(),
+            "--append",
+            "--json",
+            "append.yaml",
+        ],
+        directory.path(),
+        Some((&guard, &pane)),
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        session.active_window().await.unwrap().unwrap().id(),
+        original.id(),
+        "no appended window set focus, so the client should not have moved"
+    );
+
+    std::fs::write(
+        directory.path().join("focused.yaml"),
+        "session_name: ignored\nwindows:\n  - window_name: three\n    panes: [blank]\n  - window_name: four\n    focus: true\n    panes: [blank]\n",
+    )
+    .unwrap();
+    let output = at_pane(
+        &[
+            "load",
+            "-S",
+            guard.server().socket_path().to_str().unwrap(),
+            "--append",
+            "--json",
+            "focused.yaml",
+        ],
+        directory.path(),
+        Some((&guard, &pane)),
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        session
+            .active_window()
+            .await
+            .unwrap()
+            .unwrap()
+            .name()
+            .to_string_lossy(),
+        "four",
+        "an appended window naming focus: true should still move the client"
+    );
+    guard.shutdown().await.unwrap();
+}
+
 #[test]
 fn invalid_execution_models_are_rejected_before_creating_a_server() {
     let directory = tempfile::tempdir().unwrap();
@@ -2063,6 +2311,111 @@ fn invalid_execution_models_are_rejected_before_creating_a_server() {
         String::from_utf8_lossy(&output.stderr).contains("sleep_before"),
         "{output:?}"
     );
+}
+
+#[tokio::test]
+async fn machine_error_codes_match_the_ten_condition_table() {
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(directory.path().join("bad.yaml"), "a: [\n").unwrap();
+    std::fs::write(
+        directory.path().join("bogus.yaml"),
+        "session_name: x\nbogus: 1\nwindows:\n  - panes: [echo hi]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("ok.yaml"),
+        "session_name: ok\nwindows:\n  - panes: [echo hi]\n",
+    )
+    .unwrap();
+
+    let missing = cli(&[
+        "load",
+        "-d",
+        "--json",
+        directory.path().join("nosuchfile.yaml").to_str().unwrap(),
+    ]);
+    let malformed = cli(&[
+        "load",
+        "-d",
+        "--json",
+        directory.path().join("bad.yaml").to_str().unwrap(),
+    ]);
+    let unsupported = cli(&[
+        "load",
+        "-d",
+        "--json",
+        directory.path().join("bogus.yaml").to_str().unwrap(),
+    ]);
+    // `cli()` already runs with PATH stripped of tmux and no
+    // LIBTMUX_TEST_TMUX override; an otherwise-valid document reaches the
+    // point of actually starting it.
+    let unavailable = cli(&[
+        "load",
+        "-d",
+        "--json",
+        directory.path().join("ok.yaml").to_str().unwrap(),
+    ]);
+    for (output, code) in [
+        (&missing, "workspace_not_found"),
+        (&malformed, "invalid_workspace"),
+        (&unsupported, "unsupported_key"),
+        (&unavailable, "tmux_unavailable"),
+    ] {
+        let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(diagnostic["code"], code, "{output:?}");
+    }
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+
+    std::fs::write(
+        directory.path().join("badoption.yaml"),
+        "session_name: bo\nwindows:\n  - options:\n      no-such-option-xyz: 1\n    panes: [echo hi]\n",
+    )
+    .unwrap();
+    let refused = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "--json",
+            "badoption.yaml",
+        ],
+        directory.path(),
+    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "tmux_failed", "{refused:?}");
+
+    guard.session("kept").await.unwrap();
+    std::fs::write(directory.path().join("kept.yaml"), "exists").unwrap();
+    let clobbered = at(
+        &[
+            "freeze",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--json",
+            "-o",
+            "kept.yaml",
+            "kept",
+        ],
+        directory.path(),
+    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(&clobbered.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "destination_exists", "{clobbered:?}");
+
+    let output = at(
+        &[
+            "freeze",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--json",
+            "nosuch",
+        ],
+        directory.path(),
+    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "session_not_found", "{output:?}");
+    guard.shutdown().await.unwrap();
 }
 
 #[tokio::test]

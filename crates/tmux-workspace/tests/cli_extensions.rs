@@ -211,7 +211,7 @@ async fn invalid_extensions_refuse_all_inputs_before_scripts_or_append() {
             assert_keeper(&guard, &keeper, &pane).await;
             assert_eq!(output.status.code(), Some(1), "{extensions}: {output:?}");
             let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-            assert_eq!(error["code"], "invalid_config", "{extensions}: {error}");
+            assert_eq!(error["code"], "invalid_workspace", "{extensions}: {error}");
             assert!(output.stdout.is_empty());
         }
     }
