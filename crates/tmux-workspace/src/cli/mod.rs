@@ -195,7 +195,7 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
     let value = document::read(&source)?;
     let value = match importer {
         Some(kind) => {
-            let value = document::import(kind, &value)?;
+            let value = document::import(kind, &value, &source)?;
             normalize::workspace(&value, &source)?;
             value
         }

@@ -85,8 +85,8 @@ pub(super) fn save(path: &Path, value: &Value, format: &str, force: bool) -> Res
 
 mod importers;
 
-pub(super) fn import(kind: &str, source: &Value) -> Result<Value> {
-    importers::workspace(kind, source)
+pub(super) fn import(kind: &str, source: &Value, path: &Path) -> Result<Value> {
+    importers::workspace(kind, source, path)
 }
 
 pub(super) fn scalar(value: &Value) -> String {
