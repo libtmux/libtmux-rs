@@ -1871,22 +1871,35 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
         .await
         .expect("tmux capabilities are detected")
         .tmux_version();
+    // A numbered release's wire is frozen forever, so the exact bytes are
+    // worth pinning: a change there would mean this crate's own decoder
+    // drifted, not tmux. A development identifier's wire is not frozen --
+    // `next-3.9` widened `#{q:}`'s escape set to cover a raw newline, so a
+    // byte pinned against `next-3.8`'s tree stopped matching `next-3.9`'s
+    // even though both are "the RawQ dialect" -- so only the decode claim
+    // below is asserted for one; pinning its bytes would make this test
+    // repin itself at every escape-set change instead of surviving it.
+    let frozen = version.release().is_some();
     match TransportDialect::for_version(version) {
         TransportDialect::Vis => {
-            assert_eq!(result.stdout(), EXPECTED_VIS_STDOUT);
+            if frozen {
+                assert_eq!(result.stdout(), EXPECTED_VIS_STDOUT);
+            }
             // The visual encoding makes the transport valid UTF-8 even
             // though the underlying value is not.
             assert!(result.stdout_utf8().is_ok());
         }
         TransportDialect::RawQ => {
-            assert_eq!(result.stdout(), EXPECTED_RAW_STDOUT);
+            if frozen {
+                assert_eq!(result.stdout(), EXPECTED_RAW_STDOUT);
+            }
             assert!(result.stdout_utf8().is_err());
         }
     }
 
-    // The decoded value is the same on every dialect. This is the claim
-    // the crate makes to callers, so it is asserted on the live transport
-    // rather than only on the raw-q lane.
+    // The decoded value is the same on every dialect and every release,
+    // frozen or not. This is the claim the crate makes to callers, so it is
+    // the one assertion this test never conditions away.
     let versioned = FormatPlan::for_codec_test_at(vec![&RAW_FORMAT_BYTES], version)
         .ok()
         .expect("a plan exists for the detected version");
