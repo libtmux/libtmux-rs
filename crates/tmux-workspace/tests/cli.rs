@@ -2533,3 +2533,51 @@ fn successful_editor_can_leave_a_background_service_with_closed_streams() {
         "{state:?}"
     );
 }
+
+#[tokio::test]
+async fn load_places_panes_after_the_first_in_config_order() {
+    // H1 regression: tmux inserts a detached split immediately after its
+    // source pane, so retargeting every split at the window (which always
+    // resolves to pane 0) reverses everything but the first pane.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.yaml"),
+        "session_name: paneorder\nwindows:\n  - window_name: plain\n    panes:\n      - printf 'MARK-A\\n'; sleep 300\n      - printf 'MARK-B\\n'; sleep 300\n      - printf 'MARK-C\\n'; sleep 300\n      - printf 'MARK-D\\n'; sleep 300\n",
+    )
+    .unwrap();
+    let socket = guard.socket_path().to_str().unwrap();
+    let output = at(
+        &["load", "workspace.yaml", "-S", socket, "-d"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+
+    let session = guard
+        .server()
+        .session("paneorder")
+        .await
+        .unwrap()
+        .expect("session was created");
+    let window = session.windows().await.unwrap().remove(0);
+    let panes = window.panes().await.unwrap();
+    assert_eq!(panes.len(), 4);
+
+    for (index, (pane, marker)) in panes
+        .iter()
+        .zip(["MARK-A", "MARK-B", "MARK-C", "MARK-D"])
+        .enumerate()
+    {
+        let seen = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
+            pane.capture().await.is_ok_and(|lines| {
+                lines
+                    .iter()
+                    .any(|line| line.to_string_lossy().contains(marker))
+            })
+        })
+        .await;
+        assert!(seen.is_ok(), "pane at index {index} should show {marker}");
+    }
+
+    guard.shutdown().await.unwrap();
+}
