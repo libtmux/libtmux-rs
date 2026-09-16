@@ -193,9 +193,17 @@ impl Pane {
     }
 
     /// Return the process id of the pane's foreground process.
+    ///
+    /// `None` for a pane with no process: tmux 3.8 reports `#{pane_pid}` as
+    /// an empty string once the pane's process has exited (`remain-on-exit`
+    /// keeps such a pane instead of closing it). A value is not evidence the
+    /// process is still alive, on any release: every release before 3.8
+    /// keeps reporting the exited process's own pid rather than clearing the
+    /// field, and a pid can be reused once its process is gone. Check
+    /// [`Self::is_dead`] for liveness; do not infer it from this.
     #[must_use]
-    pub fn pid(&self) -> u32 {
-        *self.projection.pane().pane_pid()
+    pub fn pid(&self) -> Option<u32> {
+        self.projection.pane().pane_pid().available().copied()
     }
 
     /// Return the pane width in cells.

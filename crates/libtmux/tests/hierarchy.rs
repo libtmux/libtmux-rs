@@ -213,7 +213,7 @@ async fn panes_report_their_window_and_process_details() {
     for pane in &panes {
         assert_eq!(pane.window_id(), windows[0].id());
         assert_eq!(pane.window_index(), windows[0].index());
-        assert!(pane.pid() > 0);
+        assert!(pane.pid().expect("a running pane reports a pid") > 0);
         assert!(pane.width() > 0);
         assert!(pane.height() > 0);
         assert!(!pane.is_dead(), "a running pane is not dead");

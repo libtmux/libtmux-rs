@@ -60,7 +60,7 @@
 //! `Drop` is deliberately non-destructive.
 //!
 //! ```no_run
-//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::ScopeError<String, libtmux::Error>> {
 //! let id = server
 //!     .with_session("throwaway", async |session| {
 //!         session.new_window("build").await?;
@@ -72,10 +72,10 @@
 //! # }
 //! ```
 //!
-//! Setup and teardown failures convert into the operation's own error type,
-//! so there is one `?` rather than two. Once creation succeeds, a cleanup
-//! failure is returned as an after-effect; it owns the replay guidance even
-//! when the operation also failed.
+//! [`ScopeError`] distinguishes creation, operation and cleanup failures.
+//! When both operation and cleanup fail, it retains both errors without
+//! converting the operation's error type. Cleanup errors carry
+//! [`Error::AfterEffect`] because creation already succeeded.
 //!
 //! ## Options carry types
 //!
@@ -195,13 +195,49 @@
 //! # }
 //! ```
 //!
-//! Query extensions intentionally apply only to borrowed iterators:
+//! Use `matching_owned` to move selected items out of their collection:
 //!
-//! ```compile_fail
+//! ```
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let values = vec![1, 2, 3];
+//! let selected = values
+//!     .into_iter()
+//!     .matching_owned(|candidate: &i32| *candidate > 1)
+//!     .collect::<Vec<_>>();
+//! assert_eq!(selected, [2, 3]);
+//! ```
+//!
+//! `matching` still needs a borrowed iterator; `into_iter()` does not satisfy
+//! it:
+//!
+//! ```compile_fail,E0271
 //! use libtmux::query::QueryIteratorExt;
 //!
 //! let values = vec![1, 2, 3];
 //! let _ = values.into_iter().matching(|candidate: &i32| *candidate > 1);
+//! ```
+//!
+//! Borrowed results cannot outlive their collection:
+//!
+//! ```compile_fail,E0597
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let selected = {
+//!     let values = vec![String::from("only")];
+//!     values.iter().exactly_one().unwrap()
+//! };
+//! println!("{selected}");
+//! ```
+//!
+//! Consuming a collection transfers ownership:
+//!
+//! ```compile_fail,E0382
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let values = vec![String::from("only")];
+//! let selected = values.into_iter().one_or_none().unwrap();
+//! println!("{values:?} {selected:?}");
 //! ```
 #![cfg_attr(
     feature = "control-mode",
@@ -296,7 +332,7 @@ pub use command::{Command, CommandChain, CommandResult, CommandSummary};
 #[cfg(feature = "control-mode")]
 pub use error::ControlModeErrorKind;
 pub use error::{
-    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind,
+    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind, ScopeError,
     ServerConfigurationErrorKind, ServerGoneKind,
 };
 pub use formats::TmuxText;
@@ -309,7 +345,7 @@ pub use options::{
 };
 pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 pub use server::{
-    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, PromptKind, Server,
+    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, Principal, PromptKind, Server,
     ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
@@ -384,3 +420,7 @@ pub use libtmux_macros::Filterable;
 #[cfg(doctest)]
 #[doc = include_str!("../../../README.md")]
 pub struct WorkspaceReadme;
+
+#[cfg(all(doctest, feature = "query", feature = "control-mode"))]
+#[doc = include_str!("../docs/migration.md")]
+pub struct MigrationGuide;

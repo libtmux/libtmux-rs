@@ -17,6 +17,7 @@ include = [
     "/LICENSE-MIT",
     "/README.md",
     "/docs/design.md",
+    "/docs/migration.md",
     "/docs/parity.md",
     "/benches/**/*.rs",
     "/examples/**/*.rs",

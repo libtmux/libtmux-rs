@@ -408,23 +408,30 @@ impl Connection {
             let held_back = !self.awaiting.has_live() && self.pending.len() >= EVENT_QUEUE;
             let reply_deadline = self.awaiting.earliest_deadline();
 
+            // Biased, and in this order: a caller-requested stop or an
+            // executor shutdown must win a race against a pending EOF, or
+            // the outcome of a closing connection depends on which the
+            // executor happened to poll first. `Read` used to be first
+            // because every branch agreed once tmux hung up; now EOF alone
+            // is a distinct outcome from either shutdown signal, so the
+            // signals take priority.
             let step = tokio::select! {
-                line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
-                    if !held_back => Step::Read(line),
-                room = self.events.reserve(), if !self.pending.is_empty() => Step::Deliver(room.is_ok()),
-                request = self.commands.recv(), if sending => Step::Send(request),
+                biased;
                 asked = self.stopped.changed(), if watching => Step::Unwatched {
                     asked: asked.is_ok(),
                 },
                 () = cancellation_requested(&mut self.core_stopped) => Step::CoreStopped,
+                line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
+                    if !held_back => Step::Read(line),
+                room = self.events.reserve(), if !self.pending.is_empty() => Step::Deliver(room.is_ok()),
+                request = self.commands.recv(), if sending => Step::Send(request),
                 () = deadline_elapsed(reply_deadline), if self.awaiting.has_slots() => Step::TimedOut,
             };
 
             match step {
                 Step::Read(Err(error)) => return Err(error),
-                // tmux hung up, or the watcher asked to stop. Either ends the
-                // connection whatever the other half is doing.
-                Step::Read(Ok(None)) => return Ok(()),
+                // A clean remote close is announced by %exit before EOF.
+                Step::Read(Ok(None)) => return Err(Error::control_mode_closed()),
                 Step::Unwatched { asked: true } => {
                     return Ok(());
                 }

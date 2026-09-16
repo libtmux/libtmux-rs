@@ -39,6 +39,8 @@ const Q_SHELL_ESCAPED: [u8; 19] = [
     0x7c, 0x26, 0x3b, 0x3c, 0x3e, 0x28, 0x29, 0x24, 0x60, 0x5c, 0x22, 0x27, 0x2a, 0x3f, 0x5b, 0x23,
     0x20, 0x3d, 0x25,
 ];
+/// `{`, `}` and a raw newline: what `next-3.9` added to the set above.
+const Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS: [u8; 3] = *b"{}\n";
 const SHORT_SENTINEL: &str = "zot-private";
 const LONG_SENTINEL: &str = "quartz-private-payload-with-a-distinct-and-deliberately-long-shape";
 const CONTROL_SENTINEL: [u8; 3] = [0x02, 0x03, 0x04];
@@ -679,7 +681,12 @@ fn format_codec_rejects_escapes_tmux_never_emits() {
 
 #[test]
 fn production_q_escape_set_matches_the_documented_tmux_set() {
-    assert_eq!(QUOTE_SHELL_SPECIALS, Q_SHELL_ESCAPED);
+    let documented: Vec<u8> = Q_SHELL_ESCAPED
+        .iter()
+        .chain(Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS.iter())
+        .copied()
+        .collect();
+    assert_eq!(QUOTE_SHELL_SPECIALS, documented);
 }
 
 #[test]
@@ -702,6 +709,24 @@ fn format_codec_tmux_3_2a_q_escape_set_round_trips_exactly() {
     let parsed = rows(&plan, &stdout);
     let slot = parsed[0].slots().next().expect("one slot exists");
     assert_eq!(slot.as_bytes(), Q_SHELL_ESCAPED);
+}
+
+#[test]
+fn format_codec_next_3_9_q_escape_additions_round_trip_exactly() {
+    // Before QUOTE_SHELL_SPECIALS grew these three bytes, this failed with
+    // InvalidEscape at the first backslash -- the exact failure real
+    // next-3.9 output produces for any value containing a brace or a raw
+    // newline, such as `#{q:buffer_mode_format}` or `#{q:window_layout}`.
+    let mut stdout = Vec::with_capacity(Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS.len() * 2 + 2);
+    for byte in Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS {
+        stdout.extend_from_slice(&[b'\\', byte]);
+    }
+    stdout.extend_from_slice(b"=\n");
+
+    let plan = plan(vec![&FIRST]);
+    let parsed = rows(&plan, &stdout);
+    let slot = parsed[0].slots().next().expect("one slot exists");
+    assert_eq!(slot.as_bytes(), Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS);
 }
 
 #[test]
@@ -1295,7 +1320,7 @@ fn format_catalog_checked_parity_partitions_are_exact() {
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.empty)),
-        std::collections::BTreeMap::from([("absent", 30), ("available", 28), ("required", 121),])
+        std::collections::BTreeMap::from([("absent", 31), ("available", 28), ("required", 120),])
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.placement)),
@@ -1846,22 +1871,35 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
         .await
         .expect("tmux capabilities are detected")
         .tmux_version();
+    // A numbered release's wire is frozen forever, so the exact bytes are
+    // worth pinning: a change there would mean this crate's own decoder
+    // drifted, not tmux. A development identifier's wire is not frozen --
+    // `next-3.9` widened `#{q:}`'s escape set to cover a raw newline, so a
+    // byte pinned against `next-3.8`'s tree stopped matching `next-3.9`'s
+    // even though both are "the RawQ dialect" -- so only the decode claim
+    // below is asserted for one; pinning its bytes would make this test
+    // repin itself at every escape-set change instead of surviving it.
+    let frozen = version.release().is_some();
     match TransportDialect::for_version(version) {
         TransportDialect::Vis => {
-            assert_eq!(result.stdout(), EXPECTED_VIS_STDOUT);
+            if frozen {
+                assert_eq!(result.stdout(), EXPECTED_VIS_STDOUT);
+            }
             // The visual encoding makes the transport valid UTF-8 even
             // though the underlying value is not.
             assert!(result.stdout_utf8().is_ok());
         }
         TransportDialect::RawQ => {
-            assert_eq!(result.stdout(), EXPECTED_RAW_STDOUT);
+            if frozen {
+                assert_eq!(result.stdout(), EXPECTED_RAW_STDOUT);
+            }
             assert!(result.stdout_utf8().is_err());
         }
     }
 
-    // The decoded value is the same on every dialect. This is the claim
-    // the crate makes to callers, so it is asserted on the live transport
-    // rather than only on the raw-q lane.
+    // The decoded value is the same on every dialect and every release,
+    // frozen or not. This is the claim the crate makes to callers, so it is
+    // the one assertion this test never conditions away.
     let versioned = FormatPlan::for_codec_test_at(vec![&RAW_FORMAT_BYTES], version)
         .ok()
         .expect("a plan exists for the detected version");

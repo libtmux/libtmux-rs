@@ -105,7 +105,8 @@ impl Error {
             | Self::SupervisorLost { .. } => ErrorKind::Transport,
             Self::InvalidVersionOutput { .. }
             | Self::DecodeListing { .. }
-            | Self::UnreadableFormatValue { .. } => ErrorKind::Decode,
+            | Self::UnreadableFormatValue { .. }
+            | Self::UnreadableAccessRule { .. } => ErrorKind::Decode,
             #[cfg(feature = "control-mode")]
             Self::ControlModeFrameTooLarge { .. } => ErrorKind::Decode,
             #[cfg(feature = "control-mode")]
@@ -195,7 +196,8 @@ impl Error {
                 ..
             }
             | Self::CommandFailed { .. }
-            | Self::DecodeListing { .. } => false,
+            | Self::DecodeListing { .. }
+            | Self::UnreadableAccessRule { .. } => false,
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => false,
             #[cfg(feature = "control-mode")]

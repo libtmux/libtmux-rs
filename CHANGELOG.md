@@ -16,6 +16,72 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `TmuxText` names now pass directly to name lookups, so
+  `server.session(session.name())` needs no conversion. Lookups preserve the
+  original bytes. (#28)
+- `TmuxVersion::has_behavior`, behind `test-support`: the boolean form of the
+  rule `TmuxVersion::require` refuses a capability with, so a test predicting
+  a `require`-gated branch calls the same rule `require` does instead of an
+  independently derived one. Unlike `meets`, a `next-X.Y` development
+  identifier is read as the real release `X.Y` rather than clamped to the
+  crate's minimum supported release. (#28)
+
+### Changed
+
+- **Breaking.** `ControlEvents` and `next_event` now report connection failures
+  during iteration instead of ending silently. Use `event?` in fallible loops;
+  buffered notifications precede one terminal error, and `shutdown` reports any
+  failure not already delivered. (#28)
+- **Breaking, runtime-only.** EOF without `%exit` is now `Closed` instead of a
+  clean end, so `ControlEvents::shutdown`, `ControlMode::shutdown`, and
+  `control::PaneOutput::shutdown` return that error where they used to return
+  `Ok(())`. Nothing here changes a signature, so existing code keeps
+  compiling and starts seeing the error the first time a watched connection
+  closes that way, without `%exit` announcing it first. Match
+  `ControlModeErrorKind::Closed` where that end was already treated as
+  ordinary. (#28)
+- **Breaking.** `with_session`, `with_window` and `with_pane` now report
+  failures through `ScopeError<T, E>`, retaining both errors when an
+  operation and cleanup fail, and the operation's own result when only
+  cleanup fails. Update callers that propagate the scope result, and match
+  `ScopeError::OperationAndCleanup` or `ScopeError::Cleanup` to recover the
+  values each retains. (#28)
+- **Breaking.** `QueryIteratorExt` now selects owned values without cloning
+  through `matching_owned` and its cardinality helpers. Remove the extension
+  trait's generic arguments and constrain items through `Iterator`; existing
+  borrowed `matching` calls remain unchanged. (#28)
+- **Breaking.** `AccessRule::user` is renamed to `AccessRule::name` and gains
+  `AccessRule::principal`, returning a new `Principal` enum. A release with
+  group ACLs marks every `server-access -l` row `U` or `G`, so an entry can
+  now name a group as well as a user. (#28)
+- **Breaking.** `Pane::pid` returns `Option<u32>` instead of `u32`. tmux 3.8
+  reports `#{pane_pid}` as an empty string once a `remain-on-exit` pane's
+  process has gone; `None` is that state, not a decode failure. Every
+  earlier release instead keeps reporting the exited process's own pid, so a
+  populated value was never proof of liveness -- check `Pane::is_dead`
+  rather than inferring it from `pid`. (#28)
+
+### Fixed
+
+- Decoding a `#{q:}` value containing `{`, `}` or a raw newline no longer
+  fails with an invalid-escape error. The unreleased tree reporting itself as
+  `next-3.9` widened tmux's own escaped-byte set to cover all three; no
+  release through 3.7c emits the new escapes, so accepting them decodes every
+  earlier release exactly as before. `window_layout` is the field most
+  callers hit this through, since its value is JSON on that tree and JSON is
+  built from braces. (#28)
+- `Server::access_rules` no longer drops a `server-access -l` row it cannot
+  decode. A release with group ACLs marks every row -- owner included --
+  `(U,R)`/`(G,W)` instead of the bare `(R)`/`(W)` this crate expected, so the
+  previous decoder silently returned an incomplete list. A line matching
+  neither grammar now returns `Error::UnreadableAccessRule` naming the
+  marker, rather than disappearing from the result. (#28)
+- A pane listing no longer fails outright with `RequiredFieldEmpty` on tmux
+  3.8 and later once a `remain-on-exit` pane's process has exited.
+  `Pane::pid` reports `None` for that pane instead. (#28)
+
 ## 0.1.0-alpha.11 - 2026-09-12
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.11;

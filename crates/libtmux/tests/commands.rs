@@ -171,20 +171,10 @@ async fn sourcing_a_file_applies_its_commands() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A caller's own error type, carrying `From<libtmux::Error>`.
-///
-/// That conversion is what lets a scope's setup and teardown failures join
-/// the same channel as the operation's own.
+/// A caller's own error type, without a libtmux conversion.
 #[derive(Debug, PartialEq)]
 enum Failure {
     Deliberate,
-    Tmux(String),
-}
-
-impl From<libtmux::Error> for Failure {
-    fn from(error: libtmux::Error) -> Self {
-        Self::Tmux(error.to_string())
-    }
 }
 
 #[tokio::test]
@@ -202,14 +192,15 @@ async fn scoped_operations_clean_up_after_success_and_failure() {
     assert!(seen.starts_with('$'));
     assert!(server.sessions().await.expect("sessions").is_empty());
 
-    // Failure: the operation's error comes back, and cleanup still ran.
-    // The operation's error comes back directly: one `?`, not two.
     let outcome = server
         .with_session("failing", async |_session| {
             Err::<(), Failure>(Failure::Deliberate)
         })
         .await;
-    assert_eq!(outcome, Err(Failure::Deliberate));
+    assert!(matches!(
+        outcome,
+        Err(libtmux::ScopeError::Operation(Failure::Deliberate))
+    ));
     assert!(
         server.sessions().await.expect("sessions").is_empty(),
         "cleanup runs even when the operation failed",
@@ -1069,7 +1060,7 @@ async fn dispatch_only_commands_are_accepted() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::PROMPT_HISTORY)
+        .has_behavior(&since::PROMPT_HISTORY)
     {
         cleared.expect("the prompt history is cleared");
     } else {
@@ -1683,11 +1674,12 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
     let owner = rules.first().expect("the owner is listed");
     assert_eq!(rules.len(), 1);
     assert_eq!(owner.mode(), libtmux::AccessMode::Write);
-    assert!(!owner.user().is_empty());
+    assert_eq!(owner.principal(), libtmux::Principal::User);
+    assert!(!owner.name().is_empty());
 
     // tmux refuses to change the owner's own entry, so a caller cannot lock
     // itself out of the server it just started.
-    let user = owner.user().to_owned();
+    let user = owner.name().to_owned();
     for attempt in [
         server
             .grant_access(&user, libtmux::AccessMode::ReadOnly)
@@ -1724,7 +1716,7 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CAPTURE_LINE_FLAGS);
+        .has_behavior(&since::CAPTURE_LINE_FLAGS);
 
     if !supported {
         // Below 3.7 tmux accepts no `-F`, and saying so beats an empty answer.
@@ -1819,7 +1811,7 @@ async fn a_suspended_client_is_not_reported_gone() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CLIENTS_HIDE_STOPPED);
+        .has_behavior(&since::CLIENTS_HIDE_STOPPED);
 
     let child = process::Command::new("tmux")
         .arg("-S")
@@ -1979,7 +1971,7 @@ async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CAPTURE_TRIM_BLANK_CELLS);
+        .has_behavior(&since::CAPTURE_TRIM_BLANK_CELLS);
 
     let asked = pane
         .capture_with(CaptureOptions::visible().trim_blank_cells())

@@ -362,7 +362,7 @@ macro_rules! format_catalog {
                     (PANE_PATH, pane_path, "pane_path", Pane, Pane, All, V3_2A, Text, Available),
                     (PANE_PB_PROGRESS, pane_pb_progress, "pane_pb_progress", Pane, Pane, All, V3_7, PaneProgress, Required),
                     (PANE_PB_STATE, pane_pb_state, "pane_pb_state", Pane, Pane, All, V3_7, PaneProgressState, Required),
-                    (PANE_PID, pane_pid, "pane_pid", Pane, Pane, All, V3_2A, U32, Required),
+                    (PANE_PID, pane_pid, "pane_pid", Pane, Pane, All, V3_2A, U32, Absent),
                     (PANE_PIPE, pane_pipe, "pane_pipe", Pane, Pane, All, V3_2A, Bool, Required),
                     (PANE_PIPE_PID, pane_pipe_pid, "pane_pipe_pid", Pane, Pane, All, V3_7, U32, Absent),
                     (PANE_RIGHT, pane_right, "pane_right", Pane, Pane, All, V3_2A, I32, Required),

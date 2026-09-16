@@ -9,6 +9,9 @@ use crate::version::{ReleaseVersion, TmuxVersion};
 
 mod classification;
 mod refusal;
+mod scoped;
+
+pub use scoped::ScopeError;
 
 /// The category of an invalid [`crate::ServerBuilder`] configuration.
 ///
@@ -923,6 +926,21 @@ pub enum Error {
         /// Payload-free decoding metadata.
         detail: ListingDecodeError,
     },
+
+    /// A `server-access -l` line matched neither grammar tmux is known to
+    /// print.
+    ///
+    /// [`crate::Server::access_rules`] decodes the legacy `name (R)`/`name
+    /// (W)` grammar and the compound `name (U,R)`/`name (G,W)` grammar a
+    /// release with group ACLs uses, by inspecting each line rather than the
+    /// detected tmux version. This is the third case: a line this crate
+    /// cannot place in either grammar, reported rather than dropped.
+    #[non_exhaustive]
+    #[error("server-access -l printed an entry this crate does not recognize: {marker}")]
+    UnreadableAccessRule {
+        /// The unrecognized trailing marker, without the name it followed.
+        marker: String,
+    },
 }
 
 /// The kind of tmux object a failure refers to.
@@ -1134,6 +1152,12 @@ impl Error {
 
     pub(crate) fn from_invalid_version_output(output_len: usize) -> Self {
         Self::InvalidVersionOutput { output_len }
+    }
+
+    pub(crate) fn unreadable_access_rule(marker: &str) -> Self {
+        Self::UnreadableAccessRule {
+            marker: marker.to_owned(),
+        }
     }
 
     pub(crate) fn unsupported_tmux_version(found: TmuxVersion, minimum: ReleaseVersion) -> Self {
@@ -1537,6 +1561,10 @@ impl fmt::Debug for Error {
                 .debug_struct("DecodeListing")
                 .field("list_command", list_command)
                 .field("detail", detail)
+                .finish(),
+            Self::UnreadableAccessRule { marker } => formatter
+                .debug_struct("UnreadableAccessRule")
+                .field("marker", marker)
                 .finish(),
         }
     }

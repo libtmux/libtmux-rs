@@ -1,4 +1,4 @@
-//! Public contract tests for borrowed query iterator extensions.
+//! Public contract tests for query iterator composition.
 
 #![cfg(feature = "query")]
 
@@ -1075,6 +1075,80 @@ fn named_matchers_filter_borrowed_items_in_order() {
     let selected = values.iter().matching(IsEven).copied().collect::<Vec<_>>();
 
     assert_eq!(selected, [4, 2, 6]);
+}
+
+#[test]
+fn owned_matching_moves_non_clone_values_through_adapters() {
+    let kept = Rc::new(());
+    let values = vec![Rc::new(()), Rc::clone(&kept)];
+    let selected = values
+        .into_iter()
+        .map(NoTraits)
+        .matching_owned(|candidate: &NoTraits| Rc::ptr_eq(&candidate.0, &kept))
+        .exactly_one()
+        .expect("one owned value matches");
+    assert!(Rc::ptr_eq(&selected.0, &kept));
+    assert_eq!(Rc::strong_count(&kept), 2);
+}
+
+#[test]
+fn matcher_inference_is_unambiguous_for_both_ownership_paths() {
+    struct Any;
+    impl<T> Matcher<T> for Any {
+        fn matches(&self, _: &T) -> bool {
+            true
+        }
+    }
+
+    let values = [1, 2, 3, 4];
+    assert_eq!(values.iter().skip(1).matching(Any).count(), 3);
+    assert_eq!(values.into_iter().skip(1).matching_owned(Any).count(), 3);
+    assert_eq!(
+        values
+            .into_iter()
+            .matching_owned(IsEven)
+            .collect::<Vec<_>>(),
+        [2, 4]
+    );
+
+    let fields = ScalarCandidate::filter_fields();
+    let expression = fields.u8_value.eq(u8::MIN);
+    let candidates = [
+        ScalarCandidate::extrema(false),
+        ScalarCandidate::extrema(true),
+    ];
+    let borrowed = candidates
+        .iter()
+        .matching(&expression)
+        .exactly_one()
+        .expect("one borrowed candidate");
+    assert!(std::ptr::eq(borrowed, &raw const candidates[0]));
+    let owned = candidates
+        .into_iter()
+        .matching_owned(&expression)
+        .one_or_none()
+        .expect("at most one owned candidate")
+        .expect("one candidate");
+    assert_eq!(owned.u8_value, u8::MIN);
+}
+
+#[test]
+fn owned_cardinality_covers_empty_multiple_and_bounded_consumption() {
+    let empty = std::iter::empty::<NoTraits>();
+    assert!(matches!(empty.exactly_one(), Err(ExactlyOneError::NoItems)));
+    assert!(
+        std::iter::empty::<NoTraits>()
+            .one_or_none()
+            .expect("no items")
+            .is_none()
+    );
+    let visits = Cell::new(0);
+    let values = (0..).inspect(|_| visits.set(visits.get() + 1));
+    assert_eq!(values.exactly_one(), Err(ExactlyOneError::MultipleItems));
+    assert_eq!(visits.get(), 2);
+    let values = (0..).inspect(|_| visits.set(visits.get() + 1));
+    assert_eq!(values.one_or_none(), Err(MultipleItemsError));
+    assert_eq!(visits.get(), 4);
 }
 
 #[test]
