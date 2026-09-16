@@ -1982,6 +1982,12 @@ impl NewSessionOptions {
     }
 
     /// Set the initial size, which a detached session would otherwise default.
+    ///
+    /// tmux 3.2a accepts this and sets `default-size` as asked, but still
+    /// draws the new, client-less window at its own classic default,
+    /// `80x23`: a pane's reported width and height on 3.2a do not reflect
+    /// this call, even though the option was set. Every later release draws
+    /// at the requested size.
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.width = Some(width);
         self.height = Some(height);

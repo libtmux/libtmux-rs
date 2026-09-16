@@ -257,6 +257,14 @@ impl Pane {
     /// A pane whose process ends answers [`PaneWait::Dead`] rather than
     /// running to the deadline, because waiting longer cannot change it.
     ///
+    /// A [`Pane::capture`] called immediately after this returns can
+    /// occasionally miss the very output that satisfied the wait: tmux's own
+    /// redraw of the screen a fast, multi-byte-heavy write produced can still
+    /// be in flight when the next `capture-pane` reads it, independent of
+    /// this crate. Raw tmux shows the same gap running the equivalent
+    /// `send-keys`/`capture-pane` sequence directly. A caller sensitive to
+    /// this should retry the capture rather than trust it on the first look.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses a capture.
