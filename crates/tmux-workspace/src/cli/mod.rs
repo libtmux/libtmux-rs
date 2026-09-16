@@ -38,7 +38,10 @@ impl CliError {
         }
     }
     fn invalid(message: impl Into<String>) -> Self {
-        Self::new("invalid_config", message)
+        Self::new("invalid_workspace", message)
+    }
+    fn unsupported_key(message: impl Into<String>) -> Self {
+        Self::new("unsupported_key", message)
     }
     fn usage(message: impl Into<String>) -> Self {
         Self {
@@ -62,7 +65,15 @@ impl From<serde_json::Error> for CliError {
 }
 impl From<libtmux::Error> for CliError {
     fn from(error: libtmux::Error) -> Self {
-        Self::new("tmux", error.to_string())
+        // libtmux::ErrorKind is already the coarse category the crate
+        // classifies every variant into "for reporting and routing"; reuse
+        // it rather than re-deriving the same split from Error's variants.
+        let code = match error.kind() {
+            libtmux::ErrorKind::Unreachable | libtmux::ErrorKind::ServerGone => "tmux_unavailable",
+            libtmux::ErrorKind::Refused => "tmux_failed",
+            _ => "tmux",
+        };
+        Self::new(code, error.to_string())
     }
 }
 
