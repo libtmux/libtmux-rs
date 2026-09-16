@@ -86,10 +86,10 @@ pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
             let command = pane
                 .current_command()
                 .map(|command| command.to_string_lossy().into_owned());
-            let is_default_shell = match (&command, &default_shell) {
-                (Some(command), Some(shell)) => basename(command) == shell,
-                _ => false,
-            };
+            let is_default_shell = command.as_deref().is_some_and(|command| {
+                let command = basename(command);
+                ORDINARY_SHELLS.contains(&command) || default_shell.as_deref() == Some(command)
+            });
             panes.push(PaneConfig {
                 shell_commands: if is_default_shell {
                     Vec::new()
@@ -143,3 +143,16 @@ pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
 fn basename(text: &str) -> &str {
     text.rsplit('/').next().unwrap_or(text)
 }
+
+/// Interactive shells common enough that a bare pane running one is almost
+/// certainly sitting at its prompt, whatever `default-shell`'s basename says.
+///
+/// A basename comparison alone is not reliable: on macOS `/bin/sh` is bash,
+/// so `default-shell /bin/sh` still leaves a bare pane reporting `bash` as
+/// its current command, and the comparison would otherwise treat it as a
+/// pane running an explicit command and freeze `shell_command: ["bash"]`
+/// into a document whose pane had no command at all. The `default-shell`
+/// comparison still covers anything not on this list.
+const ORDINARY_SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ash", "ksh", "mksh", "fish", "csh", "tcsh",
+];
