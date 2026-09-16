@@ -2728,3 +2728,49 @@ fn teamocil_import_derives_session_name_from_the_filename() {
     assert_eq!(value["session_name"], "teamv1");
     assert_eq!(value["windows"][0]["window_name"], "sample-window");
 }
+
+#[tokio::test]
+async fn global_options_use_tmuxs_global_session_scope() {
+    // M8: rs applied global_options through the server option table
+    // (`set-option -s`), which refuses most tmuxp global_options keys with
+    // OptionScopeMismatch. tmuxp applies them with `set-option -g` (global
+    // session options) instead, so an ordinary key like history-limit
+    // belongs in the session table's global defaults, not the server's.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.yaml"),
+        "session_name: globaloptions\nglobal_options:\n  history-limit: 4242\nwindows:\n  - panes:\n      - blank\n",
+    )
+    .unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let output = at(
+        &["load", "-S", socket, "-d", "workspace.yaml"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        guard
+            .server()
+            .session("globaloptions")
+            .await
+            .unwrap()
+            .is_some(),
+        "session was created"
+    );
+    // tmux keeps the global session table separately from any one session's
+    // overrides: `show-options -t <session>` (no `-g`) answers only that
+    // session's own overrides, so the global table itself is what confirms
+    // this landed as `set-option -g` rather than the session or server
+    // tables.
+    let value = guard
+        .server()
+        .get_global_option("history-limit")
+        .await
+        .unwrap();
+    assert_eq!(
+        value.map(|v| v.to_string_lossy().into_owned()),
+        Some("4242".to_owned())
+    );
+    guard.shutdown().await.unwrap();
+}
