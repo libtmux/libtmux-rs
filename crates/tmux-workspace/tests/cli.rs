@@ -2774,3 +2774,27 @@ async fn global_options_use_tmuxs_global_session_scope() {
     );
     guard.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn freeze_never_carries_the_sessions_environment() {
+    // M11 / SPEC 1 item 4: freeze wrote the session's environment into the
+    // document, including things like SSH_AUTH_SOCK and SSH_AGENT_PID that
+    // do not survive a reload on another machine or after a reboot. tmuxp
+    // writes no environment key at all; match that.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let session = guard.session("frozen-env").await.unwrap();
+    session
+        .set_environment("SSH_AUTH_SOCK", "/tmp/agent.should-not-leak")
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let socket = guard.socket_path().to_str().unwrap();
+    let output = at(
+        &["freeze", "-S", socket, "--json", "frozen-env"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(value.get("environment").is_none(), "{value}");
+    guard.shutdown().await.unwrap();
+}
