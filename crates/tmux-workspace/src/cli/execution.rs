@@ -791,15 +791,13 @@ pub(super) async fn capture(session: &Session) -> Result<Value> {
     if !options.is_empty() {
         value["options"] = json!(options);
     }
-    let mut environment = serde_json::Map::new();
-    for (name, entry) in session.environment_all().await? {
-        if let libtmux::EnvironmentEntry::Set(text) = entry {
-            environment.insert(name, json!(text.to_string_lossy()));
-        }
-    }
-    if !environment.is_empty() {
-        value["environment"] = json!(environment);
-    }
+    // Not session.environment_all(): tmux sessions inherit the process
+    // environment they were created under, so that table holds whatever the
+    // caller's shell happened to have -- SSH_AUTH_SOCK, SSH_AGENT_PID,
+    // DISPLAY -- indistinguishably from anything the workspace itself set.
+    // None of it survives a reload on another machine or after a reboot, and
+    // a frozen workspace is a file people commit and share. tmuxp writes no
+    // environment key at all; match that (M11, SPEC 1 item 4).
     Ok(value)
 }
 
