@@ -72,6 +72,22 @@ pub enum AccessMode {
 /// prints a bare `name (R)`/`name (W)` line with no marker at all -- every row
 /// such a release can print names a user, so decoding one reports
 /// [`Principal::User`].
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// use libtmux::Principal;
+///
+/// for rule in server.access_rules().await? {
+///     match rule.principal() {
+///         Principal::User => println!("{} (user)", rule.name()),
+///         Principal::Group => println!("{} (group)", rule.name()),
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Principal {
     /// The entry names an operating-system user.
