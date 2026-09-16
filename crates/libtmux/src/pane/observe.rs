@@ -54,6 +54,25 @@ impl Pane {
     /// ```
     #[cfg(feature = "control-mode")]
     pub async fn stream_output(&self) -> Result<crate::control::PaneOutput, Error> {
+        self.stream_output_with_limits(crate::ControlLimits::default())
+            .await
+    }
+
+    /// Like [`Self::stream_output`], with explicit frame budgets.
+    ///
+    /// The connection this opens is a whole `%begin`/`%end`-framed
+    /// control-mode session, not only this one pane's bytes, so a budget set
+    /// here bounds every frame that connection reads -- the same tradeoff
+    /// [`crate::control::ControlMode::attach_with_limits`] documents.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::stream_output`].
+    #[cfg(feature = "control-mode")]
+    pub async fn stream_output_with_limits(
+        &self,
+        limits: crate::ControlLimits,
+    ) -> Result<crate::control::PaneOutput, Error> {
         // tmux reports a pane only to a client attached to a session that
         // links its window, so attaching through this handle's cached session
         // would deliver silence after the pane was joined elsewhere.
@@ -62,9 +81,10 @@ impl Pane {
             id: self.id().to_string(),
         })?;
         let server = crate::Server::from_core(Arc::clone(&self.core));
-        let (sender, events) = crate::control::ControlMode::attach(&server, window.session_id())
-            .await?
-            .split();
+        let (sender, events) =
+            crate::control::ControlMode::attach_with_limits(&server, window.session_id(), limits)
+                .await?
+                .split();
 
         // One session can hold many panes, and the connection carries all of
         // them, so narrowing happens before the caller reads.

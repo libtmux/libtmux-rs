@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use libtmux::{CaptureOptions, ControlModeErrorKind, Error, Pane};
+use libtmux::{CaptureOptions, ControlLimits, ControlModeErrorKind, Error, Pane};
 use regex::bytes::Regex;
 use serde::Serialize;
 
@@ -220,10 +220,51 @@ pub(crate) async fn wait_for_text(
     timeout: Duration,
     cancelled: &CancellationToken,
 ) -> Result<WaitView, Error> {
+    wait_for_text_with_limits(
+        pane,
+        patterns,
+        stops,
+        timeout,
+        cancelled,
+        ControlLimits::default(),
+    )
+    .await
+}
+
+/// Like [`wait_for_text`], with explicit control-mode frame budgets.
+///
+/// Every real caller wants [`wait_for_text`]'s default: this exists so a test
+/// can shrink the budget enough to force the frame-too-large shutdown error
+/// [`wait_for_text`] propagates instead of tolerating -- a branch no MCP
+/// tool argument can reach, since exposing a protocol-tuning knob to a
+/// caller of the tool would leak an implementation detail into its surface.
+///
+/// Split from [`wait_on_output`] at the attach point so a test driving a
+/// tiny budget can send its adversarial output only once attaching has
+/// provably finished, rather than racing a fixed delay against it.
+pub(crate) async fn wait_for_text_with_limits(
+    pane: &Pane,
+    patterns: &Patterns,
+    stops: &Patterns,
+    timeout: Duration,
+    cancelled: &CancellationToken,
+    limits: ControlLimits,
+) -> Result<WaitView, Error> {
     // Attached first: a pattern that arrives while the screen is being read
     // must still be seen.
-    let mut output = pane.stream_output().await?;
+    let output = pane.stream_output_with_limits(limits).await?;
+    wait_on_output(pane, output, patterns, stops, timeout, cancelled).await
+}
 
+/// The read loop [`wait_for_text_with_limits`] runs once attached.
+async fn wait_on_output(
+    pane: &Pane,
+    mut output: libtmux::control::PaneOutput,
+    patterns: &Patterns,
+    stops: &Patterns,
+    timeout: Duration,
+    cancelled: &CancellationToken,
+) -> Result<WaitView, Error> {
     // What is already on screen will never match, because a stream only
     // carries what comes next. Saying so is cheaper than a wasted deadline.
     let present_at_entry = match pane.capture_with(CaptureOptions::visible()).await {

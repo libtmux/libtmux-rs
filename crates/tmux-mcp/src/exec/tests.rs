@@ -933,3 +933,76 @@ async fn a_staged_frame_removes_itself_and_refuses_an_occupied_path() {
 
     std::fs::remove_file(&path).expect("the frame is removed");
 }
+
+/// A non-`Closed` shutdown error propagates rather than being tolerated.
+///
+/// `wait_for_text` tolerates only `ControlModeErrorKind::Closed` from
+/// `output.shutdown()`; every other shutdown error is real and must discard
+/// the view being built. Nothing in the ordinary tool path can reach that
+/// branch, since [`crate::exec::wait_for_text`] always attaches with
+/// [`libtmux::ControlLimits::default`], which no ordinary pane output
+/// exceeds -- this is why `wait_for_text_with_limits` exists.
+///
+/// Attaches before sending the adversarial line, rather than sending it a
+/// fixed delay after spawning a concurrent wait: attach-then-consume are
+/// split at `wait_on_output` for exactly this, so this test can prove attach
+/// is complete before the flood starts instead of racing it. A version that
+/// flooded the pane concurrently with attaching, with no synchronization,
+/// observed the ordinary `Closed` outcome in 2 of 8 runs instead of the
+/// frame-budget error -- an unexplained sharp edge worth its own look, not
+/// masked with a delay here.
+#[tokio::test]
+async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() {
+    use libtmux::ControlLimits;
+    use libtmux::test::TestServer;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("wait-frame-budget")
+        .await
+        .expect("session starts");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    // Comfortably above the connection's own opening handshake and the
+    // narrowing command's reply, and comfortably below the one long line the
+    // pane is made to print once attached.
+    let tiny = ControlLimits::default().max_line_bytes(256);
+    let output = pane
+        .stream_output_with_limits(tiny)
+        .await
+        .expect("attaching on a quiet pane succeeds");
+
+    // Sent only now that attach and narrow have provably finished: the very
+    // next line tmux reports on this connection already exceeds the budget.
+    pane.send_line("printf '%s\\n' \"$(head -c 4096 /dev/zero | tr '\\0' A)\"")
+        .await
+        .expect("the adversarial line is sent");
+
+    // A run of 10 `A`s: absent from the echoed command line above, which
+    // types the letter only in isolation, so this never matches the echo.
+    // It also never arrives as a delivered chunk: tmux's own protocol line
+    // carrying it is what exceeds the budget, so the connection dies before
+    // that line becomes an `Event::Output` this stream could read.
+    let patterns =
+        Patterns::compile(&["AAAAAAAAAA".to_owned()], false, false).expect("pattern compiles");
+    let stops = Patterns::compile(&[], false, false).expect("empty stop patterns compile");
+    let cancelled = CancellationToken::new();
+
+    let error = wait_on_output(
+        &pane,
+        output,
+        &patterns,
+        &stops,
+        Duration::from_secs(5),
+        &cancelled,
+    )
+    .await
+    .expect_err("a too-small frame budget is a real shutdown error, not a tolerated Closed");
+    assert!(
+        matches!(error, Error::ControlModeFrameTooLarge { .. }),
+        "the frame-budget error surfaces rather than being swallowed: {error:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

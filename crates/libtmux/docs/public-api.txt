@@ -449,6 +449,7 @@ function libtmux::Pane::set_option: async fn(&self, name: &str, value: impl Into
 function libtmux::Pane::set_title: async fn(&mut self, title: impl Into<OsString>) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::split: async fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<Self, libtmux::Error>
 function libtmux::Pane::stream_output: async fn(&self) -> Result<libtmux::control::PaneOutput, libtmux::Error>
+function libtmux::Pane::stream_output_with_limits: async fn(&self, limits: libtmux::ControlLimits) -> Result<libtmux::control::PaneOutput, libtmux::Error>
 function libtmux::Pane::swap_with: async fn(&mut self, other: &Self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::title: fn(&self) -> &libtmux::TmuxText
 function libtmux::Pane::toggle_zoom: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
