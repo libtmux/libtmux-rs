@@ -292,6 +292,7 @@ enum libtmux::plan::Planner
 enum libtmux::plan::Safety
 enum libtmux::plan::Scope
 enum libtmux::plan::SessionTarget
+enum libtmux::plan::SplitTarget
 enum libtmux::plan::StepReason
 enum libtmux::plan::WindowTarget
 enum libtmux::query::ExactlyOneError
@@ -863,6 +864,7 @@ function libtmux::plan::SplitWindow::command: fn(self, command: impl Into<OsStri
 function libtmux::plan::SplitWindow::direction: const fn(self, direction: libtmux::SplitDirection) -> Self
 function libtmux::plan::SplitWindow::environment: fn(self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self
 function libtmux::plan::SplitWindow::focus: const fn(self) -> Self
+function libtmux::plan::SplitWindow::from_pane: fn(target: impl Into<libtmux::plan::PaneTarget>) -> Self
 function libtmux::plan::SplitWindow::horizontal: const fn(self) -> Self
 function libtmux::plan::SplitWindow::new: fn(target: impl Into<libtmux::plan::WindowTarget>) -> Self
 function libtmux::plan::SplitWindow::start_directory: fn(self, directory: impl Into<OsString>) -> Self
@@ -1113,6 +1115,7 @@ impl Clone for libtmux::plan::SessionSlot
 impl Clone for libtmux::plan::SessionTarget
 impl Clone for libtmux::plan::SetEnvironment
 impl Clone for libtmux::plan::SetOption
+impl Clone for libtmux::plan::SplitTarget
 impl Clone for libtmux::plan::SplitWindow
 impl Clone for libtmux::plan::Step
 impl Clone for libtmux::plan::StepOutcome
@@ -1297,6 +1300,7 @@ impl Debug for libtmux::plan::SessionSlot
 impl Debug for libtmux::plan::SessionTarget
 impl Debug for libtmux::plan::SetEnvironment
 impl Debug for libtmux::plan::SetOption
+impl Debug for libtmux::plan::SplitTarget
 impl Debug for libtmux::plan::SplitWindow
 impl Debug for libtmux::plan::Step
 impl Debug for libtmux::plan::StepOutcome
@@ -1564,6 +1568,7 @@ impl JsonSchema for libtmux::plan::SendKeys
 impl JsonSchema for libtmux::plan::SessionTarget
 impl JsonSchema for libtmux::plan::SetEnvironment
 impl JsonSchema for libtmux::plan::SetOption
+impl JsonSchema for libtmux::plan::SplitTarget
 impl JsonSchema for libtmux::plan::SplitWindow
 impl JsonSchema for libtmux::plan::WindowTarget
 impl Ord for libtmux::PaneId
@@ -1709,6 +1714,7 @@ impl Serialize for libtmux::plan::SessionSlot
 impl Serialize for libtmux::plan::SessionTarget
 impl Serialize for libtmux::plan::SetEnvironment
 impl Serialize for libtmux::plan::SetOption
+impl Serialize for libtmux::plan::SplitTarget
 impl Serialize for libtmux::plan::SplitWindow
 impl Serialize for libtmux::plan::WindowSlot
 impl Serialize for libtmux::plan::WindowTarget
@@ -1800,6 +1806,7 @@ impl<'de> Deserialize<'de> for libtmux::plan::SessionSlot
 impl<'de> Deserialize<'de> for libtmux::plan::SessionTarget
 impl<'de> Deserialize<'de> for libtmux::plan::SetEnvironment
 impl<'de> Deserialize<'de> for libtmux::plan::SetOption
+impl<'de> Deserialize<'de> for libtmux::plan::SplitTarget
 impl<'de> Deserialize<'de> for libtmux::plan::SplitWindow
 impl<'de> Deserialize<'de> for libtmux::plan::WindowSlot
 impl<'de> Deserialize<'de> for libtmux::plan::WindowTarget
@@ -2270,6 +2277,8 @@ struct_field libtmux::plan::PaneTarget::Id::0: libtmux::PaneId
 struct_field libtmux::plan::PaneTarget::Slot::0: libtmux::plan::Slot<libtmux::plan::PaneSlot>
 struct_field libtmux::plan::SessionTarget::Id::0: libtmux::SessionId
 struct_field libtmux::plan::SessionTarget::Slot::0: libtmux::plan::Slot<libtmux::plan::SessionSlot>
+struct_field libtmux::plan::SplitTarget::Pane::0: libtmux::plan::PaneTarget
+struct_field libtmux::plan::SplitTarget::Window::0: libtmux::plan::WindowTarget
 struct_field libtmux::plan::WindowTarget::Id::0: libtmux::WindowId
 struct_field libtmux::plan::WindowTarget::Slot::0: libtmux::plan::Slot<libtmux::plan::WindowSlot>
 struct_field libtmux::test::DaemonState::Gone::0: std::process::ExitStatus
@@ -2538,6 +2547,8 @@ variant libtmux::plan::Scope::Session
 variant libtmux::plan::Scope::Window
 variant libtmux::plan::SessionTarget::Id
 variant libtmux::plan::SessionTarget::Slot
+variant libtmux::plan::SplitTarget::Pane
+variant libtmux::plan::SplitTarget::Window
 variant libtmux::plan::StepReason::Alone
 variant libtmux::plan::StepReason::CreatesId
 variant libtmux::plan::StepReason::Folded
