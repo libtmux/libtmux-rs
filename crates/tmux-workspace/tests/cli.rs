@@ -2832,3 +2832,39 @@ async fn load_accepts_both_options_and_options_after_spellings() {
     }
     guard.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn freeze_does_not_carry_the_capturing_terminals_size() {
+    // default-size is the size of the terminal the capture happened on
+    // (rs's own `load` sets it explicitly, matching tmuxp), not anything
+    // the workspace asked for. Writing it into the frozen document would
+    // pin every future reload to that size on any server.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.yaml"),
+        "session_name: sizesource\nwindows:\n  - panes:\n      - blank\n",
+    )
+    .unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let output = at(
+        &["load", "-S", socket, "-d", "workspace.yaml"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+
+    let output = at(
+        &["freeze", "-S", socket, "--json", "sizesource"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let frozen: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        frozen
+            .get("options")
+            .is_none_or(|options| options.get("default-size").is_none()),
+        "{frozen}"
+    );
+
+    guard.shutdown().await.unwrap();
+}
