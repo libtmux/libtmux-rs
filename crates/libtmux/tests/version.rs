@@ -241,9 +241,9 @@ fn enforces_the_minimum_without_promoting_development_versions() {
 /// tmux-matrix probe binary reports -- disagrees with `meets` for exactly
 /// the capabilities this crate gates above the floor: `meets` refuses every
 /// one of them, `has_behavior` grants whichever `next-3.9` numerically
-/// contains. This is the rule three tests predicted a `require`-gated branch
-/// with `meets` and, unnoticed, always took the "unsupported" branch against
-/// that probe.
+/// contains. This is the rule the `commands.rs` tests that predicted a
+/// `require`-gated branch with `meets` were reproducing, unnoticed, always
+/// taking the "unsupported" branch against that probe.
 #[cfg(feature = "test-support")]
 #[test]
 fn has_behavior_and_meets_disagree_above_the_supported_floor() {

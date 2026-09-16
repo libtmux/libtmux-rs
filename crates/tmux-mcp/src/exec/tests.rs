@@ -946,11 +946,7 @@ async fn a_staged_frame_removes_itself_and_refuses_an_occupied_path() {
 /// Attaches before sending the adversarial line, rather than sending it a
 /// fixed delay after spawning a concurrent wait: attach-then-consume are
 /// split at `wait_on_output` for exactly this, so this test can prove attach
-/// is complete before the flood starts instead of racing it. A version that
-/// flooded the pane concurrently with attaching, with no synchronization,
-/// observed the ordinary `Closed` outcome in 2 of 8 runs instead of the
-/// frame-budget error -- an unexplained sharp edge worth its own look, not
-/// masked with a delay here.
+/// is complete before the flood starts instead of racing it.
 #[tokio::test]
 async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() {
     use libtmux::ControlLimits;
