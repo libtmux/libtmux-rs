@@ -36,19 +36,44 @@ fn from_yaml(value: &Yaml) -> Result<Value> {
         })?,
         Yaml::String(v) => json!(v),
         Yaml::Array(values) => Value::Array(values.iter().map(from_yaml).collect::<Result<_>>()?),
-        Yaml::Hash(values) => Value::Object(
-            values
-                .iter()
-                .map(|(key, value)| {
-                    let key = key.as_str().ok_or_else(|| {
-                        CliError::invalid("document mapping keys must be strings")
-                    })?;
-                    Ok((key.to_owned(), from_yaml(value)?))
-                })
-                .collect::<Result<_>>()?,
-        ),
+        Yaml::Hash(values) => Value::Object(merge_hash(values)?),
         _ => return Err(CliError::invalid("unsupported YAML value")),
     })
+}
+
+/// Resolves `<<: *anchor` and `<<: [*a, *b]` at this mapping level. Merged
+/// keys are folded in first-source-wins order, then every key the mapping
+/// wrote itself overrides whatever the merge produced, regardless of where
+/// `<<` appeared among the document's own keys.
+fn merge_hash(values: &yaml_rust2::yaml::Hash) -> Result<Map<String, Value>> {
+    let mut own = Vec::new();
+    let mut sources = Vec::new();
+    for (key, value) in values {
+        if key.as_str() == Some("<<") {
+            match value {
+                Yaml::Array(items) => sources.extend(items.iter()),
+                other => sources.push(other),
+            }
+            continue;
+        }
+        let key = key
+            .as_str()
+            .ok_or_else(|| CliError::invalid("document mapping keys must be strings"))?;
+        own.push((key.to_owned(), from_yaml(value)?));
+    }
+    let mut merged = Map::new();
+    for source in sources {
+        let Value::Object(fields) = from_yaml(source)? else {
+            return Err(CliError::invalid("merge key << must reference a mapping"));
+        };
+        for (key, value) in fields {
+            merged.entry(key).or_insert(value);
+        }
+    }
+    for (key, value) in own {
+        merged.insert(key, value);
+    }
+    Ok(merged)
 }
 
 pub(super) fn encode(value: &Value, format: &str) -> Result<String> {
@@ -77,8 +102,19 @@ pub(super) fn save(path: &Path, value: &Value, format: &str, force: bool) -> Res
     if force {
         file.persist(path).map_err(|e| CliError::from(e.error))?;
     } else {
-        file.persist_noclobber(path)
-            .map_err(|e| CliError::from(e.error))?;
+        file.persist_noclobber(path).map_err(|e| {
+            if e.error.kind() == std::io::ErrorKind::AlreadyExists {
+                CliError::new(
+                    "destination_exists",
+                    format!(
+                        "{} already exists; pass --force to replace it",
+                        path.display()
+                    ),
+                )
+            } else {
+                CliError::from(e.error)
+            }
+        })?;
     }
     Ok(())
 }
@@ -99,4 +135,28 @@ pub(super) fn object(value: &Value) -> Result<&Map<String, Value>> {
     value
         .as_object()
         .ok_or_else(|| CliError::invalid("expected a mapping"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_and_sequence_merge_keys_resolve_with_explicit_keys_winning() -> Result<()> {
+        let single = parse(
+            "windows:\n  - &base\n    window_name: a\n    panes: [echo a]\n  - <<: *base\n    window_name: b\n",
+        )?;
+        assert_eq!(single["windows"][1]["window_name"], "b");
+        assert_eq!(single["windows"][1]["panes"], json!(["echo a"]));
+
+        // Two sources disagree on `shared`; the first in the sequence wins,
+        // and the mapping's own `shared` still overrides both.
+        let sequence = parse(
+            "a: &a\n  shared: from-a\n  only_a: 1\nb: &b\n  shared: from-b\n  only_b: 2\nc:\n  <<: [*a, *b]\n  shared: explicit\n",
+        )?;
+        assert_eq!(sequence["c"]["shared"], "explicit");
+        assert_eq!(sequence["c"]["only_a"], 1);
+        assert_eq!(sequence["c"]["only_b"], 2);
+        Ok(())
+    }
 }
