@@ -835,3 +835,69 @@ windows:
     guard.shutdown().await.expect("tmux fixture shuts down");
     drop(session);
 }
+
+#[tokio::test]
+async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
+    // SPEC 1 item 5: a pane running the session's default shell round-trips
+    // as a plain pane when shell_command is omitted; emitting it re-runs the
+    // shell inside itself on reload. A pane running anything else keeps its
+    // command, and -- emitted or not -- the field is always a YAML list,
+    // never a bare scalar, so a consumer never needs a union type for it.
+    use libtmux::SplitDirection;
+
+    let guard = TestServer::new().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("freeze-shell")
+        .await
+        .expect("session starts");
+    let window = session
+        .active_window()
+        .await
+        .expect("window lookup")
+        .expect("a session has a window");
+    // Typed into an interactive shell, the same way an ordinary
+    // shell_command reaches a pane -- not given as split-window's own
+    // trailing shell-command argument, which tmux runs non-interactively
+    // through the default shell and which some shells (dash included) do
+    // not exec-replace, leaving that shell as pane_current_command forever.
+    let other = window.split(SplitDirection::Below).await.expect("split");
+    other.send_line("sleep 300").await.expect("type command");
+
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(10), async || {
+        let Ok(refreshed) = other.refreshed().await else {
+            return false;
+        };
+        refreshed
+            .current_command()
+            .is_some_and(|command| command.to_string_lossy() == "sleep")
+    })
+    .await;
+    assert!(settled.is_ok(), "the split pane's command settled");
+
+    let frozen = tmux_workspace::freeze(&session)
+        .await
+        .expect("the session freezes");
+
+    assert!(
+        frozen.windows[0].panes[0].shell_commands.is_empty(),
+        "the untouched pane runs the default shell and should omit shell_command: {:?}",
+        frozen.windows[0].panes[0].shell_commands
+    );
+    // tmux reports only the command name, not its arguments, so this is
+    // what freeze can recover -- the same fidelity every other pane field
+    // already has.
+    assert_eq!(frozen.windows[0].panes[1].shell_commands, ["sleep"]);
+
+    let yaml = frozen.to_yaml();
+    assert!(
+        yaml.contains("shell_command:\n") && yaml.contains("- \"sleep\""),
+        "a single shell_command must render as a YAML list:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains("shell_command: \"sleep\""),
+        "shell_command must never render as a bare scalar:\n{yaml}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

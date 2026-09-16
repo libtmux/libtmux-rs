@@ -61,16 +61,41 @@ use crate::config::{PaneConfig, WindowConfig, Workspace};
 /// # }
 /// ```
 pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
+    // A pane sitting at the session's own default shell restarts as that
+    // same plain shell on reload, which is what it started as. Recording
+    // its command as a shell_command would instead reload the shell as a
+    // pane command, running the shell inside itself. Only a pane running
+    // something else needs to say so.
+    //
+    // `#{default-shell}` rather than Session::get_option: tmux keeps
+    // default-shell in the session table, but `show-options -t <session>`
+    // (no `-g`) answers only that session's own override, which is almost
+    // never set -- the value nearly every session actually runs comes from
+    // the global table. A format expands the effective value regardless of
+    // which table holds it.
+    let default_shell_text = session.format("#{default-shell}").await?;
+    let default_shell = Some(default_shell_text.to_string_lossy())
+        .filter(|value| !value.is_empty())
+        .map(|value| basename(&value).to_owned());
+
     let mut windows = Vec::new();
 
     for window in session.windows().await? {
         let mut panes = Vec::new();
         for pane in window.panes().await? {
+            let command = pane
+                .current_command()
+                .map(|command| command.to_string_lossy().into_owned());
+            let is_default_shell = match (&command, &default_shell) {
+                (Some(command), Some(shell)) => basename(command) == shell,
+                _ => false,
+            };
             panes.push(PaneConfig {
-                shell_commands: pane
-                    .current_command()
-                    .map(|command| vec![command.to_string_lossy().into_owned()])
-                    .unwrap_or_default(),
+                shell_commands: if is_default_shell {
+                    Vec::new()
+                } else {
+                    command.map_or_else(Vec::new, |command| vec![command])
+                },
                 environment: Vec::new(),
                 start_directory: pane
                     .current_path()
@@ -111,4 +136,10 @@ pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
         windows,
         unsupported_keys: Vec::new(),
     })
+}
+
+/// The final path component, tmux's own convention for `#{pane_current_command}`
+/// and for the shell tail of a `default-shell` path.
+fn basename(text: &str) -> &str {
+    text.rsplit('/').next().unwrap_or(text)
 }
