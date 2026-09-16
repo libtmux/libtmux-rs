@@ -103,11 +103,15 @@ pub(super) fn pairs(value: &Value, options: bool) -> Result<Vec<(String, String)
 
 fn keys(value: &Value, names: &[&str], scope: &str) -> Result<()> {
     for key in document::object(value)?.keys() {
-        if !names.contains(&key.as_str()) {
-            return Err(CliError::invalid(format!(
-                "unsupported execution key {scope}.{key}; conversion preserves this key"
-            )));
+        // A key starting with `x-`, at any level, is inert: accepted here,
+        // ignored below since nothing reads it, and `convert` still copies
+        // the document field unchanged.
+        if key.starts_with("x-") || names.contains(&key.as_str()) {
+            continue;
         }
+        return Err(CliError::unsupported_key(format!(
+            "unsupported execution key {scope}.{key}; conversion preserves this key, or prefix it x- to keep it inert"
+        )));
     }
     Ok(())
 }
@@ -218,7 +222,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     if !bridge {
         for key in ["config", "socket_name"] {
             if value.get(key).is_some() {
-                return Err(CliError::invalid(format!(
+                return Err(CliError::unsupported_key(format!(
                     "unsupported execution key workspace.{key}; select the endpoint with CLI flags"
                 )));
             }
@@ -526,6 +530,38 @@ mod tests {
         ] {
             let source = json!({"session_name":"demo","plugins":plugins,"workspace_builder":builder,"workspace_builder_options":{"extension_setting":true},"windows":[{"panes":["blank"]}]});
             assert!(workspace(&source, Path::new("workspace.yaml"))?.bridge);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn x_prefixed_keys_are_inert_at_every_level_and_other_unknowns_still_refuse() -> Result<()> {
+        let source = json!({
+            "session_name":"demo",
+            "x-workspace-level":{"anything":1},
+            "windows":[{"x-window-level":true,"panes":[{"x-pane-level":"kept","shell_command":"echo hi"}]}],
+        });
+        workspace(&source, Path::new("workspace.yaml"))?;
+
+        for (level, key) in [
+            (
+                json!({"session_name":"demo","not-x-prefixed":1,"windows":[{"panes":["blank"]}]}),
+                "workspace",
+            ),
+            (
+                json!({"session_name":"demo","windows":[{"not-x-prefixed":1,"panes":["blank"]}]}),
+                "window",
+            ),
+            (
+                json!({"session_name":"demo","windows":[{"panes":[{"not-x-prefixed":1,"shell_command":"echo hi"}]}]}),
+                "pane",
+            ),
+        ] {
+            let Err(error) = workspace(&level, Path::new("workspace.yaml")) else {
+                panic!("{key} should have refused an unknown key that is not x-prefixed");
+            };
+            assert_eq!(error.code, "unsupported_key");
+            assert!(error.message.contains("x-"), "{}", error.message);
         }
         Ok(())
     }

@@ -209,6 +209,22 @@ resolve, and this one could not have been published at all until `libtmux`
 shipped the `plan` feature it asks for — which is exactly the kind of thing
 that is invisible from inside the tree.
 
+## Compatibility with tmuxp
+
+Two window defaults are deliberate differences from tmuxp, kept because the
+result is more usable and because five or more panes still fit:
+
+- A window that names no `layout` is tiled (an even grid). tmuxp stacks it
+  instead, halving each split from the last.
+- With no explicit `focus`, the first pane a window builds stays active.
+  tmuxp leaves the last one active. An explicit `focus: true`, on a window or
+  a pane, agrees with tmuxp either way.
+
+A key starting with `x-`, at any level of the document, is inert: accepted,
+ignored at load, and `convert` preserves it unchanged. Every other unknown
+key is still refused, and the refusal names the `x-` prefix as the escape
+hatch for a document that wants to carry extra fields.
+
 ## CLI listing
 
 `tmux-workspace ls --tree` groups discovered files by their directory, keeping
