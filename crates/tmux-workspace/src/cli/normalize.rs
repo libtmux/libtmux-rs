@@ -207,6 +207,14 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     let name = text(&value["session_name"], "session_name")?
         .filter(|v| !v.is_empty())
         .ok_or_else(|| CliError::invalid("session_name is required"))?;
+    // tmux stores the name verbatim, then uses `:` and `.` as the window and
+    // pane separators in every `-t` target, so a name that contains either
+    // can be created but never addressed again (H8).
+    if let Some(separator) = name.chars().find(|c| matches!(c, ':' | '.')) {
+        return Err(CliError::invalid(format!(
+            "session_name must not contain {separator:?}; tmux reads it as a target separator and the session could not be addressed afterward"
+        )));
+    }
     let bridge = extension_bridge(value)?;
     if !bridge {
         for key in ["config", "socket_name"] {
@@ -440,6 +448,24 @@ fn pane(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_name_rejects_tmux_target_separators() {
+        // tmux stores the name verbatim, then `:` and `.` are the window and
+        // pane separators in every `-t` target, so a name that contains
+        // either can be created but never addressed again (H8).
+        for (name, separator) in [("a:b", ':'), ("a.b", '.')] {
+            let source = json!({"session_name":name,"windows":[{"panes":["blank"]}]});
+            let Err(error) = workspace(&source, Path::new("/tmp/workspace.yaml")) else {
+                panic!("{name} should have been refused");
+            };
+            assert!(
+                error.message.contains(separator),
+                "expected the message to name {separator:?}: {}",
+                error.message
+            );
+        }
+    }
 
     #[test]
     fn endpoint_fields_require_the_explicit_extension_route() -> Result<()> {
