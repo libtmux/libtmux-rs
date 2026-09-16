@@ -484,12 +484,26 @@ impl ControlMode {
             connection,
         } = actor::open(server.spawn_control(session).await?, limits, timeout).await?;
 
+        let sender = ControlSender {
+            commands,
+            timeout,
+            pane_off_is_safe,
+        };
+
+        // Ask for JSON layouts before anything else can read one. tmux 3.8+
+        // hands a control client the classic `window_layout` string it hands
+        // a plain client only after this flag is set, so `Event::LayoutChanged`
+        // and a snapshot taken through this connection would otherwise
+        // disagree with each other on format. A release below 3.8 has no such
+        // flag: `server_client_set_flags` skips a name it does not recognise,
+        // so this is a no-op there rather than a refusal.
+        sender
+            .send(Command::new("refresh-client").arg("-f").arg("new-layouts"))
+            .await?
+            .require_success("refresh-client")?;
+
         Ok(Self {
-            sender: ControlSender {
-                commands,
-                timeout,
-                pane_off_is_safe,
-            },
+            sender,
             events: ControlEvents {
                 events,
                 stop,
@@ -742,10 +756,19 @@ impl ControlSender {
     ///
     /// Below [`crate::since::CONTROL_PANE_OFF`] this pauses the pane rather
     /// than taking it out of the stream, because taking it out crashes the
-    /// server. tmux reports a paused pane, so a caller reading
-    /// [`ControlEvents`] sees [`Event::Paused`] for it there and not on a
-    /// newer tmux. The pane stops arriving either way; what a paused pane
-    /// costs is the back-pressure, since tmux keeps draining its terminal.
+    /// server. tmux keeps reading the pane's pty either way, discarding what
+    /// this connection does not want; a paused pane costs only that
+    /// connection's own back-pressure, and [`ControlEvents`] sees
+    /// [`Event::Paused`] for it.
+    ///
+    /// At or above that release, taking the pane out of the stream also stops
+    /// tmux reading its pty at all -- for every attached client, not only this
+    /// connection, and for a one-shot reader such as `capture-pane` too --
+    /// until [`Self::unmute_pane`] or [`Self::resume_pane`] turns it back on.
+    /// A human attached to the same pane sees it stop updating, and the pane's
+    /// own program can block on `write` once the kernel's pty buffer fills.
+    /// What arrives once resumed is therefore a backlog, not a gap: see
+    /// [`Self::unmute_pane`].
     ///
     /// # Errors
     ///
@@ -765,39 +788,64 @@ impl ControlSender {
 
     /// Resume sending what a pane writes, after [`Self::mute_pane`].
     ///
+    /// Below [`crate::since::CONTROL_PANE_OFF`], [`Self::mute_pane`] paused the
+    /// pane rather than taking it out of the stream, and this continues it:
     /// tmux resumes from the pane's current output rather than replaying what
-    /// was skipped, so a caller unmuting a pane has a gap, not a backlog.
+    /// was skipped, so the caller sees a gap, not a backlog.
     ///
-    /// Below [`crate::since::CONTROL_PANE_OFF`] this continues the pane that
-    /// [`Self::mute_pane`] paused, which is the same gap by another name.
+    /// At or above that release, [`Self::mute_pane`] took the pane out of the
+    /// stream instead, which also stopped tmux reading its pty; this turns
+    /// that back on, and everything written while muted arrives at once, as a
+    /// backlog rather than a gap.
+    ///
+    /// This sends both tmux commands in one dispatch rather than choosing
+    /// between them, so it is exactly [`Self::resume_pane`] -- either name
+    /// undoes [`Self::mute_pane`] correctly regardless of which mechanism the
+    /// running tmux used.
     ///
     /// # Errors
     ///
     /// Returns an error when the connection has closed or tmux refuses the
     /// stream change.
     pub async fn unmute_pane(&self, pane: &PaneId) -> Result<(), Error> {
-        self.set_pane_stream(
-            pane,
-            if self.pane_off_is_safe {
-                "on"
-            } else {
-                "continue"
-            },
-        )
-        .await
+        self.recover_pane(pane).await
     }
 
-    /// Resume a pane tmux paused because this connection fell behind.
+    /// Resume a pane tmux paused because this connection fell behind, or one
+    /// [`Self::mute_pane`] muted.
     ///
-    /// Pairs with [`Event::Paused`], which only arrives once a caller has
-    /// asked for pausing with [`Self::pause_after`].
+    /// Pairs with [`Event::Paused`], which arrives once a caller has asked for
+    /// pausing with [`Self::pause_after`]. It is also exactly
+    /// [`Self::unmute_pane`]: both send the same two commands, so calling
+    /// either after [`Self::mute_pane`] recovers the pane on every version,
+    /// rather than only the one whose mechanism happens to match.
     ///
     /// # Errors
     ///
     /// Returns an error when the connection has closed or tmux refuses the
     /// stream change.
     pub async fn resume_pane(&self, pane: &PaneId) -> Result<(), Error> {
-        self.set_pane_stream(pane, "continue").await
+        self.recover_pane(pane).await
+    }
+
+    /// Undo whichever of `off` or `pause` a pane is under, in one dispatch.
+    ///
+    /// `refresh-client -A` accepts more than one `pane:state` pair, so `on`
+    /// and `continue` travel together. tmux's `control_set_pane_on` and
+    /// `control_continue_pane` are each a no-op when their own flag is not
+    /// set, so sending both is correct whether the pane was taken out of the
+    /// stream, paused, both, or neither.
+    async fn recover_pane(&self, pane: &PaneId) -> Result<(), Error> {
+        self.send(
+            Command::new("refresh-client")
+                .arg("-A")
+                .arg(format!("{pane}:on"))
+                .arg("-A")
+                .arg(format!("{pane}:continue")),
+        )
+        .await?
+        .require_success("refresh-client")
+        .map(|_| ())
     }
 
     /// Ask tmux to report a format whenever it changes.
@@ -958,6 +1006,30 @@ impl ControlSender {
         Ok(())
     }
 
+    /// Report whether tmux still lists this pane, anywhere on the server.
+    ///
+    /// Used to tell a pane's death from an unrelated listing change: an event
+    /// that may mean a pane appeared can equally mean one left, and tmux
+    /// publishes no notification that names which.
+    pub(crate) async fn pane_exists(&self, pane: &PaneId) -> Result<bool, Error> {
+        let listed = self
+            .send(
+                Command::new("list-panes")
+                    .arg("-a")
+                    .arg("-F")
+                    .arg("#{pane_id}"),
+            )
+            .await?
+            .require_success("list-panes")?;
+
+        for line in listed.output() {
+            if decode_watched_pane_id(line)? == *pane {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     async fn set_pane_stream(&self, pane: &PaneId, state: &str) -> Result<(), Error> {
         self.send(
             Command::new("refresh-client")
@@ -1111,9 +1183,12 @@ const NARROW_DIRTY: u8 = 2;
 ///
 /// Built by [`crate::Pane::stream_output`]. This is a [`Stream`] of the bytes
 /// that pane produced, in order.
-/// Its infallible items combine normal termination and connection failure
-/// into `None`. Call [`Self::shutdown`] to observe any connection error, or
-/// use [`ControlEvents`] to receive errors during iteration.
+/// Its infallible items combine normal termination, connection failure, and
+/// the watched pane being killed into `None`, once whatever was already
+/// buffered has drained. Call [`Self::shutdown`] to observe a connection
+/// error, or use [`ControlEvents`] to receive errors during iteration; a
+/// killed pane is not an error either way, since ending is the correct answer
+/// once nothing more will arrive.
 ///
 /// tmux is told to send this connection nothing but the watched pane. A
 /// neighbouring pane running `yes` otherwise moves tens of megabytes a second
@@ -1128,7 +1203,8 @@ pub struct PaneOutput {
     events: ControlEvents,
     boundary: u64,
     closed: bool,
-    /// Kept to re-narrow the subscription, not to send a caller's commands.
+    /// Kept to re-narrow the subscription and to check the watched pane still
+    /// exists, not to send a caller's commands.
     ///
     /// tmux has no notification for a pane being created, so a pane that
     /// appears after the attach arrives unmuted; the event loop below repairs
@@ -1138,6 +1214,9 @@ pub struct PaneOutput {
     ///
     /// Each pass costs a `list-panes` round trip, so a burst coalesces.
     narrowing: Arc<AtomicU8>,
+    /// The re-narrowing pass in flight, if any, polled for whether it found
+    /// the watched pane still listed.
+    narrow_handle: Option<tokio::task::JoinHandle<bool>>,
 }
 
 impl PaneOutput {
@@ -1149,16 +1228,22 @@ impl PaneOutput {
             closed: false,
             sender,
             narrowing: Arc::new(AtomicU8::new(NARROW_IDLE)),
+            narrow_handle: None,
         }
     }
 
-    /// Tell tmux again to send only this pane.
+    /// Tell tmux again to send only this pane, and check it is still there.
     ///
-    /// Detached rather than awaited so [`Stream::poll_next`], which cannot
-    /// await, repairs the subscription the same way [`Self::next_chunk`] does.
-    /// A failure leaves the caller its own pane alongside noise, so it does
-    /// not end the stream.
-    fn narrow(&self) {
+    /// Spawned rather than awaited so [`Stream::poll_next`], which cannot
+    /// await, repairs the subscription the same way [`Self::next_chunk`]
+    /// does. tmux publishes no notification naming a pane that left the
+    /// server -- only ones consistent with a pane having *appeared* -- so a
+    /// pane's death is read from the same re-listing this already does to
+    /// repair the mute set, rather than from a second round trip. A failure
+    /// checking or re-narrowing leaves the caller its own pane alongside
+    /// noise, so it does not end the stream by itself; only a listing that
+    /// completes without the watched pane in it does.
+    fn narrow(&mut self) {
         let transition =
             self.narrowing
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
@@ -1173,7 +1258,7 @@ impl PaneOutput {
         let sender = self.sender.clone();
         let pane = self.pane.clone();
         let narrowing = Arc::clone(&self.narrowing);
-        tokio::spawn(async move {
+        self.narrow_handle = Some(tokio::spawn(async move {
             loop {
                 let _ = sender.watch_only(std::slice::from_ref(&pane)).await;
                 match narrowing.compare_exchange(
@@ -1189,13 +1274,29 @@ impl PaneOutput {
                     }
                 }
             }
-        });
+            // Settled on the final pass's view, so a pane that reappeared
+            // mid-burst under the same id is not reported gone. An error here
+            // -- the connection closing under us -- is not evidence of
+            // anything about the pane, so it counts as still there.
+            sender.pane_exists(&pane).await.unwrap_or(true)
+        }));
     }
 
     /// Return the pane being watched.
     #[must_use]
     pub const fn pane(&self) -> &PaneId {
         &self.pane
+    }
+
+    /// Return the connection this stream reads, to mute or resume panes on it.
+    ///
+    /// The watched pane's own stream cannot be muted through [`Self`] alone:
+    /// [`ControlSender::mute_pane`], [`ControlSender::unmute_pane`], and
+    /// [`ControlSender::resume_pane`] all take a target, and [`Self::pane`]
+    /// names this one.
+    #[must_use]
+    pub const fn sender(&self) -> &ControlSender {
+        &self.sender
     }
 
     /// Capture the pane's visible screen at an ordered point in this stream.
@@ -1299,25 +1400,7 @@ impl PaneOutput {
     /// A chunk is what tmux chose to report at once, which is not a line and
     /// not a fixed size. Callers wanting lines should buffer.
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
-        if self.closed {
-            return None;
-        }
-        loop {
-            let delivery = self.events.next_delivery().await;
-            match delivery {
-                Some(Delivery::Event(
-                    Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. },
-                )) if pane == self.pane => {
-                    return Some(bytes);
-                }
-                Some(Delivery::Event(Event::Exit { .. })) | None => {
-                    self.closed = true;
-                    return None;
-                }
-                Some(Delivery::Event(event)) if event.may_have_added_a_pane() => self.narrow(),
-                _ => {}
-            }
-        }
+        poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
 
     /// End the connection and report how it went.
@@ -1334,24 +1417,54 @@ impl PaneOutput {
 impl Stream for PaneOutput {
     type Item = Vec<u8>;
 
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
-        if self.closed {
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
+        // `PaneOutput` holds nothing self-referential, so projecting to a
+        // plain `&mut Self` is sound and lets the rest of this read like an
+        // ordinary method body.
+        let this = self.get_mut();
+        if this.closed {
             return Poll::Ready(None);
         }
+
+        // A re-narrow already in flight is polled for its answer before
+        // reading more events, so a pane confirmed gone ends the stream even
+        // when nothing further arrives to wake this on the event channel
+        // alone.
+        if let Some(mut handle) = this.narrow_handle.take() {
+            match Pin::new(&mut handle).poll(context) {
+                Poll::Pending => this.narrow_handle = Some(handle),
+                Poll::Ready(Ok(true)) => {}
+                Poll::Ready(Ok(false)) => {
+                    this.closed = true;
+                    return Poll::Ready(None);
+                }
+                // Nothing aborts this task, so a join failure is a panic in
+                // the check, not a cancellation; resuming it here keeps it
+                // visible rather than reporting a bug as a dead pane.
+                Poll::Ready(Err(error)) => std::panic::resume_unwind(error.into_panic()),
+            }
+        }
+
         loop {
-            match std::task::ready!(self.events.events.poll_recv(context)) {
+            match std::task::ready!(this.events.events.poll_recv(context)) {
                 Some(Delivery::Event(
                     Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. },
-                )) if pane == self.pane => {
+                )) if pane == this.pane => {
                     return Poll::Ready(Some(bytes));
                 }
                 Some(Delivery::Event(Event::Exit { .. })) | None => {
-                    self.closed = true;
+                    this.closed = true;
                     return Poll::Ready(None);
                 }
+                // `LayoutChanged` et al. can mean a pane appeared; `WindowClosed`
+                // cannot, but it is how the watched pane's own window closing
+                // under it is reported when that pane was the window's last,
+                // so both are read the same way: re-list, and end the stream
+                // if the watched pane is not on it.
                 Some(Delivery::Event(event)) => {
-                    if event.may_have_added_a_pane() {
-                        self.narrow();
+                    if event.may_have_added_a_pane() || matches!(event, Event::WindowClosed { .. })
+                    {
+                        this.narrow();
                     }
                 }
                 Some(Delivery::Boundary(_)) => {}

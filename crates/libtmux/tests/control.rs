@@ -15,6 +15,7 @@ use tokio_stream::StreamExt as _;
 assert_impl_all!(ControlSender: Clone, Send, Sync, Unpin);
 assert_impl_all!(ControlEvents: Send, Sync, Unpin, futures_core::Stream);
 assert_impl_all!(ControlMode: Send, Sync, Unpin);
+assert_impl_all!(libtmux::control::PaneOutput: Send, Sync, Unpin, futures_core::Stream);
 
 /// Report whether an event says a window has appeared.
 ///
@@ -1086,6 +1087,188 @@ async fn a_stream_opens_on_a_server_that_is_already_flooding() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Killing the observed pane ends `next_chunk()` rather than hanging it,
+/// when the pane's window survives and the death is reported as a layout
+/// change.
+///
+/// tmux publishes no dedicated "pane gone" notification; a split, a title
+/// change, and a pane dying all report through the same event vocabulary, so
+/// this checks the death path specifically rather than trusting that
+/// `may_have_added_a_pane` and its neighbours share one implementation.
+#[tokio::test]
+async fn observed_pane_death_ends_the_stream_via_layout_change() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("pane-death-layout")
+        .await
+        .expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    // A second pane keeps the window alive once the watched one is killed,
+    // so tmux reports the death as `%layout-change` rather than closing the
+    // window outright.
+    let survivor = window
+        .split(SplitOptions::new(SplitDirection::Right).command("sleep 300"))
+        .await
+        .expect("pane is created");
+    let watched = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("pane is created");
+
+    let mut output = watched.stream_output().await.expect("the pane streams");
+
+    watched.kill().await.expect("the watched pane is killed");
+
+    let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
+    assert_eq!(
+        ended,
+        Ok(None),
+        "next_chunk must end, not hang, once the watched pane is confirmed gone",
+    );
+
+    let _ = survivor;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Killing the observed pane ends `next_chunk()` rather than hanging it, when
+/// killing it also closes its window because it was the window's last pane
+/// (D7).
+///
+/// tmux reports this as `%unlinked-window-close` and `%session-window-changed`
+/// -- neither of which `may_have_added_a_pane` names, and only the second
+/// happens to also emit a covered `%session-changed` for this session's
+/// current-window bookkeeping. `WindowClosed`'s own trigger does not depend
+/// on that coincidence.
+#[tokio::test]
+async fn observed_pane_death_ends_the_stream_via_window_close() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("pane-death-window")
+        .await
+        .expect("session");
+
+    // A second window keeps the session alive once the first window's only
+    // pane is killed, so that pane's death closes its window without ending
+    // the session.
+    session
+        .new_window(NewWindowOptions::new("elsewhere").command("sleep 300"))
+        .await
+        .expect("a second window is created");
+    let first = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .find(|window| window.name().as_bytes() != b"elsewhere")
+        .expect("the original window still exists");
+    let watched = first
+        .panes()
+        .await
+        .expect("panes list")
+        .into_iter()
+        .next()
+        .expect("the original window's one pane");
+
+    let mut output = watched.stream_output().await.expect("the pane streams");
+
+    watched.kill().await.expect("the watched pane is killed");
+
+    let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
+    assert_eq!(
+        ended,
+        Ok(None),
+        "next_chunk must end, not hang, once the watched pane's window closes under it",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `PaneOutput::sender` reaches the exact connection `stream_output` opened,
+/// so a caller reading a stream can mute and resume that same stream without
+/// bypassing `stream_output` and reimplementing its internals.
+#[tokio::test]
+async fn pane_output_sender_reaches_the_streams_own_connection() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("stream-mutes-itself")
+        .await
+        .expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+    // `sleep 300` is the pane's own command rather than a shell, so a
+    // keystroke sent the instant the pane exists is echoed rather than
+    // swallowed by a prompt that has not started yet.
+    let pane = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("pane is created");
+
+    let mut output = pane.stream_output().await.expect("the pane streams");
+    assert!(!output.sender().is_closed(), "a fresh sender is open");
+
+    output
+        .sender()
+        .mute_pane(output.pane())
+        .await
+        .expect("the stream mutes its own pane");
+    pane.send_keys("echo muted-via-sender")
+        .await
+        .expect("the muted marker is sent");
+
+    // Nothing should arrive while muted; a short, bounded wait is the proof,
+    // not a hang -- the deadline running out is the expected outcome here.
+    let muted = tokio::time::timeout(Duration::from_millis(500), output.next_chunk()).await;
+    assert!(
+        muted.is_err(),
+        "no chunk should arrive on a stream muted through its own sender: {muted:?}",
+    );
+
+    output
+        .sender()
+        .unmute_pane(output.pane())
+        .await
+        .expect("the stream unmutes its own pane");
+    pane.send_keys("echo unmuted-via-sender")
+        .await
+        .expect("the unmuted marker is sent");
+
+    let resumed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let chunk = output.next_chunk().await.expect("the stream is still open");
+            if String::from_utf8_lossy(&chunk).contains("unmuted-via-sender") {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(
+        resumed.is_ok(),
+        "the stream must resume once unmuted through its own sender",
+    );
+
+    output.shutdown().await.expect("the connection shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// Muting a pane that is already producing must not take the server with it.
 ///
 /// Below [`libtmux::since::CONTROL_PANE_OFF`], `refresh-client -A <pane>:off`
@@ -1383,9 +1566,9 @@ async fn a_subscription_name_tmux_would_misread_is_refused() {
 /// The pause threshold and the resume that answers it must both dispatch.
 ///
 /// `pause_after` asks tmux to pause a pane rather than disconnect a client
-/// that falls behind, and `resume_pane` is what restarts one it paused --
-/// which is a different thing from `unmute_pane`, that being the counterpart
-/// to a mute the caller asked for.
+/// that falls behind, and `resume_pane` is what restarts one it paused. It is
+/// also exactly `unmute_pane`: both send the same two commands, so either
+/// name recovers a pane regardless of which mechanism muted or paused it.
 ///
 /// What is covered here is that both are built and accepted. Driving a real
 /// pause means falling far enough behind for tmux to notice, which is a
@@ -1416,6 +1599,147 @@ async fn the_pause_threshold_and_its_resume_are_accepted() {
         .expect("resuming is accepted");
 
     drop(commands);
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `resume_pane` leaves a pane able to receive output again after
+/// `mute_pane` muted it, even though `resume_pane`'s own doc says it pairs
+/// with `pause_after`, not `mute_pane`.
+///
+/// This checks a marker sent *after* resuming, not the one sent while muted:
+/// below `since::CONTROL_PANE_OFF`, a paused pane's output is a gap for this
+/// connection by design, not a backlog. Both `unmute_pane` and `resume_pane`
+/// send `on` and `continue` together, so either recovers a pane regardless
+/// of which mechanism muted or paused it.
+#[tokio::test]
+async fn resume_pane_recovers_what_mute_pane_muted() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("resume-recovers-mute")
+        .await
+        .expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    // `sleep 300` is the pane's own command rather than a shell, so a
+    // keystroke sent the instant the pane exists is echoed rather than
+    // swallowed by a prompt that has not started yet.
+    let pane = window
+        .split(SplitOptions::new(SplitDirection::Below).command("sleep 300"))
+        .await
+        .expect("pane is created");
+
+    let (commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    commands.mute_pane(pane.id()).await.expect("the pane mutes");
+    pane.send_keys("echo while-muted-marker")
+        .await
+        .expect("the first marker is sent");
+
+    commands
+        .resume_pane(pane.id())
+        .await
+        .expect("resuming is accepted");
+
+    pane.send_keys("echo after-resume-marker")
+        .await
+        .expect("the second marker is sent");
+
+    let saw_marker = wait_for(&mut events, |event| {
+        matches!(event, Event::Output { pane: reported, bytes }
+            if reported == pane.id()
+                && String::from_utf8_lossy(bytes).contains("after-resume-marker"))
+    })
+    .await
+    .is_some();
+    assert!(
+        saw_marker,
+        "resume_pane must leave the pane able to receive output again",
+    );
+
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `Event::LayoutChanged` and a plain snapshot of `window.layout()` must
+/// agree, byte for byte, on the same window at the same moment.
+///
+/// Without asking for `new-layouts`, a control client keeps receiving the
+/// classic layout string from `%layout-change` on a tmux that hands a plain
+/// client JSON for the same window -- so the two would silently
+/// disagree on 3.8+, and any code holding both an event stream and a snapshot
+/// would be holding two incompatible forms of the same fact.
+#[tokio::test]
+async fn layout_events_and_snapshots_agree_on_format() {
+    use libtmux::{SplitDirection, SplitOptions};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("layout-agreement")
+        .await
+        .expect("session");
+    let window = session
+        .windows()
+        .await
+        .expect("windows")
+        .into_iter()
+        .next()
+        .expect("one window");
+
+    let (_commands, mut events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    window
+        .split(SplitOptions::new(SplitDirection::Right).command("sleep 300"))
+        .await
+        .expect("the split changes the layout");
+
+    let event = wait_for(&mut events, |event| {
+        matches!(event, Event::LayoutChanged { window: reported, .. } if reported == window.id())
+    })
+    .await
+    .expect("the split reports a layout change");
+    let Event::LayoutChanged { layout, .. } = event else {
+        unreachable!("wait_for only returns what its predicate matched");
+    };
+
+    let mut refreshed = window;
+    refreshed.refresh().await.expect("the window still exists");
+    assert_eq!(
+        layout.as_bytes(),
+        refreshed.layout().as_bytes(),
+        "the event and a plain snapshot must report the same layout form",
+    );
+
+    // Agreement alone would also hold if both happened to stay classic, so
+    // this pins which form 3.8+ actually agrees on.
+    let json_capable = server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::JSON_LAYOUTS);
+    let starts_json = layout.as_bytes().starts_with(b"{");
+    assert_eq!(
+        starts_json, json_capable,
+        "the agreed form must be JSON from since::JSON_LAYOUTS onward, classic below it",
+    );
+
     events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

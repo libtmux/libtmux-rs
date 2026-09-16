@@ -212,8 +212,12 @@ fn process_script(parent: &Path, descendant: &Path, prefix: &str) -> String {
     )
 }
 
+/// The discarded opening block, followed by a success reply to the
+/// `refresh-client -f new-layouts` request `ControlMode::attach` now sends
+/// before returning -- block 1 is the opening handshake, block 2 answers that
+/// request, so a test's own first command after attaching is block 3.
 fn opening_success() -> &'static str {
-    "printf '%%begin 0 1 0\\n%%end 0 1 0\\n'"
+    "printf '%%begin 0 1 0\\n%%end 0 1 0\\n'\nIFS= read -r _new_layouts\nprintf '%%begin 0 2 0\\n%%end 0 2 0\\n'"
 }
 
 async fn attach(server: &Server) -> Result<ControlMode, Error> {
@@ -372,7 +376,7 @@ async fn an_open_response_block_has_one_deadline() {
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 2 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -586,7 +590,7 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 2 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -749,7 +753,7 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 2 0\\npartial\\n'",
+            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 3 0\\npartial\\n'",
             opening_success(),
             EVENT_QUEUE + 1,
         ),
@@ -864,7 +868,7 @@ async fn pane_snapshot_separates_output_at_the_capture_block() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 2 0\\nvisible\\n%%end 0 2 0\\n'\nprintf '%%output %%1 after\\n'\nprintf '%%exit done\\n'",
+            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 3 0\\nvisible\\n%%end 0 3 0\\n'\nprintf '%%output %%1 after\\n'\nprintf '%%exit done\\n'",
             opening_success(),
         ),
     );

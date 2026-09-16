@@ -240,7 +240,7 @@ async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
     let (_events, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
     let connection = tokio::spawn(async { Ok::<(), Error>(()) });
-    let output = PaneOutput::new(
+    let mut output = PaneOutput::new(
         "%1".parse().expect("a pane id"),
         ControlEvents {
             events: received,
