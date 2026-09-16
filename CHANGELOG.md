@@ -46,6 +46,10 @@ full.
   through `matching_owned` and its cardinality helpers. Remove the extension
   trait's generic arguments and constrain items through `Iterator`; existing
   borrowed `matching` calls remain unchanged. (#28)
+- **Breaking.** `AccessRule::user` is renamed to `AccessRule::name` and gains
+  `AccessRule::principal`, returning a new `Principal` enum. A release with
+  group ACLs marks every `server-access -l` row `U` or `G`, so an entry can
+  now name a group as well as a user. (#28)
 
 ### Fixed
 
@@ -56,6 +60,12 @@ full.
   earlier release exactly as before. `window_layout` is the field most
   callers hit this through, since its value is JSON on that tree and JSON is
   built from braces. (#28)
+- `Server::access_rules` no longer drops a `server-access -l` row it cannot
+  decode. A release with group ACLs marks every row -- owner included --
+  `(U,R)`/`(G,W)` instead of the bare `(R)`/`(W)` this crate expected, so the
+  previous decoder silently returned an incomplete list. A line matching
+  neither grammar now returns `Error::UnreadableAccessRule` naming the
+  marker, rather than disappearing from the result. (#28)
 
 ## 0.1.0-alpha.11 - 2026-09-12
 

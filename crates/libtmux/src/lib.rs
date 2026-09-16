@@ -345,7 +345,7 @@ pub use options::{
 };
 pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 pub use server::{
-    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, PromptKind, Server,
+    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, Principal, PromptKind, Server,
     ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
