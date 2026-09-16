@@ -124,6 +124,38 @@ fn generated_metadata_exposes_parser_constraints_and_labels_runtime_environment(
 }
 
 #[test]
+fn bash_completion_reaches_every_subcommands_own_options() {
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("completion.bash");
+    std::fs::write(&script, generated(&["--generate", "bash"])).unwrap();
+    for (words, needle) in [
+        ("tmux-workspace load --", "--yes"),
+        ("tmux-workspace freeze --", "--save-to"),
+        ("tmux-workspace ls --", "--tree"),
+    ] {
+        let probe = format!(
+            r#"
+            source '{script}'
+            fn=$(complete -p tmux-workspace | sed -n 's/.*-F \([^ ]*\).*/\1/p')
+            read -ra COMP_WORDS <<< '{words}'
+            COMP_CWORD=$(( ${{#COMP_WORDS[@]}} - 1 ))
+            COMPREPLY=()
+            "$fn" tmux-workspace "${{COMP_WORDS[COMP_CWORD]}}" "${{COMP_WORDS[COMP_CWORD-1]}}"
+            printf '%s\n' "${{COMPREPLY[@]}}"
+            "#,
+            script = script.display(),
+        );
+        let output = Command::new("bash").arg("-c").arg(&probe).output().unwrap();
+        assert!(output.status.success(), "{words:?}: {output:?}");
+        let offered = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            offered.lines().any(|line| line == needle),
+            "{words:?} did not offer {needle:?}: {offered:?}"
+        );
+    }
+}
+
+#[test]
 fn generated_manual_contains_leaf_and_nested_command_instructions() {
     let output = generated(&["--generate", "man"]);
     let manual = String::from_utf8(output).unwrap();
