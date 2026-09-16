@@ -1211,11 +1211,13 @@ fn snapshot_catalog_empty_policy_distinguishes_all_three_states() {
         .expect("empty optional numeric hydrates");
     assert_eq!(optional_numeric.pane_pipe_pid, Availability::Absent);
 
-    // tmux 3.8 reports `#{pane_pid}` as an empty string, not `0`, once a pane
-    // with `remain-on-exit` set has no process left. Unlike `pane_pipe_pid`,
-    // `pane_pid`'s floor is the crate's own minimum supported release, so it
-    // is never `Unsupported` or `Unproven`: every supported and development
-    // build can only report it present or absent.
+    // tmux 3.8 reports `#{pane_pid}` as an empty string once a pane with
+    // `remain-on-exit` set has no process left; every release before it
+    // keeps reporting that process's own (by then possibly reused) pid
+    // rather than clearing the field. Unlike `pane_pipe_pid`, `pane_pid`'s
+    // floor is the crate's own minimum supported release, so it is never
+    // `Unsupported` or `Unproven`: every supported and development build can
+    // only report it present or absent.
     let dead_pane_pid = pane_fixture(b"tmux 3.7\n", &[("pane_pid", b"")])
         .ok()
         .expect("empty pane_pid hydrates rather than failing RequiredFieldEmpty");

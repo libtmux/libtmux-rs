@@ -57,9 +57,11 @@ full.
   group ACLs marks every `server-access -l` row `U` or `G`, so an entry can
   now name a group as well as a user. (#28)
 - **Breaking.** `Pane::pid` returns `Option<u32>` instead of `u32`. tmux 3.8
-  reports `#{pane_pid}` as an empty string rather than `0` once a
-  `remain-on-exit` pane's process has gone; `None` is that state, not a
-  decode failure. (#28)
+  reports `#{pane_pid}` as an empty string once a `remain-on-exit` pane's
+  process has gone; `None` is that state, not a decode failure. Every
+  earlier release instead keeps reporting the exited process's own pid, so a
+  populated value was never proof of liveness -- check `Pane::is_dead`
+  rather than inferring it from `pid`. (#28)
 
 ### Fixed
 
