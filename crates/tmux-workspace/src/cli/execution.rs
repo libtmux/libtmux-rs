@@ -8,10 +8,17 @@ use libtmux::{
 use serde_json::{Value, json};
 
 use super::{
-    CliError, Result, bridge, confirm, discovery, document, normalize,
+    CliError, Result, bridge, discovery, document, normalize,
     output::{Mode, Reporter},
     process,
 };
+
+/// Per-load constants that stay the same across every input file, kept
+/// together so passing them to `build` costs one parameter, not two.
+struct Invocation<'a> {
+    python: Option<&'a std::ffi::OsStr>,
+    dimensions: Option<(u32, u32)>,
+}
 
 #[derive(Default)]
 struct Effects {
@@ -216,22 +223,10 @@ pub(super) async fn load(
     if report.machine() && !flag(args, "detached") && !flag(args, "append") {
         return Err(CliError::usage("machine load requires -d or --append"));
     }
-    let workspaces = load_inputs(args)?;
-    if !flag(args, "detached") && !flag(args, "append") {
-        require_attach_terminal()?;
-    }
-    report.progress = super::progress::Progress::new(args, report.machine())?;
-    if let Some(path) = option(args, "log-file") {
-        report
-            .log
-            .open(std::path::Path::new(&discovery::expand(path)))?;
-    }
-    let (server, borrowed) = load_target(args).await?;
-    server.validate_layouts(native_layouts(&workspaces)).await?;
-    let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
-        Some(process::python().await?)
-    } else {
-        None
+    let (workspaces, server, borrowed, python, dimensions) = load_setup(args, report).await?;
+    let invocation = Invocation {
+        python: python.as_deref(),
+        dimensions,
     };
     let mut last_session = None;
     report.event("started", json!({"inputs":workspaces.len()}))?;
@@ -254,7 +249,7 @@ pub(super) async fn load(
                 args,
                 report,
                 effects,
-                python.as_deref(),
+                &invocation,
                 borrowed.as_ref(),
             )
             .await?;
@@ -300,6 +295,43 @@ pub(super) async fn load(
         error.retained_state = Some(summary);
         error
     })
+}
+
+#[allow(
+    clippy::type_complexity,
+    reason = "one-shot preflight tuple, not a public API"
+)]
+async fn load_setup(
+    args: &ArgMatches,
+    report: &mut Reporter,
+) -> Result<(
+    Vec<(PathBuf, normalize::Workspace)>,
+    Server,
+    Option<AppendTarget>,
+    Option<std::ffi::OsString>,
+    Option<(u32, u32)>,
+)> {
+    let workspaces = load_inputs(args)?;
+    if !flag(args, "detached") && !flag(args, "append") {
+        require_attach_terminal()?;
+    }
+    // A malformed COLUMNS/LINES/TMUXP_DEFAULT_* is a usage mistake; fail
+    // before any target lookup or mutation, not mid-load as a build error.
+    let dimensions = session_dimensions()?;
+    report.progress = super::progress::Progress::new(args, report.machine())?;
+    if let Some(path) = option(args, "log-file") {
+        report
+            .log
+            .open(std::path::Path::new(&discovery::expand(path)))?;
+    }
+    let (server, borrowed) = load_target(args).await?;
+    server.validate_layouts(native_layouts(&workspaces)).await?;
+    let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
+        Some(process::python().await?)
+    } else {
+        None
+    };
+    Ok((workspaces, server, borrowed, python, dimensions))
 }
 
 struct AppendTarget {
@@ -395,7 +427,7 @@ async fn build(
     args: &ArgMatches,
     report: &mut Reporter,
     effects: &mut Effects,
-    python: Option<&std::ffi::OsStr>,
+    invocation: &Invocation<'_>,
     borrowed: Option<&AppendTarget>,
 ) -> Result<(Session, bool)> {
     if let Some(target) = borrowed {
@@ -410,7 +442,7 @@ async fn build(
             args,
             report,
             effects,
-            python.ok_or_else(|| {
+            invocation.python.ok_or_else(|| {
                 CliError::new("python_runtime", "checked Python runtime is missing")
             })?,
             borrowed,
@@ -429,17 +461,16 @@ async fn build(
     let session = if let Some(target) = borrowed {
         target.session.clone()
     } else {
-        let columns = dimension("TMUXP_DEFAULT_COLUMNS", "COLUMNS", 80);
-        let rows = dimension("TMUXP_DEFAULT_ROWS", "ROWS", 24);
         effects.stage = "session-creation";
         effects.mutation_started = Some(effects.stage);
-        let session = server
-            .new_session(
-                NewSessionOptions::new(escape_format(&workspace.name))
-                    .start_directory(escape_format(&workspace.directory))
-                    .size(columns, rows),
-            )
-            .await?;
+        let mut options = NewSessionOptions::new(escape_format(&workspace.name))
+            .start_directory(escape_format(&workspace.directory));
+        // No `-x`/`-y` at all with detection disabled: tmux then sizes the
+        // session from the largest attached client, or `default-size`.
+        if let Some((columns, rows)) = invocation.dimensions {
+            options = options.size(columns, rows);
+        }
+        let session = server.new_session(options).await?;
         effects.session = Some(session.clone());
         effects.owned = true;
         effects.changed = true;
@@ -468,7 +499,10 @@ async fn build(
     let mut selected = None;
     for (window_index, config) in workspace.windows.iter().enumerate() {
         let window = build_window(&session, config, report, effects, window_index).await?;
-        if config.focus || selected.is_none() {
+        // Appending is a guest in a session the client already owns: only an
+        // explicit `focus: true` earns a switch. A fresh build still falls
+        // back to its first window, the way it always has.
+        if config.focus || (!append && selected.is_none()) {
             selected = Some(window);
         }
     }
@@ -507,7 +541,40 @@ async fn configure_session(
         }
         let output = process::run(&argv, &workspace.script_directory, report).await?;
         effects.script_output = Some(output.value());
-        output.success()?;
+        if matches!(output.status, 130 | 143) {
+            // 130/143 are the child's own SIGINT/SIGTERM death (128 +
+            // signal), the same signals `interruptible` listens for: the
+            // whole terminal's foreground group, this process included, can
+            // deliver one straight to the child before the async handler
+            // here is even polled. Report it exactly as that handler would:
+            // changes are not rolled back, matching every other interrupted
+            // mutation, not the script-failed path below.
+            return Err(CliError {
+                code: "interrupted",
+                message: "operation interrupted".into(),
+                status: 130,
+                retained_state: None,
+            });
+        }
+        if output.status != 0 {
+            // A borrowed session is the caller's; only a session this load
+            // created is ours to remove. Its own exit status is not ours:
+            // tmuxp and every other port exit 1 here, not the script's code.
+            if effects.owned {
+                if let Some(session) = effects.session.clone() {
+                    session.kill().await?;
+                }
+            }
+            return Err(CliError {
+                code: "script_failed",
+                message: format!(
+                    "before_script exited with status {}; the session was removed",
+                    output.status
+                ),
+                status: 1,
+                retained_state: None,
+            });
+        }
         if let Some(target) = borrowed {
             target.recheck(server).await?;
         }
@@ -743,13 +810,49 @@ async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<
     report.event("warning", json!({"code":"pane_readiness_timeout","pane_id":pane.id().to_string(),"message":"shell prompt was not observed within two seconds; continuing as tmuxp does"}))
 }
 
-fn dimension(preferred: &str, fallback: &str, default: u32) -> u32 {
-    std::env::var(preferred)
-        .or_else(|_| std::env::var(fallback))
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(default)
+/// One of `TMUXP_DEFAULT_COLUMNS`/`COLUMNS` or `TMUXP_DEFAULT_ROWS`/`ROWS`,
+/// first name found wins. Unset or empty falls through; a value present but
+/// out of tmux's `1..=65535` window size is a usage error, not a default.
+fn env_dimension(names: &[&str]) -> Result<Option<u32>> {
+    for name in names {
+        match std::env::var(name) {
+            Ok(raw) if !raw.is_empty() => {
+                return raw
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|value| (1..=65535).contains(value))
+                    .map(Some)
+                    .ok_or_else(|| CliError::usage(format!("{name} must be 1..65535")));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+/// Mirrors tmuxp's `TMUXP_DETECT_TERMINAL_SIZE`: `None` means pass no
+/// `-x`/`-y` at all. Otherwise start from `TMUXP_DEFAULT_COLUMNS`/`ROWS` (else
+/// `COLUMNS`/`ROWS`, else 80x24), let the invoking terminal override it when
+/// stdout is one, then let `COLUMNS`/`LINES` override the terminal.
+fn session_dimensions() -> Result<Option<(u32, u32)>> {
+    let mut width = env_dimension(&["TMUXP_DEFAULT_COLUMNS", "COLUMNS"])?.unwrap_or(80);
+    let mut height = env_dimension(&["TMUXP_DEFAULT_ROWS", "ROWS"])?.unwrap_or(24);
+    if std::env::var("TMUXP_DETECT_TERMINAL_SIZE").is_ok_and(|value| value != "1") {
+        return Ok(None);
+    }
+    if let Ok(winsize) = rustix::termios::tcgetwinsize(std::io::stdout()) {
+        if winsize.ws_col > 0 && winsize.ws_row > 0 {
+            width = u32::from(winsize.ws_col);
+            height = u32::from(winsize.ws_row);
+        }
+    }
+    if let Some(value) = env_dimension(&["COLUMNS"])? {
+        width = value;
+    }
+    if let Some(value) = env_dimension(&["LINES"])? {
+        height = value;
+    }
+    Ok(Some((width, height)))
 }
 
 pub(super) async fn capture(session: &Session) -> Result<Value> {
@@ -821,9 +924,9 @@ pub(super) async fn freeze(args: &ArgMatches, report: &Reporter) -> Result<()> {
         "Capture retains live topology, paths, current commands and stored options; original scripts, plugin intent and command history are not recoverable. Invalid UTF-8 is replaced with U+FFFD.",
     ];
     if let Some(path) = destination {
-        if !report.machine() && !flag(args, "yes") {
-            confirm(&format!("Save {}?", path.display()))?;
-        }
+        // `--save-to` names the destination outright; that is consent to
+        // write it, with or without a terminal. `--force` still governs
+        // replacing a file that is already there.
         document::save(&path, &value, format, flag(args, "force"))?;
         if report.machine() {
             report.document(&json!({"schema_version":1,"command":"freeze","status":"ok","destination":discovery::masked(&path),"format":format,"warnings":warnings}))?;

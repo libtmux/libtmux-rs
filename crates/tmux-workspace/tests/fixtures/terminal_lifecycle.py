@@ -239,19 +239,39 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
         after = {pid: process_state(pid) for pid in pids}
         observed_keeper = native("list-panes", "-t", "=keeper", "-F", "#{pid}:#{session_id}:#{window_id}:#{pane_id}")
         assert observed_keeper == keeper, (keeper, observed_keeper)
-        active = native("list-panes", "-t", "=active", "-F", "#{pid}:#{session_id}:#{window_id}:#{pane_id}")
-        assert active and all(part for row in active.splitlines() for part in row.split(":")), active
-        assert all(row.split(":", 1)[0] == str(daemon_pid) for row in active.splitlines()), active
-        if append and action != "success":
-            assert active == initial_active, (initial_active, active)
+        # A failing before_script removes the session it owns; an appended
+        # (borrowed) one is never touched. Either way there is nothing named
+        # "active" left to query when this run both owns the session and
+        # fails its before_script.
+        owned_failure = action == "failure" and not append
+        active = None
+        if not owned_failure:
+            active = native("list-panes", "-t", "=active", "-F", "#{pid}:#{session_id}:#{window_id}:#{pane_id}")
+            assert active and all(part for row in active.splitlines() for part in row.split(":")), active
+            assert all(row.split(":", 1)[0] == str(daemon_pid) for row in active.splitlines()), active
+            if append and action != "success":
+                assert active == initial_active, (initial_active, active)
+        else:
+            try:
+                native("list-panes", "-t", "=active")
+                raise AssertionError("a failing before_script should remove the owned session")
+            except RuntimeError:
+                pass
         retained = None
-        if report["status"] != 0:
+        # Human mode reports an owned before_script failure as one plain
+        # sentence, not the machine record; only an actual interruption
+        # (INT/TERM/terminal-INT et al.) still retains "Retained state: ".
+        if report["status"] != 0 and not owned_failure:
             lines = terminal_text.decode(errors="replace").splitlines()
             retained = json.loads(next(line[len("Retained state: "):] for line in lines if line.startswith("Retained state: ")))
             effects = retained["errors"][0]["effects"]
             assert effects["session_id"] == active.split(":")[1], (effects, active)
             assert effects["owned_session"] == (not append), effects
             assert effects["stage"] == "before-script", effects
+        elif owned_failure:
+            terminal_text_str = terminal_text.decode(errors="replace")
+            assert "Retained state:" not in terminal_text_str, terminal_text_str
+            assert "before_script" in terminal_text_str, terminal_text_str
         report.update(action=action, append=append, input_delivered=sent_input,
                       signal_sent=sent_signal, before=before, after=after,
                       stop_observed=stop_observed,
@@ -274,7 +294,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                                and not stop_observed.get("failed_to_stop")
                                and stop_observed["foreground"] == report["expected_foreground"]
                                and stop_observed["echo"]))
-                          and report["status"] == (0 if action in ("success", "pipe-owner-exits") else 7 if action == "failure" else 130))
+                          and report["status"] == (0 if action in ("success", "pipe-owner-exits") else 1 if action == "failure" else 130))
         return report
     finally:
         for _, fd in pidfds:

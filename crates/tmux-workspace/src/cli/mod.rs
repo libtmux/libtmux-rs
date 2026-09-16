@@ -271,8 +271,14 @@ fn diagnostic(machine: bool, error: &CliError) {
         let _ = writeln!(io::stderr(), "{value}");
     } else {
         let _ = writeln!(io::stderr(), "{}", error.message);
-        if let Some(state) = &error.retained_state {
-            let _ = writeln!(io::stderr(), "Retained state: {state}");
+        // Interruption is the one case a human needs the machine record for:
+        // it is how a caller recovers what an unfinished mutation touched.
+        // An ordinary failure's message already says what happened; a second,
+        // JSON-shaped copy of it is not for a human to read.
+        if error.code == "interrupted" {
+            if let Some(state) = &error.retained_state {
+                let _ = writeln!(io::stderr(), "Retained state: {state}");
+            }
         }
     }
 }

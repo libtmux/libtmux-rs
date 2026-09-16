@@ -272,7 +272,11 @@ fn build(declarations: &mut Declarations) -> Command {
                 Some('o'),
                 "Save the captured workspace to this file; required outside machine mode",
             ))
-            .arg(flag("yes", Some('y'), "Accept yes/no confirmations"))
+            .arg(flag(
+                "yes",
+                Some('y'),
+                "Accept confirmations; --save-to never prompts",
+            ))
             .arg(flag(
                 "quiet",
                 Some('q'),
