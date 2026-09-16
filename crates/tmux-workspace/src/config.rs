@@ -980,9 +980,7 @@ impl PaneConfig {
     fn write_yaml(&self, out: &mut String) {
         let mut entry = Entry::new("      - ", "        ");
 
-        if let [only] = self.shell_commands.as_slice() {
-            entry.key(out, &format!("shell_command: {}", command_yaml(only)));
-        } else if !self.shell_commands.is_empty() {
+        if !self.shell_commands.is_empty() {
             entry.key(out, "shell_command:");
             write_commands(out, None, &self.shell_commands, 10);
         }
