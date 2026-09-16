@@ -528,6 +528,10 @@ async fn configure_session(
     for (name, value) in &workspace.global_options {
         server.set_option(name, value).await?;
     }
+    // `auto` (no explicit pane_readiness) waits only for zsh, the shell the
+    // prompt-redraw wait was added for; every other shell behaves as though
+    // `never` had been written. Commands are still typed into the pane
+    // either way, so a shell that is not waited for still receives them.
     effects.readiness = match workspace.readiness {
         Some(wait) => wait,
         None => session
@@ -643,7 +647,7 @@ async fn build_window(
     let mut window = session.new_window(options).await?;
     effects.changed = true;
     effects.windows.push(window.id().to_string());
-    report.event("window-created", json!({"input_index":input,"window_index":window.index(),"window_id":window.id().to_string()}))?;
+    report.event("window-created", json!({"input_index":input,"session_id":session.id().to_string(),"window_index":window.index(),"window_id":window.id().to_string()}))?;
     for (name, value) in &config.options {
         window.set_option(name, value).await?;
     }
@@ -684,7 +688,8 @@ async fn build_window(
         if let Some(progress) = &mut report.progress {
             progress.pane(pane_index + 1)?;
         }
-        report.event("pane-created", json!({"input_index":input,"window_index":window_index,"pane_id":pane.id().to_string()}))?;
+        let pane_fields = json!({"input_index":input,"session_id":session.id().to_string(),"window_id":window.id().to_string(),"pane_id":pane.id().to_string(),"pane_index":pane_index});
+        report.event("pane-created", pane_fields.clone())?;
         if effects.readiness && config.shell.is_none() {
             wait_for_prompt(pane, report).await?;
         }
@@ -692,6 +697,7 @@ async fn build_window(
         if let Some(progress) = &mut report.progress {
             progress.pane_done()?;
         }
+        report.event("pane-completed", pane_fields)?;
         if config.focus {
             active = Some(pane.clone());
         }
@@ -706,6 +712,7 @@ async fn build_window(
     if let Some(progress) = &mut report.progress {
         progress.window_done()?;
     }
+    report.event("window-completed", json!({"input_index":input,"session_id":session.id().to_string(),"window_index":window.index(),"window_id":window.id().to_string()}))?;
     Ok(window)
 }
 
