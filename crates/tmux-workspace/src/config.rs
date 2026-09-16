@@ -370,6 +370,11 @@ impl Workspace {
         let session_name = expand(session_name, "session_name")?;
         let start_directory =
             directories.resolve(&document["start_directory"], "start_directory", None, false)?;
+        if let Some(separator) = session_name.chars().find(|c| matches!(c, ':' | '.')) {
+            return Err(Problem::new("session_name", format!(
+                "must not contain {separator:?}; tmux reads it as a target separator"
+            )));
+        }
 
         let windows = match &document["windows"] {
             Yaml::BadValue | Yaml::Null => Vec::new(),
