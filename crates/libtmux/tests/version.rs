@@ -226,6 +226,56 @@ fn enforces_the_minimum_without_promoting_development_versions() {
     assert!(minimum.ensure_supported().is_ok());
 }
 
+/// `meets` and `has_behavior` are two different, deliberately non-identical
+/// rules -- documented at each -- so a test predicting a capability gate must
+/// call `has_behavior`, the one [`TmuxVersion::require`] actually refuses
+/// with.
+///
+/// `meets`'s own doc comment says a development identifier "meets only
+/// requirements at or below the crate's minimum supported release; they are
+/// not promoted to an invented release" -- and that clamp fires for *every*
+/// development identifier, `next-X.Y` included, not only a bare `master`.
+/// `has_behavior` instead reads `next-X.Y` as the real release `X.Y`, and a
+/// bare `master` (no release parses from it at all) as "not yet known to
+/// lack this". So `next-3.9` -- the version string this workspace's own
+/// tmux-matrix probe binary reports -- disagrees with `meets` for exactly
+/// the capabilities this crate gates above the floor: `meets` refuses every
+/// one of them, `has_behavior` grants whichever `next-3.9` numerically
+/// contains. This is the rule three tests predicted a `require`-gated branch
+/// with `meets` and, unnoticed, always took the "unsupported" branch against
+/// that probe.
+#[cfg(feature = "test-support")]
+#[test]
+fn has_behavior_and_meets_disagree_above_the_supported_floor() {
+    let master = TmuxVersion::parse_output(b"tmux master\n").unwrap();
+    let next_3_9 = TmuxVersion::parse_output(b"tmux next-3.9\n").unwrap();
+    let next_3_2 = TmuxVersion::parse_output(b"tmux next-3.2\n").unwrap();
+    let numbered = TmuxVersion::parse_output(b"tmux 3.7b\n").unwrap();
+    let prompt_history = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    // `meets` clamps every development identifier to "no more than the
+    // floor", so it refuses a capability above 3.2a regardless of what the
+    // build's own next-release number is.
+    assert!(!master.meets(&prompt_history));
+    assert!(!next_3_9.meets(&prompt_history));
+    assert!(!next_3_2.meets(&prompt_history));
+
+    // `has_behavior` computes the real answer instead: `next-3.9` already
+    // contains 3.3's behavior, `next-3.2` does not yet, and a bare `master`
+    // is taken at its word rather than assumed to lack it.
+    assert!(master.has_behavior(&prompt_history));
+    assert!(next_3_9.has_behavior(&prompt_history));
+    assert!(!next_3_2.has_behavior(&prompt_history));
+
+    // A numbered release is the one shape where the two rules cannot
+    // disagree: both reduce to the same `release >= required` comparison.
+    assert_eq!(
+        numbered.meets(&prompt_history),
+        numbered.has_behavior(&prompt_history)
+    );
+    assert!(numbered.has_behavior(&prompt_history));
+}
+
 #[test]
 fn release_value_getters_preserve_components() {
     let suffix = ReleaseSuffix::patch('c').expect("c is a lowercase patch suffix");

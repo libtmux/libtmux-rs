@@ -21,6 +21,12 @@ full.
 - `TmuxText` names now pass directly to name lookups, so
   `server.session(session.name())` needs no conversion. Lookups preserve the
   original bytes. (#28)
+- `TmuxVersion::has_behavior`, behind `test-support`: the boolean form of the
+  rule `TmuxVersion::require` refuses a capability with, so a test predicting
+  a `require`-gated branch calls the same rule `require` does instead of an
+  independently derived one. Unlike `meets`, a `next-X.Y` development
+  identifier is read as the real release `X.Y` rather than clamped to the
+  crate's minimum supported release. (#28)
 
 ### Changed
 

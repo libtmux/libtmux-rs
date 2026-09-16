@@ -652,6 +652,7 @@ function libtmux::TmuxText::from_bytes: fn(bytes: impl Into<Vec<u8>>) -> Self
 function libtmux::TmuxText::parse: fn<T: std::str::FromStr>(&self) -> Option<T>
 function libtmux::TmuxText::to_string_lossy: fn(&self) -> Cow<'_, str>
 function libtmux::TmuxVersion::ensure_supported: fn(&self) -> Result<(), libtmux::Error>
+function libtmux::TmuxVersion::has_behavior: fn(&self, needs: &libtmux::ReleaseVersion) -> bool
 function libtmux::TmuxVersion::is_development: const fn(&self) -> bool
 function libtmux::TmuxVersion::meets: fn(&self, required: &libtmux::ReleaseVersion) -> bool
 function libtmux::TmuxVersion::parse_output: fn(output: &[u8]) -> Result<Self, libtmux::Error>
