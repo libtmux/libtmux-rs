@@ -71,6 +71,25 @@ fn tools(toolsets: &str) -> Result<TmuxTools, Box<dyn Error>> {
 }
 
 #[test]
+fn mcp_layout_schema_describes_native_names_and_saved_layouts() -> TestResult {
+    let tool = tools("manage")?
+        .offered()
+        .into_iter()
+        .find(|tool| tool.name == "select_layout")
+        .expect("layout tool");
+    let description = tool.description.expect("tool description");
+    let input = tool.input_schema["properties"]["layout"]["description"]
+        .as_str()
+        .expect("layout description");
+    for text in [description.as_ref(), input] {
+        assert!(text.contains("abbreviation"), "{text}");
+        assert!(text.contains("saved"), "{text}");
+        assert!(text.contains("daemon"), "{text}");
+    }
+    Ok(())
+}
+
+#[test]
 fn every_toolset_permutation_is_exact() -> TestResult {
     let groups = [
         ("inspect", INSPECT),

@@ -279,15 +279,18 @@ fn builder_rejects_conflicting_selectors_and_invalid_colors_before_execution() {
         &["sentinel-config"],
     );
 
-    let invalid_colors = Server::builder()
-        .colors(16)
-        .build()
-        .expect_err("only tmux color modes are accepted");
-    assert_configuration_error(
-        &invalid_colors,
-        ServerConfigurationErrorKind::InvalidColorMode,
-        &[],
-    );
+    for colors in [16, 88] {
+        let invalid_colors = Server::builder()
+            .colors(colors)
+            .tmux_executable("/nonexistent/tmux")
+            .build()
+            .expect_err("only supported tmux color modes are accepted");
+        assert_configuration_error(
+            &invalid_colors,
+            ServerConfigurationErrorKind::InvalidColorMode,
+            &[],
+        );
+    }
 }
 
 #[test]
@@ -376,7 +379,7 @@ exit 91
         .tmux_executable(&script)
         .socket_path(&socket)
         .config_file(&config)
-        .colors(88)
+        .colors(256)
         .build()
         .expect("server configuration is valid");
 
@@ -1048,6 +1051,7 @@ async fn real_tmux_preserves_literal_semicolon_effects_on_an_isolated_socket() {
     let server = Server::builder()
         .socket_path(&socket)
         .config_file(&config)
+        .colors(256)
         .build()
         .expect("isolated real-tmux server configuration");
 

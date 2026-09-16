@@ -511,6 +511,13 @@ names and commands, not what a terminal is showing.
 named window corner. `snapshot_pane` adds geometry, cursor, and mode state to
 the visible content.
 
+`select_layout` accepts saved tmux layouts, named layouts, and unique name
+abbreviations. Names follow the running daemon's version; mirrored main
+layouts require tmux 3.5. Malformed syntax is refused before window lookup.
+tmux owns geometry and pruning, and a successful reply contains the saved
+layout actually applied. A readback failure after mutation remains a
+`partial_effect` error.
+
 **Reading several things.** `call_read_tools_batch` runs a bounded serial batch
 of enabled inspect operations. Its nested authority shrinks when an operation
 is excluded.

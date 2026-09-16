@@ -37,3 +37,10 @@ path = "fuzz_targets/workspace_yaml.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "layout"
+path = "fuzz_targets/layout.rs"
+test = false
+doc = false
+bench = false

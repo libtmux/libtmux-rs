@@ -100,10 +100,11 @@ pub struct ShowHooksArgs {
 pub struct SelectLayoutArgs {
     /// The `@`-prefixed window to arrange.
     pub window: String,
-    /// A named layout, or a layout string tmux produced earlier.
+    /// A saved tmux layout, or a named layout and its unique abbreviation.
     ///
     /// The names are `even-horizontal`, `even-vertical`, `main-horizontal`,
-    /// `main-vertical` and `tiled`.
+    /// `main-vertical` and `tiled`. The running daemon determines which names
+    /// and abbreviations are supported; mirrored main layouts require tmux 3.5.
     pub layout: String,
 }
 

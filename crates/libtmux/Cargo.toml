@@ -24,6 +24,7 @@ include = [
     "/src/**/*.rs",
     "/tests/fixtures/filter-v1/*.json",
     "/tests/fixtures/dialect-v1/*.json",
+    "/tests/fixtures/layout-preflight.json",
     "/tests/**/*.rs",
 ]
 

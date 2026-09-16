@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use libtmux::{Command, CommandChain, Error, NewSessionOptions};
@@ -505,9 +505,11 @@ impl TmuxTools {
 
     /// Arrange a window's panes.
     #[tool(
-        description = "Rearrange a window's panes into a named layout, or into a layout \
-                       string tmux gave you earlier. Use even-horizontal, even-vertical, \
-                       main-horizontal, main-vertical or tiled.",
+        description = "Rearrange a window's panes using a saved tmux layout or a named \
+                       layout and its unique abbreviation. Names follow the running \
+                       daemon's version; mirrored main layouts require tmux 3.5. \
+                       Invalid syntax is refused before window lookup. Return the \
+                       saved layout tmux actually applied.",
         title = "Arrange Window Panes",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup],
@@ -518,29 +520,19 @@ impl TmuxTools {
         &self,
         Parameters(SelectLayoutArgs { window, layout }): Parameters<SelectLayoutArgs>,
     ) -> Result<Json<Layout>, ErrorData> {
-        let target = self.find_window(&window).await?;
-        let result = self
-            .server
-            .cmd(
-                Command::new("select-layout")
-                    .arg("-t")
-                    .arg(target.id().to_string())
-                    // `select-layout` has flags of its own, and a layout is
-                    // the caller's text. Without the separator, asking for
-                    // `-E` spread the panes evenly and reported `-E` back as
-                    // the layout that had been applied.
-                    .arg("--")
-                    .arg(layout.clone()),
-            )
+        self.server
+            .validate_layouts([(OsStr::new(&layout), 1)])
             .await
             .map_err(|e| tmux_error(&e))?;
-        if let Some(error) = result.refusal_for("select-layout") {
-            return Err(tmux_error(&error));
-        }
+        let mut target = self.find_window(&window).await?;
+        target
+            .select_layout(layout)
+            .await
+            .map_err(|e| tmux_error(&e))?;
 
         Ok(Json(Layout {
             window: target.id().to_string(),
-            layout,
+            layout: lossy(target.layout()),
         }))
     }
 

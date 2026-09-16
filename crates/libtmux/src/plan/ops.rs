@@ -67,6 +67,6 @@ mod sessions;
 mod windows;
 
 pub use options::{SetEnvironment, SetOption};
-pub use panes::{CapturePane, KillPane, SelectPane, SendKeys, SplitWindow};
+pub use panes::{CapturePane, KillPane, SelectPane, SendKeys, SplitTarget, SplitWindow};
 pub use sessions::NewSession;
 pub use windows::{KillWindow, NewWindow, RenameWindow, SelectLayout, SelectWindow};
