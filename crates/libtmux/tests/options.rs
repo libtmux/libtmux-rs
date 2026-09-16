@@ -1243,3 +1243,62 @@ async fn a_name_tmux_would_resolve_is_guarded_like_the_one_it_resolves_to() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// `pane-border-format` reached a build that already has it, not just one
+/// numbered high enough.
+///
+/// `ensure_scope`'s `LATE_SCOPES` check used to call `TmuxVersion::meets`,
+/// which clamps every development identifier to the crate's minimum
+/// supported release regardless of its own next-release number -- so a
+/// `next-X.Y` build that genuinely has this capability was refused anyway.
+/// Fixed by switching to `TmuxVersion::has_behavior`, which reads `next-X.Y`
+/// as the real release. Asserted on whichever tmux is actually running
+/// rather than assumed, so this is correct on every release the compat
+/// matrix builds, `next-3.9` included, without a version predicate.
+#[tokio::test]
+async fn a_late_pane_scope_is_granted_to_whichever_tmux_actually_has_it() {
+    use libtmux::since;
+
+    let mut builder = TestServer::builder();
+    if let Some(executable) = std::env::var_os("LIBTMUX_TEST_TMUX") {
+        builder = builder.tmux_executable(executable);
+    }
+    let guard = builder.start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("late-scope").await.expect("a session");
+    let pane = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session has a window")
+        .active_pane()
+        .await
+        .expect("active pane")
+        .expect("a window has a pane");
+
+    let has_capability = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .has_behavior(&since::PANE_BORDER_FORMAT_PER_PANE);
+
+    let result = pane.set_option("pane-border-format", "#{pane_index}").await;
+    if has_capability {
+        result.expect("a build that already has this capability accepts the write");
+    } else {
+        let error = result.expect_err("a build below the real floor is still refused");
+        assert!(
+            matches!(
+                error,
+                libtmux::Error::UnsupportedCapability {
+                    capability: "pane-border-format",
+                    ..
+                }
+            ),
+            "the refusal names the capability: {error:?}",
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

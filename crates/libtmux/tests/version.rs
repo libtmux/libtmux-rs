@@ -244,7 +244,6 @@ fn enforces_the_minimum_without_promoting_development_versions() {
 /// contains. This is the rule the `commands.rs` tests that predicted a
 /// `require`-gated branch with `meets` were reproducing, unnoticed, always
 /// taking the "unsupported" branch against that probe.
-#[cfg(feature = "test-support")]
 #[test]
 fn has_behavior_and_meets_disagree_above_the_supported_floor() {
     let master = TmuxVersion::parse_output(b"tmux master\n").unwrap();

@@ -430,6 +430,14 @@ impl TmuxVersion {
     ///
     /// Development identifiers meet only requirements at or below the crate's
     /// minimum supported release; they are not promoted to an invented release.
+    /// A `next-X.Y` identifier's own release number is not read here even
+    /// when `required` is that same `X.Y` or earlier -- this is a floor
+    /// check, not a capability check. Asking "does this tree already contain
+    /// a capability that shipped at version V" is [`Self::has_behavior`]'s
+    /// question, not this one; a call site gating a specific capability
+    /// behind a release above [`Self::MIN_SUPPORTED`] almost always wants
+    /// that instead, or it refuses a development build that already has the
+    /// capability it is checking for.
     ///
     /// # Examples
     ///
@@ -463,23 +471,36 @@ impl TmuxVersion {
 
     /// Report whether this version's tree carries a capability's behavior.
     ///
-    /// This is `Self::require`'s refusal rule in boolean form, reachable so
-    /// a test predicting which branch `require` takes calls the same rule
-    /// `require` does, rather than an independently derived one that happens
-    /// to agree today. [`Self::meets`] is a different, publicly documented
-    /// rule: it clamps *every* development identifier -- `next-X.Y` included,
-    /// not only a bare `master` -- to "no more than the crate's minimum
-    /// supported release", so it refuses any requirement above that floor
-    /// regardless of what the build's own next-release number is. This reads
-    /// `next-X.Y` as the real release `X.Y` instead, so the two disagree for
-    /// any development build checked against a requirement above the floor:
-    /// [`crate::since`] holds several, and this crate's own tmux-matrix
-    /// probe self-reports `next-3.9`.
+    /// This is `Self::require`'s refusal rule in boolean form, so a caller
+    /// gating a specific capability -- or a test predicting which branch
+    /// `require` takes -- uses the same rule `require` does, rather than an
+    /// independently derived one that can drift from it. [`Self::meets`] is
+    /// a different, deliberately non-identical rule: it clamps *every*
+    /// development identifier -- `next-X.Y` included, not only a bare
+    /// `master` -- to "no more than the crate's minimum supported release",
+    /// so it refuses any requirement above that floor regardless of what the
+    /// build's own next-release number is. This reads `next-X.Y` as the real
+    /// release `X.Y` instead, so the two disagree for any development build
+    /// checked against a requirement above the floor: [`crate::since`] holds
+    /// several, and this crate's own tmux-matrix probe self-reports
+    /// `next-3.9`. Checking a capability with `meets` instead of this
+    /// refuses that capability on a development build that already has it.
     ///
-    /// Gated behind `test-support` because it exists for that reachability,
-    /// not as a second public capability check callers should choose
-    /// between.
-    #[cfg(feature = "test-support")]
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+    ///
+    /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
+    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    ///
+    /// // `next-3.9` already contains 3.7's behavior, so this reports it --
+    /// // unlike `meets`, which clamps every development identifier to the
+    /// // floor and would refuse it.
+    /// assert!(next.has_behavior(&capture_line_flags));
+    /// assert!(!next.meets(&capture_line_flags));
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
     #[must_use]
     pub fn has_behavior(&self, needs: &ReleaseVersion) -> bool {
         self.behavior_satisfies(*needs)

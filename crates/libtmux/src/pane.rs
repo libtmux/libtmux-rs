@@ -1544,7 +1544,7 @@ enum CaptureBound {
 /// let session = server.new_session("marked").await?;
 /// let pane = session.panes().await?.remove(0);
 ///
-/// if server.capabilities().await?.tmux_version().meets(&libtmux::since::CAPTURE_LINE_FLAGS) {
+/// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
 ///     let lines: Vec<CapturedLine> = pane.capture_lines(CaptureOptions::visible()).await?;
 ///     assert!(lines.iter().all(|line| !line.starts_output || !line.starts_prompt));
 /// }

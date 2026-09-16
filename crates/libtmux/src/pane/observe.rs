@@ -208,7 +208,7 @@ impl Pane {
     /// let session = server.new_session("prompts").await?;
     /// let pane = session.panes().await?.remove(0);
     ///
-    /// if server.capabilities().await?.tmux_version().meets(&libtmux::since::CAPTURE_LINE_FLAGS) {
+    /// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
     ///     let lines = pane.capture_lines(CaptureOptions::history()).await?;
     ///     // Without shell integration nothing is marked, which is an answer.
     ///     let prompts = lines.iter().filter(|line| line.starts_prompt).count();

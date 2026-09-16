@@ -197,7 +197,7 @@ use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
 ///
 /// // tmux keeps a separate history per prompt kind, so a command typed at the
 /// // `:` prompt is not offered when searching.
-/// if version.meets(&libtmux::since::PROMPT_HISTORY) {
+/// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
 ///     assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
 ///     assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
 /// }
@@ -1147,7 +1147,7 @@ impl Server {
     /// let version = server.capabilities().await?.tmux_version().clone();
     ///
     /// // A fresh server has answered no prompts.
-    /// if version.meets(&libtmux::since::PROMPT_HISTORY) {
+    /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
     ///     assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
     /// }
     ///
@@ -1225,7 +1225,7 @@ impl Server {
     /// let version = guard.server().capabilities().await?.tmux_version().clone();
     ///
     /// // Whoever started the server owns it and may act.
-    /// if version.meets(&libtmux::since::SERVER_ACCESS) {
+    /// if version.has_behavior(&libtmux::since::SERVER_ACCESS) {
     ///     let rules = guard.server().access_rules().await?;
     ///     assert_eq!(rules.len(), 1);
     ///     assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);

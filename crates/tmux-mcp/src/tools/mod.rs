@@ -91,7 +91,7 @@ impl TmuxTools {
         let supported = self.server.capabilities().await.is_ok_and(|capabilities| {
             capabilities
                 .tmux_version()
-                .meets(&libtmux::since::CAPTURE_LINE_FLAGS)
+                .has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS)
         });
 
         let (rendered, marks) = if supported {

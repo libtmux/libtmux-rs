@@ -474,7 +474,7 @@ impl ControlMode {
         let pane_off_is_safe = server
             .capabilities()
             .await
-            .is_ok_and(|capabilities| capabilities.tmux_version().meets(&CONTROL_PANE_OFF));
+            .is_ok_and(|capabilities| capabilities.tmux_version().has_behavior(&CONTROL_PANE_OFF));
 
         let timeout = server.default_timeout();
         let actor::OpenedConnection {

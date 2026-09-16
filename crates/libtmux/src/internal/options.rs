@@ -300,7 +300,7 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
     for (option, late, needs) in LATE_SCOPES {
         if *option == schema.name() && *late == requested {
             let found = core.capabilities().await?.tmux_version();
-            if !found.meets(needs) {
+            if !found.has_behavior(needs) {
                 return Err(Error::UnsupportedCapability {
                     capability: option,
                     needs: *needs,
