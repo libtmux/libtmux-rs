@@ -156,9 +156,34 @@ fn render(
         let shell = format
             .parse::<clap_complete::Shell>()
             .map_err(CliError::usage)?;
-        clap_complete::generate(shell, command, "tmux-workspace", output);
+        if shell == clap_complete::Shell::Bash {
+            let mut buffer = Vec::new();
+            clap_complete::generate(shell, command, "tmux-workspace", &mut buffer);
+            let script = String::from_utf8(buffer)
+                .map_err(|error| CliError::new("encoding", error.to_string()))?;
+            output.write_all(bash_hyphenated_case_labels("tmux-workspace", &script).as_bytes())?;
+        } else {
+            clap_complete::generate(shell, command, "tmux-workspace", output);
+        }
     }
     Ok(())
+}
+
+/// `clap_complete` 4.6.9's bash generator mangles a hyphenated bin name two
+/// different ways: the routing table (`cmd="..."`) replaces `-` with `__`,
+/// but each `case` label's path is built from the full space-joined bin name
+/// and replaces every `-` with `__subcmd__`, including the one in the bin
+/// name itself. The two spellings never meet, so every subcommand branch
+/// this generates is unreachable. Rewrite the labels back to the routed
+/// spelling; every other line already matches.
+fn bash_hyphenated_case_labels(bin_name: &str, script: &str) -> String {
+    let routed = bin_name.replace('-', "__");
+    let mislabeled = bin_name.replace('-', "__subcmd__");
+    if routed == mislabeled {
+        script.to_owned()
+    } else {
+        script.replace(&mislabeled, &routed)
+    }
 }
 
 pub(super) fn write(format: &str, report: &mut Reporter) -> Result<()> {
