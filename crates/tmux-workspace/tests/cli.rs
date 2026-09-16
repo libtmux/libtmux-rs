@@ -2810,3 +2810,40 @@ fn load_accepts_yes_even_though_it_never_prompts() {
         assert!(output.status.success(), "{flag}: {output:?}");
     }
 }
+
+#[tokio::test]
+async fn load_accepts_both_options_and_options_after_spellings() {
+    // SPEC 1 item 3: freeze emits window options under options_after
+    // (`automatic-rename: off` only holds when applied after the panes
+    // exist), so load must keep accepting both spellings on a window.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.yaml"),
+        "session_name: optionspellings\nwindows:\n  - window_name: one\n    options:\n      main-pane-width: 42\n    panes:\n      - blank\n  - window_name: two\n    options_after:\n      main-pane-width: 43\n    panes:\n      - blank\n",
+    )
+    .unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let output = at(
+        &["load", "-S", socket, "-d", "workspace.yaml"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let session = guard
+        .server()
+        .session("optionspellings")
+        .await
+        .unwrap()
+        .expect("session was created");
+    let windows = session.windows().await.unwrap();
+    for (window, expected) in windows.iter().zip(["42", "43"]) {
+        let value = window.get_option("main-pane-width").await.unwrap();
+        assert_eq!(
+            value.map(|v| v.to_string_lossy().into_owned()),
+            Some(expected.to_owned()),
+            "window {:?}",
+            window.name().to_string_lossy()
+        );
+    }
+    guard.shutdown().await.unwrap();
+}
