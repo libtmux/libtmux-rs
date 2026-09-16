@@ -140,7 +140,7 @@ pub(super) fn resolve(name: &str, importer: Option<&str>) -> Result<PathBuf> {
         }
     }
     Err(CliError::new(
-        "not_found",
+        "workspace_not_found",
         format!("workspace source {name:?} was not found"),
     ))
 }
