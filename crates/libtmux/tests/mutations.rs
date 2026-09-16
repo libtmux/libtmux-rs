@@ -5,7 +5,9 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use libtmux::test::TestServer;
+use std::time::Duration;
+
+use libtmux::test::{TestServer, retry_until};
 use libtmux::{Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
@@ -22,7 +24,7 @@ async fn wait_for_prompt(pane: &libtmux::Pane) {
         {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("the pane never drew a prompt");
 }
@@ -55,7 +57,7 @@ async fn creating_an_object_returns_it_hydrated_in_one_command() {
         .await
         .expect("pane is created");
     assert_eq!(pane.window_id(), window.id());
-    assert!(pane.pid() > 0);
+    assert!(pane.pid().expect("a running pane reports a pid") > 0);
 
     // The server agrees with what the creating commands reported.
     assert_eq!(server.sessions().await.expect("sessions").len(), 1);
@@ -238,7 +240,7 @@ async fn flag_shaped_names_layouts_and_keys_stay_literal() {
         .await
         .expect("a flag-shaped line stays literal");
 
-    libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
+    retry_until(Duration::from_secs(5), async || {
         pane.capture().await.is_ok_and(|lines| {
             let screen = lines
                 .iter()
@@ -438,7 +440,7 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
         .expect("keys are sent");
 
     // Wait for the shell to produce the output rather than sleeping.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let captured = loop {
         let lines = pane.capture().await.expect("capture succeeds");
         if lines.iter().any(|line| {
@@ -510,7 +512,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
     });
     assert_eq!(
         server
-            .wait_for_channel(accepted, std::time::Duration::from_secs(5))
+            .wait_for_channel(accepted, Duration::from_secs(5))
             .await
             .expect("the send can signal"),
         libtmux::ChannelWait::Signalled,
@@ -531,7 +533,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
 
     assert_eq!(
         server
-            .wait_for_channel(ran, std::time::Duration::from_secs(1))
+            .wait_for_channel(ran, Duration::from_secs(1))
             .await
             .expect("the command signal can be read"),
         libtmux::ChannelWait::Signalled,
@@ -561,7 +563,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         .await
         .expect("the reader is started");
     assert_eq!(
-        pane.wait_for_text("reader-ready", std::time::Duration::from_secs(5))
+        pane.wait_for_text("reader-ready", Duration::from_secs(5))
             .await
             .expect("the reader can be watched"),
         libtmux::PaneWait::Arrived,
@@ -575,7 +577,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         pane.send_line(payload).await.expect("the line is sent");
         let expected = format!("got:<{payload}>");
         assert_eq!(
-            pane.wait_for_text(&expected, std::time::Duration::from_secs(5))
+            pane.wait_for_text(&expected, Duration::from_secs(5))
                 .await
                 .expect("the reader can be watched"),
             libtmux::PaneWait::Arrived,
@@ -1511,6 +1513,64 @@ async fn respawning_and_locking_reach_every_level_tmux_offers() {
     session.lock().await.expect("the session locks");
     for client in server.clients_or_empty().await {
         client.lock().await.expect("the client locks");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane `remain-on-exit` keeps after its process ends still decodes.
+///
+/// tmux 3.8 reports `#{pane_pid}` as an empty string once a pane's process
+/// is gone; every release before it keeps reporting that process's own pid
+/// rather than clearing the field. Before this fix, an empty value there was
+/// `RequiredFieldEmpty`, which failed the whole listing outright rather than
+/// reporting an absent pid -- reproduced against the real daemon rather than
+/// a synthetic fixture, because this is the same shape `tmux-mcp`'s dead-pane
+/// tests hit: `respawn(Some("exit 0"), true)` leaves a pane whose listing
+/// used to fail this way. Which of the two shapes the running tmux actually
+/// reports is asserted rather than assumed, so this passes identically on
+/// every release from 3.2a through the `next-3.9` tmux-matrix probe.
+#[tokio::test]
+async fn a_dead_panes_pid_is_absent_rather_than_a_decode_failure() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("dead-pid").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+    let mut pane = window.active_pane().await.expect("panes").expect("a pane");
+
+    let running_pid = pane.pid().expect("a running pane reports a pid");
+    assert!(running_pid > 0);
+
+    pane.set_option("remain-on-exit", "on")
+        .await
+        .expect("the dead pane is kept rather than closed");
+    pane.respawn(Some("exit 0"), true)
+        .await
+        .expect("the command runs and exits");
+
+    retry_until(Duration::from_secs(5), async || {
+        pane.refreshed()
+            .await
+            .is_ok_and(|refreshed| refreshed.is_dead())
+    })
+    .await
+    .expect("the pane becomes dead");
+    // The listing this refresh runs is exactly where `RequiredFieldEmpty`
+    // used to surface: reaching the assertions below at all is most of what
+    // this test proves.
+    pane.refresh().await.expect("the pane refreshes once dead");
+
+    assert!(pane.is_dead(), "the pane is kept, not closed");
+    // Every release through 3.7c retains the exited process's own pid, so
+    // this arm runs there. tmux 3.8 and later clears it instead, and the
+    // `None` that leaves unchecked -- reaching it at all, rather than the
+    // `refresh` above returning `Err(RequiredFieldEmpty)`, is the fix.
+    if let Some(pid) = pane.pid() {
+        assert!(pid > 0, "a reported pid is never zero");
     }
 
     guard.shutdown().await.expect("tmux fixture shuts down");

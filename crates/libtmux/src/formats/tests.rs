@@ -1320,7 +1320,7 @@ fn format_catalog_checked_parity_partitions_are_exact() {
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.empty)),
-        std::collections::BTreeMap::from([("absent", 30), ("available", 28), ("required", 121),])
+        std::collections::BTreeMap::from([("absent", 31), ("available", 28), ("required", 120),])
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.placement)),

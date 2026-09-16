@@ -193,9 +193,13 @@ impl Pane {
     }
 
     /// Return the process id of the pane's foreground process.
+    ///
+    /// `None` for a pane with no process: tmux 3.8 changed `#{pane_pid}` from
+    /// reporting `0` to reporting an empty string once the pane's process has
+    /// exited (`remain-on-exit` keeps such a pane instead of closing it).
     #[must_use]
-    pub fn pid(&self) -> u32 {
-        *self.projection.pane().pane_pid()
+    pub fn pid(&self) -> Option<u32> {
+        self.projection.pane().pane_pid().available().copied()
     }
 
     /// Return the pane width in cells.

@@ -56,6 +56,10 @@ full.
   `AccessRule::principal`, returning a new `Principal` enum. A release with
   group ACLs marks every `server-access -l` row `U` or `G`, so an entry can
   now name a group as well as a user. (#28)
+- **Breaking.** `Pane::pid` returns `Option<u32>` instead of `u32`. tmux 3.8
+  reports `#{pane_pid}` as an empty string rather than `0` once a
+  `remain-on-exit` pane's process has gone; `None` is that state, not a
+  decode failure. (#28)
 
 ### Fixed
 
@@ -72,6 +76,9 @@ full.
   previous decoder silently returned an incomplete list. A line matching
   neither grammar now returns `Error::UnreadableAccessRule` naming the
   marker, rather than disappearing from the result. (#28)
+- A pane listing no longer fails outright with `RequiredFieldEmpty` on tmux
+  3.8 and later once a `remain-on-exit` pane's process has exited.
+  `Pane::pid` reports `None` for that pane instead. (#28)
 
 ## 0.1.0-alpha.11 - 2026-09-12
 

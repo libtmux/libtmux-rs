@@ -610,13 +610,12 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
             pane_height,
             pane_in_mode,
             pane_index,
-            pane_pid,
             pane_width,
             scroll_region_lower,
             scroll_region_upper
         ]
     );
-    assert_stored_fields!(pane, u32, evidence, [pane_pipe_pid, pane_z]);
+    assert_stored_fields!(pane, u32, evidence, [pane_pid, pane_pipe_pid, pane_z]);
     assert_stored_fields!(pane, u64, flat, [history_bytes]);
     assert_stored_fields!(pane, i64, evidence, [pane_dead_time]);
     assert_stored_fields!(
@@ -1211,6 +1210,28 @@ fn snapshot_catalog_empty_policy_distinguishes_all_three_states() {
         .ok()
         .expect("empty optional numeric hydrates");
     assert_eq!(optional_numeric.pane_pipe_pid, Availability::Absent);
+
+    // tmux 3.8 reports `#{pane_pid}` as an empty string, not `0`, once a pane
+    // with `remain-on-exit` set has no process left. Unlike `pane_pipe_pid`,
+    // `pane_pid`'s floor is the crate's own minimum supported release, so it
+    // is never `Unsupported` or `Unproven`: every supported and development
+    // build can only report it present or absent.
+    let dead_pane_pid = pane_fixture(b"tmux 3.7\n", &[("pane_pid", b"")])
+        .ok()
+        .expect("empty pane_pid hydrates rather than failing RequiredFieldEmpty");
+    assert_eq!(dead_pane_pid.pane_pid, Availability::Absent);
+
+    let running_pane_pid = pane_fixture(b"tmux 3.7\n", &[("pane_pid", b"4242")])
+        .ok()
+        .expect("a numeric pane_pid still hydrates");
+    assert_eq!(running_pane_pid.pane_pid, Availability::Available(4242));
+
+    for output in [b"tmux 3.2a\n".as_slice(), b"tmux master\n".as_slice()] {
+        let never_unsupported = pane_fixture(output, &[("pane_pid", b"")])
+            .ok()
+            .expect("pane_pid hydrates at the floor and on development builds");
+        assert_eq!(never_unsupported.pane_pid, Availability::Absent);
+    }
 
     let optional_text = pane_fixture(b"tmux 3.7\n", &[("pane_mode", b"")])
         .ok()
