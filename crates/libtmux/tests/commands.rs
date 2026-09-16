@@ -1674,11 +1674,12 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
     let owner = rules.first().expect("the owner is listed");
     assert_eq!(rules.len(), 1);
     assert_eq!(owner.mode(), libtmux::AccessMode::Write);
-    assert!(!owner.user().is_empty());
+    assert_eq!(owner.principal(), libtmux::Principal::User);
+    assert!(!owner.name().is_empty());
 
     // tmux refuses to change the owner's own entry, so a caller cannot lock
     // itself out of the server it just started.
-    let user = owner.user().to_owned();
+    let user = owner.name().to_owned();
     for attempt in [
         server
             .grant_access(&user, libtmux::AccessMode::ReadOnly)

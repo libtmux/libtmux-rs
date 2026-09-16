@@ -260,6 +260,7 @@ enum libtmux::PaneProgressState
 enum libtmux::PaneSize
 enum libtmux::PaneTarget
 enum libtmux::PaneWait
+enum libtmux::Principal
 enum libtmux::PromptKind
 enum libtmux::ReplaceMode
 enum libtmux::ResizeDirection
@@ -292,7 +293,8 @@ enum libtmux::query::FilterExpressionErrorKind
 enum libtmux::test::DaemonState
 enum libtmux::test::TestServerErrorKind
 function libtmux::AccessRule::mode: const fn(&self) -> libtmux::AccessMode
-function libtmux::AccessRule::user: fn(&self) -> &str
+function libtmux::AccessRule::name: fn(&self) -> &str
+function libtmux::AccessRule::principal: const fn(&self) -> libtmux::Principal
 function libtmux::CaptureOptions::end: const fn(self, line: i32) -> Self
 function libtmux::CaptureOptions::escape_sequences: const fn(self) -> Self
 function libtmux::CaptureOptions::history: const fn() -> Self
@@ -1006,6 +1008,7 @@ impl Clone for libtmux::PaneProgressState
 impl Clone for libtmux::PaneSize
 impl Clone for libtmux::PaneTarget
 impl Clone for libtmux::PaneWait
+impl Clone for libtmux::Principal
 impl Clone for libtmux::PromptKind
 impl Clone for libtmux::ReleaseSuffix
 impl Clone for libtmux::ReleaseVersion
@@ -1102,6 +1105,7 @@ impl Copy for libtmux::PaneDirection
 impl Copy for libtmux::PaneProgressState
 impl Copy for libtmux::PaneSize
 impl Copy for libtmux::PaneWait
+impl Copy for libtmux::Principal
 impl Copy for libtmux::PromptKind
 impl Copy for libtmux::ReleaseSuffix
 impl Copy for libtmux::ReleaseVersion
@@ -1174,6 +1178,7 @@ impl Debug for libtmux::PaneProgressState
 impl Debug for libtmux::PaneSize
 impl Debug for libtmux::PaneTarget
 impl Debug for libtmux::PaneWait
+impl Debug for libtmux::Principal
 impl Debug for libtmux::PromptKind
 impl Debug for libtmux::ReleaseSuffix
 impl Debug for libtmux::ReleaseVersion
@@ -1328,6 +1333,7 @@ impl Eq for libtmux::PaneProgressState
 impl Eq for libtmux::PaneSize
 impl Eq for libtmux::PaneTarget
 impl Eq for libtmux::PaneWait
+impl Eq for libtmux::Principal
 impl Eq for libtmux::PromptKind
 impl Eq for libtmux::ReleaseSuffix
 impl Eq for libtmux::ReleaseVersion
@@ -1520,6 +1526,7 @@ impl PartialEq for libtmux::PaneProgressState
 impl PartialEq for libtmux::PaneSize
 impl PartialEq for libtmux::PaneTarget
 impl PartialEq for libtmux::PaneWait
+impl PartialEq for libtmux::Principal
 impl PartialEq for libtmux::PromptKind
 impl PartialEq for libtmux::ReleaseSuffix
 impl PartialEq for libtmux::ReleaseVersion
@@ -1917,6 +1924,7 @@ struct_field libtmux::Error::SupervisorLost::request_id: u64
 struct_field libtmux::Error::Timeout::command: libtmux::CommandSummary
 struct_field libtmux::Error::Timeout::request_id: u64
 struct_field libtmux::Error::Timeout::timeout: std::time::Duration
+struct_field libtmux::Error::UnreadableAccessRule::marker: String
 struct_field libtmux::Error::UnreadableFormatValue::detail: libtmux::IdParseError
 struct_field libtmux::Error::UnreadableFormatValue::format: &'static str
 struct_field libtmux::Error::UnsupportedCapability::capability: &'static str
@@ -2180,6 +2188,7 @@ variant libtmux::Error::SessionExists
 variant libtmux::Error::Spawn
 variant libtmux::Error::SupervisorLost
 variant libtmux::Error::Timeout
+variant libtmux::Error::UnreadableAccessRule
 variant libtmux::Error::UnreadableFormatValue
 variant libtmux::Error::UnsupportedCapability
 variant libtmux::Error::UnsupportedTmuxVersion
@@ -2240,6 +2249,8 @@ variant libtmux::PaneTarget::Id
 variant libtmux::PaneWait::Arrived
 variant libtmux::PaneWait::Dead
 variant libtmux::PaneWait::TimedOut
+variant libtmux::Principal::Group
+variant libtmux::Principal::User
 variant libtmux::PromptKind::Command
 variant libtmux::PromptKind::Search
 variant libtmux::PromptKind::Target

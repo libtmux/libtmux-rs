@@ -64,6 +64,22 @@ pub enum AccessMode {
     Write,
 }
 
+/// Whether an [`AccessRule`] names an operating-system user or group.
+///
+/// tmux originally listed only users. A later release let the server owner
+/// add a whole group to the access list, and marks each listed entry `U` or
+/// `G` so a caller can tell them apart. A release before that mark existed
+/// prints a bare `name (R)`/`name (W)` line with no marker at all -- every row
+/// such a release can print names a user, so decoding one reports
+/// [`Principal::User`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Principal {
+    /// The entry names an operating-system user.
+    User,
+    /// The entry names an operating-system group.
+    Group,
+}
+
 /// One entry of the server's access list.
 ///
 /// # Examples
@@ -74,7 +90,7 @@ pub enum AccessMode {
 ///
 /// for rule in server.access_rules().await? {
 ///     if rule.mode() == AccessMode::Write {
-///         println!("{} can type", rule.user());
+///         println!("{} can type", rule.name());
 ///     }
 /// }
 /// # Ok(())
@@ -82,22 +98,69 @@ pub enum AccessMode {
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessRule {
-    user: String,
+    name: String,
+    principal: Principal,
     mode: AccessMode,
 }
 
 impl AccessRule {
-    /// The user this entry names.
+    /// The user or group this entry names.
     #[must_use]
-    pub fn user(&self) -> &str {
-        &self.user
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
-    /// What that user may do.
+    /// Whether [`Self::name`] is an operating-system user or group.
+    #[must_use]
+    pub const fn principal(&self) -> Principal {
+        self.principal
+    }
+
+    /// What that principal may do.
     #[must_use]
     pub const fn mode(&self) -> AccessMode {
         self.mode
     }
+}
+
+/// Decode one `server-access -l` line into an [`AccessRule`].
+///
+/// tmux prints either the legacy `name (R)`/`name (W)` (no principal marker,
+/// every row a user) or the compound `name (U,R)`/`name (G,W)` grammar a
+/// release with group ACLs uses for every row, owner included. Deciding which
+/// grammar applies from the line itself, rather than from the detected tmux
+/// version, is what lets this read a listing from either release without a
+/// version predicate.
+///
+/// # Errors
+///
+/// Returns [`Error::UnreadableAccessRule`] when the trailing marker matches
+/// neither grammar, naming the marker rather than silently dropping the row.
+fn parse_access_rule(line: &str) -> Result<AccessRule, Error> {
+    let (name, marker) = line
+        .rsplit_once(' ')
+        .ok_or_else(|| Error::unreadable_access_rule(line))?;
+    let inner = marker
+        .strip_prefix('(')
+        .and_then(|marker| marker.strip_suffix(')'))
+        .ok_or_else(|| Error::unreadable_access_rule(marker))?;
+    let (principal, mode) = match inner.split_once(',') {
+        Some(("U", mode)) => (Principal::User, mode),
+        Some(("G", mode)) => (Principal::Group, mode),
+        Some(_) => return Err(Error::unreadable_access_rule(marker)),
+        // No comma: the legacy grammar, which lists only users.
+        None => (Principal::User, inner),
+    };
+    let mode = match mode {
+        "R" => AccessMode::ReadOnly,
+        "W" => AccessMode::Write,
+        _ => return Err(Error::unreadable_access_rule(marker)),
+    };
+    Ok(AccessRule {
+        name: name.to_owned(),
+        principal,
+        mode,
+    })
 }
 
 /// The first tmux release that remembers prompt history.
@@ -1167,24 +1230,11 @@ impl Server {
             return Err(Error::from_refused_result("server-access", &result, None));
         }
 
-        // tmux writes `name (R)` or `name (W)`, one per line. Split from the
-        // right because the flag is fixed width and a name is not.
-        Ok(result
+        result
             .stdout_lossy()
             .lines()
-            .filter_map(|line| {
-                let (user, flag) = line.rsplit_once(' ')?;
-                let mode = match flag {
-                    "(R)" => AccessMode::ReadOnly,
-                    "(W)" => AccessMode::Write,
-                    _ => return None,
-                };
-                Some(AccessRule {
-                    user: user.to_owned(),
-                    mode,
-                })
-            })
-            .collect())
+            .map(parse_access_rule)
+            .collect()
     }
 
     /// Let a user attach to this server.
@@ -1491,7 +1541,7 @@ mod tests {
 
     use tokio::sync::{Notify, watch};
 
-    use super::{NewSessionOptions, Server};
+    use super::{AccessMode, NewSessionOptions, Principal, Server, parse_access_rule};
     use crate::command::{CommandRequest, CommandResult, ProcessStatus};
     use crate::formats::{DecoderKind, FormatDescriptor, FormatPlan, ListProfile};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
@@ -1772,6 +1822,59 @@ mod tests {
         let summary = options.into_command("#{session_id}").summary();
         assert_eq!(summary.sensitive_argument_count(), 1);
         assert!(!summary.to_string().contains(secret));
+    }
+
+    #[test]
+    fn access_rule_lines_decode_both_the_legacy_and_the_group_acl_grammar() {
+        // A release before group ACLs prints no principal marker at all, and
+        // every row it can print names a user.
+        let legacy_write = parse_access_rule("alice (W)").expect("legacy write row parses");
+        assert_eq!(legacy_write.name(), "alice");
+        assert_eq!(legacy_write.principal(), Principal::User);
+        assert_eq!(legacy_write.mode(), AccessMode::Write);
+
+        let legacy_read = parse_access_rule("bob (R)").expect("legacy read-only row parses");
+        assert_eq!(legacy_read.principal(), Principal::User);
+        assert_eq!(legacy_read.mode(), AccessMode::ReadOnly);
+
+        // A release with group ACLs marks every row, owner included, so the
+        // decoder must not assume the legacy shape just because a row is
+        // read-write.
+        let user_row = parse_access_rule("carol (U,W)").expect("compound user row parses");
+        assert_eq!(user_row.name(), "carol");
+        assert_eq!(user_row.principal(), Principal::User);
+        assert_eq!(user_row.mode(), AccessMode::Write);
+
+        let group_row = parse_access_rule("admins (G,R)").expect("compound group row parses");
+        assert_eq!(group_row.name(), "admins");
+        assert_eq!(group_row.principal(), Principal::Group);
+        assert_eq!(group_row.mode(), AccessMode::ReadOnly);
+    }
+
+    /// An unrecognized `server-access -l` marker is reported through
+    /// `Error::UnreadableAccessRule` rather than silently dropped: a
+    /// listing with only such a row used to come back empty.
+    #[test]
+    fn an_unrecognized_access_rule_marker_is_reported_not_dropped() {
+        let bad_principal = parse_access_rule("mallory (X,W)")
+            .expect_err("an unknown principal letter is rejected");
+        assert!(
+            matches!(&bad_principal, Error::UnreadableAccessRule { marker } if marker == "(X,W)"),
+            "the refusal names the marker rather than silently dropping the row: \
+             {bad_principal:?}",
+        );
+        assert_eq!(bad_principal.kind(), ErrorKind::Decode);
+
+        let bad_mode =
+            parse_access_rule("mallory (U,X)").expect_err("an unknown mode letter is rejected");
+        assert!(matches!(
+            &bad_mode,
+            Error::UnreadableAccessRule { marker } if marker == "(U,X)"
+        ));
+
+        let no_marker =
+            parse_access_rule("mallory").expect_err("a line with no trailing marker is rejected");
+        assert!(matches!(no_marker, Error::UnreadableAccessRule { .. }));
     }
 }
 
