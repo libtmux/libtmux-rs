@@ -352,7 +352,7 @@ returns the global `window_client_mode.default_format`.
 | `pane_path` | pane | pane | all | 3.2a | text | available | pane-info |
 | `pane_pb_progress` | pane | pane | all | 3.7 | pane-progress | required | pane-info |
 | `pane_pb_state` | pane | pane | all | 3.7 | pane-progress-state | required | pane-info |
-| `pane_pid` | pane | pane | all | 3.2a | u32 | required | pane-info |
+| `pane_pid` | pane | pane | all | 3.2a | u32 | absent | pane-info |
 | `pane_pipe` | pane | pane | all | 3.2a | bool | required | pane-info |
 | `pane_pipe_pid` | pane | pane | all | 3.7 | u32 | absent | pane-info |
 | `pane_right` | pane | pane | all | 3.2a | i32 | required | pane-info |

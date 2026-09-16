@@ -431,7 +431,7 @@ function libtmux::Pane::kill: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::Pane::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
 function libtmux::Pane::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
 function libtmux::Pane::paste_buffer: async fn(&self, name: Option<&str>) -> Result<(), libtmux::Error>
-function libtmux::Pane::pid: fn(&self) -> u32
+function libtmux::Pane::pid: fn(&self) -> Option<u32>
 function libtmux::Pane::pipe: async fn(&self, command: Option<impl Into<OsString>>) -> Result<(), libtmux::Error>
 function libtmux::Pane::refresh: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
