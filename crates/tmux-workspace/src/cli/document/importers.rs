@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
@@ -123,7 +123,7 @@ fn reject_templates(value: &Value) -> Result<()> {
     }
 }
 
-pub(super) fn workspace(kind: &str, source: &Value) -> Result<Value> {
+pub(super) fn workspace(kind: &str, source: &Value, path: &Path) -> Result<Value> {
     if kind == "tmuxinator" {
         reject_templates(source)?;
     }
@@ -148,7 +148,21 @@ pub(super) fn workspace(kind: &str, source: &Value) -> Result<Value> {
         &["name", "root", "windows"][..]
     };
     let map = mapping(source, allowed, kind)?;
-    let name = alias(map, &["name", "project_name"], kind)?;
+    let name = alias(map, &["name", "project_name"], kind)?.clone();
+    // teamocil's current format carries no session name at all: the
+    // document starts at `windows:`, and teamocil itself names the session
+    // after the file. tmuxp leaves session_name null and warns instead; this
+    // matches cxx, dotnet, java and swift, which derive it the same way (H6).
+    let name = if kind == "teamocil" && name.is_null() {
+        let stem = path.file_stem().and_then(|stem| stem.to_str()).ok_or_else(|| {
+            CliError::invalid(
+                "teamocil: session_name is required and could not be derived from the import path",
+            )
+        })?;
+        json!(stem)
+    } else {
+        name
+    };
     let root = alias(map, &["root", "project_root"], kind)?;
     let cwd = std::env::current_dir()?;
     let root = match root {
