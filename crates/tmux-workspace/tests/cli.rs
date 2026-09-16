@@ -2662,3 +2662,48 @@ async fn ndjson_load_emits_completion_events_with_tmux_ids() {
 
     guard.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn panes_without_a_start_directory_use_the_invocation_directory() {
+    // H9 / SPEC 1 item 1: with no start_directory anywhere in the document,
+    // tmuxp starts panes in the directory `load` was run from, not the
+    // directory the workspace file lives in.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let base = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let document_directory = base.path().join("workspaces");
+    let invocation_directory = base.path().join("caller");
+    std::fs::create_dir_all(&document_directory).unwrap();
+    std::fs::create_dir_all(&invocation_directory).unwrap();
+    let document_directory = document_directory.canonicalize().unwrap();
+    let invocation_directory = invocation_directory.canonicalize().unwrap();
+    std::fs::write(
+        document_directory.join("workspace.yaml"),
+        "session_name: nostartdir\nwindows:\n  - panes:\n      - blank\n",
+    )
+    .unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let output = at(
+        &[
+            "load",
+            "-S",
+            socket,
+            "-d",
+            document_directory.join("workspace.yaml").to_str().unwrap(),
+        ],
+        &invocation_directory,
+    );
+    assert!(output.status.success(), "{output:?}");
+    let session = guard
+        .server()
+        .session("nostartdir")
+        .await
+        .unwrap()
+        .expect("session was created");
+    let pane = session.panes().await.unwrap().remove(0);
+    assert_eq!(
+        pane.current_path()
+            .map(|path| path.to_string_lossy().into_owned()),
+        Some(invocation_directory.to_string_lossy().into_owned())
+    );
+    guard.shutdown().await.unwrap();
+}
