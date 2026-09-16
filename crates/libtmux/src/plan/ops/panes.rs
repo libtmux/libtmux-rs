@@ -11,8 +11,79 @@ use super::{
     Chainable, Effects, Op, Operation, PaneSlot, PaneTarget, Safety, Scope, Slot, WindowTarget,
 };
 use super::{PANE_FORMAT, Resolver};
+#[cfg(feature = "serde")]
+use crate::plan::ProducerIdentity;
+use crate::plan::SlotUse;
 use crate::window::assignment;
 use crate::{Command, SplitDirection};
+
+/// `split-window`'s `-t`: a window (its active pane divides) or an exact pane.
+///
+/// tmux resolves `-t <window>` to whichever pane is currently active in it,
+/// and a detached split never changes which pane that is -- so dividing the
+/// same window on every step of a loop keeps dividing the same pane, and
+/// tmux inserts each new one immediately after it, pushing the previous pane
+/// down. Naming the pane a previous step created (`SplitWindow::from_pane`)
+/// avoids that; naming the window (`SplitWindow::new`) is for the one split
+/// that has no earlier pane to name yet.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum SplitTarget {
+    /// Divides whichever pane in the window is currently active.
+    Window(WindowTarget),
+    /// Divides this exact pane, regardless of which one is active.
+    Pane(PaneTarget),
+}
+
+impl SplitTarget {
+    pub(in crate::plan) fn slot(&self) -> Option<SlotUse> {
+        match self {
+            Self::Window(target) => target.slot(),
+            Self::Pane(target) => target.slot(),
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    pub(in crate::plan) fn rebind(&mut self, producers: &[Option<ProducerIdentity>]) {
+        match self {
+            Self::Window(target) => target.rebind(producers),
+            Self::Pane(target) => target.rebind(producers),
+        }
+    }
+
+    pub(crate) fn token(&self, resolve: Resolver<'_>) -> Option<OsString> {
+        match self {
+            Self::Window(target) => target.token(resolve),
+            Self::Pane(target) => target.token(resolve),
+        }
+    }
+}
+
+/// A plan recorded before `SplitWindow` could target a pane carries a bare
+/// [`WindowTarget`] (`{"Id":...}`/`{"Slot":...}`) rather than today's
+/// externally tagged `{"Window":...}`/`{"Pane":...}`. The two shapes never
+/// share a tag name, so trying the current one first and falling back to the
+/// bare window is unambiguous.
+#[cfg(feature = "serde")]
+fn deserialize_split_target<'de, D>(deserializer: D) -> Result<SplitTarget, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Current(SplitTarget),
+        Legacy(WindowTarget),
+    }
+    Ok(match Wire::deserialize(deserializer)? {
+        Wire::Current(target) => target,
+        Wire::Legacy(target) => SplitTarget::Window(target),
+    })
+}
 
 /// Split a window, making a pane.
 #[derive(Clone)]
@@ -20,7 +91,11 @@ use crate::{Command, SplitDirection};
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SplitWindow {
-    pub(crate) target: WindowTarget,
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "deserialize_split_target")
+    )]
+    pub(crate) target: SplitTarget,
     vertical: bool,
     /// tmux's `-b`, which puts the new pane before the one being divided.
     ///
@@ -70,10 +145,38 @@ pub struct SplitWindow {
 
 impl SplitWindow {
     /// Split this window, leaving the new pane unfocused.
+    ///
+    /// Divides whichever pane in the window is currently active. Building a
+    /// layout one split at a time needs [`SplitWindow::from_pane`] instead:
+    /// after the first split, "whichever pane is active" is still the one
+    /// this step just divided, not the one it just made.
     #[must_use]
     pub fn new(target: impl Into<WindowTarget>) -> Self {
         Self {
-            target: target.into(),
+            target: SplitTarget::Window(target.into()),
+            vertical: true,
+            before: false,
+            start_directory: None,
+            command: None,
+            environment: Vec::new(),
+            focus: false,
+        }
+    }
+
+    /// Split this pane, putting a new one beside it.
+    ///
+    /// [`SplitWindow::new`] divides whichever pane in the window is active;
+    /// this divides the pane named, which is what building a layout one
+    /// split at a time needs -- pass the [`Slot<PaneSlot>`] the previous
+    /// split (or the window's own first pane, [`Slot<WindowSlot>::pane`])
+    /// returned, and each new pane lands after the one it actually came
+    /// from instead of always after pane 0.
+    ///
+    /// [`Slot<WindowSlot>::pane`]: crate::plan::Slot::pane
+    #[must_use]
+    pub fn from_pane(target: impl Into<PaneTarget>) -> Self {
+        Self {
+            target: SplitTarget::Pane(target.into()),
             vertical: true,
             before: false,
             start_directory: None,

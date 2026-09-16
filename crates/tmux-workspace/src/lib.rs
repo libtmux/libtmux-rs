@@ -174,17 +174,26 @@ impl<'server> WorkspaceBuilder<'server> {
             // A new window arrives holding exactly one pane, so the count is
             // known rather than looked up: the first configured pane is that
             // one, and the rest are splits.
-            let mut panes = vec![window.pane()];
+            //
+            // Each split targets the pane the previous one made
+            // (`SplitWindow::from_pane`), not the window: `-t <window>`
+            // always resolves to the window's active pane, and a detached
+            // split never changes which pane that is, so targeting the
+            // window on every iteration would keep dividing pane 0 and push
+            // each new pane in front of the last.
+            let mut source = window.pane();
+            let mut panes = vec![source];
             for pane in config.panes.iter().skip(1) {
                 let directory = pane.start_directory.as_deref().or(directory);
-                let mut split = SplitWindow::new(window);
+                let mut split = SplitWindow::from_pane(source);
                 if let Some(directory) = directory {
                     split = split.start_directory(escape_format(directory));
                 }
                 for (name, value) in config.environment.iter().chain(&pane.environment) {
                     split = split.environment(name.as_str(), value.as_str());
                 }
-                panes.push(plan.add(split));
+                source = plan.add(split);
+                panes.push(source);
             }
 
             // Layout is applied once the pane count is final, or tmux would
