@@ -162,6 +162,14 @@ impl Workspace {
             .as_str()
             .ok_or_else(|| ConfigError::invalid("session_name must be a string"))?
             .to_owned();
+        // tmux stores the name verbatim, then uses `:` and `.` as the window
+        // and pane separators in every `-t` target, so a name that contains
+        // either can be created but never addressed again.
+        if let Some(separator) = session_name.chars().find(|c| matches!(c, ':' | '.')) {
+            return Err(ConfigError::invalid(format!(
+                "session_name must not contain {separator:?}; tmux reads it as a target separator and the session could not be addressed afterward"
+            )));
+        }
 
         let windows = match &document["windows"] {
             Yaml::BadValue | Yaml::Null => Vec::new(),

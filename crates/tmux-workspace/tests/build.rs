@@ -105,6 +105,22 @@ fn a_missing_session_name_is_rejected() {
     assert!(matches!(error, tmux_workspace::ConfigError::Invalid { .. },));
 }
 
+#[test]
+fn a_session_name_tmux_could_not_address_is_rejected() {
+    // Library-level H8: tmux stores the name verbatim, then uses `:` and `.`
+    // as the window and pane separators in every `-t` target, so a name
+    // that contains either can be created but never addressed again -- the
+    // same defect the CLI had, in the code path in front of it.
+    for name in ["a:b", "a.b"] {
+        let error = Workspace::from_yaml(&format!("session_name: {name:?}\nwindows: []"))
+            .expect_err("an unaddressable session_name should be refused");
+        assert!(
+            matches!(error, tmux_workspace::ConfigError::Invalid { .. }),
+            "{name}: {error:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn building_reproduces_the_configured_shape() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -766,15 +782,24 @@ async fn a_name_from_the_file_cannot_run_a_command() {
     // it would otherwise choose what runs.
     let directory = tempfile::tempdir().expect("a temporary directory");
     let marker = directory.path().join("marker");
+    // A session_name payload cannot reuse `directory`: tempfile's default
+    // prefix is dotted, and a `.` in session_name is refused outright as a
+    // tmux target separator (H8), for a reason this test is not about.
+    let session_directory = tempfile::Builder::new()
+        .prefix("session-name-guard")
+        .tempdir()
+        .expect("a temporary directory without a dot in its name");
+    let session_marker = session_directory.path().join("marker");
     let workspace = Workspace::from_yaml(&format!(
         "
 session_name: \"#(touch {0})\"
 windows:
-  - window_name: \"#(touch {0})\"
+  - window_name: \"#(touch {1})\"
     panes:
       - sleep 300
 ",
-        marker.display()
+        session_marker.display(),
+        marker.display(),
     ))
     .expect("configuration parses");
 
@@ -786,6 +811,10 @@ windows:
         .expect("the workspace builds");
 
     assert!(!marker.exists(), "a name from the file ran a command");
+    assert!(
+        !session_marker.exists(),
+        "a name from the file ran a command"
+    );
 
     // The name survives as the text it was, rather than being dropped.
     let windows = session.windows().await.expect("windows");
