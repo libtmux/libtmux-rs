@@ -901,3 +901,56 @@ async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn library_builder_places_panes_after_the_first_in_config_order() {
+    // Library-level H1: WorkspaceBuilder::plan() split every pane after the
+    // first from the window (SplitWindow::new), which always resolves to
+    // the window's active pane. A detached split never changes which pane
+    // that is, so every split kept dividing pane 0, and tmux inserts each
+    // new pane immediately after its source -- a 4-pane window came out A,
+    // D, C, B instead of A, B, C, D, the same defect the CLI had.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: libpaneorder
+windows:
+  - window_name: plain
+    panes:
+      - printf 'MARK-A\\n'; sleep 300
+      - printf 'MARK-B\\n'; sleep 300
+      - printf 'MARK-C\\n'; sleep 300
+      - printf 'MARK-D\\n'; sleep 300
+",
+    )
+    .expect("the workspace parses");
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    let window = session.windows().await.expect("windows").remove(0);
+    let panes = window.panes().await.expect("panes");
+    assert_eq!(panes.len(), 4);
+
+    for (index, (pane, marker)) in panes
+        .iter()
+        .zip(["MARK-A", "MARK-B", "MARK-C", "MARK-D"])
+        .enumerate()
+    {
+        let seen = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
+            pane.capture().await.is_ok_and(|lines| {
+                lines
+                    .iter()
+                    .any(|line| line.to_string_lossy().contains(marker))
+            })
+        })
+        .await;
+        assert!(seen.is_ok(), "pane index {index} should show {marker}");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
