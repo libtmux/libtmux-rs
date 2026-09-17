@@ -37,6 +37,17 @@ impl Server {
 
     /// Lock a `wait-for` channel, blocking later lock attempts on it.
     ///
+    /// Dropping this future while it is still queued behind another locker
+    /// leaves the channel permanently locked if that locker's process ends
+    /// without calling [`Self::unlock_channel`], and every future call here
+    /// for the same channel blocks forever: `cmd_wait_for_unlock` hands a
+    /// released lock to the next queued locker with no mechanism to skip one
+    /// whose client already disconnected. This is a tmux defect
+    /// (`cmd-wait-for.c`), not something this crate can protect against, and
+    /// the non-locking [`Self::wait_for_channel`]'s claim that dropping it is
+    /// safe does not carry over to this call: that form is an idempotent
+    /// latch check, not a queue. Measured directly on 3.2a, 3.7c, and master.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the channel name.
@@ -53,6 +64,10 @@ impl Server {
     }
 
     /// Unlock a `wait-for` channel.
+    ///
+    /// Always call this from whatever locked with [`Self::lock_channel`],
+    /// including on an error path: a locker that ends without unlocking can
+    /// wedge the channel for everyone else. See that method's hazard note.
     ///
     /// # Errors
     ///
@@ -154,9 +169,10 @@ impl Server {
                 Ok(ChannelWait::TimedOut)
             }
             Ok(Err(error)) => Err(error),
-            // Dropping the dispatch kills the tmux client that was waiting.
-            // The server is unaffected and the channel stays usable, measured
-            // by killing a waiter outright and signalling it afterwards.
+            // Dropping the dispatch kills the waiting tmux client; the
+            // channel stays usable, measured by killing a waiter and
+            // signalling it after. True only for this idempotent-latch
+            // form -- `Self::lock_channel`'s queue has no such guarantee.
             Err(_elapsed) => Ok(ChannelWait::TimedOut),
         }
     }

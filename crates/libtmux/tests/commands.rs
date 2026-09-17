@@ -406,6 +406,57 @@ async fn wait_for_channels_lock_and_release() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Cancelling a queued `lock_channel` wedges the channel for every later
+/// locker: a tmux defect, not something this crate can protect against. See
+/// [`Server::lock_channel`]'s hazard note.
+///
+/// `cmd_wait_for_unlock` hands a channel to the next queued locker with no
+/// mechanism to skip one whose client already disconnected, so killing a
+/// locker while it is queued -- not while it holds the lock -- corrupts the
+/// channel for everyone behind it, even though nobody ever unlocked it
+/// explicitly. Pinned with a tight bound so this fails loudly, not
+/// silently, if a tmux release ever fixes the defect.
+#[tokio::test]
+async fn real_tmux_compat_cancelling_a_queued_lock_wedges_the_channel() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    // Uncontested: takes the lock and returns at once. Never unlocked.
+    server
+        .lock_channel("wedge")
+        .await
+        .expect("the first lock is uncontested");
+
+    // Contested: queues behind the holder above, then is cancelled while
+    // still queued -- what `kill_on_drop` is for, killing the underlying
+    // `tmux wait-for -L` subprocess rather than leaving it running.
+    let cancelled = tokio::time::timeout(
+        libtmux::test::scaled(Duration::from_secs(2)),
+        server.lock_channel("wedge"),
+    )
+    .await;
+    assert!(
+        cancelled.is_err(),
+        "the second lock is genuinely contested and queues",
+    );
+
+    // A third locker has nothing ahead of it but the first holder -- the
+    // second never acquired the channel, only queued -- yet tmux hands it
+    // to the dead second locker anyway and never notices it is gone, so
+    // this wedges rather than resolving at a sensible bound.
+    let wedged = tokio::time::timeout(
+        libtmux::test::scaled(Duration::from_millis(800)),
+        server.lock_channel("wedge"),
+    )
+    .await;
+    assert!(
+        wedged.is_err(),
+        "cancelling the queued locker corrupts the channel for good, per the defect this pins",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// Waiting blocks until something signals, rather than returning at once.
 ///
 /// The latch makes the easy case indistinguishable from a broken one: a wait
