@@ -958,9 +958,15 @@ impl ControlSender {
 
     /// Receive output from these panes and no others.
     ///
-    /// Lists panes over this same connection, so the answer cannot disagree
-    /// with the connection it configures, then mutes every pane not named.
-    /// See [`Self::mute_pane`] for why this beats filtering what arrives.
+    /// Lists panes in the session this connection attached to -- over this
+    /// same connection, so the answer cannot disagree with it -- then mutes
+    /// every one not named. See [`Self::mute_pane`] for why this beats
+    /// filtering what arrives, and why the listing must not reach past this
+    /// connection's own session: `off` stops tmux reading a muted pane's pty
+    /// for every client, not just this connection, so muting a pane outside
+    /// this session would widen the change to whatever else is watching it,
+    /// and a control client is sent only its attached session's output in
+    /// the first place, so panes outside it were never part of this stream.
     ///
     /// A pane created after this call is not muted, because tmux publishes no
     /// notification for a pane appearing. Repeat this whenever
@@ -975,7 +981,7 @@ impl ControlSender {
         let listed = self
             .send(
                 Command::new("list-panes")
-                    .arg("-a")
+                    .arg("-s")
                     .arg("-F")
                     .arg("#{pane_id}"),
             )

@@ -51,6 +51,41 @@ async fn wait_for(
     }
 }
 
+/// Send a marker command into `pane` and drain `output` until it has been
+/// seen and the connection has gone quiet.
+///
+/// A fresh `stream_output()` connection reports its own attach-time
+/// `%session-changed` before anything else, which triggers a narrow whose
+/// `list-panes` round trip is still in flight for a moment. A caller that
+/// acts immediately -- killing the watched pane, or touching another
+/// session -- can race that narrow and have it coincidentally catch the
+/// change anyway, which is not evidence the thing under test does.
+#[allow(clippy::panic, clippy::expect_used, reason = "test assertion helper")]
+async fn settle_stream(
+    pane: &libtmux::Pane,
+    output: &mut libtmux::control::PaneOutput,
+    marker: &str,
+) {
+    pane.send_keys(format!("echo {marker}\n"))
+        .await
+        .expect("a settle command is sent");
+    loop {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), output.next_chunk())
+            .await
+            .expect("settle output arrives")
+            .expect("the stream is alive");
+        if String::from_utf8_lossy(&chunk).contains(marker) {
+            break;
+        }
+    }
+    // The marker line's echo is not necessarily the whole reaction: drain
+    // until a short gap, so a chunk still queued behind it is not mistaken
+    // later for something the caller's own action produced.
+    while let Ok(Some(_)) =
+        tokio::time::timeout(Duration::from_millis(300), output.next_chunk()).await
+    {}
+}
+
 #[tokio::test]
 async fn commands_travel_down_one_connection() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -788,6 +823,56 @@ async fn a_pane_created_after_narrowing_is_muted_too() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Watching one pane must not touch a pane in an unrelated session.
+///
+/// A control client is sent only its attached session's output, so
+/// `watch_only` never needed to look past it; listing `list-panes -a`
+/// (every pane on the server) instead made it mute an unrelated session's
+/// pane too, and on tmux 3.7+ `mute_pane`'s `off` stops tmux reading a
+/// muted pane's pty for every client, not just this connection -- freezing
+/// the other session's pane for as long as this stream stayed open.
+#[tokio::test]
+async fn watching_one_pane_does_not_touch_an_unrelated_session() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let watched_session = server
+        .new_session("watch-scope-watched")
+        .await
+        .expect("session");
+    let watched = watched_session.panes().await.expect("panes list").remove(0);
+
+    let other_session = server
+        .new_session("watch-scope-unrelated")
+        .await
+        .expect("session");
+    let other = other_session.panes().await.expect("panes list").remove(0);
+
+    let mut output = watched.stream_output().await.expect("the pane streams");
+    settle_stream(&watched, &mut output, "mcp-watch-scope-settle").await;
+
+    other
+        .send_line("echo mcp-watch-scope-unrelated-marker")
+        .await
+        .expect("the unrelated session's pane runs a command");
+
+    let arrived = libtmux::test::retry_until(Duration::from_secs(5), async || {
+        other.capture().await.is_ok_and(|lines| {
+            lines.iter().any(|line| {
+                line.to_string_lossy()
+                    .contains("mcp-watch-scope-unrelated-marker")
+            })
+        })
+    })
+    .await;
+    assert!(
+        arrived.is_ok(),
+        "an unrelated session's pane keeps producing output while a watch is open elsewhere",
+    );
+
+    output.shutdown().await.expect("the connection shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// Command output whose every line begins with `%` must survive the block.
 ///
 /// A pane id is spelled `%0`, so `list-panes -F '#{pane_id}'` produces rows
@@ -1229,30 +1314,11 @@ async fn observed_pane_death_in_a_never_active_window_ends_the_stream() {
         .expect("the new window's one pane");
 
     let mut output = watched.stream_output().await.expect("the pane streams");
-    // Drains a chunk of real output before the kill, so the connection's own
-    // attach-time `%session-changed` -- and the narrow it triggers -- cannot
-    // still be in flight and race the kill below: `send_keys` and its own
-    // echo cannot arrive before the events that preceded them on the same
-    // connection have already been processed.
-    watched
-        .send_keys("echo mcp-inactive-window-marker\n")
-        .await
-        .expect("a marker command is sent");
-    loop {
-        let chunk = tokio::time::timeout(Duration::from_secs(5), output.next_chunk())
-            .await
-            .expect("marker output arrives")
-            .expect("the stream is alive before the kill");
-        if String::from_utf8_lossy(&chunk).contains("mcp-inactive-window-marker") {
-            break;
-        }
-    }
-    // The typed-line echo above is not necessarily the command's whole
-    // reaction: drain until a short gap, so a chunk still queued behind it
-    // is not mistaken later for the stream ending because of the kill.
-    while let Ok(Some(_)) =
-        tokio::time::timeout(Duration::from_millis(300), output.next_chunk()).await
-    {}
+    // Settles the connection's own attach-time `%session-changed`, and the
+    // narrow it triggers, before the kill below: otherwise that narrow can
+    // still be in flight and happen to catch the pane's death anyway,
+    // masking the gap this test exists to catch.
+    settle_stream(&watched, &mut output, "mcp-inactive-window-marker").await;
 
     watched.kill().await.expect("the watched pane is killed");
 
