@@ -371,6 +371,15 @@ impl SelectLayout {
                 .arg(self.layout.clone()),
         )
     }
+
+    /// The layout value this operation would send, unvalidated.
+    ///
+    /// `render` has no server to check it against; the validation lives in
+    /// [`crate::plan::Plan::run`], before the plan's first command, which is
+    /// what this exists for.
+    pub(crate) fn layout(&self) -> &std::ffi::OsStr {
+        &self.layout
+    }
 }
 
 operation!(

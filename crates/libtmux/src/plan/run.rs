@@ -17,7 +17,8 @@ use super::{Op, OperationKind, Part, Plan, Scope, Step};
 use crate::error::ListingDecodeError;
 use crate::formats::FormatCodecError;
 use crate::{
-    Command, CommandChain, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId,
+    Command, CommandChain, Error, IdParseError, PaneId, Server, SessionId, TmuxText, Window,
+    WindowId,
 };
 
 /// How an operation ended.
@@ -299,6 +300,7 @@ impl Plan {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.validate_option_scopes()?;
+        self.validate_layouts(server).await?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -433,6 +435,25 @@ impl Plan {
             }
         }
 
+        Ok(())
+    }
+
+    /// Refuse a `select-layout` value that `select-layout` itself cannot
+    /// parse.
+    ///
+    /// A plan renders its own commands, so a recorded
+    /// [`super::ops::SelectLayout`] reaches tmux without passing
+    /// [`Window::select_layout`]'s guard: 3.3 and 3.3a exit on a layout
+    /// value they cannot parse, taking every session on the socket with
+    /// them. Checked here, alongside `validate_option_scopes`, rather than
+    /// in `render`, which has no server to check a preset's version floor
+    /// against. Before the first command either way.
+    async fn validate_layouts(&self, server: &Server) -> Result<(), Error> {
+        for operation in self.steps() {
+            if let Op::SelectLayout(select) = operation {
+                Window::validate_saved_layout(server, select.layout()).await?;
+            }
+        }
         Ok(())
     }
 
@@ -701,6 +722,11 @@ impl Plan {
     /// written, a slot dependency is invalid, or a creating operation does not
     /// return valid IDs. Validation happens before the first command. A command
     /// tmux refuses is reported in the [`PlanResult`].
+    ///
+    /// A [`super::ops::SelectLayout`] here does not get [`Self::run`]'s
+    /// `select-layout` guard: that check needs a version probe, and this
+    /// connection carries no [`Server`] to run one against. A layout value
+    /// this cannot parse still reaches tmux directly.
     pub async fn run_over_control_mode(
         &self,
         sender: &crate::control::ControlSender,

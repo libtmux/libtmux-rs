@@ -685,6 +685,25 @@ pub enum Error {
     #[error("select-layout needs a preset name or a layout tmux reported")]
     UnrecognizedLayout,
 
+    /// A saved layout value is a preset prefix that names more than one
+    /// preset on the running tmux release.
+    ///
+    /// tmux's own `layout_set_lookup` accepts a unique prefix (`tile` and
+    /// `even-h` both apply cleanly on every supported release), so refusing
+    /// every prefix would reject values tmux itself understands. An
+    /// ambiguous one is refused before dispatch instead of leaving tmux to
+    /// pick one silently. The candidates are only the presets available on
+    /// the running release: `main-h` is unique on tmux 3.2a and ambiguous
+    /// from 3.5, where the mirrored pair exists.
+    #[non_exhaustive]
+    #[error("layout {input:?} names more than one preset: {}", candidates.join(", "))]
+    AmbiguousLayout {
+        /// The value the caller passed.
+        input: String,
+        /// The preset names it could mean.
+        candidates: Vec<&'static str>,
+    },
+
     /// A plan has a dependency that cannot be resolved before dispatch.
     #[cfg(feature = "plan")]
     #[error("invalid plan: {source}")]
@@ -1342,6 +1361,11 @@ impl fmt::Debug for Error {
                 .finish(),
             Self::RuntimeNested => formatter.debug_struct("RuntimeNested").finish(),
             Self::UnrecognizedLayout => formatter.debug_struct("UnrecognizedLayout").finish(),
+            Self::AmbiguousLayout { input, candidates } => formatter
+                .debug_struct("AmbiguousLayout")
+                .field("input", input)
+                .field("candidates", candidates)
+                .finish(),
             Self::InvalidServerConfiguration { kind } => formatter
                 .debug_struct("InvalidServerConfiguration")
                 .field("kind", kind)

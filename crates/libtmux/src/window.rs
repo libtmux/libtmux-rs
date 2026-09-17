@@ -468,26 +468,8 @@ impl Window {
                 OsString::from(named.as_str())
             }
             LayoutSpec::Saved(saved) => {
-                // Checked here rather than left to tmux: 3.3 and 3.3a exit on
-                // a value `select-layout` cannot parse, taking every session on
-                // the socket with them, and `--` does not help -- it turns
-                // `-o` from the undo flag into exactly such a value.
                 let server = crate::Server::from_core(Arc::clone(&self.core));
-                match SavedLayout::classify(saved) {
-                    SavedLayout::Preset(named) => {
-                        server
-                            .require(named.as_str(), named.minimum_release())
-                            .await?;
-                    }
-                    SavedLayout::Classic => {}
-                    SavedLayout::Json => {
-                        server
-                            .require("a JSON layout string", crate::version::since::JSON_LAYOUTS)
-                            .await?;
-                    }
-                    SavedLayout::Unrecognized => return Err(Error::UnrecognizedLayout),
-                }
-                saved.clone()
+                Self::validate_saved_layout(&server, saved).await?
             }
         };
 
@@ -506,6 +488,60 @@ impl Window {
             .await
             .map_err(|error| error.after_effect("select-layout"))?;
         Ok(self)
+    }
+
+    /// Validate a saved layout string before it reaches tmux, and return the
+    /// argument to send.
+    ///
+    /// The guard [`Self::select_layout`] applies to a [`LayoutSpec::Saved`]
+    /// value, factored out so every caller that dispatches `select-layout`
+    /// with a caller-supplied string goes through the same refusal rather
+    /// than reimplementing it: [`crate::plan::ops::SelectLayout`] validates
+    /// each recorded operation this way before a plan's first command, and
+    /// an MCP or other integration should call this (or [`Self::select_layout`]
+    /// directly, when it already holds a [`Window`]) rather than building the
+    /// `select-layout` command itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnrecognizedLayout`] for a value that is not a
+    /// preset name, a unique preset prefix, a classic layout string, or
+    /// JSON; [`Error::AmbiguousLayout`] for a prefix that names more than
+    /// one preset available on the running release; and
+    /// [`crate::ErrorKind::UnsupportedVersion`] for a preset or a JSON
+    /// layout this release predates.
+    pub(crate) async fn validate_saved_layout(
+        server: &crate::Server,
+        saved: &OsStr,
+    ) -> Result<OsString, Error> {
+        // Checked here rather than left to tmux: 3.3 and 3.3a exit on a
+        // value `select-layout` cannot parse, taking every session on the
+        // socket with them, and `--` does not help -- it turns `-o` from
+        // the undo flag into exactly such a value.
+        let version = server.capabilities().await?.tmux_version().clone();
+        match SavedLayout::classify(saved, &version) {
+            SavedLayout::Preset(named) => {
+                server
+                    .require(named.as_str(), named.minimum_release())
+                    .await?;
+                // The resolved name, not whatever prefix the caller spelled:
+                // a caller who typed `tile` gets `tiled` sent, not a second
+                // round of tmux's own matching.
+                Ok(OsString::from(named.as_str()))
+            }
+            SavedLayout::Classic => Ok(saved.to_owned()),
+            SavedLayout::Json => {
+                server
+                    .require("a JSON layout string", crate::version::since::JSON_LAYOUTS)
+                    .await?;
+                Ok(saved.to_owned())
+            }
+            SavedLayout::Ambiguous(candidates) => Err(Error::AmbiguousLayout {
+                input: saved.to_string_lossy().into_owned(),
+                candidates,
+            }),
+            SavedLayout::Unrecognized => Err(Error::UnrecognizedLayout),
+        }
     }
 
     /// Restart the window's command in place.
@@ -1368,32 +1404,62 @@ impl From<&TmuxText> for LayoutSpec {
 
 /// The shape of a saved layout value, read before it reaches tmux.
 enum SavedLayout {
-    /// A preset name passed as text rather than as a [`Layout`].
+    /// A preset name, or a prefix of exactly one, passed as text rather than
+    /// as a [`Layout`].
     Preset(Layout),
     /// tmux's checksum-prefixed string: four hex digits and a comma.
     Classic,
     /// The JSON form tmux reports from [`crate::since::JSON_LAYOUTS`].
     Json,
+    /// A prefix that names more than one preset available on the running
+    /// release.
+    Ambiguous(Vec<&'static str>),
     /// Nothing tmux ever reported, and nothing `select-layout` can parse.
     Unrecognized,
 }
 
 impl SavedLayout {
-    fn classify(saved: &OsStr) -> Self {
+    /// Every preset [`select_layout`](Window::select_layout) knows, in the
+    /// order tmux itself declares them.
+    const PRESETS: [Layout; 7] = [
+        Layout::EvenHorizontal,
+        Layout::EvenVertical,
+        Layout::MainHorizontal,
+        Layout::MainHorizontalMirrored,
+        Layout::MainVertical,
+        Layout::MainVerticalMirrored,
+        Layout::Tiled,
+    ];
+
+    fn classify(saved: &OsStr, version: &crate::TmuxVersion) -> Self {
         let Some(text) = saved.to_str() else {
             return Self::Unrecognized;
         };
-        let presets = [
-            Layout::EvenHorizontal,
-            Layout::EvenVertical,
-            Layout::MainHorizontal,
-            Layout::MainHorizontalMirrored,
-            Layout::MainVertical,
-            Layout::MainVerticalMirrored,
-            Layout::Tiled,
-        ];
-        if let Some(named) = presets.into_iter().find(|named| named.as_str() == text) {
+        if let Some(named) = Self::PRESETS.into_iter().find(|named| named.as_str() == text) {
             return Self::Preset(named);
+        }
+        // tmux's own `layout_set_lookup` is a prefix match, so `tile` and
+        // `even-h` both apply on every release; matched only against the
+        // presets the running release actually has, so `main-h` is unique
+        // on 3.2a (five presets) even though it is ambiguous from 3.5,
+        // where the mirrored pair exists. An empty string matches every
+        // preset's prefix and must stay unrecognized rather than reading as
+        // ambiguous among all seven.
+        if !text.is_empty() {
+            let candidates: Vec<Layout> = Self::PRESETS
+                .into_iter()
+                .filter(|named| version.meets(&named.minimum_release()))
+                .filter(|named| named.as_str().starts_with(text))
+                .collect();
+            match candidates.as_slice() {
+                [only] => return Self::Preset(*only),
+                [_, ..] => {
+                    return Self::Ambiguous(
+                        candidates.iter().map(|named| named.as_str()).collect(),
+                    );
+                }
+                [] => {}
+            }
         }
         // `layout_parse` reads `%hx,` and insists it consumed exactly five
         // bytes; tmux itself always writes the checksum as four lowercase

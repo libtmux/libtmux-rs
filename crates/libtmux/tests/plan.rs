@@ -16,8 +16,8 @@ use std::time::Duration;
 use libtmux::plan::{
     Attribution, CapturePane, KillPane, KillWindow, NewSession, NewWindow, OperationKind,
     OperationReport, OperationValue, Outcome, PaneTarget, Plan, PlanResult,
-    PlanValidationErrorKind, Planner, SelectPane, SelectWindow, SendKeys, SetEnvironment,
-    SetOption, SplitWindow, StepReason, WindowTarget,
+    PlanValidationErrorKind, Planner, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SetEnvironment, SetOption, SplitWindow, StepReason, WindowTarget,
 };
 use libtmux::test::TestServer;
 use libtmux::{
@@ -721,6 +721,47 @@ async fn a_plan_will_not_write_an_option_where_tmux_keeps_another() {
     assert!(
         server.sessions().await.expect("sessions").is_empty(),
         "validation happens before the first command",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A plan refuses a `select-layout` value `select-layout` itself cannot
+/// parse, before its first command.
+///
+/// A plan renders its own commands, so `SelectLayout` reached tmux without
+/// the check the direct `Window::select_layout` path makes: tmux 3.3 and
+/// 3.3a exit on a layout value they cannot parse, taking every session on
+/// the socket with them.
+#[tokio::test]
+async fn a_plan_refuses_a_layout_value_select_layout_cannot_parse() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    for value in ["-o", "garbage", ""] {
+        let mut plan = Plan::new();
+        let session = plan.add(NewSession::new("layout-guard"));
+        plan.add(SelectLayout::new(session.window(), value));
+
+        let error = plan
+            .run(server, Planner::Sequential)
+            .await
+            .map(|_| ())
+            .expect_err("select-layout cannot parse this value");
+        assert_eq!(
+            error.kind(),
+            libtmux::ErrorKind::InvalidInput,
+            "{value:?}: {error:?}",
+        );
+        assert!(
+            server.sessions().await.expect("sessions").is_empty(),
+            "{value:?}: validation happens before the first command",
+        );
+    }
+
+    assert!(
+        server.is_alive().await,
+        "the server survives every refused value",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

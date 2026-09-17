@@ -1568,6 +1568,84 @@ async fn a_value_that_is_not_a_layout_is_refused_before_dispatch() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A unique preset prefix applies; a prefix naming more than one preset is
+/// refused, naming the candidates.
+///
+/// tmux's own `layout_set_lookup` is a prefix match, so `tile` and `even-h`
+/// apply on every release and never reach the 3.3a crash path -- an
+/// exact-match-only guard refuses a spelling tmux itself accepts.
+#[tokio::test]
+async fn a_unique_layout_prefix_applies_an_ambiguous_one_names_its_candidates() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("layout-prefix").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+    window
+        .split(SplitOptions::new(SplitDirection::Right))
+        .await
+        .expect("a second pane to lay out");
+
+    window
+        .select_layout("tile")
+        .await
+        .expect("a unique prefix of `tiled` applies");
+    window
+        .select_layout("even-h")
+        .await
+        .expect("a unique prefix of `even-horizontal` applies");
+
+    let error = window
+        .select_layout("even-")
+        .await
+        .expect_err("a prefix naming two presets is ambiguous");
+    assert_eq!(error.kind(), ErrorKind::InvalidInput, "{error}");
+    let message = error.to_string();
+    assert!(message.contains("even-horizontal"), "{message}");
+    assert!(message.contains("even-vertical"), "{message}");
+
+    // Empty is not a prefix of "every preset": it stays the same refusal as
+    // every other unrecognized value, not "ambiguous among all seven".
+    let empty_error = window
+        .select_layout("")
+        .await
+        .expect_err("empty is refused, not ambiguous");
+    assert!(
+        !empty_error.to_string().contains("more than one preset"),
+        "{empty_error}",
+    );
+
+    // `main-h` is unique among the presets tmux 3.2a knows (five) and
+    // ambiguous once the mirrored pair exists (3.5+) -- the candidate set is
+    // the running release's, not every preset this crate can name.
+    let mirrored_capable = server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::MIRRORED_LAYOUTS);
+    let main_h = window.select_layout("main-h").await;
+    if mirrored_capable {
+        let error = main_h.expect_err("main-h is ambiguous once the mirrored pair exists");
+        assert_eq!(error.kind(), ErrorKind::InvalidInput, "{error}");
+    } else {
+        main_h.expect("main-h is unique without the mirrored pair");
+    }
+
+    assert!(
+        server
+            .has_session("layout-prefix")
+            .await
+            .expect("tmux still answers"),
+        "the session survives every prefix, unique or ambiguous",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A JSON-looking saved layout on an old tmux is refused with a version
 /// hint, not just tmux's generic "invalid layout".
 #[tokio::test]

@@ -1869,6 +1869,8 @@ struct_field libtmux::ClientFields::client_written: libtmux::query::IntegerField
 struct_field libtmux::EnvironmentEntry::Set::0: libtmux::TmuxText
 struct_field libtmux::Error::AfterEffect::operation: &'static str
 struct_field libtmux::Error::AfterEffect::source: Box<libtmux::Error>
+struct_field libtmux::Error::AmbiguousLayout::candidates: Vec<&'static str>
+struct_field libtmux::Error::AmbiguousLayout::input: String
 struct_field libtmux::Error::CapabilityDefective::broken_in: libtmux::ReleaseVersion
 struct_field libtmux::Error::CapabilityDefective::capability: &'static str
 struct_field libtmux::Error::CapabilityDefective::fixed_in: libtmux::ReleaseVersion
@@ -2165,6 +2167,7 @@ variant libtmux::ControlModeErrorKind::UnrepresentableCommand
 variant libtmux::EnvironmentEntry::Removed
 variant libtmux::EnvironmentEntry::Set
 variant libtmux::Error::AfterEffect
+variant libtmux::Error::AmbiguousLayout
 variant libtmux::Error::CapabilityDefective
 variant libtmux::Error::ClientSuspended
 variant libtmux::Error::CommandFailed
