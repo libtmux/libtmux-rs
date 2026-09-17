@@ -130,9 +130,11 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
         attributes[3] |= termios.TOSTOP
         termios.tcsetattr(slave, termios.TCSANOW, attributes)
     os.set_blocking(master, False)
-    argv = [binary, "load", "-d", "--no-progress", "--color", "never", "-S", str(socket)]
-    if append:
-        argv += ["--append"]
+    argv = [binary, "load", "--no-progress", "--color", "never", "-S", str(socket)]
+    # `-d` now always wins over `--append`, so getting a borrowed session
+    # here relies on `--append` alone to skip the attach step, same as `-d`
+    # otherwise does for the owned-session case.
+    argv += ["--append"] if append else ["-d"]
     argv += [str(directory / "workspace.json")]
     supervisor = subprocess.Popen([sys.executable, __file__, "--supervisor", *argv],
                                   cwd=directory, env=environment, stdin=slave,

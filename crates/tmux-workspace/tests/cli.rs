@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 #[tokio::test]
-async fn attached_load_requires_terminal_before_scripts_or_session_mutation() {
+async fn outside_tmux_attach_requires_terminal_before_scripts_or_session_mutation() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
@@ -22,21 +22,19 @@ async fn attached_load_requires_terminal_before_scripts_or_session_mutation() {
     )
     .unwrap();
     let socket = guard.socket_path().to_str().unwrap();
-    for inherited in [false, true] {
-        let output = at_pane(
-            &["load", "workspace.json", "-S", socket],
-            directory.path(),
-            inherited.then_some((&guard, pane.as_str())),
-        );
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("attaching requires a terminal"));
-        assert!(!marker.exists(), "terminal refusal ran the setup script");
-        let sessions = guard.server().sessions().await.unwrap();
-        assert_eq!(sessions.len(), 1, "terminal refusal created a session");
-        assert_eq!(sessions[0].id(), keeper.id());
-        assert_eq!(keeper.windows().await.unwrap().len(), 1);
-        assert_eq!(current_pane(&keeper).await, pane);
-    }
+    let output = at_pane(
+        &["load", "workspace.json", "-S", socket],
+        directory.path(),
+        None,
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("attaching requires a terminal"));
+    assert!(!marker.exists(), "terminal refusal ran the setup script");
+    let sessions = guard.server().sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1, "terminal refusal created a session");
+    assert_eq!(sessions[0].id(), keeper.id());
+    assert_eq!(keeper.windows().await.unwrap().len(), 1);
+    assert_eq!(current_pane(&keeper).await, pane);
     for append in [false, true] {
         let output = at_pane(
             &[
@@ -66,6 +64,146 @@ async fn attached_load_requires_terminal_before_scripts_or_session_mutation() {
     }
     assert_eq!(guard.server().sessions().await.unwrap().len(), 1);
     assert_eq!(keeper.windows().await.unwrap().len(), 2);
+    guard.shutdown().await.unwrap();
+}
+
+/// Inside tmux on the target server, an attached load needs no terminal at
+/// all: it builds the session and only then reaches for `switch-client`,
+/// which does not need one. With no attached client on that server to
+/// switch, `switch-client` itself fails, but not for lack of a terminal.
+#[tokio::test]
+async fn inside_tmux_attach_does_not_require_terminal() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("terminal-keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let marker = directory.path().join("before-script-ran");
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({
+            "session_name":"terminal-workspace", "before_script":"touch before-script-ran",
+            "windows":[{"panes":["blank"]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let socket = guard.socket_path().to_str().unwrap();
+    let output = at_pane(
+        &["load", "workspace.json", "-S", socket],
+        directory.path(),
+        Some((&guard, pane.as_str())),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        !stderr.contains("attaching requires a terminal"),
+        "{stderr}"
+    );
+    assert!(marker.exists(), "inside tmux did not run before_script");
+    let session = guard
+        .server()
+        .session("terminal-workspace")
+        .await
+        .unwrap()
+        .expect("inside tmux did not build the session");
+    session.kill().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
+/// Aimed at a server other than the current pane's, an attached load refuses
+/// before building anything, the same way whether that server is already
+/// running or has never been started.
+#[tokio::test]
+async fn cross_server_attach_refuses_before_building_whether_or_not_the_target_runs() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("terminal-keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"other-workspace","windows":[{"panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+
+    let other = libtmux::test::TestServer::new().await.unwrap();
+    let output = at_pane(
+        &[
+            "load",
+            "workspace.json",
+            "-S",
+            other.socket_path().to_str().unwrap(),
+        ],
+        directory.path(),
+        Some((&guard, pane.as_str())),
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("current pane's"), "{stderr}");
+    assert!(stderr.contains("-d"), "{stderr}");
+    assert_eq!(
+        other.server().sessions().await.unwrap().len(),
+        0,
+        "cross-server refusal built a session on a running target"
+    );
+    other.shutdown().await.unwrap();
+
+    let absent = directory.path().join("never-started.sock");
+    let output = at_pane(
+        &["load", "workspace.json", "-S", absent.to_str().unwrap()],
+        directory.path(),
+        Some((&guard, pane.as_str())),
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        !absent.exists(),
+        "cross-server refusal started the target server"
+    );
+    assert_eq!(
+        guard.server().sessions().await.unwrap().len(),
+        1,
+        "cross-server refusal touched the current pane's own server"
+    );
+    guard.shutdown().await.unwrap();
+}
+
+/// `TMUX` set with no `TMUX_PANE`, as a `run-shell` key binding sees it: the
+/// load still builds and switches, exit 0, no terminal needed.
+#[tokio::test]
+async fn run_shell_style_load_has_no_terminal_and_no_tmux_pane() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"runshell-built","windows":[{"panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+    let mut command = command_at(
+        &[
+            "load",
+            "workspace.json",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--yes",
+        ],
+        directory.path(),
+    );
+    command.env(
+        "TMUX",
+        format!("{},{},0", guard.socket_path().display(), guard.daemon_pid()),
+    );
+    let output = command.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("attaching requires a terminal"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("current pane's"), "{stderr}");
+    let built = guard.server().session("runshell-built").await.unwrap();
+    let built =
+        built.unwrap_or_else(|| panic!("run-shell style load did not build the session: {stderr}"));
+    built.kill().await.unwrap();
     guard.shutdown().await.unwrap();
 }
 
@@ -396,6 +534,194 @@ async fn current_pane(session: &libtmux::Session) -> String {
         .unwrap()
         .id()
         .to_string()
+}
+
+/// Waits until a pane's shell has drawn a prompt and can receive input.
+async fn prompt_ready(server: &libtmux::Server, pane: &str) {
+    for _ in 0..600 {
+        let reading = server
+            .cmd(
+                libtmux::Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(pane)
+                    .arg("#{cursor_x},#{cursor_y}"),
+            )
+            .await
+            .unwrap()
+            .stdout_lossy()
+            .trim()
+            .to_owned();
+        if !reading.is_empty() && reading != "0,0" {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("pane {pane} never drew a prompt");
+}
+
+/// Drives one interactive load prompt from a real tmux pane: types the load
+/// command, waits for the question, answers by keystroke, and waits for the
+/// shell prompt to return, never by piping stdin.
+struct PromptDriver<'a> {
+    guard: &'a libtmux::test::TestServer,
+    keeper: &'a libtmux::Session,
+    binary: &'a str,
+    socket: &'a str,
+    directory: &'a Path,
+}
+
+impl PromptDriver<'_> {
+    async fn ask(&self, load_args: &str, prompt_needle: &str, answer: char) -> libtmux::Pane {
+        let window = self
+            .keeper
+            .new_window(
+                libtmux::NewWindowOptions::unnamed().start_directory(self.directory.to_path_buf()),
+            )
+            .await
+            .unwrap();
+        let pane = window.active_pane().await.unwrap().unwrap();
+        prompt_ready(self.guard.server(), pane.id().as_ref()).await;
+        let binary = self.binary;
+        let socket = self.socket;
+        pane.send_line(format!("{binary} load -S {socket} {load_args}; echo RC=$?"))
+            .await
+            .unwrap();
+        pane.wait_for_text(prompt_needle, std::time::Duration::from_secs(5))
+            .await
+            .unwrap();
+        pane.send_line(answer.to_string()).await.unwrap();
+        // Not `wait_for_text("RC=", ...)`: the shell echoes the typed
+        // command, including the literal `echo RC=$?` it has not run yet,
+        // so that text is on screen before the load even starts.
+        pane.wait_for_quiet(
+            std::time::Duration::from_millis(300),
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        pane
+    }
+}
+
+const NEW_SESSION_PROMPT: &str = "load detached (n)";
+
+/// New session, inside tmux, answered "n": builds detached, never appends.
+#[tokio::test]
+async fn new_session_prompt_answered_detached_builds_without_appending() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("keeper").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("new.json"),
+        serde_json::json!({"session_name":"prompted-new","windows":[{"window_name":"pnew","panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let driver = PromptDriver {
+        guard: &guard,
+        keeper: &keeper,
+        binary: env!("CARGO_BIN_EXE_tmux-workspace"),
+        socket: guard.socket_path().to_str().unwrap(),
+        directory: directory.path(),
+    };
+    let pane = driver.ask("new.json", NEW_SESSION_PROMPT, 'n').await;
+    let built = guard.server().session("prompted-new").await.unwrap();
+    assert!(
+        built.is_some(),
+        "answering n did not build the detached session"
+    );
+    assert!(
+        !keeper
+            .windows()
+            .await
+            .unwrap()
+            .iter()
+            .any(|window| window.name().to_string_lossy() == "pnew"),
+        "answering n appended instead of building detached"
+    );
+    built.unwrap().kill().await.unwrap();
+    pane.window().await.unwrap().unwrap().kill().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
+/// New session, inside tmux, answered "a": appends into the current session
+/// rather than building one named by the workspace.
+#[tokio::test]
+async fn new_session_prompt_answered_append_appends_the_current_session() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("keeper").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("new.json"),
+        serde_json::json!({"session_name":"prompted-new","windows":[{"window_name":"pnew","panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let driver = PromptDriver {
+        guard: &guard,
+        keeper: &keeper,
+        binary: env!("CARGO_BIN_EXE_tmux-workspace"),
+        socket: guard.socket_path().to_str().unwrap(),
+        directory: directory.path(),
+    };
+    let pane = driver.ask("new.json", NEW_SESSION_PROMPT, 'a').await;
+    assert!(
+        guard
+            .server()
+            .session("prompted-new")
+            .await
+            .unwrap()
+            .is_none(),
+        "answering a still built the workspace's own session"
+    );
+    assert!(
+        keeper
+            .windows()
+            .await
+            .unwrap()
+            .iter()
+            .any(|window| window.name().to_string_lossy() == "pnew"),
+        "answering a did not append the workspace's window"
+    );
+    pane.window().await.unwrap().unwrap().kill().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
+/// An already-running session, answered "n": nothing changes, exit 0.
+#[tokio::test]
+async fn exists_prompt_answered_no_changes_nothing() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("keeper").await.unwrap();
+    let existing = guard.session("already-there").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("exists.json"),
+        serde_json::json!({"session_name":"already-there","windows":[{"window_name":"unwanted","panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let driver = PromptDriver {
+        guard: &guard,
+        keeper: &keeper,
+        binary: env!("CARGO_BIN_EXE_tmux-workspace"),
+        socket: guard.socket_path().to_str().unwrap(),
+        directory: directory.path(),
+    };
+    let pane = driver
+        .ask("exists.json", "already running. Attach?", 'n')
+        .await;
+    assert_eq!(
+        existing.windows().await.unwrap().len(),
+        1,
+        "answering n to the exists prompt changed the session"
+    );
+    let text = pane.capture().await.unwrap();
+    let text = text
+        .iter()
+        .map(|line| line.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("RC=0"), "{text}");
+    pane.window().await.unwrap().unwrap().kill().await.unwrap();
+    guard.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1634,8 +1960,10 @@ async fn load_renames_only_the_last_input_and_retessellates_many_panes() {
         &["load", "-S", socket, "--append", "--json", "first.json"],
         directory.path(),
     );
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("current_pane_required"));
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(r#""code":"usage""#), "{stderr}");
+    assert!(stderr.contains("TMUX_PANE"), "{stderr}");
     guard.shutdown().await.unwrap();
 }
 
@@ -2333,6 +2661,113 @@ async fn failed_append_reports_borrowed_session_and_created_ids() {
         1
     );
     assert!(guard.server().has_session("borrowed").await.unwrap());
+    guard.shutdown().await.unwrap();
+}
+
+/// An appended window whose `window_index` collides with one already in the
+/// session states tmux's own exit status as a number, not `Option`'s `Debug`.
+#[tokio::test]
+async fn append_index_collision_states_the_exit_status_plainly() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let session = guard.session("borrowed").await.unwrap();
+    let pane = current_pane(&session).await;
+    let existing_index = session.active_window().await.unwrap().unwrap().index();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("collide.json"),
+        serde_json::json!({
+            "session_name":"ignored",
+            "windows":[{"window_name":"created","window_index":existing_index,"panes":["blank"]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = at_pane(
+        &[
+            "load",
+            "-S",
+            guard.server().socket_path().to_str().unwrap(),
+            "--append",
+            "collide.json",
+        ],
+        directory.path(),
+        Some((&guard, &pane)),
+    );
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Some("), "{stderr}");
+    assert!(
+        stderr.contains(&format!("index {existing_index} in use")),
+        "{stderr}"
+    );
+    guard.shutdown().await.unwrap();
+}
+
+/// `-d` always wins over `--append`: a detached load builds a new session
+/// rather than appending into the current pane's, inside tmux and outside.
+#[tokio::test]
+async fn detached_flag_beats_append_inside_and_outside_tmux() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"detached-wins","windows":[{"panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+    let socket = guard.socket_path().to_str().unwrap();
+    for inside in [false, true] {
+        let output = at_pane(
+            &["load", "workspace.json", "-S", socket, "-d", "--append"],
+            directory.path(),
+            inside.then_some((&guard, pane.as_str())),
+        );
+        assert!(output.status.success(), "inside={inside}: {output:?}");
+        let built = guard.server().session("detached-wins").await.unwrap();
+        let built = built.unwrap_or_else(|| {
+            panic!("inside={inside}: -d --append did not build a detached session")
+        });
+        built.kill().await.unwrap();
+        assert_eq!(
+            keeper.windows().await.unwrap().len(),
+            1,
+            "inside={inside}: -d --append appended into the current session"
+        );
+    }
+    guard.shutdown().await.unwrap();
+}
+
+/// After appending, the human summary names the session that received the
+/// windows, with a single space, not `Loaded` with a doubled one.
+#[tokio::test]
+async fn append_summary_says_appended_with_a_single_space() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"ignored","windows":[{"window_name":"added","panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+    let output = at_pane(
+        &[
+            "load",
+            "workspace.json",
+            "-S",
+            guard.server().socket_path().to_str().unwrap(),
+            "--append",
+        ],
+        directory.path(),
+        Some((&guard, pane.as_str())),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Appended keeper\n"), "{stdout:?}");
+    assert!(!stdout.contains("Loaded"), "{stdout:?}");
     guard.shutdown().await.unwrap();
 }
 
