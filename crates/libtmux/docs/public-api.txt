@@ -1899,6 +1899,8 @@ struct_field libtmux::Error::InvalidServerConfiguration::kind: libtmux::ServerCo
 struct_field libtmux::Error::InvalidVersionOutput::output_len: usize
 struct_field libtmux::Error::LinkGone::kind: libtmux::ObjectKind
 struct_field libtmux::Error::LinkGone::target: String
+struct_field libtmux::Error::NoEffect::command: &'static str
+struct_field libtmux::Error::NoEffect::stderr: String
 struct_field libtmux::Error::ObjectGone::id: String
 struct_field libtmux::Error::ObjectGone::kind: libtmux::ObjectKind
 struct_field libtmux::Error::OptionRejected::detail: String
@@ -2182,6 +2184,7 @@ variant libtmux::Error::InvalidPlan
 variant libtmux::Error::InvalidServerConfiguration
 variant libtmux::Error::InvalidVersionOutput
 variant libtmux::Error::LinkGone
+variant libtmux::Error::NoEffect
 variant libtmux::Error::ObjectGone
 variant libtmux::Error::OptionRejected
 variant libtmux::Error::OptionScopeMismatch

@@ -395,6 +395,23 @@ async fn create_one<T>(
             target.as_deref(),
         ));
     }
+    // tmux can exit 0 having done nothing: `-S <dir>/missing/sock` prints
+    // `error creating ... (No such file or directory)` on stderr and exits
+    // 0 with empty stdout, though not every build writes that line -- an
+    // empty stdout alone already means nothing was created. Either way this
+    // is a plain refusal, not a partial effect, and tmux's own reason (when
+    // it gave one) is worth more than the generic message below.
+    if result.stdout().is_empty() {
+        let stderr = result.stderr_lossy();
+        return Err(Error::NoEffect {
+            command: command_name,
+            stderr: if stderr.trim().is_empty() {
+                "tmux gave no reason".to_owned()
+            } else {
+                stderr.into_owned()
+            },
+        });
+    }
 
     hydrate(result.stdout())
         .map_err(|error| error.after_effect(command_name))?

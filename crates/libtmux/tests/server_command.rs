@@ -350,6 +350,45 @@ async fn public_capability_raw_command_and_shutdown_boundary_is_usable() {
     server.shutdown().await.expect("shutdown is idempotent");
 }
 
+/// tmux creates the parent directory of `-L`/the default socket itself, but
+/// never one a `-S` path names, and it answers three different ways:
+/// 3.2a exits **0** saying nothing at all, 3.3a through 3.7c exit **0** after
+/// printing `error creating <path> (No such file or directory)` on stderr, and
+/// next-3.9 prints that and exits **1**. Nothing is created in any of them, so
+/// none may read as a partial effect, and tmux's own reason -- when it gave one
+/// -- must not be replaced by a generic message or a `Debug`-formatted exit
+/// code.
+#[tokio::test]
+async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let server = Server::builder()
+        .socket_path(directory.path().join("missing-parent").join("sock"))
+        .build()
+        .expect("a socket under a missing directory is valid setup");
+
+    let error = server
+        .new_session("wont-exist")
+        .await
+        .expect_err("tmux creates nothing under a missing parent directory");
+
+    assert_ne!(
+        error.kind(),
+        libtmux::ErrorKind::PartialEffect,
+        "nothing was created, so this is not a partial effect: {error:?}",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("error creating") || message.contains("gave no reason"),
+        "tmux's own reason survives, or the message says there was none: {message}",
+    );
+    assert!(
+        !message.contains("Some(0)"),
+        "a Debug-formatted exit code does not leak into the message: {message}",
+    );
+
+    server.shutdown().await.expect("shutdown succeeds");
+}
+
 #[tokio::test]
 async fn capability_probe_is_exact_shared_lazy_and_preserves_versions() {
     let directory = tempfile::tempdir().expect("temporary directory");

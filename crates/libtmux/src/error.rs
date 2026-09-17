@@ -942,6 +942,24 @@ pub enum Error {
         stderr: String,
     },
 
+    /// A creating command exited 0 without creating anything.
+    ///
+    /// `tmux -S <dir>/missing/sock new-session ...` prints `error creating
+    /// <path> (No such file or directory)` on stderr and exits 0 with empty
+    /// stdout: exit 0 usually means the command ran, so this is its own
+    /// variant rather than [`Self::CommandFailed`], which would print the
+    /// exit code as `Some(0)` beside the word "rejected" -- a contradiction
+    /// -- and rather than [`Self::AfterEffect`], which would claim an
+    /// effect that never happened.
+    #[non_exhaustive]
+    #[error("{command} had no effect: {stderr}")]
+    NoEffect {
+        /// The tmux command that exited 0 without effect.
+        command: &'static str,
+        /// The message tmux printed on stderr.
+        stderr: String,
+    },
+
     /// tmux listing output could not be decoded into typed snapshots.
     ///
     /// This reports a disagreement between the crate and the tmux that
@@ -1577,6 +1595,11 @@ impl fmt::Debug for Error {
                 .debug_struct("CommandFailed")
                 .field("command", command)
                 .field("exit_code", exit_code)
+                .field("stderr", stderr)
+                .finish(),
+            Self::NoEffect { command, stderr } => formatter
+                .debug_struct("NoEffect")
+                .field("command", command)
                 .field("stderr", stderr)
                 .finish(),
             Self::ObjectGone { kind, id } => formatter

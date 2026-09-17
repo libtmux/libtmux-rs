@@ -28,7 +28,7 @@ impl ToolError {
     ///
     /// For the one caller that reports a nested tool's own failure inside a
     /// batch item rather than as this tool's failure
-    /// ([`super::contract::TmuxTools::call_read_tools_batch`]), and for a
+    /// ([`crate::TmuxTools::call_read_tools_batch`]), and for a
     /// test that calls a tool directly and inspects the classification a
     /// wire client would otherwise read from `isError` content.
     #[must_use]

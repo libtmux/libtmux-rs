@@ -77,6 +77,7 @@ impl Error {
             Self::ClientSuspended { .. } => ErrorKind::Refused,
             Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
+            | Self::NoEffect { .. }
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
             | Self::SessionExists { .. }
@@ -200,6 +201,7 @@ impl Error {
                 ..
             }
             | Self::CommandFailed { .. }
+            | Self::NoEffect { .. }
             | Self::DecodeListing { .. }
             | Self::UnreadableAccessRule { .. } => false,
             #[cfg(feature = "plan")]
