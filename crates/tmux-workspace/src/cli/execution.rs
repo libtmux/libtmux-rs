@@ -23,6 +23,7 @@ struct Invocation<'a> {
 #[derive(Default)]
 struct Effects {
     input: usize,
+    path: Option<String>,
     session: Option<Session>,
     owned: bool,
     changed: bool,
@@ -46,6 +47,7 @@ impl LoadState {
     fn failure(&self, error: &CliError) -> Value {
         let mut failure = json!({"code":error.code,"message":error.message});
         let mut partial = !self.results.is_empty();
+        let mut results = self.results.clone();
         if let Some(effects) = &self.current {
             let uncertain = error.code == "interrupted" && effects.mutation_started.is_some();
             partial |= effects.changed || uncertain;
@@ -56,8 +58,33 @@ impl LoadState {
                 failure["outcome_unknown"] = json!(true);
                 failure["mutation_stage"] = json!(effects.mutation_started);
             }
+            // One record per input attempted, the failed one included, with
+            // the same minimum fields a completed input's record carries --
+            // unless it is already there (this input built, and only the
+            // summary write after it failed) or the outcome is genuinely
+            // unknown (interrupted), where inventing one would contradict
+            // outcome_unknown's own guarantee.
+            let already_recorded = self
+                .results
+                .iter()
+                .any(|record| record["input_index"] == effects.input);
+            if !uncertain && !already_recorded {
+                // Every stage a before_script failure or a build failure can
+                // be reached from already reports `reused: false` on
+                // success (build's own early "same name, no append"
+                // shortcut is the only case that reports `true`, and it
+                // returns before configure_session or a window is ever
+                // touched, so it cannot be the input that failed here).
+                results.push(json!({
+                    "input": effects.path,
+                    "input_index": effects.input,
+                    "session_id": effects.session.as_ref().map(|s| s.id().to_string()),
+                    "session_name": effects.session.as_ref().map(|s| s.name().to_string_lossy()),
+                    "reused": false,
+                }));
+            }
         }
-        json!({"schema_version":1,"command":"load","status":if partial {"partial"} else {"error"},"errors":[failure],"results":self.results})
+        json!({"schema_version":1,"command":"load","status":if partial {"partial"} else {"error"},"errors":[failure],"results":results})
     }
 
     pub(super) fn interrupted(&self, error: &mut CliError, report: &mut Reporter) {
@@ -233,6 +260,7 @@ pub(super) async fn load(
     for (index, (path, workspace)) in workspaces.iter().enumerate() {
         let effects = state.current.insert(Effects {
             input: index,
+            path: Some(discovery::masked(path)),
             ..Effects::default()
         });
         let outcome = async {
@@ -517,11 +545,13 @@ async fn build(
 }
 
 /// A borrowed session is the caller's; only one this load created is ours
-/// to remove.
-async fn remove_owned_session(effects: &Effects) -> Result<()> {
+/// to remove. Once it is, nothing this input did is left behind, so a
+/// caller checking whether effects persisted sees none.
+async fn remove_owned_session(effects: &mut Effects) -> Result<()> {
     if effects.owned {
         if let Some(session) = effects.session.clone() {
             session.kill().await?;
+            effects.changed = false;
         }
     }
     Ok(())
