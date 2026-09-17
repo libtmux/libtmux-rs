@@ -3122,6 +3122,65 @@ async fn ndjson_load_emits_completion_events_with_tmux_ids() {
 }
 
 #[tokio::test]
+async fn ndjson_brackets_before_script_with_started_and_completed_events() {
+    // A consumer needs to know when a script began, ended, with
+    // what status, and which input it belongs to, matching go's three
+    // events instead of an unbracketed, input-less script-output.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({
+            "session_name":"script-events",
+            "before_script":"/bin/sh -c 'printf out; printf err >&2; exit 0'",
+            "windows":[{"panes":["blank"]}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let socket = guard.server().socket_path().to_str().unwrap();
+    let output = at(
+        &["load", "-S", socket, "-d", "--ndjson", "workspace.json"],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let events: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+
+    let names = |event: &&serde_json::Value| event["event"].as_str().unwrap().starts_with("script");
+    let script_events: Vec<_> = events.iter().filter(names).collect();
+    assert_eq!(
+        script_events
+            .iter()
+            .map(|event| event["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "script-started",
+            "script-output",
+            "script-output",
+            "script-completed"
+        ],
+        "{events:#?}"
+    );
+    for event in &script_events {
+        assert_eq!(event["input_index"], 0, "{event}");
+    }
+    let completed = script_events.last().unwrap();
+    assert_eq!(completed["child_status"], 0, "{completed}");
+    assert_eq!(completed["truncated"], false, "{completed}");
+    let outputs: Vec<_> = script_events
+        .iter()
+        .filter(|event| event["event"] == "script-output")
+        .collect();
+    assert!(outputs.iter().any(|event| event["stream"] == "stdout"));
+    assert!(outputs.iter().any(|event| event["stream"] == "stderr"));
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn panes_without_a_start_directory_use_the_invocation_directory() {
     // With no start_directory anywhere, panes should start in the
     // invocation directory, matching tmuxp.

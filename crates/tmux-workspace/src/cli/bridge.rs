@@ -57,7 +57,7 @@ pub(super) async fn build(
         BUILD.into(),
         request.to_string().into(),
     ];
-    process::run(&argv, Path::new(&std::env::current_dir()?), report).await
+    process::run(&argv, Path::new(&std::env::current_dir()?), report, None).await
 }
 
 #[cfg(test)]
