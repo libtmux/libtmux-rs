@@ -222,7 +222,11 @@ async fn select_layout_refuses_an_unparseable_value_and_the_server_survives() {
             .map(|_| ())
             .expect_err("select-layout cannot parse this value")
             .into_error_data();
-        assert_eq!(error.code, ErrorCode::INVALID_PARAMS, "{value:?}: {error:?}");
+        assert_eq!(
+            error.code,
+            ErrorCode::INVALID_PARAMS,
+            "{value:?}: {error:?}"
+        );
     }
 
     // The daemon and its session are unharmed, not merely this process:

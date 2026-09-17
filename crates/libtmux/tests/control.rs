@@ -1141,14 +1141,17 @@ async fn observed_pane_death_ends_the_stream_via_layout_change() {
 }
 
 /// Killing the observed pane ends `next_chunk()` rather than hanging it, when
-/// killing it also closes its window because it was the window's last pane
-/// (D7).
+/// killing it also closes its window because it was the window's last pane,
+/// and that window was the session's active one.
 ///
-/// tmux reports this as `%unlinked-window-close` and `%session-window-changed`
-/// -- neither of which `may_have_added_a_pane` names, and only the second
-/// happens to also emit a covered `%session-changed` for this session's
-/// current-window bookkeeping. `WindowClosed`'s own trigger does not depend
-/// on that coincidence.
+/// The watched window here is active throughout -- the second window is
+/// created with `NewWindowOptions`'s default `-d`, so it is never selected --
+/// so tmux also has to move the session's active window to the survivor, and
+/// reports that as `%session-changed`, which `may_have_added_a_pane` already
+/// covers. That means this case alone cannot tell `WindowClosed`'s own
+/// trigger apart from riding along on `%session-changed`; see
+/// `observed_pane_death_in_a_never_active_window_ends_the_stream` for the
+/// case with no such event to lean on.
 #[tokio::test]
 async fn observed_pane_death_ends_the_stream_via_window_close() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -1191,6 +1194,82 @@ async fn observed_pane_death_ends_the_stream_via_window_close() {
         "next_chunk must end, not hang, once the watched pane's window closes under it",
     );
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Killing the observed pane ends `next_chunk()` rather than hanging it, when
+/// the window that closes under it was never the session's active one.
+///
+/// tmux reports this shape as `%unlinked-window-close` alone: no
+/// `%session-changed`, because the active window never moves, so
+/// `PaneOutput::poll_next`'s narrow trigger must include
+/// `Event::UnlinkedWindowClosed` alongside `Event::WindowClosed` and
+/// `may_have_added_a_pane()` or the stream hangs forever once the pane's
+/// window closes this way.
+#[tokio::test]
+async fn observed_pane_death_in_a_never_active_window_ends_the_stream() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("pane-death-inactive-window")
+        .await
+        .expect("session");
+    // The first window stays active throughout: `NewWindowOptions` defaults
+    // to `-d`, so the second window below is created without selecting it.
+    let watched_window = session
+        .new_window(NewWindowOptions::new("closing"))
+        .await
+        .expect("a second, unselected window is created");
+    let watched = watched_window
+        .panes()
+        .await
+        .expect("panes list")
+        .into_iter()
+        .next()
+        .expect("the new window's one pane");
+
+    let mut output = watched.stream_output().await.expect("the pane streams");
+    // Drains a chunk of real output before the kill, so the connection's own
+    // attach-time `%session-changed` -- and the narrow it triggers -- cannot
+    // still be in flight and race the kill below: `send_keys` and its own
+    // echo cannot arrive before the events that preceded them on the same
+    // connection have already been processed.
+    watched
+        .send_keys("echo mcp-inactive-window-marker\n")
+        .await
+        .expect("a marker command is sent");
+    loop {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), output.next_chunk())
+            .await
+            .expect("marker output arrives")
+            .expect("the stream is alive before the kill");
+        if String::from_utf8_lossy(&chunk).contains("mcp-inactive-window-marker") {
+            break;
+        }
+    }
+    // The typed-line echo above is not necessarily the command's whole
+    // reaction: drain until a short gap, so a chunk still queued behind it
+    // is not mistaken later for the stream ending because of the kill.
+    while let Ok(Some(_)) =
+        tokio::time::timeout(Duration::from_millis(300), output.next_chunk()).await
+    {}
+
+    watched.kill().await.expect("the watched pane is killed");
+
+    let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
+    assert_eq!(
+        ended,
+        Ok(None),
+        "next_chunk must end, not hang, once a never-active window closes under it",
+    );
+
+    assert!(
+        server
+            .has_session("pane-death-inactive-window")
+            .await
+            .expect("tmux still answers"),
+        "the session, and its still-active first window, survive",
+    );
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

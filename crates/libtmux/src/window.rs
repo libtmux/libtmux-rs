@@ -1435,7 +1435,10 @@ impl SavedLayout {
         let Some(text) = saved.to_str() else {
             return Self::Unrecognized;
         };
-        if let Some(named) = Self::PRESETS.into_iter().find(|named| named.as_str() == text) {
+        if let Some(named) = Self::PRESETS
+            .into_iter()
+            .find(|named| named.as_str() == text)
+        {
             return Self::Preset(named);
         }
         // tmux's own `layout_set_lookup` is a prefix match, so `tile` and

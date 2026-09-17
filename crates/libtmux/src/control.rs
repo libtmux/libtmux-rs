@@ -1456,13 +1456,16 @@ impl Stream for PaneOutput {
                     this.closed = true;
                     return Poll::Ready(None);
                 }
-                // `LayoutChanged` et al. can mean a pane appeared; `WindowClosed`
-                // cannot, but it is how the watched pane's own window closing
-                // under it is reported when that pane was the window's last,
-                // so both are read the same way: re-list, and end the stream
-                // if the watched pane is not on it.
+                // A layout change can mean a pane appeared; a window close
+                // means the watched pane's own window died -- `Unlinked`
+                // when it was not the session's active window. All three
+                // re-list and end the stream if the watched pane is gone.
                 Some(Delivery::Event(event)) => {
-                    if event.may_have_added_a_pane() || matches!(event, Event::WindowClosed { .. })
+                    if event.may_have_added_a_pane()
+                        || matches!(
+                            event,
+                            Event::WindowClosed { .. } | Event::UnlinkedWindowClosed { .. }
+                        )
                     {
                         this.narrow();
                     }
