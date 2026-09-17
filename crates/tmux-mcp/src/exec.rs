@@ -76,16 +76,25 @@ pub enum RunOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitOutcome {
-    /// A wanted pattern was already on the pane's screen before this began
-    /// watching, rather than in output that arrived afterward.
+    /// A wanted pattern was already in the pane's output before this began
+    /// watching, on a row above the one still being typed into.
     ///
     /// A wait only sees what a pane writes after it starts, so this is never
-    /// folded into [`Self::Matched`]: the same pattern sent moments earlier
-    /// with `send_keys` can already be sitting there as the shell's own echo
-    /// of the typed command, and a caller that treated that as a fresh match
-    /// would act before the command it sent had necessarily run. Choosing a
-    /// pattern not already visible waits for one that has not happened yet.
+    /// folded into [`Self::Matched`]: the same pattern printed moments
+    /// earlier -- an earlier command's own output, or the shell's echo of a
+    /// line that has already been submitted -- can already be sitting there,
+    /// and a caller that treated that as a fresh match would act on
+    /// something that happened before this call, not because of it.
     PresentAtEntry,
+    /// A wanted pattern's only occurrence is the row still being typed
+    /// into: text this server (or a person sharing the pane) sent and has
+    /// not submitted, not anything that has run.
+    ///
+    /// Submit it, then wait again: the next wait sees the command's own
+    /// output on a row above a new one still being typed into, which is
+    /// [`Self::PresentAtEntry`] or [`Self::Matched`] depending on when it
+    /// arrived, never this.
+    Pending,
     /// A pattern matched, in output that arrived after the wait attached.
     Matched,
     /// A stop pattern matched, so the wait ended early.
@@ -266,14 +275,74 @@ pub(crate) async fn wait_for_text_with_limits(
         let _ = output.shutdown().await;
         return Ok(view);
     }
-    wait_on_output(output, patterns, stops, timeout, cancelled).await
+    wait_on_output(pane, output, patterns, stops, timeout, cancelled).await
 }
 
-/// Report a wanted pattern already on the pane's screen, before any stream
-/// attaches to watch for one arriving.
+/// One pane's screen, split at the row still being typed into.
 ///
-/// See [`WaitOutcome::PresentAtEntry`] for why this is a distinct outcome
-/// from [`WaitOutcome::Matched`] rather than a flag alongside it.
+/// Two tmux round trips read this, not one: the cursor row first, then the
+/// screen. They are not atomic, so a line arriving between the two can only
+/// move the cursor down and make `pending` cover a later row -- excluding
+/// more from `above`, never less -- which is the safe direction to be wrong
+/// in.
+struct Screen {
+    /// Every visible row above the one still being typed into, each
+    /// terminated with a newline: completed output, never text this server
+    /// or a person sent and has not submitted.
+    above: Vec<u8>,
+    /// The row still being typed into, terminated with a newline to match
+    /// `above`'s rows.
+    pending: Vec<u8>,
+}
+
+impl Screen {
+    /// Capture `pane`'s current screen, split at its cursor row.
+    ///
+    /// `None` when the pane cannot be read; the same failure surfaces again
+    /// from whatever the caller does next.
+    async fn capture(pane: &Pane) -> Option<Self> {
+        let cursor_row: usize = pane
+            .format("#{cursor_y}")
+            .await
+            .ok()?
+            .to_string_lossy()
+            .trim()
+            .parse()
+            .ok()?;
+        let lines = pane.capture_with(CaptureOptions::visible()).await.ok()?;
+        // A cursor row past the last captured line is conservative rather
+        // than a decode failure: treat every visible row as still pending.
+        let pending_row = cursor_row.min(lines.len().saturating_sub(1));
+
+        let mut above = Vec::new();
+        for line in lines.iter().take(pending_row) {
+            above.extend_from_slice(line.as_bytes());
+            above.push(b'\n');
+        }
+        let mut pending = lines
+            .get(pending_row)
+            .map_or_else(Vec::new, |line| line.as_bytes().to_vec());
+        pending.push(b'\n');
+
+        Some(Self { above, pending })
+    }
+
+    /// Both halves, in screen order, for a view that reports the whole
+    /// thing rather than only whichever half matched.
+    fn whole(&self) -> Vec<u8> {
+        let mut all = self.above.clone();
+        all.extend_from_slice(&self.pending);
+        all
+    }
+}
+
+/// Report a wanted pattern already in the pane's output, or still only on
+/// the row being typed into, before any stream attaches to watch for one
+/// arriving.
+///
+/// See [`WaitOutcome::PresentAtEntry`] and [`WaitOutcome::Pending`] for why
+/// these are distinct outcomes from [`WaitOutcome::Matched`] rather than a
+/// flag alongside it.
 async fn read_present_at_entry(
     pane: &Pane,
     patterns: &Patterns,
@@ -286,30 +355,36 @@ async fn read_present_at_entry(
 
     // A screen that cannot be read is not a reason to refuse to wait; the
     // same failure surfaces from the attach right after this.
-    let Ok(lines) = pane.capture_with(CaptureOptions::visible()).await else {
-        return Ok(None);
-    };
-    let mut screen = Vec::new();
-    for line in &lines {
-        screen.extend_from_slice(line.as_bytes());
-        screen.push(b'\n');
-    }
-    let Some((index, source)) = patterns.first_match(&screen) else {
+    let Some(screen) = Screen::capture(pane).await else {
         return Ok(None);
     };
 
+    let outcome = patterns
+        .first_match(&screen.above)
+        .map(|found| (WaitOutcome::PresentAtEntry, found))
+        .or_else(|| {
+            patterns
+                .first_match(&screen.pending)
+                .map(|found| (WaitOutcome::Pending, found))
+        });
+    let Some((outcome, (index, source))) = outcome else {
+        return Ok(None);
+    };
+    let whole = screen.whole();
+
     Ok(Some(WaitView {
         pane: pane.id().to_string(),
-        outcome: WaitOutcome::PresentAtEntry,
+        outcome,
         matched_index: Some(index),
         matched_pattern: Some(source.to_owned()),
-        text: String::from_utf8_lossy(&screen).into_owned(),
-        bytes: screen.len(),
+        text: String::from_utf8_lossy(&whole).into_owned(),
+        bytes: whole.len(),
     }))
 }
 
 /// The read loop [`wait_for_text_with_limits`] runs once attached.
 async fn wait_on_output(
+    pane: &Pane,
     mut output: libtmux::control::PaneOutput,
     patterns: &Patterns,
     stops: &Patterns,
@@ -354,10 +429,22 @@ async fn wait_on_output(
                         break;
                     }
                 } else if let Some((index, source)) = patterns.first_match(&text) {
-                    outcome = WaitOutcome::Matched;
-                    matched_index = Some(index);
-                    matched_pattern = Some(source.to_owned());
-                    break;
+                    // Fresh bytes on this connection are not necessarily a
+                    // submitted line: the kernel echoes what was typed at
+                    // once, and a shell's line editor re-prints the buffer
+                    // when it starts reading, both genuinely new output that
+                    // can still be sitting on the row being typed into.
+                    // Confirmed only once the *current* screen shows the
+                    // pattern above that row.
+                    let confirmed = Screen::capture(pane)
+                        .await
+                        .is_some_and(|screen| patterns.first_match(&screen.above).is_some());
+                    if confirmed {
+                        outcome = WaitOutcome::Matched;
+                        matched_index = Some(index);
+                        matched_pattern = Some(source.to_owned());
+                        break;
+                    }
                 }
 
                 if text.len() > OUTPUT_LIMIT {
@@ -391,9 +478,23 @@ async fn wait_on_output(
 
     // A chunk can arrive in the same instant the deadline elapses; without
     // this, that race would report `Deadline` while `text` already holds a
-    // match, which is exactly the shape DOTNET-10 hit in another port.
-    let (outcome, matched_index, matched_pattern) =
+    // match, the same shape the .NET port hit.
+    let (mut outcome, mut matched_index, mut matched_pattern) =
         reconcile_deadline(outcome, matched_index, matched_pattern, patterns, &text);
+    // `reconcile_deadline` reads the same accumulated buffer the main loop
+    // does, and is subject to the same trap: the promotion it just made can
+    // still be the pane's own not-yet-submitted line racing the deadline,
+    // not a genuine match. Confirmed the same way, against the row still
+    // being typed into, or the promotion is undone.
+    if matches!(outcome, WaitOutcome::Matched)
+        && Screen::capture(pane)
+            .await
+            .is_none_or(|screen| patterns.first_match(&screen.above).is_none())
+    {
+        outcome = WaitOutcome::Deadline;
+        matched_index = None;
+        matched_pattern = None;
+    }
 
     Ok(WaitView {
         pane: pane_id,

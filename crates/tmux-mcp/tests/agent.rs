@@ -2882,11 +2882,13 @@ async fn list_sessions_excludes_this_processs_own_observation_client() {
 }
 
 /// `send_keys` then `wait_for_text` for a pattern the typed line's own echo
-/// already shows must not report `matched` (RS-4).
+/// already shows must not report `matched`.
 ///
 /// The line is typed without Enter and the wait begins only once the echo is
-/// on screen, so the pattern is present at entry on every run rather than on
-/// whichever runs the shell happened to echo first.
+/// on screen, so the pattern sits on the row still being typed into on every
+/// run rather than on whichever runs the shell happened to echo first, and
+/// is reported `pending` rather than `present_at_entry`: nothing has
+/// run yet.
 #[tokio::test]
 async fn send_then_wait_does_not_match_the_commands_own_echo() {
     let (guard, tools, pane) = typing_fixture("send-then-wait").await;
@@ -2924,8 +2926,194 @@ async fn send_then_wait_does_not_match_the_commands_own_echo() {
             .expect("wait answers"),
     );
     assert_eq!(
-        waited["outcome"], "present_at_entry",
-        "a pattern already on screen before the wait attached must not read as a fresh match: {waited}",
+        waited["outcome"], "pending",
+        "a pattern only on the row still being typed into is not a match: {waited}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Waiting again for the same marker after submitting it reports the
+/// command's own output, not the same `pending` answer as before it ran.
+///
+/// `echo MCPMARKER2` puts the marker in both the typed line and the line's
+/// own output, which is exactly the shape that used to make both waits
+/// answer identically: `present_at_entry`/`pending` is a screen-snapshot
+/// check with no notion of a row still being typed into, so it could not
+/// tell "only the unsubmitted echo" apart from "the command's own output,
+/// already printed."
+#[tokio::test]
+async fn waiting_again_after_submitting_reports_the_output_not_the_echo() {
+    let (guard, tools, pane) = typing_fixture("send-then-wait-again").await;
+
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER2",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent");
+    let waited = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "patterns": ["MCPMARKER2"],
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait answers"),
+    );
+    assert_eq!(waited["outcome"], "pending", "{waited}");
+
+    tools
+        .send_keys(args(serde_json::json!({"pane": pane, "enter": true})))
+        .await
+        .expect("the line is submitted");
+
+    let waited_again = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "patterns": ["MCPMARKER2"],
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait answers"),
+    );
+    assert_eq!(
+        waited_again["outcome"], "present_at_entry",
+        "the command genuinely ran, so this is its output, not the unsubmitted echo: {waited_again}",
+    );
+    let text = waited_again["text"].as_str().expect("text field");
+    assert!(
+        text.matches("MCPMARKER2").count() >= 2,
+        "the report includes both the echoed command line and its own printed output: {text:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pattern that arrives genuinely after the wait attached is still
+/// reported `matched`, even though the same text sat unsubmitted on the
+/// pending line moments earlier: a later confirmed match must not be
+/// swallowed by the earlier pending one.
+#[tokio::test]
+async fn a_match_after_the_wait_attaches_is_still_reported() {
+    let (guard, tools, pane) = typing_fixture("wait-then-submit").await;
+
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER3",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent");
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        guard
+            .server()
+            .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
+            .await
+            .is_ok_and(|captured| captured.stdout_lossy().contains("MCPMARKER3"))
+    })
+    .await
+    .expect("the shell echoes the typed line");
+
+    let waiting = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .wait_for_text(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "patterns": ["submitted-MCPMARKER3"],
+                        "seconds": 10
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    tools
+        .send_keys(args(serde_json::json!({"pane": pane, "enter": true})))
+        .await
+        .expect("the line is submitted");
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo submitted-MCPMARKER3",
+            "enter": true
+        })))
+        .await
+        .expect("a second command runs and prints the awaited marker");
+
+    let waited = json(waiting.await.expect("wait joins").expect("wait answers"));
+    assert_eq!(waited["outcome"], "matched", "{waited}");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Typing a marker without submitting it while a wait is already attached
+/// must not report `matched`, even though the kernel's echo of the typed
+/// keys is genuinely new output on this connection.
+///
+/// This is the same trap `send_then_wait_does_not_match_the_commands_own_echo`
+/// closes at attach time, reproduced against the stream-reading loop
+/// instead of the entry screen: `patterns.first_match` on the accumulated
+/// stream bytes alone cannot tell "the pane's own not-yet-submitted line"
+/// apart from real output, only a check against the current screen's row
+/// still being typed into can.
+#[tokio::test]
+async fn typing_a_marker_without_submitting_while_a_wait_is_open_is_not_matched() {
+    let (guard, tools, pane) = typing_fixture("type-while-waiting").await;
+
+    let waiting = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .wait_for_text(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "patterns": ["MCPMARKER4"],
+                        "seconds": 3
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+    // The wait must be attached before the marker is typed: the point is a
+    // pattern arriving as fresh stream output, not one already on the
+    // screen `read_present_at_entry` reads before this task even starts.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER4",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent, not submitted");
+
+    let waited = json(waiting.await.expect("wait joins").expect("wait answers"));
+    assert_eq!(
+        waited["outcome"], "deadline",
+        "typed but never submitted text must not be reported matched: {waited}",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

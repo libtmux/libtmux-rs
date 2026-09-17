@@ -1020,6 +1020,7 @@ async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() 
     let cancelled = CancellationToken::new();
 
     let error = wait_on_output(
+        &pane,
         output,
         &patterns,
         &stops,
