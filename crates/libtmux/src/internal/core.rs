@@ -321,6 +321,15 @@ pub(crate) struct Core {
     next_request_id: AtomicU64,
     #[cfg(feature = "control-mode")]
     persistent_clients: PersistentClients,
+    /// PIDs of control clients this process itself spawned with
+    /// [`Self::spawn_control`], for as long as each is still running.
+    ///
+    /// Shared with every [`PersistentChild`] this spawns, which removes its
+    /// own entry on drop -- so this reflects processes, not connection
+    /// handles, and stays correct across [`crate::control::ControlSender`]
+    /// and [`crate::control::ControlEvents`] being dropped independently.
+    #[cfg(feature = "control-mode")]
+    control_client_pids: Arc<std::sync::Mutex<std::collections::HashSet<u32>>>,
 }
 
 impl Core {
@@ -349,6 +358,8 @@ impl Core {
             next_request_id: AtomicU64::new(1),
             #[cfg(feature = "control-mode")]
             persistent_clients: PersistentClients::new(control_client_limits),
+            #[cfg(feature = "control-mode")]
+            control_client_pids: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -441,7 +452,26 @@ impl Core {
                 tokio::time::Instant::now().checked_add(self.configuration.timeout),
             )
             .await?;
-        PersistentChild::spawn(&self.configuration.launch, &request, reservation)
+        PersistentChild::spawn(
+            &self.configuration.launch,
+            &request,
+            reservation,
+            Arc::clone(&self.control_client_pids),
+        )
+    }
+
+    /// Report whether this process itself spawned the control client with
+    /// this pid, and it is still running.
+    ///
+    /// For a caller telling a human's attached client apart from a control
+    /// connection this same process opened to watch or wait on the server:
+    /// [`Self::spawn_control`] is the only thing that adds an entry.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn owns_control_client(&self, pid: u32) -> bool {
+        self.control_client_pids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&pid)
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {

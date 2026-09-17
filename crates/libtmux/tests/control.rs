@@ -119,6 +119,55 @@ async fn commands_travel_down_one_connection() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// `Server::owns_control_client` reports a pid this process itself spawned
+/// with `ControlMode::attach`, and releases it once that connection ends.
+///
+/// The pid this checks is discovered independently, through
+/// `Server::clients`, rather than plumbed out of the connection: a caller
+/// telling its own observation apart from a human's attached client has
+/// only every listed client's pid to go on.
+#[tokio::test]
+async fn owns_control_client_reports_its_own_spawned_connections() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("owns-control-client")
+        .await
+        .expect("session");
+
+    assert!(
+        server.clients().await.expect("clients list").is_empty(),
+        "nothing is attached before any connection opens",
+    );
+
+    let control = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches");
+
+    let clients = server.clients().await.expect("clients list");
+    let pids: Vec<u32> = clients.iter().map(libtmux::Client::pid).collect();
+    assert_eq!(pids.len(), 1, "exactly one client is attached: {pids:?}");
+    let pid = pids[0];
+    assert!(
+        server.owns_control_client(pid),
+        "the connection this process just spawned is its own",
+    );
+    assert!(
+        !server.owns_control_client(pid.wrapping_add(1)),
+        "an arbitrary other pid is not",
+    );
+
+    control.shutdown().await.expect("control mode shuts down");
+
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        !server.owns_control_client(pid)
+    })
+    .await
+    .expect("the pid is released once the connection actually ends");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn stream_reports_server_shutdown_once_before_eof() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

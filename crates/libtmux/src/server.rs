@@ -399,6 +399,41 @@ impl Server {
         self.core.spawn_control(session).await
     }
 
+    /// Report whether this process itself opened the control client with
+    /// this pid, and it is still running.
+    ///
+    /// [`crate::Pane::stream_output`], [`crate::Client::pid`] and friends can
+    /// all open or report a control-mode connection; tmux counts any of them
+    /// as an attached client the same as a human's terminal. A caller telling
+    /// its own observation apart from an attached human reads every
+    /// [`crate::Client::pid`] it cares about through this rather than
+    /// tracking one connection it happened to keep, because more than one may
+    /// be open at once.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    ///
+    /// // Nothing has opened a control client yet.
+    /// assert!(!server.owns_control_client(std::process::id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "control-mode")]
+    #[must_use]
+    pub fn owns_control_client(&self, pid: u32) -> bool {
+        self.core.owns_control_client(pid)
+    }
+
     /// Construct a server from the captured default endpoint context.
     ///
     /// # Errors

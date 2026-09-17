@@ -245,12 +245,16 @@ impl TmuxTools {
             .new_session(options)
             .await
             .map_err(|e| tmux_error(&e))?;
+        let foreign_attached = self.foreign_attached_sessions().await;
 
         Ok(Json(SessionView {
             id: session.id().to_string(),
             name: lossy(session.name()),
             windows: session.window_count(),
-            attached: session.is_attached(),
+            attached: foreign_attached.as_ref().map_or_else(
+                || session.is_attached(),
+                |set| set.contains(&session.id().to_string()),
+            ),
         }))
     }
 

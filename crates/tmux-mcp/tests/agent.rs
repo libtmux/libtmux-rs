@@ -2783,6 +2783,104 @@ async fn wait_and_cursor_tools_observe_live_output() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// `list_sessions` must not read a session as attached while this server's
+/// own `wait_for_text` is the only client there.
+///
+/// tmux really does count the wait's control connection as an attached
+/// client, so the test waits for that raw count to prove the wait is
+/// attached before asserting `list_sessions` excludes it -- the property
+/// under test is the exclusion, not a delay long enough for a client to
+/// show up.
+#[tokio::test]
+async fn list_sessions_excludes_this_processs_own_observation_client() {
+    let (guard, tools, pane) = typing_fixture("watch-excludes-own-client").await;
+    let name = "watch-excludes-own-client";
+
+    let listed_before = json(tools.list_sessions().await.expect("sessions"));
+    assert_eq!(listed_before["sessions"][0]["attached"], false);
+
+    let waiting = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .wait_for_text(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "patterns": ["mcp-rs2-11-never-matches"],
+                        "seconds": 5
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+
+    let raw_attached = libtmux::test::retry_until(Duration::from_secs(3), async || {
+        guard
+            .server()
+            .session(name)
+            .await
+            .is_ok_and(|session| session.is_some_and(|found| found.is_attached()))
+    })
+    .await;
+    assert!(
+        raw_attached.is_ok(),
+        "the wait's own control client attaches, which is what tmux itself counts",
+    );
+
+    let listed_during = json(tools.list_sessions().await.expect("sessions"));
+    assert_eq!(
+        listed_during["sessions"][0]["attached"], false,
+        "this server's own observation client is not an attached client: {listed_during}",
+    );
+
+    waiting
+        .await
+        .expect("the wait task joins")
+        .expect("wait_for_text answers");
+
+    // The other half of D2: excluding this server's own clients must not
+    // widen into excluding every client. A foreign control connection this
+    // test spawns directly, outside TmuxTools, still reads as attached.
+    let executable = guard
+        .server()
+        .resolved_tmux_executable()
+        .expect("fixture tmux resolves");
+    let mut foreign = std::process::Command::new(executable)
+        .arg("-S")
+        .arg(guard.server().socket_path())
+        .arg("-C")
+        .arg("attach")
+        .arg("-t")
+        .arg(name)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("a foreign control client starts");
+
+    let listed_with_foreign = libtmux::test::retry_until(Duration::from_secs(5), async || {
+        json(
+            tools
+                .list_sessions()
+                .await
+                .expect("sessions answers while a foreign client is attached"),
+        )["sessions"][0]["attached"]
+            == true
+    })
+    .await;
+    let _ = foreign.kill();
+    let _ = foreign.wait();
+    assert!(
+        listed_with_foreign.is_ok(),
+        "a genuinely foreign client is not excluded",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// `send_keys` then `wait_for_text` for a pattern the typed line's own echo
 /// already shows must not report `matched` (RS-4).
 ///

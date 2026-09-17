@@ -439,11 +439,15 @@ impl TmuxTools {
         Parameters(crate::SessionArgs { session }): Parameters<crate::SessionArgs>,
     ) -> Result<Json<SessionView>, ToolError> {
         let session = self.find_session(&session).await?;
+        let foreign_attached = self.foreign_attached_sessions().await;
         Ok(Json(SessionView {
             id: session.id().to_string(),
             name: lossy(session.name()),
             windows: session.window_count(),
-            attached: session.is_attached(),
+            attached: foreign_attached.as_ref().map_or_else(
+                || session.is_attached(),
+                |set| set.contains(&session.id().to_string()),
+            ),
         }))
     }
 
@@ -588,11 +592,15 @@ impl TmuxTools {
             .rename(libtmux::escape_format(name))
             .await
             .map_err(|error| tmux_error(&error))?;
+        let foreign_attached = self.foreign_attached_sessions().await;
         Ok(Json(SessionView {
             id: session.id().to_string(),
             name: lossy(session.name()),
             windows: session.window_count(),
-            attached: session.is_attached(),
+            attached: foreign_attached.as_ref().map_or_else(
+                || session.is_attached(),
+                |set| set.contains(&session.id().to_string()),
+            ),
         }))
     }
 

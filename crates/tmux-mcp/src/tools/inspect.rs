@@ -113,7 +113,11 @@ impl TmuxTools {
     )]
     pub async fn list_sessions(&self) -> Result<Json<Sessions>, ToolError> {
         let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
-        Ok(Json(Self::render_sessions(&sessions)))
+        let foreign_attached = self.foreign_attached_sessions().await;
+        Ok(Json(Self::render_sessions(
+            &sessions,
+            foreign_attached.as_ref(),
+        )))
     }
 
     /// List every window on the server, one row per session link.
@@ -145,18 +149,22 @@ impl TmuxTools {
         name = "get_server_info",
         description = "Report every session with its windows and panes, in one call. \
                        Prefer this over calling the three listing tools separately: \
-                       it costs tmux three commands rather than one per object.",
+                       it costs tmux four commands rather than one per object.",
         title = "Describe Server",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
     pub async fn describe(&self) -> Result<Json<Tree>, ToolError> {
         let tree = self.server.hierarchy().await.map_err(|e| tmux_error(&e))?;
+        let foreign_attached = self.foreign_attached_sessions().await;
         let sessions: Vec<_> = tree
             .iter()
             .map(|branch| Branch {
                 id: branch.session.id().to_string(),
                 name: lossy(branch.session.name()),
-                attached: branch.session.is_attached(),
+                attached: foreign_attached.as_ref().map_or_else(
+                    || branch.session.is_attached(),
+                    |set| set.contains(&branch.session.id().to_string()),
+                ),
                 windows: branch
                     .windows
                     .iter()

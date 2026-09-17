@@ -171,7 +171,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. Return metad
 
 ## `get_server_info`
 
-Inspect tmux metadata; accepts no client-supplied executable input. Report every session with its windows and panes, in one call. Prefer this over calling the three listing tools separately: it costs tmux three commands rather than one per object.
+Inspect tmux metadata; accepts no client-supplied executable input. Report every session with its windows and panes, in one call. Prefer this over calling the three listing tools separately: it costs tmux four commands rather than one per object.
 
 - Toolset: `inspect`
 - Process reach: `none`

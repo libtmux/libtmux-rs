@@ -5,6 +5,7 @@ mod inspect;
 mod observe;
 mod pane_input;
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -62,18 +63,73 @@ pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<TmuxTo
 impl TmuxTools {
     /// Describe sessions, shared by the tool and the `tmux://` resource so the
     /// two cannot drift into different accounts of the same session.
-    pub(super) fn render_sessions(sessions: &[libtmux::Session]) -> Sessions {
+    ///
+    /// `foreign_attached` overrides `Session::is_attached` when it is
+    /// `Some`: see [`Self::foreign_attached_sessions`].
+    pub(super) fn render_sessions(
+        sessions: &[libtmux::Session],
+        foreign_attached: Option<&BTreeSet<String>>,
+    ) -> Sessions {
         Sessions {
             sessions: sessions
                 .iter()
-                .map(|session| SessionView {
-                    id: session.id().to_string(),
-                    name: lossy(session.name()),
-                    windows: session.window_count(),
-                    attached: session.is_attached(),
+                .map(|session| {
+                    let id = session.id().to_string();
+                    let attached = foreign_attached
+                        .map_or_else(|| session.is_attached(), |set| set.contains(&id));
+                    SessionView {
+                        id,
+                        name: lossy(session.name()),
+                        windows: session.window_count(),
+                        attached,
+                    }
                 })
                 .collect(),
         }
+    }
+
+    /// The sessions with a client attached that this process did not open
+    /// for its own observation.
+    ///
+    /// While `wait_for_text`, `stream_output`, or any other control
+    /// connection this server opens is live, tmux counts it as an attached
+    /// client the same as a human's terminal: `Session::is_attached` alone
+    /// cannot tell the two apart. `Server::owns_control_client` resolves
+    /// each client this reads from `list-clients` by pid, so a session
+    /// reads as attached only when something else is there too.
+    ///
+    /// `None` when the listing itself could not be read: an empty server
+    /// reports `no current target` for a server-wide listing, and every
+    /// caller here falls back to `Session::is_attached` rather than
+    /// answering `false` for a session that may well be attached.
+    pub(super) async fn foreign_attached_sessions(&self) -> Option<BTreeSet<String>> {
+        let result = self
+            .server
+            .cmd(
+                libtmux::Command::new("list-clients")
+                    .arg("-F")
+                    .arg("#{session_id} #{client_pid}"),
+            )
+            .await
+            .ok()?;
+        if !result.success() {
+            return None;
+        }
+
+        let mut sessions = BTreeSet::new();
+        for line in result.stdout_lossy().lines() {
+            let mut fields = line.split(' ');
+            let (Some(session), Some(pid)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            let Ok(pid) = pid.parse::<u32>() else {
+                continue;
+            };
+            if !self.server.owns_control_client(pid) {
+                sessions.insert(session.to_owned());
+            }
+        }
+        Some(sessions)
     }
 
     /// Read what the last command in a pane printed.
