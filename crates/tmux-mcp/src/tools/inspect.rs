@@ -2,7 +2,6 @@ use std::time::{Duration, Instant};
 
 use libtmux::{CaptureOptions, Command};
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::exec::Patterns;
@@ -12,7 +11,7 @@ use crate::{
     Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs, TmuxTools, Tree, Windows,
 };
 
-use super::error::{bad_input, tmux_error};
+use super::error::{ToolError, bad_input, tmux_error};
 use super::{OptionScope, lossy, lossy_optional};
 
 /// Separates the fields of a `snapshot_pane` format query.
@@ -112,7 +111,7 @@ impl TmuxTools {
         title = "List Sessions",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
-    pub async fn list_sessions(&self) -> Result<Json<Sessions>, ErrorData> {
+    pub async fn list_sessions(&self) -> Result<Json<Sessions>, ToolError> {
         let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
         Ok(Json(Self::render_sessions(&sessions)))
     }
@@ -124,7 +123,7 @@ impl TmuxTools {
         title = "List Windows",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
-    pub async fn list_windows(&self) -> Result<Json<Windows>, ErrorData> {
+    pub async fn list_windows(&self) -> Result<Json<Windows>, ToolError> {
         let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
         Ok(Json(Self::render_windows(&windows)))
     }
@@ -135,7 +134,7 @@ impl TmuxTools {
         title = "List Panes",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
-    pub async fn list_panes(&self) -> Result<Json<Panes>, ErrorData> {
+    pub async fn list_panes(&self) -> Result<Json<Panes>, ToolError> {
         let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(self.render_panes(&panes)))
@@ -150,7 +149,7 @@ impl TmuxTools {
         title = "Describe Server",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
-    pub async fn describe(&self) -> Result<Json<Tree>, ErrorData> {
+    pub async fn describe(&self) -> Result<Json<Tree>, ToolError> {
         let tree = self.server.hierarchy().await.map_err(|e| tmux_error(&e))?;
         let sessions: Vec<_> = tree
             .iter()
@@ -209,7 +208,7 @@ impl TmuxTools {
             start,
             end,
         }): Parameters<CapturePaneArgs>,
-    ) -> Result<Json<Capture>, ErrorData> {
+    ) -> Result<Json<Capture>, ToolError> {
         if last_command {
             return self.capture_last_command(&pane).await;
         }
@@ -268,7 +267,7 @@ impl TmuxTools {
             max_lines,
             history,
         }): Parameters<SnapshotArgs>,
-    ) -> Result<Json<Snapshot>, ErrorData> {
+    ) -> Result<Json<Snapshot>, ToolError> {
         let target = self.find_pane(&pane).await?;
 
         // One format query for the state a listing does not carry.
@@ -362,7 +361,7 @@ impl TmuxTools {
             session,
             window,
         }): Parameters<SearchPanesArgs>,
-    ) -> Result<Json<Matches>, ErrorData> {
+    ) -> Result<Json<Matches>, ToolError> {
         let patterns = Patterns::compile(std::slice::from_ref(&pattern), regex, match_case)
             .map_err(|(source, reason)| {
                 bad_input(format!("pattern {source} is invalid: {reason}"))
@@ -476,7 +475,7 @@ impl TmuxTools {
             target,
             ..
         }): Parameters<OptionArgs>,
-    ) -> Result<Json<OptionValue>, ErrorData> {
+    ) -> Result<Json<OptionValue>, ToolError> {
         let scope = self
             .option_scope(scope.as_deref(), target.as_deref())
             .await?;
@@ -512,7 +511,7 @@ impl TmuxTools {
     pub async fn show_environment(
         &self,
         Parameters(ShowEnvironmentArgs { session }): Parameters<ShowEnvironmentArgs>,
-    ) -> Result<Json<Environment>, ErrorData> {
+    ) -> Result<Json<Environment>, ToolError> {
         let entries = match session.as_deref() {
             Some(name) => self.find_session(name).await?.environment_all().await,
             None => self.server.environment_all().await,
@@ -549,7 +548,7 @@ impl TmuxTools {
     pub async fn show_hooks(
         &self,
         Parameters(ShowHooksArgs { session }): Parameters<ShowHooksArgs>,
-    ) -> Result<Json<Hooks>, ErrorData> {
+    ) -> Result<Json<Hooks>, ToolError> {
         let found = match session.as_deref() {
             Some(name) => self.find_session(name).await?.hooks().await,
             None => self.server.hooks().await,

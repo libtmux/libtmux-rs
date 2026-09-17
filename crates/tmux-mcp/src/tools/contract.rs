@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{PaneView, SessionView, TmuxTools, WindowView};
 
-use super::error::{bad_input, object_gone, tmux_error};
+use super::error::{ToolError, bad_input, object_gone, tmux_error};
 use super::lossy;
 
 const READ_BATCH_MAX_OPERATIONS: usize = 16;
@@ -437,7 +437,7 @@ impl TmuxTools {
     pub async fn get_session_info(
         &self,
         Parameters(crate::SessionArgs { session }): Parameters<crate::SessionArgs>,
-    ) -> Result<Json<SessionView>, ErrorData> {
+    ) -> Result<Json<SessionView>, ToolError> {
         let session = self.find_session(&session).await?;
         Ok(Json(SessionView {
             id: session.id().to_string(),
@@ -457,7 +457,7 @@ impl TmuxTools {
     pub async fn get_window_info(
         &self,
         Parameters(crate::WindowArgs { window }): Parameters<crate::WindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         Ok(Json(Self::one_window(&self.find_window(&window).await?)))
     }
 
@@ -471,7 +471,7 @@ impl TmuxTools {
     pub async fn get_pane_info(
         &self,
         Parameters(crate::PaneArgs { pane }): Parameters<crate::PaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let pane = self.find_pane(&pane).await?;
         let socket = self.socket();
         Ok(Json(self.pane_view(&pane, socket)))
@@ -488,7 +488,7 @@ impl TmuxTools {
     pub async fn find_pane_by_position(
         &self,
         Parameters(PositionArgs { window, corner }): Parameters<PositionArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let panes = self
             .find_window(&window)
             .await?
@@ -540,7 +540,7 @@ impl TmuxTools {
     pub async fn get_tmux_variables(
         &self,
         Parameters(VariablesArgs { names, pane }): Parameters<VariablesArgs>,
-    ) -> Result<Json<VariablesValue>, ErrorData> {
+    ) -> Result<Json<VariablesValue>, ToolError> {
         if !(1..=32).contains(&names.len()) {
             return Err(bad_input(
                 "names must contain between one and 32 tmux variables".to_owned(),
@@ -582,7 +582,7 @@ impl TmuxTools {
     pub async fn rename_session(
         &self,
         Parameters(RenameSessionArgs { session, name }): Parameters<RenameSessionArgs>,
-    ) -> Result<Json<SessionView>, ErrorData> {
+    ) -> Result<Json<SessionView>, ToolError> {
         let mut session = self.find_session(&session).await?;
         session
             .rename(libtmux::escape_format(name))
@@ -610,7 +610,7 @@ impl TmuxTools {
     pub async fn rename_window(
         &self,
         Parameters(RenameWindowArgs { window, name }): Parameters<RenameWindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let mut window = self.find_window(&window).await?;
         window
             .rename(libtmux::escape_format(name))
@@ -633,7 +633,7 @@ impl TmuxTools {
             width,
             height,
         }): Parameters<WindowSizeArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let mut window = self.find_window(&window).await?;
         window
             .resize(width, height)
@@ -658,7 +658,7 @@ impl TmuxTools {
             destination_session,
             destination_index,
         }): Parameters<MoveWindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&destination_session).await?;
         let mut window = self.find_window(&window).await?;
         window
@@ -681,7 +681,7 @@ impl TmuxTools {
             source_pane,
             target_pane,
         }): Parameters<SwapPaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let target = self.find_pane(&target_pane).await?;
         let mut source = self.find_pane(&source_pane).await?;
         source
@@ -706,7 +706,7 @@ impl TmuxTools {
     pub async fn set_pane_title(
         &self,
         Parameters(PaneTitleArgs { pane, title }): Parameters<PaneTitleArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
         pane.set_title(libtmux::escape_format(title))
             .await
@@ -725,7 +725,7 @@ impl TmuxTools {
     pub async fn set_mouse_enabled(
         &self,
         Parameters(SessionFlagArgs { session, enabled }): Parameters<SessionFlagArgs>,
-    ) -> Result<Json<SettingChanged>, ErrorData> {
+    ) -> Result<Json<SettingChanged>, ToolError> {
         let value = if enabled { "on" } else { "off" };
         if let Some(name) = session.as_deref() {
             self.find_session(name)
@@ -756,7 +756,7 @@ impl TmuxTools {
     pub async fn set_history_limit(
         &self,
         Parameters(HistoryLimitArgs { session, limit }): Parameters<HistoryLimitArgs>,
-    ) -> Result<Json<SettingChanged>, ErrorData> {
+    ) -> Result<Json<SettingChanged>, ToolError> {
         if let Some(name) = session.as_deref() {
             self.find_session(name)
                 .await?
@@ -797,7 +797,7 @@ impl TmuxTools {
             name,
             start_directory,
         }): Parameters<CreateWindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&session).await?;
         let mut options = name.map(libtmux::escape_format).map_or_else(
             libtmux::NewWindowOptions::unnamed,
@@ -835,7 +835,7 @@ impl TmuxTools {
             percent,
             start_directory,
         }): Parameters<SplitWindowArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         // Parsed from the same table the advertised schema is checked against,
         // so a word a client is offered is a word this accepts.
         let direction = match direction.as_deref() {
@@ -880,7 +880,7 @@ impl TmuxTools {
     pub async fn respawn_pane_configured(
         &self,
         Parameters(RespawnArgs { pane, kill_first }): Parameters<RespawnArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
         pane.respawn(None::<String>, kill_first)
             .await
@@ -907,7 +907,7 @@ impl TmuxTools {
     pub async fn set_synchronize_panes(
         &self,
         Parameters(WindowFlagArgs { window, enabled }): Parameters<WindowFlagArgs>,
-    ) -> Result<Json<SettingChanged>, ErrorData> {
+    ) -> Result<Json<SettingChanged>, ToolError> {
         let value = if enabled { "on" } else { "off" };
         self.find_window(&window)
             .await?
@@ -938,7 +938,7 @@ impl TmuxTools {
             operations,
             on_error,
         }): Parameters<SendBatchArgs>,
-    ) -> Result<Json<BatchResult>, ErrorData> {
+    ) -> Result<Json<BatchResult>, ToolError> {
         if operations.is_empty() || operations.len() > 64 {
             return Err(bad_input(
                 "operations must contain 1 through 64 items".to_owned(),
@@ -971,7 +971,7 @@ impl TmuxTools {
                         success: false,
                         result: None,
                         result_truncated: false,
-                        error: Some(error),
+                        error: Some(error.into_error_data()),
                     });
                     if on_error.stops() {
                         break;
@@ -1020,7 +1020,7 @@ impl TmuxTools {
             on_error,
         }): Parameters<ReadBatchArgs>,
         context: RequestContext<rmcp::RoleServer>,
-    ) -> Result<Json<BatchResult>, ErrorData> {
+    ) -> Result<Json<BatchResult>, ToolError> {
         if operations.is_empty() || operations.len() > READ_BATCH_MAX_OPERATIONS {
             return Err(bad_input(format!(
                 "operations must contain 1 through {READ_BATCH_MAX_OPERATIONS} items"
@@ -1041,7 +1041,10 @@ impl TmuxTools {
             if !allowed.contains(tool.as_str()) {
                 if !batch.push(BatchItem {
                     index,
-                    error: Some(bad_input(format!("{tool} is not an enabled inspect tool"))),
+                    error: Some(
+                        bad_input(format!("{tool} is not an enabled inspect tool"))
+                            .into_error_data(),
+                    ),
                     tool,
                     success: false,
                     result: None,

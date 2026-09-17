@@ -78,11 +78,13 @@ impl GuardedDispatch {
                 Self::Send => tools
                     .send_keys(args(serde_json::json!({"pane": pane, "keys": ["C-l"]})))
                     .await
-                    .map(|_| ()),
+                    .map(|_| ())
+                    .map_err(tmux_mcp::ToolError::into_error_data),
                 Self::Paste => tools
                     .paste_text(args(serde_json::json!({"pane": pane, "text": "race"})))
                     .await
-                    .map(|_| ()),
+                    .map(|_| ())
+                    .map_err(tmux_mcp::ToolError::into_error_data),
             }
         })
     }
@@ -596,6 +598,7 @@ async fn run_error(tools: &TmuxTools, pane: &str, command: &str) -> rmcp::model:
         .await
         .err()
         .unwrap_or_else(|| panic!("guarded run is refused: {command}"))
+        .into_error_data()
 }
 
 type RunTask = tokio::task::JoinHandle<
@@ -631,6 +634,7 @@ async fn waiting_run(
                     tmux_mcp::Reporter::none(),
                 )
                 .await
+                .map_err(tmux_mcp::ToolError::into_error_data)
         }
     });
     await_channel(server, &started).await;
@@ -698,7 +702,8 @@ async fn assert_paste_refused_unchanged(
         .paste_text(args(serde_json::json!({"pane": pane, "text": "guarded"})))
         .await
         .err()
-        .expect("paste is refused");
+        .expect("paste is refused")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], kind);
     assert_eq!(server.buffer_names().await.expect("buffers list"), buffers);
     assert_eq!(pane_screen(tools, pane).await, screen);
@@ -862,7 +867,8 @@ async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
         })))
         .await
         .err()
-        .expect("a modal configured peer refuses the whole input");
+        .expect("a modal configured peer refuses the whole input")
+        .into_error_data();
     assert_eq!(
         modal_error.data.expect("typed refusal")["kind"],
         "invalid_input"
@@ -916,7 +922,8 @@ async fn pane_input_refuses_input_disabled_configured_members() {
         })))
         .await
         .err()
-        .expect("an input-disabled configured peer refuses the whole input");
+        .expect("an input-disabled configured peer refuses the whole input")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_channel_quiet(guard.server(), channel).await;
 
@@ -952,7 +959,8 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
         })))
         .await
         .err()
-        .expect("the attended active pane refuses input");
+        .expect("the attended active pane refuses input")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_channel_quiet(guard.server(), source_channel).await;
     assert_paste_refused_unchanged(&tools, guard.server(), &source, "invalid_input").await;
@@ -962,7 +970,8 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
         .send_keys(args(serde_json::json!({"pane": source, "keys": ["C-l"]})))
         .await
         .err()
-        .expect("caller protection still takes precedence");
+        .expect("caller protection still takes precedence")
+        .into_error_data();
     assert_self_protection(error, &source);
 
     pane_handle(guard.server(), &source)
@@ -992,7 +1001,8 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
         })))
         .await
         .err()
-        .expect("every pane visible to a terminal client refuses input");
+        .expect("every pane visible to a terminal client refuses input")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_channel_quiet(guard.server(), peer_channel).await;
 
@@ -1115,7 +1125,8 @@ async fn pane_input_and_batch_protect_only_reached_caller_panes() {
         })))
         .await
         .err()
-        .expect("direct caller input is refused");
+        .expect("direct caller input is refused")
+        .into_error_data();
     assert_self_protection(error, &source);
     assert_channel_quiet(guard.server(), direct_channel).await;
 
@@ -1132,7 +1143,8 @@ async fn pane_input_and_batch_protect_only_reached_caller_panes() {
         })))
         .await
         .err()
-        .expect("a synchronized caller peer refuses the whole input");
+        .expect("a synchronized caller peer refuses the whole input")
+        .into_error_data();
     assert_self_protection(error, &peer);
     assert_channel_quiet(guard.server(), peer_channel).await;
 
@@ -1245,7 +1257,8 @@ async fn pane_input_fails_closed_on_incomplete_or_inconsistent_caller_context() 
             .paste_text(args(serde_json::json!({"pane": source, "text": ""})))
             .await
             .err()
-            .unwrap_or_else(|| panic!("{case} must fail pane input closed"));
+            .unwrap_or_else(|| panic!("{case} must fail pane input closed"))
+            .into_error_data();
         assert_eq!(
             error.data.as_ref().expect("typed caller refusal")["kind"],
             "self_protection",
@@ -1363,7 +1376,8 @@ async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
         .paste_text(args(serde_json::json!({"pane": pane, "text": "late"})))
         .await
         .err()
-        .expect("a transition after setup refuses the paste");
+        .expect("a transition after setup refuses the paste")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert!(pane_handle(guard.server(), &pane).await.is_in_mode());
     assert_eq!(
@@ -1387,7 +1401,8 @@ async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
         .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
         .await
         .err()
-        .expect("even an empty paste performs its target guard");
+        .expect("even an empty paste performs its target guard")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_eq!(
         guard.server().buffer_names().await.expect("buffers list"),
@@ -1528,7 +1543,8 @@ async fn teardown_refuses_the_inherited_caller_pane() {
         .kill_pane(args(serde_json::json!({"pane": own})))
         .await
         .map(|_| ())
-        .expect_err("caller pane is protected");
+        .expect_err("caller pane is protected")
+        .into_error_data();
 
     assert!(error.message.contains(&own), "{}", error.message);
     assert_eq!(panes(&tools).await.len(), 1);
@@ -1587,7 +1603,8 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
             .err()
-            .expect("the interrupted command still reserves the pane");
+            .expect("the interrupted command still reserves the pane")
+            .into_error_data();
         assert_active_run(&refusal, outcome);
         signal_channel(guard.server(), &release).await;
         assert_eq!(
@@ -1747,7 +1764,7 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
             .err()
-            .and_then(|error| error.data)
+            .and_then(|error| error.into_error_data().data)
             .is_some_and(|data| data["kind"] == "invalid_input")
     })
     .await
@@ -1838,7 +1855,9 @@ async fn active_run_reservation_is_process_wide_and_guards_all_input() {
         ("run", overlapping.map(|_| ())),
     ] {
         assert_active_run(
-            &result.expect_err("active run guards every pane-input route"),
+            &result
+                .expect_err("active run guards every pane-input route")
+                .into_error_data(),
             operation,
         );
     }
@@ -1914,7 +1933,8 @@ async fn assert_input_reservation_blocks_run(operation: GuardedDispatch) {
     );
     assert_active_run(
         &run.err()
-            .expect("the input reservation refuses the racing run"),
+            .expect("the input reservation refuses the racing run")
+            .into_error_data(),
         &format!("run racing a {}", operation.name()),
     );
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -2005,7 +2025,8 @@ async fn uncertain_dispatch_keeps_the_run_reserved_until_proven() {
         )
         .await
         .err()
-        .expect("the accepted send times out before acknowledgement");
+        .expect("the accepted send times out before acknowledgement")
+        .into_error_data();
     assert_eq!(
         error.data.expect("typed uncertain dispatch")["kind"],
         "dispatch_unknown"
@@ -2017,7 +2038,8 @@ async fn uncertain_dispatch_keeps_the_run_reserved_until_proven() {
         .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
         .await
         .err()
-        .expect("uncertain delivery reserves the pane");
+        .expect("uncertain delivery reserves the pane")
+        .into_error_data();
     assert_active_run(&refusal, "paste after uncertain dispatch");
 
     signal_channel(guard.server(), release).await;
@@ -2166,7 +2188,8 @@ async fn run_reports_phase_aware_source_disappearance() {
         )
         .await
         .err()
-        .expect("a pane killed after the initial checkpoint is refused");
+        .expect("a pane killed after the initial checkpoint is refused")
+        .into_error_data();
     let final_detail = final_error.data.expect("transition detail");
     assert_eq!(final_error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
     assert_eq!(final_detail["kind"], "object_gone");
@@ -2190,7 +2213,8 @@ async fn run_reports_phase_aware_source_disappearance() {
         )
         .await
         .err()
-        .expect("an initially unknown pane is caller input");
+        .expect("an initially unknown pane is caller input")
+        .into_error_data();
     assert_eq!(initial_error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     assert_eq!(
         initial_error.data.expect("caller detail")["kind"],
@@ -2315,7 +2339,8 @@ async fn pane_input_rejects_terminal_control_in_the_socket_route() {
         })))
         .await
         .err()
-        .expect("pane input rejects a terminal-control socket");
+        .expect("pane input rejects a terminal-control socket")
+        .into_error_data();
 
     assert_eq!(error.data.expect("typed refusal")["kind"], "decode");
     assert_eq!(pane_screen(&bootstrap_tools, &pane).await, before);
@@ -3001,6 +3026,7 @@ async fn mcp_flag_shaped_metadata_operands_stay_literal() {
     else {
         panic!("a flag-shaped invalid layout was executed as an option");
     };
+    let layout_error = layout_error.into_error_data();
     assert!(
         !layout_error.message.contains("unknown flag"),
         "the layout reached tmux as an operand: {layout_error:?}"

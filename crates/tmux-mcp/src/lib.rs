@@ -60,6 +60,7 @@ pub use policy::{
     SocketProvenance, SurfaceError, TOOLS_ENV, TOOLSETS_ENV, Toolset,
 };
 pub use tail::Cursor;
+pub use tools::error::ToolError;
 pub use views::*;
 
 use std::path::PathBuf;

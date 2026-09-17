@@ -174,18 +174,23 @@ async fn read_batch_rejects_more_than_sixteen_operations() {
     let arguments = json!({"operations": operations, "on_error": "stop"});
     let request = CallToolRequestParams::new("call_read_tools_batch")
         .with_arguments(arguments.as_object().cloned().expect("object arguments"));
-    let error = wire
+    let result = wire
         .client
         .call_tool(request)
         .await
-        .expect_err("seventeen operations exceed the batch limit");
+        .expect("too many operations is a tool result, not a protocol error");
 
-    assert!(error.to_string().contains("1 through 16"), "{error}");
+    assert_eq!(result.is_error, Some(true), "{result:?}");
+    let text = result.content.first().and_then(|block| block.as_text());
+    assert!(
+        text.is_some_and(|text| text.text.contains("1 through 16")),
+        "{result:?}"
+    );
     wire.shutdown().await;
 }
 
 #[tokio::test]
-async fn read_batch_preserves_nested_protocol_errors() {
+async fn read_batch_reports_a_nested_business_refusal_as_a_failed_result() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = TmuxTools::builder(guard.server().clone())
         .selection(selection("inspect"))
@@ -207,13 +212,67 @@ async fn read_batch_preserves_nested_protocol_errors() {
     let structured = response
         .structured_content
         .expect("batch has structured content");
-    let error = &structured["results"][0]["error"];
+    let item = &structured["results"][0];
 
+    // A nested tool's own tmux-level refusal is not a JSON-RPC protocol
+    // fault: it comes back as a failed nested `CallToolResult`, in
+    // `result`, and `error` stays unset for it.
+    assert_eq!(item["success"], false, "{item}");
+    assert!(item["error"].is_null(), "{item}");
+    let nested = &item["result"];
+    assert_eq!(nested["isError"], true, "{nested}");
+    let text = nested["content"][0]["text"]
+        .as_str()
+        .expect("nested content is text");
+    let detail: Value = serde_json::from_str(text).expect("nested body is JSON");
+    assert_eq!(detail["message"], "no pane %999999", "{detail}");
+    assert_eq!(detail["data"]["kind"], "object_gone", "{detail}");
+    assert_eq!(detail["data"]["retryable"], false, "{detail}");
+    assert_eq!(detail["data"]["stale"], true, "{detail}");
+
+    wire.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn read_batch_preserves_a_nested_protocol_error() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+
+    // A nested tool that is not on this batch operation's own allow list is
+    // rejected before the nested router is asked at all -- a protocol-shaped
+    // fault about the batch request itself, not about anything tmux did, so
+    // it stays in `error` rather than `result`.
+    let response = wire
+        .call(
+            "call_read_tools_batch",
+            json!({
+                "operations": [{
+                    "tool": "kill_pane",
+                    "arguments": {"pane": "%0"}
+                }],
+                "on_error": "stop"
+            }),
+        )
+        .await;
+    let structured = response
+        .structured_content
+        .expect("batch has structured content");
+    let item = &structured["results"][0];
+
+    assert_eq!(item["success"], false, "{item}");
+    assert!(item["result"].is_null(), "{item}");
+    let error = &item["error"];
     assert_eq!(error["code"], -32602, "{error}");
-    assert_eq!(error["message"], "no pane %999999", "{error}");
-    assert_eq!(error["data"]["kind"], "object_gone", "{error}");
-    assert_eq!(error["data"]["retryable"], false, "{error}");
-    assert_eq!(error["data"]["stale"], true, "{error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("kill_pane")),
+        "{error}"
+    );
 
     wire.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -437,4 +496,59 @@ async fn commandless_creation_runs_the_configured_process() {
 
     wire.shutdown().await;
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A tmux-level refusal is `isError` tool content, not a JSON-RPC error:
+/// the model can read it and decide what to do next, and a client
+/// that does not surface protocol errors to the model still sees it.
+#[tokio::test]
+async fn a_tmux_refusal_is_an_is_error_result_not_a_protocol_error() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = TmuxTools::builder(guard.server().clone())
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+
+    let request = CallToolRequestParams::new("get_pane_info").with_arguments(
+        json!({"pane": "%999999"})
+            .as_object()
+            .cloned()
+            .expect("object arguments"),
+    );
+    let result = wire
+        .client
+        .call_tool(request)
+        .await
+        .expect("a tmux refusal is a tool result, not a protocol error");
+
+    assert_eq!(result.is_error, Some(true), "{result:?}");
+    let text = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .expect("isError content is text");
+    let detail: Value = serde_json::from_str(&text.text).expect("content body is JSON");
+    assert_eq!(detail["data"]["kind"], "object_gone", "{detail}");
+
+    wire.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A request the framework cannot route at all is still a JSON-RPC
+/// protocol error, because no tool body ever ran to produce content for
+/// the model to read.
+#[tokio::test]
+async fn an_unknown_tool_is_still_a_protocol_error() {
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .selection(selection("inspect"))
+        .build();
+    let wire = Wire::connect(tools).await;
+
+    let request = CallToolRequestParams::new("this_tool_does_not_exist");
+    wire.client
+        .call_tool(request)
+        .await
+        .expect_err("an unknown tool name cannot become a tool result");
+
+    wire.shutdown().await;
 }

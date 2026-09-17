@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use libtmux::{Command, CommandChain, Error, NewSessionOptions};
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::{
@@ -12,7 +11,7 @@ use crate::{
     SendKeysArgs, Sent, SessionArgs, SessionView, Size, TmuxTools, WindowArgs, Windows,
 };
 
-use super::error::{EffectBoundary, bad_input, tmux_error, vanished};
+use super::error::{EffectBoundary, ToolError, bad_input, tmux_error, vanished};
 use super::lossy;
 use super::pane_input::{MissingSource, PaneInputReach, active_run_error};
 
@@ -64,15 +63,15 @@ async fn delete_private_paste_buffer(server: &libtmux::Server, name: &str) -> Re
     server.delete_buffer(name).await
 }
 
-fn cleanup_after_refusal(primary: ErrorData, cleanup: Result<(), Error>) -> ErrorData {
+fn cleanup_after_refusal(primary: ToolError, cleanup: Result<(), Error>) -> ToolError {
     match cleanup {
         Ok(()) => primary,
         Err(cleanup) => {
+            let message = primary.into_error_data().message;
             let mut boundary = EffectBoundary::new("paste_text");
             boundary.mark();
             boundary.local(format!(
-                "{}; temporary paste buffer cleanup failed: {cleanup}",
-                primary.message
+                "{message}; temporary paste buffer cleanup failed: {cleanup}"
             ))
         }
     }
@@ -83,7 +82,7 @@ impl TmuxTools {
     pub(super) async fn protect_window_caller(
         &self,
         window: &libtmux::Window,
-    ) -> Result<(), ErrorData> {
+    ) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
@@ -95,7 +94,7 @@ impl TmuxTools {
     }
 
     /// Refuse to destroy a session that currently contains the caller pane.
-    async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ErrorData> {
+    async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
@@ -114,7 +113,7 @@ impl TmuxTools {
             keys,
             enter,
         }: SendKeysArgs,
-    ) -> Result<Json<Sent>, ErrorData> {
+    ) -> Result<Json<Sent>, ToolError> {
         let keys = keys.unwrap_or_default();
         if text.is_none() && keys.is_empty() && !enter {
             return Err(bad_input("send_keys needs text, keys, or enter".to_owned()));
@@ -178,7 +177,7 @@ impl TmuxTools {
     pub async fn kill_window(
         &self,
         Parameters(WindowArgs { window }): Parameters<WindowArgs>,
-    ) -> Result<Json<Killed>, ErrorData> {
+    ) -> Result<Json<Killed>, ToolError> {
         let window = self.find_window(&window).await?;
         let id = window.id().to_string();
         self.protect_window_caller(&window).await?;
@@ -198,7 +197,7 @@ impl TmuxTools {
     pub async fn kill_pane(
         &self,
         Parameters(PaneArgs { pane }): Parameters<PaneArgs>,
-    ) -> Result<Json<Killed>, ErrorData> {
+    ) -> Result<Json<Killed>, ToolError> {
         let pane = self.find_pane(&pane).await?;
         let id = pane.id().to_string();
         if self.protected_pane().await? == Some(id.as_str()) {
@@ -235,7 +234,7 @@ impl TmuxTools {
             name,
             start_directory,
         }): Parameters<CreateSessionArgs>,
-    ) -> Result<Json<SessionView>, ErrorData> {
+    ) -> Result<Json<SessionView>, ToolError> {
         let mut options = NewSessionOptions::new(libtmux::escape_format(name));
         if let Some(directory) = start_directory {
             options = options.start_directory(libtmux::escape_format(directory));
@@ -266,7 +265,7 @@ impl TmuxTools {
     pub async fn kill_session(
         &self,
         Parameters(SessionArgs { session }): Parameters<SessionArgs>,
-    ) -> Result<Json<Killed>, ErrorData> {
+    ) -> Result<Json<Killed>, ToolError> {
         let target = self.find_session(&session).await?;
         let id = target.id().to_string();
         self.protect_session_caller(&target).await?;
@@ -292,7 +291,7 @@ impl TmuxTools {
             direction,
             cells,
         }): Parameters<ResizePaneArgs>,
-    ) -> Result<Json<Size>, ErrorData> {
+    ) -> Result<Json<Size>, ToolError> {
         let direction = crate::schema::resize_direction(&direction).ok_or_else(|| {
             bad_input(format!(
                 "direction must be {}, not {direction}",
@@ -336,7 +335,7 @@ impl TmuxTools {
     pub async fn send_keys(
         &self,
         Parameters(args): Parameters<SendKeysArgs>,
-    ) -> Result<Json<Sent>, ErrorData> {
+    ) -> Result<Json<Sent>, ToolError> {
         self.send_keys_one(args).await
     }
 
@@ -355,7 +354,7 @@ impl TmuxTools {
     pub async fn select_pane(
         &self,
         Parameters(SelectPaneArgs { pane, direction }): Parameters<SelectPaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let target = self.find_pane(&pane).await?;
 
         // `next` and `previous` are resolved here rather than with a tmux
@@ -442,7 +441,7 @@ impl TmuxTools {
     pub async fn select_window(
         &self,
         Parameters(SelectWindowArgs { window, direction }): Parameters<SelectWindowArgs>,
-    ) -> Result<Json<Windows>, ErrorData> {
+    ) -> Result<Json<Windows>, ToolError> {
         let mut target = self.find_window(&window).await?;
         let mut boundary = EffectBoundary::new("select_window");
 
@@ -517,26 +516,17 @@ impl TmuxTools {
     pub async fn select_layout(
         &self,
         Parameters(SelectLayoutArgs { window, layout }): Parameters<SelectLayoutArgs>,
-    ) -> Result<Json<Layout>, ErrorData> {
-        let target = self.find_window(&window).await?;
-        let result = self
-            .server
-            .cmd(
-                Command::new("select-layout")
-                    .arg("-t")
-                    .arg(target.id().to_string())
-                    // `select-layout` has flags of its own, and a layout is
-                    // the caller's text. Without the separator, asking for
-                    // `-E` spread the panes evenly and reported `-E` back as
-                    // the layout that had been applied.
-                    .arg("--")
-                    .arg(layout.clone()),
-            )
+    ) -> Result<Json<Layout>, ToolError> {
+        let mut target = self.find_window(&window).await?;
+        // Through `Window::select_layout` rather than a raw `select-layout`
+        // dispatch: that is where the pre-dispatch refusal lives (3.3 and
+        // 3.3a exit on a layout value `select-layout` cannot parse, taking
+        // every session on the socket with them), and a second, unguarded
+        // path here bypassed it.
+        target
+            .select_layout(layout.clone())
             .await
             .map_err(|e| tmux_error(&e))?;
-        if let Some(error) = result.refusal_for("select-layout") {
-            return Err(tmux_error(&error));
-        }
 
         Ok(Json(Layout {
             window: target.id().to_string(),
@@ -559,7 +549,7 @@ impl TmuxTools {
     pub async fn clear_pane(
         &self,
         Parameters(PaneArgs { pane }): Parameters<PaneArgs>,
-    ) -> Result<Json<PaneChanged>, ErrorData> {
+    ) -> Result<Json<PaneChanged>, ToolError> {
         let target = self.find_pane(&pane).await?;
         target.clear_history().await.map_err(|e| tmux_error(&e))?;
 
@@ -590,7 +580,7 @@ impl TmuxTools {
     pub async fn paste_text(
         &self,
         Parameters(PasteTextArgs { pane, text, enter }): Parameters<PasteTextArgs>,
-    ) -> Result<Json<Pasted>, ErrorData> {
+    ) -> Result<Json<Pasted>, ToolError> {
         let initial = self
             .preflight_pane_input(
                 &pane,
@@ -681,7 +671,7 @@ impl TmuxTools {
     pub async fn signal_channel(
         &self,
         Parameters(ChannelArgs { channel, .. }): Parameters<ChannelArgs>,
-    ) -> Result<Json<ChannelSignal>, ErrorData> {
+    ) -> Result<Json<ChannelSignal>, ToolError> {
         self.server
             .signal_channel(&channel)
             .await
@@ -806,6 +796,7 @@ mod tests {
         let Err(error) = result else {
             panic!("Enter reached tmux but its held reply did not fail");
         };
+        let error = error.into_error_data();
         assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
         let detail = error.data.expect("the error carries detail");
         assert_eq!(detail["kind"], "partial_effect", "{detail}");

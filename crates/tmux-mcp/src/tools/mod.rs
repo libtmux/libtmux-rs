@@ -1,6 +1,6 @@
 mod contract;
 mod control;
-mod error;
+pub(crate) mod error;
 mod inspect;
 mod observe;
 mod pane_input;
@@ -17,7 +17,7 @@ use crate::{
     Capture, Marks, PaneView, Panes, SessionView, Sessions, TmuxTools, WindowView, Windows,
 };
 
-use error::{bad_input, object_gone, tmux_error};
+use error::{ToolError, bad_input, object_gone, tmux_error};
 
 /// Render tmux bytes for a protocol that requires valid UTF-8.
 ///
@@ -86,7 +86,7 @@ impl TmuxTools {
     pub(super) async fn capture_last_command(
         &self,
         pane: &str,
-    ) -> Result<Json<Capture>, ErrorData> {
+    ) -> Result<Json<Capture>, ToolError> {
         let target = self.find_pane(pane).await?;
         let supported = self.server.capabilities().await.is_ok_and(|capabilities| {
             capabilities
@@ -182,7 +182,7 @@ impl TmuxTools {
         &self,
         scope: Option<&str>,
         target: Option<&str>,
-    ) -> Result<OptionScope, ErrorData> {
+    ) -> Result<OptionScope, ToolError> {
         let needs = |what: &str| bad_input(format!("scope {what} needs a target id"));
 
         match scope {
@@ -275,7 +275,7 @@ impl TmuxTools {
     ///
     /// A returned pane has been resolved in the caller's claimed session on
     /// the selected daemon. Malformed or stale context refuses the operation.
-    pub(super) async fn protected_pane(&self) -> Result<Option<&str>, ErrorData> {
+    pub(super) async fn protected_pane(&self) -> Result<Option<&str>, ToolError> {
         if self.caller.is_none() {
             return Ok(None);
         }
@@ -296,7 +296,7 @@ impl TmuxTools {
         socket: &Path,
         generation: libtmux::ServerGeneration,
         panes: &[libtmux::Pane],
-    ) -> Result<Option<&'a str>, ErrorData> {
+    ) -> Result<Option<&'a str>, ToolError> {
         let Some(caller) = self.caller.as_deref() else {
             return Ok(None);
         };
@@ -323,7 +323,7 @@ impl TmuxTools {
     }
 
     /// Classify a refusal that protects the pane this process talks through.
-    pub(super) fn self_protection(message: String) -> ErrorData {
+    pub(super) fn self_protection(message: String) -> ToolError {
         ErrorData::invalid_params(
             message,
             // Its own kind, because this is the server declining rather than
@@ -335,16 +335,17 @@ impl TmuxTools {
                 "stale": false,
             })),
         )
+        .into()
     }
 
-    fn caller_context_refusal(detail: &str) -> ErrorData {
+    fn caller_context_refusal(detail: &str) -> ToolError {
         Self::self_protection(format!(
             "refusing this operation because {detail}; restart the MCP outside tmux or with a complete current TMUX and TMUX_PANE context"
         ))
     }
 
     /// Refuse a command that may destroy the pane this process talks through.
-    pub(super) fn self_harm(what: &str, own: &str) -> ErrorData {
+    pub(super) fn self_harm(what: &str, own: &str) -> ToolError {
         Self::self_protection(format!(
             "refusing to kill this {what}: pane {own} matches this MCP server's inherited \
              caller context, so killing it may end this conversation. Run the command in \
@@ -361,7 +362,7 @@ impl TmuxTools {
     /// again" will look again and `not-a-window` will still not be a window.
     /// And `@01` resolves, where a string comparison against the canonical
     /// `@1` called it missing.
-    pub(super) async fn find_window(&self, id: &str) -> Result<libtmux::Window, ErrorData> {
+    pub(super) async fn find_window(&self, id: &str) -> Result<libtmux::Window, ToolError> {
         let window: libtmux::WindowId = id.parse().map_err(|error: libtmux::IdParseError| {
             let sigil = error.expected_sigil();
             bad_input(format!(
@@ -379,7 +380,7 @@ impl TmuxTools {
     /// Resolve a pane id, reporting an unknown one as invalid input.
     ///
     /// Shares the reasoning on [`Self::find_window`].
-    pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux::Pane, ErrorData> {
+    pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux::Pane, ToolError> {
         let pane: libtmux::PaneId = id.parse().map_err(|error: libtmux::IdParseError| {
             let sigil = error.expected_sigil();
             bad_input(format!(
@@ -395,7 +396,7 @@ impl TmuxTools {
     }
 
     /// Resolve a session by name, reporting an unknown one as invalid input.
-    pub(super) async fn find_session(&self, name: &str) -> Result<libtmux::Session, ErrorData> {
+    pub(super) async fn find_session(&self, name: &str) -> Result<libtmux::Session, ToolError> {
         self.server
             .sessions()
             .await
