@@ -32,6 +32,9 @@ include = [
 path = "src/lib.rs"
 
 [[example]]
+name = "inspect"
+
+[[example]]
 name = "scratch"
 required-features = ["test-support"]
 
