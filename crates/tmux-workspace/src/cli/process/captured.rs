@@ -150,7 +150,16 @@ pub(in crate::cli) async fn run(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .process_group(0);
-    let mut child = command.spawn()?;
+    // Named so a caller that treats "could not start" as its own failure
+    // mode (a missing or non-executable before_script, tmuxp's
+    // BeforeLoadScriptNotExists) can tell it apart from every other io
+    // error this function can also raise.
+    let mut child = command.spawn().map_err(|error| {
+        CliError::new(
+            "child_spawn",
+            format!("could not start {program:?}: {error}"),
+        )
+    })?;
     let pid = child
         .id()
         .and_then(|pid| i32::try_from(pid).ok())

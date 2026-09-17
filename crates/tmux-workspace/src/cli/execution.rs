@@ -516,6 +516,17 @@ async fn build(
     Ok((session, false))
 }
 
+/// A borrowed session is the caller's; only one this load created is ours
+/// to remove.
+async fn remove_owned_session(effects: &Effects) -> Result<()> {
+    if effects.owned {
+        if let Some(session) = effects.session.clone() {
+            session.kill().await?;
+        }
+    }
+    Ok(())
+}
+
 async fn configure_session(
     server: &Server,
     session: &Session,
@@ -539,7 +550,21 @@ async fn configure_session(
                 .unwrap_or_else(|| std::path::Path::new("."));
             *executable = parent.join(&*executable).into_os_string();
         }
-        let output = process::run(&argv, &workspace.script_directory, report).await?;
+        let output = match process::run(&argv, &workspace.script_directory, report).await {
+            Ok(output) => output,
+            // Missing or not executable: tmuxp's BeforeLoadScriptNotExists,
+            // the same failure as a nonzero exit, not a different one.
+            Err(error) if error.code == "child_spawn" => {
+                remove_owned_session(effects).await?;
+                return Err(CliError {
+                    code: "script_failed",
+                    message: format!("before_script {}; the session was removed", error.message),
+                    status: 1,
+                    retained_state: None,
+                });
+            }
+            Err(error) => return Err(error),
+        };
         effects.script_output = Some(output.value());
         if matches!(output.status, 130 | 143) {
             // 130/143 are the child's own SIGINT/SIGTERM death (128 +
@@ -557,14 +582,9 @@ async fn configure_session(
             });
         }
         if output.status != 0 {
-            // A borrowed session is the caller's; only a session this load
-            // created is ours to remove. Its own exit status is not ours:
-            // tmuxp and every other port exit 1 here, not the script's code.
-            if effects.owned {
-                if let Some(session) = effects.session.clone() {
-                    session.kill().await?;
-                }
-            }
+            // Its own exit status is not ours: tmuxp and every other port
+            // exit 1 here, not the script's code.
+            remove_owned_session(effects).await?;
             return Err(CliError {
                 code: "script_failed",
                 message: format!(
