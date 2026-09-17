@@ -907,7 +907,7 @@ pub enum Error {
     /// This variant is for operations whose whole purpose is the effect, so a
     /// refusal is a failure rather than a result.
     #[non_exhaustive]
-    #[error("tmux rejected {command} (exit {exit_code:?}): {stderr}")]
+    #[error("tmux rejected {command} (exit {}): {stderr}", exit_code_text(*exit_code))]
     CommandFailed {
         /// The tmux command that was rejected.
         command: &'static str,
@@ -931,6 +931,12 @@ pub enum Error {
         /// Payload-free decoding metadata.
         detail: ListingDecodeError,
     },
+}
+
+/// Renders a rejected command's exit code for [`Error::CommandFailed`],
+/// plainly rather than through `Option`'s `Debug` (`Some(1)`).
+fn exit_code_text(code: Option<i32>) -> String {
+    code.map_or_else(|| "unknown".to_owned(), |code| format!("status {code}"))
 }
 
 /// The kind of tmux object a failure refers to.

@@ -182,6 +182,20 @@ fn a_refusal_that_names_no_server_stays_a_refusal() {
     assert_eq!(error.kind(), ErrorKind::Refused, "{error:?}");
 }
 
+/// A rejected command's exit code is a plain number, not `Option`'s `Debug`.
+#[test]
+fn a_rejected_command_states_its_exit_status_plainly() {
+    let error = Error::refused(
+        "new-window",
+        Some(1),
+        "create window failed: index 1 in use".to_owned(),
+        None,
+    );
+    let text = error.to_string();
+    assert!(!text.contains("Some("), "{text}");
+    assert!(text.contains("status 1"), "{text}");
+}
+
 #[test]
 fn withheld_refusal_uses_the_payload_appropriate_variant() {
     let error = Error::refused_withheld("set-option", Some(1));
