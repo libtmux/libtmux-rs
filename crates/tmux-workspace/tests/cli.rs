@@ -1890,10 +1890,10 @@ async fn load_logging_failure_preserves_primary_status_and_diagnostic_order() {
                 .iter()
                 .find(|row| row.get("results").is_some())
                 .unwrap();
-            assert_eq!(
-                summary["status"],
-                if status == 0 { "ok" } else { "partial" }
-            );
+            // Each case is a lone input with an owned session; a
+            // failure removes it, so nothing is retained and status is
+            // error, not partial.
+            assert_eq!(summary["status"], if status == 0 { "ok" } else { "error" });
             if status != 0 && streams == "merged" {
                 if warning {
                     let primary = values
@@ -2045,19 +2045,27 @@ async fn closed_load_output_preserves_completed_inputs_and_child_failure() {
         let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
         let retained = &diagnostic["retained_state"];
         let results = retained["results"].as_array().expect("completed inputs");
-        assert_eq!(
-            results.len(),
-            if status == 0 { 2 } else { 1 },
-            "{diagnostic}"
-        );
-        for result in results {
-            let session = guard
+        // One record per input attempted, the failed one included, so
+        // "second" is here either way; only status == 0 leaves its session
+        // standing to look up.
+        assert_eq!(results.len(), 2, "{diagnostic}");
+        let first_session = guard
+            .server()
+            .session(results[0]["session_name"].as_str().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(results[0]["session_id"], first_session.id().as_ref());
+        if status == 0 {
+            let second_session = guard
                 .server()
-                .session(result["session_name"].as_str().unwrap())
+                .session(results[1]["session_name"].as_str().unwrap())
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(result["session_id"], session.id().as_ref());
+            assert_eq!(results[1]["session_id"], second_session.id().as_ref());
+        } else {
+            assert_eq!(results[1]["session_name"], "second");
         }
         let second = if status == 0 {
             &results[1]
@@ -2145,13 +2153,70 @@ async fn before_script_that_cannot_start_removes_the_owned_session_too() {
     assert!(!guard.server().has_session("nostart").await.unwrap());
     let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(diagnostic["code"], "script_failed", "{diagnostic}");
-    let effects = &diagnostic["retained_state"]["errors"][0]["effects"];
+    let retained = &diagnostic["retained_state"];
+    let effects = &retained["errors"][0]["effects"];
     assert_eq!(effects["owned_session"], true);
     assert_eq!(effects["stage"], "before-script");
-    let results = diagnostic["retained_state"]["results"]
+    // Nothing completed and the owned session was removed, so this is
+    // error, not partial, and the single attempted input still gets a
+    // results[] record with the minimum fields.
+    assert_eq!(retained["status"], "error", "{retained}");
+    let results = retained["results"]
         .as_array()
         .expect("results[] present even on this failure");
-    assert!(results.is_empty(), "{diagnostic}");
+    assert_eq!(results.len(), 1, "{retained}");
+    assert_eq!(results[0]["input_index"], 0);
+    assert!(results[0]["input"].as_str().unwrap().ends_with("bf.yaml"));
+    assert_eq!(results[0]["session_name"], "nostart");
+    assert_eq!(results[0]["reused"], false);
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn appended_before_script_failure_leaves_the_borrowed_session_and_stays_partial() {
+    // A failed input's session is never rolled back when it is
+    // borrowed (append), so this is "partial" (effects left behind), not
+    // "error", unlike the owned case above.
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let session = guard
+        .server()
+        .new_session(libtmux::NewSessionOptions::new("owner"))
+        .await
+        .unwrap();
+    let pane = current_pane(&session).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let missing = directory.path().join("missing-script");
+    std::fs::write(
+        directory.path().join("bf.yaml"),
+        format!(
+            "session_name: ignored\nbefore_script: {}\nwindows:\n  - panes: [echo x]\n",
+            missing.display()
+        ),
+    )
+    .unwrap();
+    let output = at_pane(
+        &[
+            "load",
+            "-S",
+            guard.server().socket_path().to_str().unwrap(),
+            "--append",
+            "--json",
+            "bf.yaml",
+        ],
+        directory.path(),
+        Some((&guard, &pane)),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(guard.server().has_session("owner").await.unwrap());
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "script_failed", "{diagnostic}");
+    let retained = &diagnostic["retained_state"];
+    assert_eq!(retained["status"], "partial", "{retained}");
+    assert_eq!(retained["errors"][0]["effects"]["owned_session"], false);
+    let results = retained["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "{retained}");
+    assert_eq!(results[0]["session_name"], "owner");
+    assert_eq!(results[0]["reused"], false);
     guard.shutdown().await.unwrap();
 }
 
