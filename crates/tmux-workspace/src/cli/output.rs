@@ -206,6 +206,7 @@ impl Reporter {
                         "heading",
                         "Workspaces",
                         &format!("{} configured directories", directories.len()),
+                        "  ",
                     )?;
                     self.tree(&mut output, records)?;
                 } else {
@@ -232,7 +233,7 @@ impl Reporter {
             }
         }
         for (directory, entries) in groups {
-            self.write_line(output, "heading", &directory.to_string_lossy(), "")?;
+            self.write_line(output, "heading", &directory.to_string_lossy(), "", "  ")?;
             for (index, record) in entries.iter().enumerate() {
                 let (branch, indent) = if index + 1 == entries.len() {
                     ("└── ", "    ")
@@ -258,6 +259,7 @@ impl Reporter {
             "subject",
             record["name"].as_str().unwrap_or("workspace"),
             record["path"].as_str().unwrap_or(""),
+            "  ",
         )?;
         if let Some(config) = record.get("config") {
             for line in super::document::encode(config, "yaml")?.lines() {
@@ -267,23 +269,27 @@ impl Reporter {
         Ok(())
     }
 
-    pub(super) fn loaded(&self, results: &Value) -> Result<()> {
-        for result in results.as_array().into_iter().flatten() {
-            self.line(
-                "success",
-                if result["reused"] == true {
+    /// `appended[i]` says whether `results[i]` was appended into a session
+    /// this load did not build, rather than created or reused outright.
+    pub(super) fn loaded(&self, results: &Value, appended: &[bool]) -> Result<()> {
+        for (index, result) in results.as_array().into_iter().flatten().enumerate() {
+            let name = result["session_name"].as_str().unwrap_or("");
+            if appended.get(index).copied().unwrap_or(false) {
+                self.write_line(&mut io::stdout().lock(), "success", "Appended", name, " ")?;
+            } else {
+                let subject = if result["reused"] == true {
                     "Reused"
                 } else {
                     "Loaded"
-                },
-                result["session_name"].as_str().unwrap_or(""),
-            )?;
+                };
+                self.line("success", subject, name)?;
+            }
         }
         Ok(())
     }
 
     pub(super) fn line(&self, role: &str, subject: &str, detail: &str) -> Result<()> {
-        self.write_line(&mut io::stdout().lock(), role, subject, detail)
+        self.write_line(&mut io::stdout().lock(), role, subject, detail, "  ")
     }
 
     fn write_line(
@@ -292,6 +298,7 @@ impl Reporter {
         role: &str,
         subject: &str,
         detail: &str,
+        gap: &str,
     ) -> Result<()> {
         let code = match role {
             "heading" => "1;96",
@@ -306,10 +313,10 @@ impl Reporter {
         if self.color {
             writeln!(
                 output,
-                "\x1b[{code}m{subject}\x1b[0m  \x1b[36m{detail}\x1b[0m"
+                "\x1b[{code}m{subject}\x1b[0m{gap}\x1b[36m{detail}\x1b[0m"
             )?;
         } else {
-            writeln!(output, "{subject}  {detail}")?;
+            writeln!(output, "{subject}{gap}{detail}")?;
         }
         Ok(())
     }

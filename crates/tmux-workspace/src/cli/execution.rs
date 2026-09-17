@@ -1,4 +1,8 @@
-use std::{fmt::Write as _, path::PathBuf};
+use std::{
+    fmt::Write as _,
+    io::{IsTerminal as _, Write as _},
+    path::PathBuf,
+};
 
 use clap::ArgMatches;
 use libtmux::{
@@ -182,16 +186,6 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
     ))
 }
 
-async fn load_target(args: &ArgMatches) -> Result<(Server, Option<AppendTarget>)> {
-    let server = server(args)?;
-    let borrowed = if flag(args, "append") {
-        Some(append_target(&server).await?)
-    } else {
-        None
-    };
-    Ok((server, borrowed))
-}
-
 fn load_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>> {
     let files = args
         .get_many::<String>("workspace_files")
@@ -250,12 +244,18 @@ pub(super) async fn load(
     if report.machine() && !flag(args, "detached") && !flag(args, "append") {
         return Err(CliError::usage("machine load requires -d or --append"));
     }
-    let (workspaces, server, borrowed, python, dimensions) = load_setup(args, report).await?;
+    let (workspaces, server, borrowed, python, dimensions, inside_tmux) =
+        load_setup(args, report).await?;
     let invocation = Invocation {
         python: python.as_deref(),
         dimensions,
     };
+    let base_attach = !flag(args, "detached") && !flag(args, "append");
+    let interactive =
+        !report.machine() && !flag(args, "yes") && base_attach && std::io::stdin().is_terminal();
     let mut last_session = None;
+    let mut attach_at_end = base_attach;
+    let mut appended = Vec::new();
     report.event("started", json!({"inputs":workspaces.len()}))?;
     for (index, (path, workspace)) in workspaces.iter().enumerate() {
         let effects = state.current.insert(Effects {
@@ -263,42 +263,36 @@ pub(super) async fn load(
             path: Some(discovery::masked(path)),
             ..Effects::default()
         });
-        let outcome = async {
-            if let Some(progress) = &mut report.progress {
-                progress.start(workspace)?;
-            }
-            report.event(
-                "workspace-started",
-                json!({"input_index":index,"input":discovery::masked(path)}),
-            )?;
-            let (session, reused) = build(
-                &server,
-                workspace,
-                args,
-                report,
-                effects,
-                &invocation,
-                borrowed.as_ref(),
-            )
-            .await?;
-            let mut result = effects.value();
-            result["input"] = json!(discovery::masked(path));
-            result["reused"] = json!(reused);
-            state.results.push(result.clone());
-            last_session = Some(session);
-            if let Some(progress) = &mut report.progress {
-                progress.finish(reused, workspace.bridge)?;
-            }
-            report.event("workspace-completed", result)
-        }
+        let outcome = load_one(
+            &server,
+            workspace,
+            args,
+            report,
+            effects,
+            &invocation,
+            borrowed.as_ref(),
+            interactive,
+            inside_tmux.unwrap_or(false),
+            base_attach,
+            index,
+            path,
+            &mut state.results,
+        )
         .await;
-        if let Err(mut error) = outcome {
-            let summary = state.failure(&error);
-            if let Err(publication) = report.summary("failed", &summary) {
-                let _ = write!(error.message, "; output failed: {publication}");
+        match outcome {
+            Ok((session, attach_this_input, appended_flag)) => {
+                appended.push(appended_flag);
+                last_session = Some(session);
+                attach_at_end = attach_this_input;
             }
-            error.retained_state = Some(summary);
-            return Err(error);
+            Err(mut error) => {
+                let summary = state.failure(&error);
+                if let Err(publication) = report.summary("failed", &summary) {
+                    let _ = write!(error.message, "; output failed: {publication}");
+                }
+                error.retained_state = Some(summary);
+                return Err(error);
+            }
         }
     }
     let mut summary = json!({"schema_version":1,"command":"load","status":"ok","errors":[]});
@@ -307,12 +301,12 @@ pub(super) async fn load(
     let outcome = async {
         report.summary("completed", &summary)?;
         if !report.machine() {
-            report.loaded(&summary["results"])?;
+            report.loaded(&summary["results"], &appended)?;
             std::io::Write::flush(&mut std::io::stdout())?;
             report.log_warning();
-            if !flag(args, "detached") && !flag(args, "append") {
+            if attach_at_end {
                 if let Some(session) = last_session {
-                    attach(&server, &session).await?;
+                    attach(&server, &session, inside_tmux.unwrap_or(false)).await?;
                 }
             }
         }
@@ -323,6 +317,76 @@ pub(super) async fn load(
         error.retained_state = Some(summary);
         error
     })
+}
+
+/// What an interactive prompt decided for one workspace, beyond the load's
+/// own flags.
+enum Disposition {
+    /// Build (or reuse) and attach at the end, same as the unprompted default.
+    Switch,
+    /// Build, but leave the client where it is.
+    Detached,
+    /// Append into the answering prompt's own `AppendTarget`.
+    Append(AppendTarget),
+    /// The session already exists and the answer was no: change nothing.
+    Decline,
+}
+
+/// Asks whether to switch, load detached or append (a session that does not
+/// yet exist, inside tmux), or attach (one that already does). Only reached
+/// when stdin is a terminal, `--yes` was not given, and the load is neither
+/// detached nor appending.
+async fn prompt_disposition(
+    server: &Server,
+    workspace: &normalize::Workspace,
+    inside_tmux: bool,
+) -> Result<Disposition> {
+    let existing = if server.is_alive().await {
+        server.session(&workspace.name).await?
+    } else {
+        None
+    };
+    if existing.is_some() {
+        let answer = ask(
+            &format!("{} is already running. Attach? [Y/n]", workspace.name),
+            "yn",
+            'y',
+        )?;
+        return Ok(if answer == 'n' {
+            Disposition::Decline
+        } else {
+            Disposition::Switch
+        });
+    }
+    if !inside_tmux {
+        return Ok(Disposition::Switch);
+    }
+    let answer = ask(
+        "Already inside tmux: switch (y), load detached (n), or append (a)? [y/n/a]",
+        "yna",
+        'y',
+    )?;
+    Ok(match answer {
+        'n' => Disposition::Detached,
+        'a' => Disposition::Append(append_target(server).await?),
+        _ => Disposition::Switch,
+    })
+}
+
+/// Reads one keystroke answer from a real terminal, defaulting on anything
+/// else so a garbled line never hangs the prompt.
+fn ask(question: &str, choices: &str, default: char) -> Result<char> {
+    write!(std::io::stderr(), "{question} ")?;
+    std::io::stderr().flush()?;
+    let mut response = String::new();
+    std::io::stdin().read_line(&mut response)?;
+    Ok(response
+        .trim()
+        .chars()
+        .next()
+        .map(|answer| answer.to_ascii_lowercase())
+        .filter(|answer| choices.contains(*answer))
+        .unwrap_or(default))
 }
 
 #[allow(
@@ -338,11 +402,19 @@ async fn load_setup(
     Option<AppendTarget>,
     Option<std::ffi::OsString>,
     Option<(u32, u32)>,
+    Option<bool>,
 )> {
     let workspaces = load_inputs(args)?;
-    if !flag(args, "detached") && !flag(args, "append") {
-        require_attach_terminal()?;
-    }
+    let server = server(args)?;
+    // Whether this load is inside tmux on the server it targets, and
+    // whether it can attach at all: `None` when `-d`/`--append` mean it
+    // never will. Resolved, and any cross-server refusal raised, before any
+    // tmux call this load makes.
+    let inside_tmux = if !flag(args, "detached") && !flag(args, "append") {
+        Some(require_attach_context(&server)?)
+    } else {
+        None
+    };
     // A malformed COLUMNS/LINES/TMUXP_DEFAULT_* is a usage mistake; fail
     // before any target lookup or mutation, not mid-load as a build error.
     let dimensions = session_dimensions()?;
@@ -352,14 +424,94 @@ async fn load_setup(
             .log
             .open(std::path::Path::new(&discovery::expand(path)))?;
     }
-    let (server, borrowed) = load_target(args).await?;
+    // `-d` always wins over `--append`: a detached load never borrows the
+    // current pane's session, inside tmux or outside it.
+    let borrowed = if flag(args, "append") && !flag(args, "detached") {
+        Some(append_target(&server).await?)
+    } else {
+        None
+    };
     server.validate_layouts(native_layouts(&workspaces)).await?;
     let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
         Some(process::python().await?)
     } else {
         None
     };
-    Ok((workspaces, server, borrowed, python, dimensions))
+    Ok((
+        workspaces,
+        server,
+        borrowed,
+        python,
+        dimensions,
+        inside_tmux,
+    ))
+}
+
+/// Builds (or reuses, or appends) one workspace input, after asking whatever
+/// interactive prompt applies. Returns the session, whether the load should
+/// attach to it at the end, and whether this input was appended rather than
+/// created or reused.
+///
+/// The result record is pushed to `results` before the `workspace-completed`
+/// event that carries it is sent: a consumer that closes its read end right
+/// after seeing that event must still find the record it just saw.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site; splitting would need a struct with no other use"
+)]
+async fn load_one(
+    server: &Server,
+    workspace: &normalize::Workspace,
+    args: &ArgMatches,
+    report: &mut Reporter,
+    effects: &mut Effects,
+    invocation: &Invocation<'_>,
+    borrowed: Option<&AppendTarget>,
+    interactive: bool,
+    inside_tmux: bool,
+    base_attach: bool,
+    index: usize,
+    path: &std::path::Path,
+    results: &mut Vec<Value>,
+) -> Result<(Session, bool, bool)> {
+    let disposition = if interactive {
+        Some(prompt_disposition(server, workspace, inside_tmux).await?)
+    } else {
+        None
+    };
+    let (borrowed_for_input, attach_this_input) = match &disposition {
+        None => (borrowed, base_attach),
+        Some(Disposition::Switch) => (borrowed, true),
+        Some(Disposition::Detached | Disposition::Decline) => (borrowed, false),
+        Some(Disposition::Append(target)) => (Some(target), false),
+    };
+    if let Some(progress) = &mut report.progress {
+        progress.start(workspace)?;
+    }
+    report.event(
+        "workspace-started",
+        json!({"input_index":index,"input":discovery::masked(path)}),
+    )?;
+    let (session, reused) = build(
+        server,
+        workspace,
+        args,
+        report,
+        effects,
+        invocation,
+        borrowed_for_input,
+    )
+    .await?;
+    let mut result = effects.value();
+    result["input"] = json!(discovery::masked(path));
+    result["reused"] = json!(reused);
+    let appended = borrowed_for_input.is_some();
+    results.push(result.clone());
+    if let Some(progress) = &mut report.progress {
+        progress.finish(reused, workspace.bridge)?;
+    }
+    report.event("workspace-completed", result)?;
+    Ok((session, attach_this_input, appended))
 }
 
 struct AppendTarget {
@@ -417,16 +569,11 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
 
 async fn append_target(server: &Server) -> Result<AppendTarget> {
     let pane = std::env::var("TMUX_PANE")
-        .map_err(|_| {
-            CliError::new(
-                "current_pane_required",
-                "append requires TMUX_PANE identifying the current pane",
-            )
-        })?
+        .map_err(|_| CliError::usage("append requires TMUX_PANE identifying the current pane"))?
         .parse::<libtmux::PaneId>()
         .map_err(|error| append_context(error.to_string()))?;
     let context = std::env::var("TMUX")
-        .map_err(|_| append_context("append requires the inherited TMUX daemon identity"))?;
+        .map_err(|_| CliError::usage("append requires the inherited TMUX daemon identity"))?;
     let (socket, pid) = tmux_context(&context)?;
     let inherited_server = Server::builder()
         .socket_path(socket)
@@ -1000,19 +1147,39 @@ pub(super) async fn freeze(args: &ArgMatches, report: &Reporter) -> Result<()> {
 }
 
 fn require_attach_terminal() -> Result<()> {
-    use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
-        return Err(CliError::new(
-            "terminal_required",
-            "attaching requires a terminal; use -d",
-        ));
+        return Err(CliError::usage("attaching requires a terminal; use -d"));
     }
     Ok(())
 }
 
-async fn attach(server: &Server, session: &Session) -> Result<()> {
-    require_attach_terminal()?;
-    let action = if std::env::var_os("TMUX").is_some() {
+/// Whether an attached load can go ahead: inside tmux on the server it
+/// targets it always can, since it ends in `switch-client`, which needs no
+/// terminal; outside tmux it needs one. Aimed at a different server, it
+/// refuses before anything is built or any tmux command runs, so the same
+/// refusal applies whether or not that server is running.
+fn require_attach_context(server: &Server) -> Result<bool> {
+    match Server::from_env() {
+        Ok(context) if same_socket(context.socket_path(), server.socket_path()) => Ok(true),
+        Ok(_) => Err(CliError::usage(
+            "the target tmux server is not the current pane's; use -d to load without attaching",
+        )),
+        Err(_) => {
+            require_attach_terminal()?;
+            Ok(false)
+        }
+    }
+}
+
+/// Compares two socket paths without running a tmux command: lexically
+/// first, then resolved, so a symlinked alias for the same server still
+/// matches.
+fn same_socket(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result<()> {
+    let action = if inside_tmux {
         "switch-client"
     } else {
         "attach-session"
