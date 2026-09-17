@@ -580,7 +580,14 @@ async fn configure_session(
                 .unwrap_or_else(|| std::path::Path::new("."));
             *executable = parent.join(&*executable).into_os_string();
         }
-        let output = match process::run(&argv, &workspace.script_directory, report).await {
+        let output = match process::run(
+            &argv,
+            &workspace.script_directory,
+            report,
+            Some(effects.input),
+        )
+        .await
+        {
             Ok(output) => output,
             // Missing or not executable: tmuxp's BeforeLoadScriptNotExists,
             // the same failure as a nonzero exit, not a different one.

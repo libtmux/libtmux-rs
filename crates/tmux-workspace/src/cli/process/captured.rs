@@ -95,6 +95,7 @@ fn retain(retained: &mut String, text: &str, truncated: &mut bool) {
 
 fn chunk(
     report: &mut Reporter,
+    input_index: Option<usize>,
     stream: &str,
     text: &str,
     retained: &mut String,
@@ -108,7 +109,7 @@ fn chunk(
     if report.machine() {
         report.event(
             "script-output",
-            json!({"stream":stream,"text":text,"encoding":"utf-8-with-replacement"}),
+            json!({"input_index":input_index,"stream":stream,"text":text,"encoding":"utf-8-with-replacement"}),
         )?;
     } else if report.progress_output(stream, text)? {
         return Ok(());
@@ -122,10 +123,41 @@ fn chunk(
     Ok(())
 }
 
+/// Named so a caller that treats "could not start" as its own failure mode
+/// (a missing or non-executable `before_script`, tmuxp's
+/// `BeforeLoadScriptNotExists`) can tell it apart from every other io error
+/// this function can also raise.
+fn spawn(
+    command: &mut tokio::process::Command,
+    program: &OsString,
+    terminal: Option<terminal::Terminal>,
+) -> Result<(tokio::process::Child, rustix::process::Pid, ChildGroup)> {
+    let child = command.spawn().map_err(|error| {
+        CliError::new(
+            "child_spawn",
+            format!("could not start {program:?}: {error}"),
+        )
+    })?;
+    let pid = child
+        .id()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .and_then(rustix::process::Pid::from_raw)
+        .ok_or_else(|| CliError::new("child_identity", "child process identity is unavailable"))?;
+    let mut group = ChildGroup {
+        pid: Some(pid),
+        terminal,
+    };
+    if let Some(terminal) = &mut group.terminal {
+        terminal.handoff(pid)?;
+    }
+    Ok((child, pid, group))
+}
+
 pub(in crate::cli) async fn run(
     argv: &[OsString],
     directory: &Path,
     report: &mut Reporter,
+    input_index: Option<usize>,
 ) -> Result<ChildOutput> {
     let (program, arguments) = argv
         .split_first()
@@ -150,28 +182,7 @@ pub(in crate::cli) async fn run(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .process_group(0);
-    // Named so a caller that treats "could not start" as its own failure
-    // mode (a missing or non-executable before_script, tmuxp's
-    // BeforeLoadScriptNotExists) can tell it apart from every other io
-    // error this function can also raise.
-    let mut child = command.spawn().map_err(|error| {
-        CliError::new(
-            "child_spawn",
-            format!("could not start {program:?}: {error}"),
-        )
-    })?;
-    let pid = child
-        .id()
-        .and_then(|pid| i32::try_from(pid).ok())
-        .and_then(rustix::process::Pid::from_raw)
-        .ok_or_else(|| CliError::new("child_identity", "child process identity is unavailable"))?;
-    let mut group = ChildGroup {
-        pid: Some(pid),
-        terminal,
-    };
-    if let Some(terminal) = &mut group.terminal {
-        terminal.handoff(pid)?;
-    }
+    let (mut child, pid, mut group) = spawn(&mut command, program, terminal)?;
     let mut stdout = child
         .stdout
         .take()
@@ -187,6 +198,7 @@ pub(in crate::cli) async fn run(
         truncated: false,
         terminal: false,
     };
+    report.event("script-started", json!({"input_index":input_index}))?;
     let mut out_buffer = vec![0; 8192];
     let mut err_buffer = vec![0; 8192];
     let (mut out_pending, mut err_pending) = (Vec::new(), Vec::new());
@@ -197,12 +209,12 @@ pub(in crate::cli) async fn run(
             read = stdout.read(&mut out_buffer), if !out_done => {
                 let size = read?; out_done = size == 0;
                 let text = decode(&mut out_pending, &out_buffer[..size], out_done);
-                chunk(report, "stdout", &text, &mut output.stdout, &mut output.truncated)?;
+                chunk(report, input_index, "stdout", &text, &mut output.stdout, &mut output.truncated)?;
             }
             read = stderr.read(&mut err_buffer), if !err_done => {
                 let size = read?; err_done = size == 0;
                 let text = decode(&mut err_pending, &err_buffer[..size], err_done);
-                chunk(report, "stderr", &text, &mut output.stderr, &mut output.truncated)?;
+                chunk(report, input_index, "stderr", &text, &mut output.stderr, &mut output.truncated)?;
             }
             result = child_event(pid, &mut child_signal, group.terminal.is_some()), if status.is_none() => {
                 match result? {
@@ -227,6 +239,10 @@ pub(in crate::cli) async fn run(
     output.status = status.unwrap_or(1);
     group.finish(output.status == 0)?;
     child.wait().await?;
+    report.event(
+        "script-completed",
+        json!({"input_index":input_index,"child_status":output.status,"truncated":output.truncated}),
+    )?;
     Ok(output)
 }
 

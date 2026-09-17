@@ -247,7 +247,7 @@ pub(super) async fn shell(options: &ArgMatches, report: &mut Reporter) -> Result
     let output = if let Some(terminal) = terminal {
         run_terminal(&argv, terminal).await?
     } else {
-        run(&argv, &std::env::current_dir()?, report).await?
+        run(&argv, &std::env::current_dir()?, report, None).await?
     };
     if report.machine() {
         let mut value = output.value();
@@ -282,7 +282,7 @@ pub(super) async fn edit(options: &ArgMatches, report: &mut Reporter) -> Result<
         run_terminal(&argv, terminal).await?
     } else {
         require_support()?;
-        run(&argv, &std::env::current_dir()?, report).await?
+        run(&argv, &std::env::current_dir()?, report, None).await?
     };
     if !report.machine() {
         return output.success();
