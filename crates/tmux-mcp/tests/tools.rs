@@ -152,6 +152,12 @@ async fn capture_can_include_scrollback() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A layout value shaped like a flag is refused, not obeyed.
+///
+/// `select_layout` now goes through `Window::select_layout`'s guard,
+/// which refuses `-E` client-side as a value that is not a
+/// recognized layout -- it never reaches tmux at all, so it cannot be
+/// misread there as the flag that spreads panes evenly either.
 #[tokio::test]
 async fn layout_input_shaped_like_a_flag_is_not_obeyed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -182,9 +188,9 @@ async fn layout_input_shaped_like_a_flag_is_not_obeyed() {
         })))
         .await
         .map(|_| ())
-        .expect_err("flag-shaped layout is data")
+        .expect_err("flag-shaped layout is refused before it reaches tmux")
         .into_error_data();
-    assert!(error.message.contains("-E"), "{}", error.message);
+    assert_eq!(error.data.expect("classification")["kind"], "invalid_input");
     let after: Vec<Value> = json(tools.list_panes().await.expect("panes"))["panes"]
         .as_array()
         .unwrap()
