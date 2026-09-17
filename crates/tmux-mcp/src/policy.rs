@@ -547,10 +547,51 @@ mod tests {
         assert_eq!(names, reported);
         assert!(listed.iter().all(|tool| {
             let description = tool.description.as_deref().expect("description");
-            resolved.report.tools.iter().any(|row| {
-                row.name == tool.name && description.starts_with(row.controlled_opener())
-            })
+            resolved
+                .report
+                .tools
+                .iter()
+                .any(|row| row.name == tool.name && description.ends_with(row.controlled_opener()))
         }));
+    }
+
+    /// A caller that reads only up to a tool's first sentence -- a common
+    /// truncation or summary strategy -- must still be able to tell tools
+    /// apart.
+    ///
+    /// `finish_route` used to prepend the coarse, capability-keyed safety
+    /// sentence before a tool's own description; several tools sharing a
+    /// `(toolset, process_reach, output_classes)` bucket then shared the
+    /// byte-identical opener.
+    #[test]
+    fn every_tools_first_sentence_is_distinct() {
+        let selection =
+            Selection::parse_for_socket(None, None, None, true).expect("dedicated minimal surface");
+        let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
+            .expect("complete manifest");
+
+        let mut by_first_sentence: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for tool in &resolved.report.tools {
+            let first_sentence = tool
+                .description
+                .split(". ")
+                .next()
+                .unwrap_or(&tool.description);
+            by_first_sentence
+                .entry(first_sentence)
+                .or_default()
+                .push(tool.name.as_str());
+        }
+        let collisions: Vec<_> = by_first_sentence
+            .into_iter()
+            .filter(|(_, names)| names.len() > 1)
+            .collect();
+        assert!(
+            collisions.is_empty(),
+            "tools sharing a first sentence, indistinguishable by a caller that reads only that \
+             far: {collisions:?}",
+        );
     }
 
     #[test]

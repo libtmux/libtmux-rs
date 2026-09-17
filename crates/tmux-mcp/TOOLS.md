@@ -51,7 +51,7 @@ the detached MCP surface to expose modal human-client operations.
 
 ## `call_read_tools_batch`
 
-Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted. Call a serial batch of at most sixteen enabled inspect tools. One approval for this batch covers every enabled nested name; inner tools do not receive separate client approval. The complete JSON-RPC response line, including its request ID and newline, is capped at 1,000,000 bytes; truncated payloads and omitted bytes are explicit.
+Call a serial batch of at most sixteen enabled inspect tools. One approval for this batch covers every enabled nested name; inner tools do not receive separate client approval. The complete JSON-RPC response line, including its request ID and newline, is capped at 1,000,000 bytes; truncated payloads and omitted bytes are explicit. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -66,7 +66,7 @@ Read pane output; accepts no client-supplied executable input. Returned content 
 
 ## `capture_pane`
 
-Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted. Read a pane's contents. Reads the visible screen by default; set history to reach output that has scrolled off, or give a start and end line. Set last_command to get only what the last command printed, which is usually what you want and is far shorter -- it needs tmux 3.7 and a shell that marks its prompts, and says so when it cannot.
+Read a pane's contents. Reads the visible screen by default; set history to reach output that has scrolled off, or give a start and end line. Set last_command to get only what the last command printed, which is usually what you want and is far shorter -- it needs tmux 3.7 and a shell that marks its prompts, and says so when it cannot. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -81,7 +81,7 @@ Read pane output; accepts no client-supplied executable input. Returned content 
 
 ## `capture_since`
 
-Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted. Read what a pane wrote since the previous call. The first call, with no cursor, starts watching and returns a cursor; later calls pass it back and receive only what is new. Use this to follow a pane over several turns without re-reading the whole screen. The answer says missed=true if the cursor no longer names retained output, including when the pane outran the buffer, its live tail was evicted, or the server restarted. Starting a tail owns a retained observer until the tail is evicted or the server stops.
+Read what a pane wrote since the previous call. The first call, with no cursor, starts watching and returns a cursor; later calls pass it back and receive only what is new. Use this to follow a pane over several turns without re-reading the whole screen. The answer says missed=true if the cursor no longer names retained output, including when the pane outran the buffer, its live tail was evicted, or the server restarted. Starting a tail owns a retained observer until the tail is evicted or the server stops. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -96,7 +96,7 @@ Read pane output; accepts no client-supplied executable input. Returned content 
 
 ## `clear_pane_scrollback`
 
-Delete tmux state; accepts no command payload. Discard a pane's scrollback, so the next capture_pane returns only what happens next. Use this before running something whose output you want to read cleanly: it is far cheaper than reading past the old output every time. The visible screen is left alone.
+Discard a pane's scrollback, so the next capture_pane returns only what happens next. Use this before running something whose output you want to read cleanly: it is far cheaper than reading past the old output every time. The visible screen is left alone. Delete tmux state; accepts no command payload.
 
 - Toolset: `teardown`
 - Process reach: `none`
@@ -111,7 +111,7 @@ Delete tmux state; accepts no command payload. Discard a pane's scrollback, so t
 
 ## `create_session`
 
-Start a pane's configured process; accepts no command payload. Create a new detached tmux session
+Create a new detached tmux session Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -126,7 +126,7 @@ Start a pane's configured process; accepts no command payload. Create a new deta
 
 ## `create_window`
 
-Start a pane's configured process; accepts no command payload. Create a window running its configured process
+Create a window running its configured process Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -141,7 +141,7 @@ Start a pane's configured process; accepts no command payload. Create a window r
 
 ## `find_pane_by_position`
 
-Inspect tmux metadata; accepts no client-supplied executable input. Find the pane touching a named window corner
+Find the pane touching a named window corner Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -156,7 +156,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. Find the pan
 
 ## `get_pane_info`
 
-Inspect tmux metadata; accepts no client-supplied executable input. Return metadata for one pane
+Return metadata for one pane Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -171,7 +171,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. Return metad
 
 ## `get_server_info`
 
-Inspect tmux metadata; accepts no client-supplied executable input. Report every session with its windows and panes, in one call. Prefer this over calling the three listing tools separately: it costs tmux four commands rather than one per object.
+Report every session with its windows and panes, in one call. Prefer this over calling the three listing tools separately: it costs tmux four commands rather than one per object. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -186,7 +186,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. Report every
 
 ## `get_session_info`
 
-Inspect tmux metadata; accepts no client-supplied executable input. Return metadata for one session
+Return metadata for one session Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -201,7 +201,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. Return metad
 
 ## `get_tmux_variables`
 
-Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration. Read a bounded set of tmux variables against one pane
+Read a bounded set of tmux variables against one pane Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -216,7 +216,7 @@ Read configured tmux commands; accepts no client-supplied executable input. Retu
 
 ## `get_window_info`
 
-Inspect tmux metadata; accepts no client-supplied executable input. Return metadata for one window
+Return metadata for one window Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -231,7 +231,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. Return metad
 
 ## `kill_pane`
 
-Delete tmux state; accepts no command payload. Kill a pane. Killing a window's last pane closes the window
+Kill a pane. Killing a window's last pane closes the window Delete tmux state; accepts no command payload.
 
 - Toolset: `teardown`
 - Process reach: `none`
@@ -246,7 +246,7 @@ Delete tmux state; accepts no command payload. Kill a pane. Killing a window's l
 
 ## `kill_session`
 
-Delete tmux state; accepts no command payload. Kill a tmux session and everything in it
+Kill a tmux session and everything in it Delete tmux state; accepts no command payload.
 
 - Toolset: `teardown`
 - Process reach: `none`
@@ -261,7 +261,7 @@ Delete tmux state; accepts no command payload. Kill a tmux session and everythin
 
 ## `kill_window`
 
-Delete tmux state; accepts no command payload. Kill a window, closing it in every session that links it
+Kill a window, closing it in every session that links it Delete tmux state; accepts no command payload.
 
 - Toolset: `teardown`
 - Process reach: `none`
@@ -276,7 +276,7 @@ Delete tmux state; accepts no command payload. Kill a window, closing it in ever
 
 ## `list_panes`
 
-Inspect tmux metadata; accepts no client-supplied executable input. List every pane on the server
+List every pane on the server Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -291,7 +291,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. List every p
 
 ## `list_sessions`
 
-Inspect tmux metadata; accepts no client-supplied executable input. List every tmux session on the server
+List every tmux session on the server Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -306,7 +306,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. List every t
 
 ## `list_windows`
 
-Inspect tmux metadata; accepts no client-supplied executable input. List every window on the server. A window linked into several sessions appears once per link, so an id can repeat with a different session_id.
+List every window on the server. A window linked into several sessions appears once per link, so an id can repeat with a different session_id. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -321,7 +321,7 @@ Inspect tmux metadata; accepts no client-supplied executable input. List every w
 
 ## `move_window`
 
-Change tmux state; no client-supplied executable input. Move one window to a session and index
+Move one window to a session and index Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -336,7 +336,7 @@ Change tmux state; no client-supplied executable input. Move one window to a ses
 
 ## `paste_text`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Put text into a pane through a tmux paste buffer instead of typing it key by key. Use this for anything long or awkward: send_keys types the text, so a shell reading it can react to each character, and a bracketed-paste aware program treats a paste as one block. Optional Enter is appended to that same block. Empty text without Enter is a guarded buffer-free no-op. Paste targets only the named pane, even when synchronized input is enabled. A dead, input-disabled, mode-owned, terminal-attended, or inherited-caller target is refused before setup and again immediately before paste. The private buffer is deleted after setup, refusal, and paste outcomes; observations can still race with tmux.
+Put text into a pane through a tmux paste buffer instead of typing it key by key. Use this for anything long or awkward: send_keys types the text, so a shell reading it can react to each character, and a bracketed-paste aware program treats a paste as one block. Optional Enter is appended to that same block. Empty text without Enter is a guarded buffer-free no-op. Paste targets only the named pane, even when synchronized input is enabled. A dead, input-disabled, mode-owned, terminal-attended, or inherited-caller target is refused before setup and again immediately before paste. The private buffer is deleted after setup, refusal, and paste outcomes; observations can still race with tmux. Send input to a pane's program; a shell that receives it runs it with your user's permissions.
 
 - Toolset: `execute`
 - Process reach: `pane-input`
@@ -351,7 +351,7 @@ Send input to a pane's program; a shell that receives it runs it with your user'
 
 ## `rename_session`
 
-Change tmux state; no client-supplied executable input. Rename one session
+Rename one session Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -366,7 +366,7 @@ Change tmux state; no client-supplied executable input. Rename one session
 
 ## `rename_window`
 
-Change tmux state; no client-supplied executable input. Rename one window
+Rename one window Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -381,7 +381,7 @@ Change tmux state; no client-supplied executable input. Rename one window
 
 ## `resize_pane`
 
-Change tmux state; no client-supplied executable input. Move one edge of a pane by a number of rows or columns
+Move one edge of a pane by a number of rows or columns Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -396,7 +396,7 @@ Change tmux state; no client-supplied executable input. Move one edge of a pane 
 
 ## `resize_window`
 
-Change tmux state; no client-supplied executable input. Resize one window to exact cell dimensions
+Resize one window to exact cell dimensions Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -411,7 +411,7 @@ Change tmux state; no client-supplied executable input. Resize one window to exa
 
 ## `respawn_pane`
 
-Start a pane's configured process; accepts no command payload. Restart a pane's configured process with no command payload
+Restart a pane's configured process with no command payload Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -426,7 +426,7 @@ Start a pane's configured process; accepts no command payload. Restart a pane's 
 
 ## `run_shell_command`
 
-Run a shell command in a pane with your user's permissions. Run a shell command in a pane, wait for it to finish, and report its exit status with everything it wrote. This is the tool for "run this and tell me if it worked". Output is read from the pane's live stream, so nothing is missed and the shell prompt is not included. The command runs in a subshell, so cd and export do not persist and invalid syntax completes with a nonzero status. Valid inherited Bash and zsh ERR and DEBUG traps remain visible to the command while parent-shell traps and options remain unchanged. It requires one configured input recipient and observes its mode, liveness, input-off state, attended-client state, cohort, inherited-caller relation, known POSIX shell, and resolved route before watcher setup and again before dispatch. A process-wide endpoint-and-pane reservation blocks other MCP pane input until the completion marker or pane closure is proved. The resolved tmux executable and socket path must contain no ASCII terminal-control bytes. The reservation serializes this MCP's input, but tmux observations can still race with dispatch. The pane shell, tmux server, and configuration must be trusted. Reaching the deadline, cancelling, or an uncertain dispatch stops this request while its watcher keeps the reservation until completion is proved.
+Run a shell command in a pane, wait for it to finish, and report its exit status with everything it wrote. This is the tool for "run this and tell me if it worked". Output is read from the pane's live stream, so nothing is missed and the shell prompt is not included. The command runs in a subshell, so cd and export do not persist and invalid syntax completes with a nonzero status. Valid inherited Bash and zsh ERR and DEBUG traps remain visible to the command while parent-shell traps and options remain unchanged. It requires one configured input recipient and observes its mode, liveness, input-off state, attended-client state, cohort, inherited-caller relation, known POSIX shell, and resolved route before watcher setup and again before dispatch. A process-wide endpoint-and-pane reservation blocks other MCP pane input until the completion marker or pane closure is proved. The resolved tmux executable and socket path must contain no ASCII terminal-control bytes. The reservation serializes this MCP's input, but tmux observations can still race with dispatch. The pane shell, tmux server, and configuration must be trusted. Reaching the deadline, cancelling, or an uncertain dispatch stops this request while its watcher keeps the reservation until completion is proved. Run a shell command in a pane with your user's permissions.
 
 - Toolset: `execute`
 - Process reach: `pane-command`
@@ -441,7 +441,7 @@ Run a shell command in a pane with your user's permissions. Run a shell command 
 
 ## `search_panes`
 
-Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted. Search what panes are displaying with Rust's linear-time regex engine. Accept at most 4,096 pattern bytes; search at most 64 panes, 8,192 lines, and 1 MiB; spend at most 250 ms matching and five seconds capturing. Report the pane and line of every match. Use this to find where something is -- which pane has the failing test, which one printed the error -- instead of capturing panes one at a time. Searches the visible screen by default; set history to include scrollback.
+Search what panes are displaying with Rust's linear-time regex engine. Accept at most 4,096 pattern bytes; search at most 64 panes, 8,192 lines, and 1 MiB; spend at most 250 ms matching and five seconds capturing. Report the pane and line of every match. Use this to find where something is -- which pane has the failing test, which one printed the error -- instead of capturing panes one at a time. Searches the visible screen by default; set history to include scrollback. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -456,7 +456,7 @@ Read pane output; accepts no client-supplied executable input. Returned content 
 
 ## `select_layout`
 
-Change tmux state; no client-supplied executable input. Rearrange a window's panes into a named layout, or into a layout string tmux gave you earlier. Use even-horizontal, even-vertical, main-horizontal, main-vertical or tiled.
+Rearrange a window's panes into a named layout, or into a layout string tmux gave you earlier. Use even-horizontal, even-vertical, main-horizontal, main-vertical or tiled. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -471,7 +471,7 @@ Change tmux state; no client-supplied executable input. Rearrange a window's pan
 
 ## `select_pane`
 
-Change tmux state; no client-supplied executable input. Select a pane, making it its window's active pane. Give a direction to move relative to it instead: up, down, left, and right follow the layout, last returns to the previously active pane, and next and previous step through the window in order.
+Select a pane, making it its window's active pane. Give a direction to move relative to it instead: up, down, left, and right follow the layout, last returns to the previously active pane, and next and previous step through the window in order. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -486,7 +486,7 @@ Change tmux state; no client-supplied executable input. Select a pane, making it
 
 ## `select_window`
 
-Change tmux state; no client-supplied executable input. Select a window, making it its session's active window. Give a direction to move relative to it instead: next and previous step through the session in index order, and last returns to the previously active window.
+Select a window, making it its session's active window. Give a direction to move relative to it instead: next and previous step through the session in index order, and last returns to the previously active window. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -501,7 +501,7 @@ Change tmux state; no client-supplied executable input. Select a window, making 
 
 ## `send_keys`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Type text into a pane, press named keys in it, or both. `text` is sent literally, so C-c in it types those three characters. Use `keys` for anything without a character of its own -- C-c to interrupt a running command, Escape, Up, C-d -- which are tmux key names and are interpreted. Text, keys, and optional Enter keep that order in one tmux dispatch. Before input, the configured synchronized-pane cohort is observed; a dead, input-disabled, mode-owned, terminal-attended, or inherited-caller member refuses the whole call. Returned pane IDs describe configured membership, not confirmed delivery. The observation can race with tmux processing the input.
+Type text into a pane, press named keys in it, or both. `text` is sent literally, so C-c in it types those three characters. Use `keys` for anything without a character of its own -- C-c to interrupt a running command, Escape, Up, C-d -- which are tmux key names and are interpreted. Text, keys, and optional Enter keep that order in one tmux dispatch. Before input, the configured synchronized-pane cohort is observed; a dead, input-disabled, mode-owned, terminal-attended, or inherited-caller member refuses the whole call. Returned pane IDs describe configured membership, not confirmed delivery. The observation can race with tmux processing the input. Send input to a pane's program; a shell that receives it runs it with your user's permissions.
 
 - Toolset: `execute`
 - Process reach: `pane-input`
@@ -516,7 +516,7 @@ Send input to a pane's program; a shell that receives it runs it with your user'
 
 ## `send_keys_batch`
 
-Send input to a pane's program; a shell that receives it runs it with your user's permissions. Send an ordered batch of input operations to panes. Each executed row repeats send_keys' effective synchronized-cohort, dead-pane, input-off, pane-mode, attended-client, and inherited-caller preflight, then crosses one tmux dispatch. These observations can race with tmux processing the input.
+Send an ordered batch of input operations to panes. Each executed row repeats send_keys' effective synchronized-cohort, dead-pane, input-off, pane-mode, attended-client, and inherited-caller preflight, then crosses one tmux dispatch. These observations can race with tmux processing the input. Send input to a pane's program; a shell that receives it runs it with your user's permissions.
 
 - Toolset: `execute`
 - Process reach: `pane-input`
@@ -531,7 +531,7 @@ Send input to a pane's program; a shell that receives it runs it with your user'
 
 ## `set_history_limit`
 
-Change tmux state; no client-supplied executable input. Set the scrollback history limit for a session or its global default
+Set the scrollback history limit for a session or its global default Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -546,7 +546,7 @@ Change tmux state; no client-supplied executable input. Set the scrollback histo
 
 ## `set_mouse_enabled`
 
-Change tmux state; no client-supplied executable input. Set mouse handling for a session or the global session default
+Set mouse handling for a session or the global session default Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -561,7 +561,7 @@ Change tmux state; no client-supplied executable input. Set mouse handling for a
 
 ## `set_pane_title`
 
-Change tmux state; no client-supplied executable input. Set one pane's title
+Set one pane's title Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -576,7 +576,7 @@ Change tmux state; no client-supplied executable input. Set one pane's title
 
 ## `set_synchronize_panes`
 
-Change tmux state; no client-supplied executable input. Set the window default for synchronized pane input. Individual pane overrides still determine the effective configured cohort, so enabling this can amplify what one send_keys call reaches.
+Set the window default for synchronized pane input. Individual pane overrides still determine the effective configured cohort, so enabling this can amplify what one send_keys call reaches. Change tmux state; no client-supplied executable input.
 
 - Toolset: `execute`
 - Process reach: `none`
@@ -591,7 +591,7 @@ Change tmux state; no client-supplied executable input. Set the window default f
 
 ## `show_environment`
 
-Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets. Read the environment tmux hands to processes it starts, for the server or for one session. This is not the environment of anything already running: a pane started before a change keeps what it was given.
+Read the environment tmux hands to processes it starts, for the server or for one session. This is not the environment of anything already running: a pane started before a change keeps what it was given. Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -606,7 +606,7 @@ Read the tmux environment; accepts no client-supplied executable input. Returned
 
 ## `show_hooks`
 
-Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration. List the hooks tmux runs when something happens on the server, such as a pane exiting. This tool does not set hooks. Hooks set through another path remain in their server or session until unset; configuration files persist them across server restarts. Reach for this when tmux does something no tool here asked for.
+List the hooks tmux runs when something happens on the server, such as a pane exiting. This tool does not set hooks. Hooks set through another path remain in their server or session until unset; configuration files persist them across server restarts. Reach for this when tmux does something no tool here asked for. Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -621,7 +621,7 @@ Read configured tmux commands; accepts no client-supplied executable input. Retu
 
 ## `show_option`
 
-Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration. Read a tmux option, such as history-limit or a user option like @theme. Name the scope the option lives in; global-session is what tmux uses when a command names no target.
+Read a tmux option, such as history-limit or a user option like @theme. Name the scope the option lives in; global-session is what tmux uses when a command names no target. Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -636,7 +636,7 @@ Read configured tmux commands; accepts no client-supplied executable input. Retu
 
 ## `signal_channel`
 
-Change tmux state; no client-supplied executable input. Signal a tmux wait-for channel, releasing every current waiter. With no waiter, one signal is latched; signalling the same channel again clears that latch.
+Signal a tmux wait-for channel, releasing every current waiter. With no waiter, one signal is latched; signalling the same channel again clears that latch. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -651,7 +651,7 @@ Change tmux state; no client-supplied executable input. Signal a tmux wait-for c
 
 ## `snapshot_pane`
 
-Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted. Read pane content with cursor position, mode state, and scroll position in one reply. The state query and capture are separate, so the result is not atomic. Prefer this over capture_pane when you need to reason about where the pane is rather than only what it says -- a cursor at column zero on a fresh line is a shell waiting, and a pane in a mode may route keys to tmux instead of the workload.
+Read pane content with cursor position, mode state, and scroll position in one reply. The state query and capture are separate, so the result is not atomic. Prefer this over capture_pane when you need to reason about where the pane is rather than only what it says -- a cursor at column zero on a fresh line is a shell waiting, and a pane in a mode may route keys to tmux instead of the workload. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -666,7 +666,7 @@ Read pane output; accepts no client-supplied executable input. Returned content 
 
 ## `split_window`
 
-Start a pane's configured process; accepts no command payload. Split a window and start the configured process with no command payload
+Split a window and start the configured process with no command payload Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -681,7 +681,7 @@ Start a pane's configured process; accepts no command payload. Split a window an
 
 ## `swap_pane`
 
-Change tmux state; no client-supplied executable input. Swap the positions of two panes
+Swap the positions of two panes Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -696,7 +696,7 @@ Change tmux state; no client-supplied executable input. Swap the positions of tw
 
 ## `wait_for_channel`
 
-Change tmux state; no client-supplied executable input. Block until something signals a tmux wait-for channel. A pending signal is consumed. Pair this with a shell command that ends in `tmux wait-for -S <channel>` to synchronise with work this server did not start.
+Block until something signals a tmux wait-for channel. A pending signal is consumed. Pair this with a shell command that ends in `tmux wait-for -S <channel>` to synchronise with work this server did not start. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -711,7 +711,7 @@ Change tmux state; no client-supplied executable input. Block until something si
 
 ## `wait_for_text`
 
-Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted. Wait until a pane writes matching text. Reads the pane's live output stream, so text that scrolls past between checks is still seen. Prefer run_shell_command for commands you are sending yourself: it reports an exit status instead of guessing from output. Use this for output you did not author, such as a server logging that it is ready. A pattern that is a substring of a command you just sent with send_keys can already be on screen as its echo; outcome present_at_entry reports that rather than matched, so a still-pending command does not read as already done. The live stream attaches a client while waiting, changing the session's attached-client state. Each list accepts at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time regex engine.
+Wait until a pane writes matching text. Reads the pane's live output stream, so text that scrolls past between checks is still seen. Prefer run_shell_command for commands you are sending yourself: it reports an exit status instead of guessing from output. Use this for output you did not author, such as a server logging that it is ready. A pattern that is a substring of a command you just sent with send_keys can already be on screen as its echo; outcome present_at_entry reports that rather than matched, so a still-pending command does not read as already done. The live stream attaches a client while waiting, changing the session's attached-client state. Each list accepts at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time regex engine. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
 
 - Toolset: `inspect`
 - Process reach: `none`

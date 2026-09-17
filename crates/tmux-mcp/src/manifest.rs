@@ -460,13 +460,17 @@ fn finish_route(
 ) -> Result<ReportTool, SurfaceError> {
     let opener = row.controlled_opener();
     let remainder = route.attr.description.as_deref().unwrap_or("").trim();
+    // The tool's own text goes first, so a caller that truncates to the
+    // first sentence can still tell tools apart: the safety sentence,
+    // shared by every tool in the same (toolset, process_reach,
+    // output_classes) bucket, trails it instead.
     route.attr.description = Some(
-        if remainder.starts_with(opener) {
+        if remainder.ends_with(opener) {
             remainder.to_owned()
         } else if remainder.is_empty() {
             opener.to_owned()
         } else {
-            format!("{opener} {remainder}")
+            format!("{remainder} {opener}")
         }
         .into(),
     );

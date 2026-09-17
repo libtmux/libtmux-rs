@@ -131,16 +131,19 @@ async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
 
     for tool in listed {
         let description = tool.description.expect("controlled description");
+        // The safety sentence trails the tool's own text, so a
+        // caller that truncates to the first sentence still sees something
+        // that names what the tool does.
         assert!(
-            description.starts_with("Inspect tmux metadata;")
-                || description.starts_with("Read pane output;")
-                || description.starts_with("Read the tmux environment;")
-                || description.starts_with("Read configured tmux commands;")
-                || description.starts_with("Change tmux state;")
-                || description.starts_with("Start a pane's configured process;")
-                || description.starts_with("Send input to a pane's program;")
-                || description.starts_with("Run a shell command in a pane")
-                || description.starts_with("Delete tmux state;"),
+            description.ends_with("Inspect tmux metadata; accepts no client-supplied executable input.")
+                || description.ends_with("Returned content may be sensitive or untrusted.")
+                || description.ends_with("Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets.")
+                || description.ends_with("Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration.")
+                || description.ends_with("Change tmux state; no client-supplied executable input.")
+                || description.ends_with("Start a pane's configured process; accepts no command payload.")
+                || description.ends_with("Send input to a pane's program; a shell that receives it runs it with your user's permissions.")
+                || description.ends_with("Run a shell command in a pane with your user's permissions.")
+                || description.ends_with("Delete tmux state; accepts no command payload."),
             "{}: {description}",
             tool.name,
         );
