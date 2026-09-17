@@ -2113,6 +2113,49 @@ async fn failing_before_script_removes_the_owned_session_and_reads_as_one_senten
 }
 
 #[tokio::test]
+async fn before_script_that_cannot_start_removes_the_owned_session_too() {
+    // tmuxp raises BeforeLoadScriptNotExists for a missing or
+    // non-executable before_script; this port treats it exactly like a
+    // nonzero exit, not a different failure. A path under a fresh tempdir
+    // that nothing ever created stays missing without depending on any
+    // fixed system binary (no /bin/false: macOS carries none).
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let missing = directory.path().join("missing-script");
+    std::fs::write(
+        directory.path().join("bf.yaml"),
+        format!(
+            "session_name: nostart\nbefore_script: {}\nwindows:\n  - panes: [echo x]\n",
+            missing.display()
+        ),
+    )
+    .unwrap();
+    let output = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "--json",
+            "bf.yaml",
+        ],
+        directory.path(),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(!guard.server().has_session("nostart").await.unwrap());
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "script_failed", "{diagnostic}");
+    let effects = &diagnostic["retained_state"]["errors"][0]["effects"];
+    assert_eq!(effects["owned_session"], true);
+    assert_eq!(effects["stage"], "before-script");
+    let results = diagnostic["retained_state"]["results"]
+        .as_array()
+        .expect("results[] present even on this failure");
+    assert!(results.is_empty(), "{diagnostic}");
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn closed_workspace_completed_event_retains_the_completed_input() {
     use tokio::io::AsyncReadExt;
 
