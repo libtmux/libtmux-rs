@@ -2981,6 +2981,21 @@ async fn freezing_a_socket_with_no_server_names_the_missing_session() {
             .contains("no server"),
         "{output:?}"
     );
+
+    // Same for the bare form, which picks the sole session when there is one.
+    let output = at(
+        &["freeze", "-S", cold.to_str().unwrap(), "--json"],
+        directory.path(),
+    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "session_not_found", "{output:?}");
+    assert!(
+        !diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("no server"),
+        "{output:?}"
+    );
 }
 
 #[tokio::test]
