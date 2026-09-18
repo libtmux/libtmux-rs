@@ -684,26 +684,52 @@ mod tests {
 
     #[tokio::test]
     async fn successful_creation_marks_decode_and_missing_object_failures() {
-        for stdout in [b"malformed\n".as_slice(), b"".as_slice()] {
-            let executor = Arc::new(CreationExecutor {
-                calls: AtomicUsize::new(0),
-                stdout,
-            });
-            let core = Core::from_executor_for_test(executor.clone());
+        let executor = Arc::new(CreationExecutor {
+            calls: AtomicUsize::new(0),
+            stdout: b"malformed\n".as_slice(),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
 
-            let error = create_session(&core, |_format| Command::new("new-session"))
-                .await
-                .expect_err("tmux succeeded but did not describe the created session");
+        let error = create_session(&core, |_format| Command::new("new-session"))
+            .await
+            .expect_err("tmux succeeded but did not describe the created session");
 
-            assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
-            assert_eq!(error.kind(), ErrorKind::PartialEffect);
-            assert!(matches!(
-                error,
-                Error::AfterEffect {
-                    operation: "new-session",
-                    ..
-                }
-            ));
-        }
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
+        assert!(matches!(
+            error,
+            Error::AfterEffect {
+                operation: "new-session",
+                ..
+            }
+        ));
+    }
+
+    /// Output tmux could not decode is a partial effect: something was made and
+    /// this cannot say what. No output at all is not, and the difference is not
+    /// cosmetic -- a caller told an effect may be outstanding cannot safely
+    /// retry. A creating command that worked always prints the object it made,
+    /// so nothing printed means nothing made, which is what every tmux does for
+    /// a socket path under a directory that does not exist.
+    #[tokio::test]
+    async fn creation_that_printed_nothing_is_a_refusal_not_a_partial_effect() {
+        let executor = Arc::new(CreationExecutor {
+            calls: AtomicUsize::new(0),
+            stdout: b"".as_slice(),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
+
+        let error = create_session(&core, |_format| Command::new("new-session"))
+            .await
+            .expect_err("tmux succeeded but described no session");
+
+        assert_ne!(error.kind(), ErrorKind::PartialEffect);
+        assert!(matches!(
+            error,
+            Error::NoEffect {
+                command: "new-session",
+                ..
+            }
+        ));
     }
 }
