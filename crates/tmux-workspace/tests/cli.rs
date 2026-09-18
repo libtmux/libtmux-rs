@@ -68,14 +68,18 @@ async fn outside_tmux_attach_requires_terminal_before_scripts_or_session_mutatio
 }
 
 /// Inside tmux on the target server, an attached load needs no terminal at
-/// all: it builds the session and only then reaches for `switch-client`,
-/// which does not need one. With no attached client on that server to
-/// switch, `switch-client` itself fails, but not for lack of a terminal.
+/// all: it switches the client that is already there. A control-mode client
+/// is the only kind that attaches without one, which is what makes the
+/// accepted context testable beside the refused ones.
 #[tokio::test]
-async fn inside_tmux_attach_does_not_require_terminal() {
+async fn inside_tmux_attach_switches_an_attached_client_without_a_terminal() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
     let pane = current_pane(&keeper).await;
+    let control = libtmux::control::ControlMode::attach(guard.server(), keeper.id())
+        .await
+        .unwrap();
+    wait_for_client(guard.server(), keeper.id().as_ref()).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let marker = directory.path().join("before-script-ran");
     std::fs::write(
@@ -94,11 +98,8 @@ async fn inside_tmux_attach_does_not_require_terminal() {
         Some((&guard, pane.as_str())),
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{output:?}");
-    assert!(
-        !stderr.contains("attaching requires a terminal"),
-        "{stderr}"
-    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(!stderr.contains("use -d"), "{stderr}");
     assert!(marker.exists(), "inside tmux did not run before_script");
     let session = guard
         .server()
@@ -106,8 +107,152 @@ async fn inside_tmux_attach_does_not_require_terminal() {
         .await
         .unwrap()
         .expect("inside tmux did not build the session");
+    drop(control);
     session.kill().await.unwrap();
     guard.shutdown().await.unwrap();
+}
+
+/// Every way the pane a load was invoked from can fail to be usable: the
+/// variable that names the daemon is malformed or names a daemon that is
+/// gone, the pane is not a pane or not on this server, and nothing is
+/// attached to the pane's session. Each is settled before the first
+/// mutation, so none of them leaves a session behind.
+#[tokio::test]
+async fn unusable_attach_context_refuses_before_building_anything() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("terminal-keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let socket = guard.socket_path().display().to_string();
+    let live = format!("{socket},{},0", guard.daemon_pid());
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let marker = directory.path().join("before-script-ran");
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({
+            "session_name":"probe", "before_script":"touch before-script-ran",
+            "windows":[{"panes":["blank"]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let cases = [
+        (
+            "stale daemon",
+            format!("{socket},{},0", guard.daemon_pid().wrapping_add(1)),
+            pane.clone(),
+            "no longer",
+        ),
+        (
+            "malformed variable",
+            socket.clone(),
+            pane.clone(),
+            "socket,pid,session",
+        ),
+        (
+            "pane is not an id",
+            live.clone(),
+            "not-a-pane".into(),
+            "TMUX_PANE",
+        ),
+        (
+            "pane is not here",
+            live.clone(),
+            "%9999".into(),
+            "TMUX_PANE",
+        ),
+        ("nothing attached", live.clone(), pane.clone(), "attached"),
+    ];
+    for (case, context, current, needle) in cases {
+        let output = command_at(
+            &["load", "workspace.json", "-S", socket.as_str()],
+            directory.path(),
+        )
+        .env("TMUX", &context)
+        .env("TMUX_PANE", &current)
+        .output()
+        .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{case}: {output:?}");
+        assert!(stderr.contains(needle), "{case}: {stderr}");
+        assert!(!marker.exists(), "{case}: the refusal ran before_script");
+        assert_eq!(
+            guard.server().sessions().await.unwrap().len(),
+            1,
+            "{case}: the refusal built a session"
+        );
+    }
+    assert_eq!(keeper.windows().await.unwrap().len(), 1);
+    guard.shutdown().await.unwrap();
+}
+
+/// A socket path holding commas is one tmux cannot address but this command
+/// can, and `freeze` and `load --append` both accept it. The attach gate
+/// reads `TMUX` the same way, so an attached load accepts it too.
+#[tokio::test]
+async fn attach_accepts_matching_explicit_and_inherited_comma_socket_paths() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("terminal-keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let control = libtmux::control::ControlMode::attach(guard.server(), keeper.id())
+        .await
+        .unwrap();
+    wait_for_client(guard.server(), keeper.id().as_ref()).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let alias = directory.path().join("socket,with,commas");
+    std::os::unix::fs::symlink(guard.socket_path(), &alias).unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"comma-attached","windows":[{"panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &["load", "workspace.json", "-S", alias.to_str().unwrap()],
+        directory.path(),
+    )
+    .env(
+        "TMUX",
+        format!("{},{},0", alias.display(), guard.daemon_pid()),
+    )
+    .env("TMUX_PANE", &pane)
+    .output()
+    .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{output:?}");
+    assert!(!stderr.contains("use -d"), "{stderr}");
+    assert!(
+        guard
+            .server()
+            .session("comma-attached")
+            .await
+            .unwrap()
+            .is_some(),
+        "{stderr}"
+    );
+    drop(control);
+    guard.shutdown().await.unwrap();
+}
+
+/// Waits until tmux lists a client on the session, which attaching reports
+/// separately from registering it.
+async fn wait_for_client(server: &libtmux::Server, session: &str) {
+    for _ in 0..600 {
+        let attached = server
+            .cmd(
+                libtmux::Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(session)
+                    .arg("#{session_attached}"),
+            )
+            .await
+            .unwrap();
+        if attached.stdout_lossy().trim() != "0" {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("no client attached to {session}");
 }
 
 /// Aimed at a server other than the current pane's, an attached load refuses
@@ -573,6 +718,13 @@ struct PromptDriver<'a> {
 
 impl PromptDriver<'_> {
     async fn ask(&self, load_args: &str, prompt_needle: &str, answer: char) -> libtmux::Pane {
+        // An attached load resolves the client it would switch before it
+        // builds anything, so the pane needs one; control mode is the only
+        // kind that attaches without a terminal of its own.
+        let control = libtmux::control::ControlMode::attach(self.guard.server(), self.keeper.id())
+            .await
+            .unwrap();
+        wait_for_client(self.guard.server(), self.keeper.id().as_ref()).await;
         let window = self
             .keeper
             .new_window(
@@ -600,6 +752,7 @@ impl PromptDriver<'_> {
         )
         .await
         .unwrap();
+        drop(control);
         pane
     }
 }

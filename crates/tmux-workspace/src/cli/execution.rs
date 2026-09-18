@@ -426,7 +426,7 @@ async fn load_setup(
     // never will. Resolved, and any cross-server refusal raised, before any
     // tmux call this load makes.
     let inside_tmux = if !flag(args, "detached") && !flag(args, "append") {
-        Some(require_attach_context(&server)?)
+        Some(require_attach_context(&server).await?)
     } else {
         None
     };
@@ -550,6 +550,12 @@ fn append_context(message: impl Into<String>) -> CliError {
     CliError::new("append_context", message)
 }
 
+/// The one reader of `TMUX` in this command.
+///
+/// Splitting from the right keeps a socket path that contains commas, which
+/// tmux itself truncates at the first one; every path that resolves an
+/// endpoint from the variable goes through here so that the same value never
+/// names two different servers.
 fn tmux_context(context: &str) -> Result<(&str, u32)> {
     let parsed = context.rsplit_once(',').and_then(|(prefix, session)| {
         session.parse::<u32>().ok()?;
@@ -557,7 +563,9 @@ fn tmux_context(context: &str) -> Result<(&str, u32)> {
         let pid = pid.parse::<u32>().ok()?;
         (!socket.is_empty() && pid > 0).then_some((socket, pid))
     });
-    parsed.ok_or_else(|| append_context("TMUX must identify a socket, daemon PID, and session"))
+    parsed.ok_or_else(|| {
+        CliError::usage("TMUX is set to something other than socket,pid,session, so the current tmux server cannot be identified")
+    })
 }
 
 async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libtmux::SessionId)> {
@@ -570,7 +578,7 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
                 .arg("#{pid}:#{start_time}:#{session_id}"),
         )
         .await
-        .map_err(|error| append_context(error.to_string()))?;
+        .map_err(|_| append_context("the tmux server holding the current pane is not running"))?;
     let text = result.stdout_lossy();
     let mut fields = text.trim().split(':');
     let parsed = (|| {
@@ -1168,22 +1176,84 @@ fn require_attach_terminal() -> Result<()> {
     Ok(())
 }
 
-/// Whether an attached load can go ahead: inside tmux on the server it
-/// targets it always can, since it ends in `switch-client`, which needs no
-/// terminal; outside tmux it needs one. Aimed at a different server, it
-/// refuses before anything is built or any tmux command runs, so the same
-/// refusal applies whether or not that server is running.
-fn require_attach_context(server: &Server) -> Result<bool> {
-    match Server::from_env() {
-        Ok(context) if same_socket(context.socket_path(), server.socket_path()) => Ok(true),
-        Ok(_) => Err(CliError::usage(
-            "the target tmux server is not the current pane's; use -d to load without attaching",
-        )),
-        Err(_) => {
-            require_attach_terminal()?;
-            Ok(false)
-        }
+fn unusable_context(detail: &str) -> CliError {
+    CliError::usage(format!("{detail}; use -d to load without attaching"))
+}
+
+/// Whether an attached load will switch a client or attach one.
+///
+/// Inside tmux on the server it targets the load ends by switching the
+/// client, which needs no terminal but does need the context it was invoked
+/// from to still hold: the daemon `TMUX` names is the one answering on that
+/// socket, `TMUX_PANE` names a pane there, that pane has a terminal, and a
+/// client is attached to its session. Outside tmux the load attaches
+/// instead, which needs a terminal. Everything is resolved here, before the
+/// load creates anything, so a context that cannot be honoured leaves no
+/// session behind.
+async fn require_attach_context(server: &Server) -> Result<bool> {
+    let context = std::env::var("TMUX").unwrap_or_default();
+    if context.is_empty() {
+        require_attach_terminal()?;
+        return Ok(false);
     }
+    let (socket, daemon) = tmux_context(&context)?;
+    if !same_socket(std::path::Path::new(socket), server.socket_path()) {
+        return Err(unusable_context(
+            "the target tmux server is not the current pane's",
+        ));
+    }
+    // A key binding's `run-shell` inherits TMUX without TMUX_PANE: tmux then
+    // switches the client that pressed the key, and there is no pane to
+    // resolve.
+    let pane = std::env::var("TMUX_PANE").unwrap_or_default();
+    let mut command = Command::new("display-message").arg("-p");
+    command = if pane.is_empty() {
+        command.arg("#{pid}")
+    } else {
+        let pane = pane
+            .parse::<libtmux::PaneId>()
+            .map_err(|_| unusable_context("TMUX_PANE does not name a pane"))?;
+        // A target tmux cannot resolve is not a refusal: it answers with the
+        // fields it could fill and leaves the rest empty, so the pane's own
+        // id is what says whether it is there.
+        command
+            .arg("-t")
+            .arg(pane.as_ref())
+            .arg("#{pid}:#{pane_id}:#{pane_tty}:#{session_attached}")
+    };
+    let result = server
+        .cmd(command)
+        .await
+        .map_err(|_| unusable_context("the tmux server TMUX names is not running"))?;
+    if !result.success() {
+        return Err(unusable_context(
+            "the tmux server TMUX names is not running",
+        ));
+    }
+    let answer = result.stdout_lossy();
+    let mut fields = answer.trim().split(':');
+    if fields.next().and_then(|pid| pid.parse::<u32>().ok()) != Some(daemon) {
+        return Err(unusable_context(
+            "TMUX names a tmux server that is no longer the one on that socket",
+        ));
+    }
+    if pane.is_empty() {
+        return Ok(true);
+    }
+    if fields.next().is_none_or(str::is_empty) {
+        return Err(unusable_context(
+            "TMUX_PANE does not name a pane on the target tmux server",
+        ));
+    }
+    if !fields.next().is_some_and(|tty| tty.starts_with('/')) {
+        return Err(unusable_context("the current pane has no terminal"));
+    }
+    if fields.next().is_none_or(|count| count == "0") {
+        return Err(unusable_context(
+            "no tmux client is attached to the current pane's session",
+        ));
+    }
+    Ok(true)
 }
 
 /// Compares two socket paths without running a tmux command: lexically
@@ -1211,8 +1281,12 @@ async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result
         Ok(())
     } else {
         Err(CliError::new(
-            "attach_failed",
-            format!("tmux {action} exited with {status}"),
+            "tmux_failed",
+            if inside_tmux {
+                "the tmux client could not be switched to the session"
+            } else {
+                "the session could not be attached to this terminal"
+            },
         ))
     }
 }
