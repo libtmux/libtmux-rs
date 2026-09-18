@@ -1282,6 +1282,15 @@ impl Layout {
         }
     }
 
+    /// Whether this release's tree carries the preset.
+    ///
+    /// `has_behavior`, not `meets`: a development identifier carries what its
+    /// release number implies, and clamping one to the crate's floor hides a
+    /// preset the running tmux has.
+    pub(crate) fn is_in(self, version: &crate::TmuxVersion) -> bool {
+        version.has_behavior(&self.minimum_release())
+    }
+
     /// The first tmux release that arranges panes this way.
     ///
     /// The mirrored pair arrived in 3.5; the rest predate everything this
@@ -1403,6 +1412,7 @@ impl From<&TmuxText> for LayoutSpec {
 }
 
 /// The shape of a saved layout value, read before it reaches tmux.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 enum SavedLayout {
     /// A preset name, or a prefix of exactly one, passed as text rather than
     /// as a [`Layout`].
@@ -1437,6 +1447,7 @@ impl SavedLayout {
         };
         if let Some(named) = Self::PRESETS
             .into_iter()
+            .filter(|named| named.is_in(version))
             .find(|named| named.as_str() == text)
         {
             return Self::Preset(named);
@@ -1451,7 +1462,7 @@ impl SavedLayout {
         if !text.is_empty() {
             let candidates: Vec<Layout> = Self::PRESETS
                 .into_iter()
-                .filter(|named| version.meets(&named.minimum_release()))
+                .filter(|named| named.is_in(version))
                 .filter(|named| named.as_str().starts_with(text))
                 .collect();
             match candidates.as_slice() {
@@ -1978,5 +1989,53 @@ mod split_option_tests {
         let summary = options.into_command("@1", "#{pane_id}").summary();
         assert_eq!(summary.sensitive_argument_count(), 2);
         assert!(!summary.to_string().contains(secret));
+    }
+}
+
+#[cfg(test)]
+mod layout_version_tests {
+    use std::ffi::OsStr;
+
+    use super::{Layout, SavedLayout};
+    use crate::TmuxVersion;
+
+    fn classify(text: &str, raw: &[u8]) -> SavedLayout {
+        let version = TmuxVersion::parse_output(raw).expect("a parsable version");
+        SavedLayout::classify(OsStr::new(text), &version)
+    }
+
+    /// A development tree carries every preset its release number implies, so
+    /// resolving one must ask the behaviour question rather than the
+    /// conservative one: clamping a development identifier to the crate's
+    /// floor hides the mirrored pair on a tmux that has it, and silently
+    /// turns an ambiguous prefix back into a unique one.
+    #[test]
+    fn a_development_release_resolves_the_presets_it_has() {
+        for raw in [b"tmux next-3.9\n".as_slice(), b"tmux master\n".as_slice()] {
+            assert_eq!(
+                classify("main-vertical-mirrored", raw),
+                SavedLayout::Preset(Layout::MainVerticalMirrored),
+                "{} names a preset this tree has",
+                String::from_utf8_lossy(raw).trim(),
+            );
+            assert!(
+                matches!(classify("main-h", raw), SavedLayout::Ambiguous(_)),
+                "{}: `main-h` is a prefix of two presets once the mirrored pair exists",
+                String::from_utf8_lossy(raw).trim(),
+            );
+        }
+    }
+
+    /// The floor still has five presets, so the same prefix is unique there.
+    #[test]
+    fn the_minimum_release_resolves_its_own_presets() {
+        assert_eq!(
+            classify("main-h", b"tmux 3.2a\n"),
+            SavedLayout::Preset(Layout::MainHorizontal),
+        );
+        assert_eq!(
+            classify("main-vertical-mirrored", b"tmux 3.2a\n"),
+            SavedLayout::Unrecognized,
+        );
     }
 }

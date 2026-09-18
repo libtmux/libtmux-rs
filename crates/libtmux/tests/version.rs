@@ -1,5 +1,9 @@
 //! Integration tests for tmux version parsing and ordering.
 
+// Helpers outside a test function are not covered by clippy.toml's in-test
+// exemptions, and this file has one.
+#![allow(clippy::expect_used)]
+
 use std::error::Error as StdError;
 
 use libtmux::{Error, ReleaseSuffix, ReleaseVersion, TmuxVersion};
@@ -308,4 +312,55 @@ fn error_is_a_thread_safe_static_standard_error() {
     fn assert_error<T: StdError + Send + Sync + 'static>() {}
 
     assert_error::<Error>();
+}
+
+/// `meets` answers the floor question and clamps a development identifier to
+/// it, so gating a capability on it refuses a tmux that already has the
+/// capability. Its own rustdoc has warned about that from the start, and
+/// `SavedLayout::classify` gated the mirrored layout presets on it anyway:
+/// on `next-3.9` both presets vanished and an ambiguous prefix read as
+/// unique. Prose did not prevent that, so this does. A capability question
+/// belongs to `has_behavior` or `require`.
+#[test]
+fn meets_is_only_ever_asked_about_the_floor() {
+    let mut offenders = Vec::new();
+
+    for entry in walk(std::path::Path::new("src")) {
+        let source = std::fs::read_to_string(&entry).expect("a readable source file");
+        for (number, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            // Doc examples show the trap on purpose.
+            if code.starts_with("///") || code.starts_with("//!") || code.starts_with("//") {
+                continue;
+            }
+            if code.contains(".meets(") && !code.contains("MIN_SUPPORTED") {
+                offenders.push(format!(
+                    "{}:{}: {}",
+                    entry.display(),
+                    number + 1,
+                    code.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "`meets` gates a capability here; use `has_behavior` or `require`:\n{}",
+        offenders.join("\n"),
+    );
+}
+
+fn walk(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let entries = std::fs::read_dir(directory).expect("a readable directory");
+    for entry in entries {
+        let path = entry.expect("a readable entry").path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            found.push(path);
+        }
+    }
+    found
 }
