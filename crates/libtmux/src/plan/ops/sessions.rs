@@ -1,5 +1,6 @@
 //! Operations that make or address a session.
 
+use crate::escape_format;
 use std::ffi::OsString;
 
 use super::SESSION_FORMAT;
@@ -94,12 +95,12 @@ impl NewSession {
             .arg("-F")
             .arg(SESSION_FORMAT)
             .arg("-s")
-            .arg(self.name.clone());
+            .arg(escape_format(&self.name));
         if let Some(directory) = &self.start_directory {
-            command = command.arg("-c").arg(directory.clone());
+            command = command.arg("-c").arg(escape_format(directory));
         }
         if let Some(name) = &self.window_name {
-            command = command.arg("-n").arg(name.clone());
+            command = command.arg("-n").arg(escape_format(name));
         }
         command
     }

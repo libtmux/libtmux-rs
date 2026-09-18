@@ -17,7 +17,7 @@ use crate::snapshot::{PaneFields, PaneInfo};
 use crate::target::{PaneId, ServerIdentity, SessionId, WindowId};
 use crate::version::TmuxVersion;
 use crate::window::Window;
-use crate::{Command, CommandResult, Error, ObjectKind};
+use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
 mod observe;
 mod settings;
@@ -846,7 +846,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the title.
-    pub async fn set_title(&mut self, title: impl Into<OsString>) -> Result<&mut Self, Error> {
+    pub async fn set_title(&mut self, title: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "select-pane",
@@ -854,7 +854,7 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("-T")
-                .sensitive_arg(title.into()),
+                .sensitive_arg(title.into().into_os_string()),
         )
         .await?;
 

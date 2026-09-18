@@ -375,18 +375,18 @@ function libtmux::Layout::minimum_release: const fn(self) -> libtmux::ReleaseVer
 function libtmux::ListingDecodeError::field_name: const fn(&self) -> Option<&'static str>
 function libtmux::ListingDecodeError::row: const fn(&self) -> Option<usize>
 function libtmux::NewSessionOptions::command: fn(self, command: impl Into<OsString>) -> Self
-function libtmux::NewSessionOptions::new: fn(name: impl Into<OsString>) -> Self
+function libtmux::NewSessionOptions::new: fn(name: impl Into<libtmux::TmuxArg>) -> Self
 function libtmux::NewSessionOptions::size: fn(self, width: u32, height: u32) -> Self
-function libtmux::NewSessionOptions::start_directory: fn(self, directory: impl Into<PathBuf>) -> Self
-function libtmux::NewSessionOptions::window_name: fn(self, name: impl Into<OsString>) -> Self
+function libtmux::NewSessionOptions::start_directory: fn(self, directory: impl Into<libtmux::TmuxArg>) -> Self
+function libtmux::NewSessionOptions::window_name: fn(self, name: impl Into<libtmux::TmuxArg>) -> Self
 function libtmux::NewWindowOptions::command: fn(self, command: impl Into<OsString>) -> Self
 function libtmux::NewWindowOptions::environment: fn(self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self
 function libtmux::NewWindowOptions::index: const fn(self, index: i32) -> Self
-function libtmux::NewWindowOptions::new: fn(name: impl Into<OsString>) -> Self
+function libtmux::NewWindowOptions::new: fn(name: impl Into<libtmux::TmuxArg>) -> Self
 function libtmux::NewWindowOptions::placement: const fn(self, placement: libtmux::WindowPlacement) -> Self
 function libtmux::NewWindowOptions::replace_existing: const fn(self) -> Self
 function libtmux::NewWindowOptions::select: const fn(self) -> Self
-function libtmux::NewWindowOptions::start_directory: fn(self, directory: impl Into<std::path::PathBuf>) -> Self
+function libtmux::NewWindowOptions::start_directory: fn(self, directory: impl Into<libtmux::TmuxArg>) -> Self
 function libtmux::NewWindowOptions::unnamed: const fn() -> Self
 function libtmux::OptionSchema::accepts: fn(&self, scope: libtmux::OptionScope) -> bool
 function libtmux::OptionSchema::kind: const fn(&self) -> libtmux::OptionKind
@@ -448,7 +448,7 @@ function libtmux::Pane::send_prefix: async fn(&self) -> Result<(), libtmux::Erro
 function libtmux::Pane::session_id: const fn(&self) -> &libtmux::SessionId
 function libtmux::Pane::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Pane::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Pane::set_title: async fn(&mut self, title: impl Into<OsString>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::set_title: async fn(&mut self, title: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::split: async fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<Self, libtmux::Error>
 function libtmux::Pane::stream_output: async fn(&self) -> Result<libtmux::control::PaneOutput, libtmux::Error>
 function libtmux::Pane::stream_output_with_limits: async fn(&self, limits: libtmux::ControlLimits) -> Result<libtmux::control::PaneOutput, libtmux::Error>
@@ -615,7 +615,7 @@ function libtmux::Session::path: fn(&self) -> &libtmux::TmuxText
 function libtmux::Session::previous_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Session::refresh: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Session::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
-function libtmux::Session::rename: async fn(&mut self, name: impl Into<OsString>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Session::rename: async fn(&mut self, name: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
 function libtmux::Session::search_windows: async fn<M: libtmux::query::Matcher<libtmux::Window>>(&self, matcher: M) -> Result<Vec<libtmux::Window>, libtmux::Error>
 function libtmux::Session::search_windows_or_empty: async fn<M: libtmux::query::Matcher<libtmux::Window>>(&self, matcher: M) -> Vec<libtmux::Window>
 function libtmux::Session::set_environment: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
@@ -648,8 +648,11 @@ function libtmux::SplitOptions::full: const fn(self) -> Self
 function libtmux::SplitOptions::new: const fn(direction: libtmux::SplitDirection) -> Self
 function libtmux::SplitOptions::select: const fn(self) -> Self
 function libtmux::SplitOptions::size: const fn(self, size: libtmux::PaneSize) -> Self
-function libtmux::SplitOptions::start_directory: fn(self, directory: impl Into<std::path::PathBuf>) -> Self
+function libtmux::SplitOptions::start_directory: fn(self, directory: impl Into<libtmux::TmuxArg>) -> Self
 function libtmux::SplitOptions::zoom: const fn(self) -> Self
+function libtmux::TmuxArg::as_os_str: fn(&self) -> &OsStr
+function libtmux::TmuxArg::format: fn(template: impl Into<OsString>) -> Self
+function libtmux::TmuxArg::literal: fn(text: impl AsRef<OsStr>) -> Self
 function libtmux::TmuxText::as_bytes: fn(&self) -> &[u8]
 function libtmux::TmuxText::as_flag: fn(&self) -> Option<bool>
 function libtmux::TmuxText::as_str: fn(&self) -> Result<&str, std::str::Utf8Error>
@@ -700,7 +703,7 @@ function libtmux::Window::panes_or_empty: async fn(&self) -> Vec<libtmux::Pane>
 function libtmux::Window::previous_layout: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::refresh: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
-function libtmux::Window::rename: async fn(&mut self, name: impl Into<OsString>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::rename: async fn(&mut self, name: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::resize: async fn(&mut self, width: u32, height: u32) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::resize_by: async fn(&mut self, direction: libtmux::ResizeDirection, cells: u32) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, kill: bool) -> Result<&mut Self, libtmux::Error>
@@ -1035,6 +1038,7 @@ impl Clone for libtmux::SessionTarget
 impl Clone for libtmux::SessionTree
 impl Clone for libtmux::SplitDirection
 impl Clone for libtmux::SplitOptions
+impl Clone for libtmux::TmuxArg
 impl Clone for libtmux::TmuxText
 impl Clone for libtmux::TmuxVersion
 impl Clone for libtmux::Window
@@ -1207,6 +1211,7 @@ impl Debug for libtmux::SessionTree
 impl Debug for libtmux::SessionTreeFields
 impl Debug for libtmux::SplitDirection
 impl Debug for libtmux::SplitOptions
+impl Debug for libtmux::TmuxArg
 impl Debug for libtmux::TmuxText
 impl Debug for libtmux::TmuxVersion
 impl Debug for libtmux::Window
@@ -1358,6 +1363,7 @@ impl Eq for libtmux::SessionName
 impl Eq for libtmux::SessionNameError
 impl Eq for libtmux::SessionTarget
 impl Eq for libtmux::SplitDirection
+impl Eq for libtmux::TmuxArg
 impl Eq for libtmux::TmuxText
 impl Eq for libtmux::TmuxVersion
 impl Eq for libtmux::Window
@@ -1404,11 +1410,21 @@ impl Error for libtmux::query::MultipleItemsError
 impl Error for libtmux::test::RetryTimeout
 impl Error for libtmux::test::TestServerError
 impl From<&OsStr> for libtmux::LayoutSpec
+impl From<&OsStr> for libtmux::TmuxArg
+impl From<&OsString> for libtmux::TmuxArg
+impl From<&Path> for libtmux::TmuxArg
+impl From<&PathBuf> for libtmux::TmuxArg
+impl From<&String> for libtmux::TmuxArg
 impl From<&libtmux::TmuxText> for libtmux::LayoutSpec
+impl From<&libtmux::TmuxText> for libtmux::TmuxArg
 impl From<&str> for libtmux::LayoutSpec
+impl From<&str> for libtmux::TmuxArg
 impl From<&str> for libtmux::TmuxText
 impl From<OsString> for libtmux::LayoutSpec
+impl From<OsString> for libtmux::TmuxArg
+impl From<PathBuf> for libtmux::TmuxArg
 impl From<String> for libtmux::LayoutSpec
+impl From<String> for libtmux::TmuxArg
 impl From<String> for libtmux::TmuxText
 impl From<Vec<u8>> for libtmux::TmuxText
 impl From<libtmux::Layout> for libtmux::LayoutSpec
@@ -1464,6 +1480,7 @@ impl Hash for libtmux::Session
 impl Hash for libtmux::SessionId
 impl Hash for libtmux::SessionName
 impl Hash for libtmux::SessionTarget
+impl Hash for libtmux::TmuxArg
 impl Hash for libtmux::TmuxText
 impl Hash for libtmux::Window
 impl Hash for libtmux::WindowId
@@ -1495,6 +1512,7 @@ impl Ord for libtmux::ReleaseVersion
 impl Ord for libtmux::SessionId
 impl Ord for libtmux::SessionName
 impl Ord for libtmux::SessionTarget
+impl Ord for libtmux::TmuxArg
 impl Ord for libtmux::TmuxText
 impl Ord for libtmux::WindowId
 impl Ord for libtmux::WindowTarget
@@ -1551,6 +1569,7 @@ impl PartialEq for libtmux::SessionName
 impl PartialEq for libtmux::SessionNameError
 impl PartialEq for libtmux::SessionTarget
 impl PartialEq for libtmux::SplitDirection
+impl PartialEq for libtmux::TmuxArg
 impl PartialEq for libtmux::TmuxText
 impl PartialEq for libtmux::TmuxVersion
 impl PartialEq for libtmux::Window
@@ -1597,6 +1616,7 @@ impl PartialOrd for libtmux::ReleaseVersion
 impl PartialOrd for libtmux::SessionId
 impl PartialOrd for libtmux::SessionName
 impl PartialOrd for libtmux::SessionTarget
+impl PartialOrd for libtmux::TmuxArg
 impl PartialOrd for libtmux::TmuxText
 impl PartialOrd for libtmux::TmuxVersion
 impl PartialOrd for libtmux::WindowId
@@ -1791,6 +1811,7 @@ struct libtmux::SessionTree
 struct libtmux::SessionTreeFields
 struct libtmux::SparseValues<T>
 struct libtmux::SplitOptions
+struct libtmux::TmuxArg
 struct libtmux::TmuxText
 struct libtmux::TmuxVersion
 struct libtmux::Window

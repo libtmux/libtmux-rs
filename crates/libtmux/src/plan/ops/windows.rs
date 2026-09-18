@@ -1,5 +1,6 @@
 //! Operations that make or address a window.
 
+use crate::escape_format;
 use std::ffi::OsString;
 use std::fmt;
 
@@ -157,10 +158,10 @@ impl NewWindow {
             command = command.arg("-d");
         }
         if let Some(name) = &self.name {
-            command = command.arg("-n").arg(name.clone());
+            command = command.arg("-n").arg(escape_format(name));
         }
         if let Some(directory) = &self.start_directory {
-            command = command.arg("-c").arg(directory.clone());
+            command = command.arg("-c").arg(escape_format(directory));
         }
         for (name, value) in &self.environment {
             command = command.arg("-e").sensitive_arg(assignment(name, value));
@@ -271,7 +272,7 @@ impl RenameWindow {
                 .arg("-t")
                 .arg(self.target.token(resolve)?)
                 .arg("--")
-                .arg(self.name.clone()),
+                .arg(escape_format(&self.name)),
         )
     }
 }

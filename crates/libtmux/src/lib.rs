@@ -94,21 +94,38 @@
 //! # }
 //! ```
 //!
-//! ## A name reaches tmux as a format
+//! ## A name reaches tmux as text
 //!
 //! tmux expands a name through its format machinery before it checks it, so
-//! `#{session_id}` in a name becomes the id and `#(command)` runs `command` in
-//! a shell and becomes its output. That holds for `new_session`,
-//! `Session::rename`, `Window::rename`, and every other name tmux takes from
-//! a command. tmux is consistent here: whoever can run `tmux new-session` can
-//! already run commands, so a name given on a command line is trusted by
-//! construction.
+//! `#{session_id}` in a name would become the id and `#(command)` would run
+//! `command` in a shell. That holds for a session and window name, a pane
+//! title, an option name, and the `-c` start directory alike. tmux is
+//! consistent here: whoever can run `tmux new-session` can already run
+//! commands, so a name given on a command line is trusted by construction.
 //!
 //! A library moves that boundary. tmux's caller is a person at a shell; this
 //! crate's caller is a program, and the name it passes may have come from an
-//! argument, a request field, or a configuration file. Passing untrusted text
-//! as a name gives whoever wrote it a shell, so escape `#` as `##` before it
-//! reaches tmux, or refuse the name.
+//! argument, a request field, or a configuration file. So every argument tmux
+//! would expand is typed [`TmuxArg`], and every conversion into it escapes:
+//! what a caller passes is what tmux stores.
+//!
+//! ```no_run
+//! # async fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! use libtmux::{NewSessionOptions, TmuxArg};
+//!
+//! // Text is text, whatever is in it.
+//! server.new_session("release#1").await?;
+//!
+//! // Expansion is opt-in, and reads as such. Only for a template the
+//! // program itself wrote.
+//! server
+//!     .new_session(NewSessionOptions::new("build").start_directory(
+//!         TmuxArg::format("#{pane_current_path}"),
+//!     ))
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! Expansion is not the only way the name you asked for is not the name you
 //! get. tmux releases through 3.6b rewrite `:` and `.` in a session name to
@@ -356,7 +373,7 @@ pub use snapshot::PaneProgressState;
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{
     PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName, SessionNameError,
-    SessionTarget, WindowId, WindowTarget, escape_format,
+    SessionTarget, TmuxArg, WindowId, WindowTarget, escape_format,
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, since};
 pub use window::{

@@ -19,7 +19,7 @@ use crate::pane::Pane;
 use crate::session::Session;
 use crate::{
     Command, CommandChain, CommandResult, EngineCapabilities, Error, ReleaseSuffix, ReleaseVersion,
-    ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
+    ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, TmuxArg,
 };
 
 mod builder;
@@ -1961,9 +1961,9 @@ mod tests {
 #[must_use = "options describe a session but do not create one"]
 #[derive(Clone)]
 pub struct NewSessionOptions {
-    name: OsString,
-    start_directory: Option<PathBuf>,
-    window_name: Option<OsString>,
+    name: TmuxArg,
+    start_directory: Option<TmuxArg>,
+    window_name: Option<TmuxArg>,
     command: Option<OsString>,
     width: Option<u32>,
     height: Option<u32>,
@@ -1984,7 +1984,9 @@ impl fmt::Debug for NewSessionOptions {
 
 impl NewSessionOptions {
     /// Describe a session with the given name.
-    pub fn new(name: impl Into<OsString>) -> Self {
+    ///
+    /// The name is sent literally. [`TmuxArg::format`] opts into expansion.
+    pub fn new(name: impl Into<TmuxArg>) -> Self {
         Self {
             name: name.into(),
             start_directory: None,
@@ -1997,15 +1999,15 @@ impl NewSessionOptions {
 
     /// Set the working directory for the session's first window.
     ///
-    /// tmux expands this as a format, so [`crate::escape_format`] belongs
-    /// around text a program did not write.
-    pub fn start_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+    /// The directory is sent literally. [`TmuxArg::format`] opts into
+    /// expansion, which is how `#{pane_current_path}` is asked for.
+    pub fn start_directory(mut self, directory: impl Into<TmuxArg>) -> Self {
         self.start_directory = Some(directory.into());
         self
     }
 
-    /// Name the session's first window.
-    pub fn window_name(mut self, name: impl Into<OsString>) -> Self {
+    /// Name the session's first window, literally.
+    pub fn window_name(mut self, name: impl Into<TmuxArg>) -> Self {
         self.window_name = Some(name.into());
         self
     }
@@ -2042,12 +2044,12 @@ impl NewSessionOptions {
             .arg("-F")
             .arg(print_format)
             .arg("-s")
-            .arg(self.name);
+            .arg(self.name.into_os_string());
         if let Some(directory) = self.start_directory {
             command = command.arg("-c").arg(directory.into_os_string());
         }
         if let Some(name) = self.window_name {
-            command = command.arg("-n").arg(name);
+            command = command.arg("-n").arg(name.into_os_string());
         }
         if let (Some(width), Some(height)) = (self.width, self.height) {
             command = command
@@ -2065,6 +2067,7 @@ impl NewSessionOptions {
 
 impl<T: Into<OsString>> From<T> for NewSessionOptions {
     fn from(name: T) -> Self {
+        let name: OsString = name.into();
         Self::new(name)
     }
 }

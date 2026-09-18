@@ -235,9 +235,9 @@ impl TmuxTools {
             start_directory,
         }): Parameters<CreateSessionArgs>,
     ) -> Result<Json<SessionView>, ToolError> {
-        let mut options = NewSessionOptions::new(libtmux::escape_format(name));
+        let mut options = NewSessionOptions::new(name);
         if let Some(directory) = start_directory {
-            options = options.start_directory(libtmux::escape_format(directory));
+            options = options.start_directory(directory);
         }
 
         let session = self

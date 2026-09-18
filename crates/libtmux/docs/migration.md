@@ -1,5 +1,45 @@
 # Migrating from 0.1.0-alpha.11
 
+## Names, titles and start directories are text
+
+Every argument tmux expands as a format now takes `TmuxArg`, and every
+conversion into it escapes. `&str`, `String`, `OsString`, `Path` and
+`&TmuxText` all convert, so ordinary calls are unchanged:
+
+```no_run
+# async fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+// Unchanged, and now stored as written rather than expanded.
+server.new_session("release#1").await?;
+# Ok(())
+# }
+```
+
+Two changes to make:
+
+- Drop any `escape_format` you applied before calling one of these. The sink
+  escapes now, so passing pre-escaped text stores the escape characters.
+- Where you meant a format, say so with `TmuxArg::format`. This is the one way
+  to reach `#{pane_current_path}` in a start directory, and it belongs only
+  around a template the program itself wrote.
+
+```no_run
+# async fn split(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+use libtmux::{SplitDirection, SplitOptions, TmuxArg};
+
+pane.split(
+    SplitOptions::new(SplitDirection::Below)
+        .start_directory(TmuxArg::format("#{pane_current_path}")),
+)
+.await?;
+# Ok(())
+# }
+```
+
+The sinks: `NewSessionOptions::{new, window_name, start_directory}`,
+`NewWindowOptions::{new, start_directory}`, `SplitOptions::start_directory`,
+`Session::rename`, `Window::rename`, `Pane::set_title`. Option names and the
+`plan` operations escape internally and need no change at the call site.
+
 ## Control events
 
 `ControlEvents` yields `Result<Event, Error>`. `ControlEvents::next_event`

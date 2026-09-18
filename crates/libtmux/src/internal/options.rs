@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
 
+use crate::escape_format;
 use crate::formats::TmuxText;
 use crate::hooks::IndexedHooks;
 use crate::hooks::ReplaceMode;
@@ -82,7 +83,7 @@ pub(crate) async fn get(
         .apply(Command::new("show-options"))
         .arg("-v")
         .arg("--")
-        .arg(OsString::from(name));
+        .arg(escape_format(name));
     let result = core.execute(command).await?;
 
     if !result.success() {
@@ -163,7 +164,7 @@ pub(crate) async fn set(
         Some(name),
         command
             .arg("--")
-            .arg(OsString::from(name))
+            .arg(escape_format(name))
             .sensitive_arg(value.into()),
     )
     .await
@@ -181,7 +182,7 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
             .apply(Command::new("set-option"))
             .arg("-u")
             .arg("--")
-            .arg(OsString::from(name)),
+            .arg(escape_format(name)),
     )
     .await
 }
@@ -206,10 +207,12 @@ pub(crate) async fn set_hook(
 ) -> Result<(), Error> {
     ensure_scope(core, scope, name).await?;
 
+    // Every valid hook name is `[a-z-]+`, so escaping is a no-op on one and
+    // protection if tmux ever expands here as it does for an option name.
     let slot = if name.contains('[') {
-        OsString::from(name)
+        escape_format(name)
     } else {
-        OsString::from(format!("{name}[0]"))
+        escape_format(format!("{name}[0]"))
     };
 
     run(
@@ -237,7 +240,7 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
             .apply(Command::new("set-hook"))
             .arg("-u")
             .arg("--")
-            .arg(OsString::from(name)),
+            .arg(escape_format(name)),
     )
     .await
 }
@@ -450,7 +453,7 @@ async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<Strin
             scope
                 .apply(Command::new("show-options"))
                 .arg("--")
-                .arg(OsString::from(name)),
+                .arg(escape_format(name)),
         )
         .await?;
     if !result.success() {
@@ -536,7 +539,7 @@ pub(crate) async fn set_hooks(
                 .apply(Command::new("set-hook"))
                 .arg("-u")
                 .arg("--")
-                .arg(OsString::from(name)),
+                .arg(escape_format(name)),
         );
     }
     for (index, value) in hooks {
@@ -544,7 +547,7 @@ pub(crate) async fn set_hooks(
             scope
                 .apply(Command::new("set-hook"))
                 .arg("--")
-                .arg(OsString::from(format!("{name}[{index}]")))
+                .arg(escape_format(format!("{name}[{index}]")))
                 // A hook command is bytes, as everything tmux stores is. The
                 // single-hook path forwards them; going through a `String`
                 // here would replace whatever is not UTF-8 before tmux ever

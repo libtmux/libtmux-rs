@@ -487,14 +487,13 @@ impl TmuxTools {
         let scope = self
             .option_scope(scope.as_deref(), target.as_deref())
             .await?;
-        let literal_name = libtmux::escape_format(&name).to_string_lossy().into_owned();
         let value = match scope {
-            OptionScope::Server => self.server.get_option(&literal_name).await,
-            OptionScope::GlobalSession => self.server.get_global_option(&literal_name).await,
-            OptionScope::GlobalWindow => self.server.get_global_window_option(&literal_name).await,
-            OptionScope::Session(session) => session.get_option(&literal_name).await,
-            OptionScope::Window(window) => window.get_option(&literal_name).await,
-            OptionScope::Pane(pane) => pane.get_option(&literal_name).await,
+            OptionScope::Server => self.server.get_option(&name).await,
+            OptionScope::GlobalSession => self.server.get_global_option(&name).await,
+            OptionScope::GlobalWindow => self.server.get_global_window_option(&name).await,
+            OptionScope::Session(session) => session.get_option(&name).await,
+            OptionScope::Window(window) => window.get_option(&name).await,
+            OptionScope::Pane(pane) => pane.get_option(&name).await,
         }
         .map_err(|e| tmux_error(&e))?;
 

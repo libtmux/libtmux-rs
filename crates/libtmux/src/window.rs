@@ -17,7 +17,7 @@ use crate::snapshot::WindowProjection;
 #[cfg(feature = "query")]
 use crate::snapshot::{WindowFields, WindowInfo};
 use crate::target::{ServerIdentity, SessionId, WindowId};
-use crate::{Command, CommandResult, Error, ObjectKind};
+use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
 mod navigation;
 mod settings;
@@ -374,7 +374,7 @@ impl Window {
     /// tmux expands the name as a format before it checks it, so `#(command)`
     /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
     /// before passing text a caller supplied.
-    pub async fn rename(&mut self, name: impl Into<OsString>) -> Result<&mut Self, Error> {
+    pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "rename-window",
@@ -382,7 +382,7 @@ impl Window {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("--")
-                .arg(name.into()),
+                .arg(name.into().into_os_string()),
         )
         .await?;
 
@@ -1747,7 +1747,7 @@ impl ResizeDirection {
 #[derive(Clone)]
 pub struct SplitOptions {
     direction: SplitDirection,
-    start_directory: Option<std::path::PathBuf>,
+    start_directory: Option<TmuxArg>,
     command: Option<OsString>,
     size: Option<PaneSize>,
     environment: Vec<(OsString, OsString)>,
@@ -1789,9 +1789,9 @@ impl SplitOptions {
 
     /// Set the new pane's working directory.
     ///
-    /// tmux expands this as a format, so [`crate::escape_format`] belongs
-    /// around text a program did not write.
-    pub fn start_directory(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+    /// The directory is sent literally. [`TmuxArg::format`] opts into
+    /// expansion, which is how `#{pane_current_path}` is asked for.
+    pub fn start_directory(mut self, directory: impl Into<TmuxArg>) -> Self {
         self.start_directory = Some(directory.into());
         self
     }

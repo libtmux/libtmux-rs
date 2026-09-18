@@ -589,7 +589,7 @@ impl TmuxTools {
     ) -> Result<Json<SessionView>, ToolError> {
         let mut session = self.find_session(&session).await?;
         session
-            .rename(libtmux::escape_format(name))
+            .rename(name)
             .await
             .map_err(|error| tmux_error(&error))?;
         let foreign_attached = self.foreign_attached_sessions().await;
@@ -621,7 +621,7 @@ impl TmuxTools {
     ) -> Result<Json<WindowView>, ToolError> {
         let mut window = self.find_window(&window).await?;
         window
-            .rename(libtmux::escape_format(name))
+            .rename(name)
             .await
             .map_err(|error| tmux_error(&error))?;
         Ok(Json(Self::one_window(&window)))
@@ -716,7 +716,7 @@ impl TmuxTools {
         Parameters(PaneTitleArgs { pane, title }): Parameters<PaneTitleArgs>,
     ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
-        pane.set_title(libtmux::escape_format(title))
+        pane.set_title(title)
             .await
             .map_err(|error| tmux_error(&error))?;
         let socket = self.socket();
@@ -807,12 +807,12 @@ impl TmuxTools {
         }): Parameters<CreateWindowArgs>,
     ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&session).await?;
-        let mut options = name.map(libtmux::escape_format).map_or_else(
+        let mut options = name.map(libtmux::TmuxArg::from).map_or_else(
             libtmux::NewWindowOptions::unnamed,
             libtmux::NewWindowOptions::new,
         );
         if let Some(directory) = start_directory {
-            options = options.start_directory(libtmux::escape_format(directory));
+            options = options.start_directory(directory);
         }
         let window = session
             .new_window(options)
@@ -865,7 +865,7 @@ impl TmuxTools {
             options = options.size(PaneSize::Percent(percent));
         }
         if let Some(directory) = start_directory {
-            options = options.start_directory(libtmux::escape_format(directory));
+            options = options.start_directory(directory);
         }
         let created = self
             .find_pane(&pane)

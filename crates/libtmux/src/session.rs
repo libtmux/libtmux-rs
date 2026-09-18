@@ -19,7 +19,7 @@ use crate::snapshot::SessionFields;
 use crate::snapshot::SessionInfo;
 use crate::target::{ServerIdentity, SessionId};
 use crate::window::Window;
-use crate::{Command, CommandResult, Error, ObjectKind};
+use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
 /// What a session's environment holds for one name.
 ///
@@ -537,7 +537,7 @@ impl Session {
     /// tmux expands the name as a format before it checks it, so `#(command)`
     /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
     /// before passing text a caller supplied.
-    pub async fn rename(&mut self, name: impl Into<OsString>) -> Result<&mut Self, Error> {
+    pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "rename-session",
@@ -545,7 +545,7 @@ impl Session {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("--")
-                .arg(name.into()),
+                .arg(name.into().into_os_string()),
         )
         .await?;
 
@@ -959,8 +959,8 @@ impl FilterSchema for Session {
 #[must_use = "options describe a window but do not create one"]
 #[derive(Clone)]
 pub struct NewWindowOptions {
-    name: Option<OsString>,
-    start_directory: Option<std::path::PathBuf>,
+    name: Option<TmuxArg>,
+    start_directory: Option<TmuxArg>,
     command: Option<OsString>,
     index: Option<i32>,
     placement: Option<WindowPlacement>,
@@ -1041,8 +1041,10 @@ impl NewWindowOptions {
         }
     }
 
-    /// Describe a window with the given name.
-    pub fn new(name: impl Into<OsString>) -> Self {
+    /// Describe a window with the given name, sent literally.
+    ///
+    /// [`TmuxArg::format`] opts into expansion.
+    pub fn new(name: impl Into<TmuxArg>) -> Self {
         Self {
             name: Some(name.into()),
             ..Self::unnamed()
@@ -1051,9 +1053,9 @@ impl NewWindowOptions {
 
     /// Set the window's working directory.
     ///
-    /// tmux expands this as a format, so [`crate::escape_format`] belongs
-    /// around text a program did not write.
-    pub fn start_directory(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+    /// The directory is sent literally. [`TmuxArg::format`] opts into
+    /// expansion, which is how `#{pane_current_path}` is asked for.
+    pub fn start_directory(mut self, directory: impl Into<TmuxArg>) -> Self {
         self.start_directory = Some(directory.into());
         self
     }
@@ -1132,7 +1134,7 @@ impl NewWindowOptions {
             command = command.arg("-k");
         }
         if let Some(name) = self.name {
-            command = command.arg("-n").arg(name);
+            command = command.arg("-n").arg(name.into_os_string());
         }
         if let Some(directory) = self.start_directory {
             command = command.arg("-c").arg(directory.into_os_string());
@@ -1151,6 +1153,7 @@ impl NewWindowOptions {
 
 impl<T: Into<OsString>> From<T> for NewWindowOptions {
     fn from(name: T) -> Self {
+        let name: OsString = name.into();
         Self::new(name)
     }
 }
