@@ -1965,6 +1965,7 @@ pub struct NewSessionOptions {
     start_directory: Option<TmuxArg>,
     window_name: Option<TmuxArg>,
     command: Option<OsString>,
+    environment: Vec<(OsString, OsString)>,
     width: Option<u32>,
     height: Option<u32>,
 }
@@ -1976,6 +1977,7 @@ impl fmt::Debug for NewSessionOptions {
             .field("has_start_directory", &self.start_directory.is_some())
             .field("has_window_name", &self.window_name.is_some())
             .field("has_command", &self.command.is_some())
+            .field("environment_count", &self.environment.len())
             .field("width", &self.width)
             .field("height", &self.height)
             .finish_non_exhaustive()
@@ -1992,6 +1994,7 @@ impl NewSessionOptions {
             start_directory: None,
             window_name: None,
             command: None,
+            environment: Vec::new(),
             width: None,
             height: None,
         }
@@ -2015,6 +2018,16 @@ impl NewSessionOptions {
     /// Run a command instead of the default shell.
     pub fn command(mut self, command: impl Into<OsString>) -> Self {
         self.command = Some(command.into());
+        self
+    }
+
+    /// Set an environment variable for the process the new session starts.
+    ///
+    /// Call this more than once for more than one variable. tmux applies
+    /// these to the new process only, not to the session. The value is not
+    /// format-expanded, so it needs no escaping.
+    pub fn environment(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.environment.push((name.into(), value.into()));
         self
     }
 
@@ -2057,6 +2070,11 @@ impl NewSessionOptions {
                 .arg(width.to_string())
                 .arg("-y")
                 .arg(height.to_string());
+        }
+        for (name, value) in self.environment {
+            command = command
+                .arg("-e")
+                .sensitive_arg(crate::window::assignment(&name, &value));
         }
         if let Some(shell_command) = self.command {
             command = command.sensitive_arg(shell_command);

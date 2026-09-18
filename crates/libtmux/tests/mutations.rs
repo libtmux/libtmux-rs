@@ -2085,3 +2085,51 @@ async fn a_rendered_window_target_survives_a_renumber() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[tokio::test]
+async fn a_new_session_carries_environment_to_its_first_process() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+
+    let session = guard
+        .server()
+        .new_session(NewSessionOptions::new("env").environment("LIBTMUX_RS", "set-here"))
+        .await
+        .expect("the session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    wait_for_prompt(&pane).await;
+    pane.send_line("printf 'seen=%s\\n' \"$LIBTMUX_RS\"")
+        .await
+        .expect("the pane accepts the line");
+
+    assert_eq!(
+        pane.wait_for_text("seen=set-here", Duration::from_secs(10))
+            .await
+            .expect("the pane is readable"),
+        libtmux::PaneWait::Arrived,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_pane_reaches_the_session_it_was_found_through() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("reach")
+        .await
+        .expect("the session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    let reached = pane
+        .session()
+        .await
+        .expect("the session listing is readable")
+        .expect("the session still exists");
+
+    assert_eq!(reached.id(), session.id());
+    assert_eq!(text(Some(reached.name())), b"reach".to_vec());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

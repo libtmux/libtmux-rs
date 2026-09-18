@@ -375,6 +375,7 @@ function libtmux::Layout::minimum_release: const fn(self) -> libtmux::ReleaseVer
 function libtmux::ListingDecodeError::field_name: const fn(&self) -> Option<&'static str>
 function libtmux::ListingDecodeError::row: const fn(&self) -> Option<usize>
 function libtmux::NewSessionOptions::command: fn(self, command: impl Into<OsString>) -> Self
+function libtmux::NewSessionOptions::environment: fn(self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self
 function libtmux::NewSessionOptions::new: fn(name: impl Into<libtmux::TmuxArg>) -> Self
 function libtmux::NewSessionOptions::size: fn(self, width: u32, height: u32) -> Self
 function libtmux::NewSessionOptions::start_directory: fn(self, directory: impl Into<libtmux::TmuxArg>) -> Self
@@ -445,6 +446,7 @@ function libtmux::Pane::send_key_names: async fn<I, K>(&self, keys: I) -> Result
 function libtmux::Pane::send_keys: async fn(&self, keys: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Pane::send_line: async fn(&self, text: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Pane::send_prefix: async fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Pane::session: async fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
 function libtmux::Pane::session_id: const fn(&self) -> &libtmux::SessionId
 function libtmux::Pane::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Pane::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
@@ -476,6 +478,9 @@ function libtmux::ReleaseVersion::major: const fn(self) -> u16
 function libtmux::ReleaseVersion::minor: const fn(self) -> u16
 function libtmux::ReleaseVersion::new: const fn(major: u16, minor: u16, suffix: libtmux::ReleaseSuffix) -> Self
 function libtmux::ReleaseVersion::suffix: const fn(self) -> libtmux::ReleaseSuffix
+function libtmux::ScopeError::into_operation: fn(self) -> Option<E>
+function libtmux::ScopeError::into_value: fn(self) -> Option<T>
+function libtmux::ScopeError::tmux_error: const fn(&self) -> Option<&libtmux::Error>
 function libtmux::Server::access_rules: async fn(&self) -> Result<Vec<libtmux::AccessRule>, libtmux::Error>
 function libtmux::Server::append_array_option: async fn(&self, name: &str, index: u32, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::array_option: async fn(&self, name: &str) -> Result<libtmux::SparseValues<libtmux::TmuxText>, libtmux::Error>

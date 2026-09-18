@@ -11,6 +11,7 @@ use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "query")]
 use crate::query::{FilterSchema, Filterable};
+use crate::session::Session;
 use crate::snapshot::PaneProjection;
 #[cfg(feature = "query")]
 use crate::snapshot::{PaneFields, PaneInfo};
@@ -427,6 +428,39 @@ impl Pane {
         Ok(listing::window_for_pane(&self.core, self.id())
             .await?
             .map(|projection| Window::new(Arc::clone(&self.core), projection)))
+    }
+
+    /// Return the session this pane was reached through.
+    ///
+    /// This re-reads tmux rather than the snapshot, so a session renamed or
+    /// removed since discovery is reported as it is now. `Ok(None)` means the
+    /// session no longer exists.
+    ///
+    /// A window can be linked into several sessions, so this is the session
+    /// this handle was reached through rather than the pane's only one; the
+    /// pane itself belongs to exactly one window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session listing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+    /// if let Some(session) = pane.session().await? {
+    ///     println!("{}", session.name().to_string_lossy());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn session(&self) -> Result<Option<Session>, Error> {
+        let infos = listing::sessions(&self.core, None).await?;
+
+        Ok(infos
+            .into_iter()
+            .find(|info| info.session_id() == self.session_id())
+            .map(|info| Session::new(Arc::clone(&self.core), info)))
     }
 
     /// Split this pane, putting a new one beside it.

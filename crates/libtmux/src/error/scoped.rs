@@ -47,6 +47,7 @@ use super::Error;
 /// # Ok(())
 /// # }
 /// ```
+#[non_exhaustive]
 pub enum ScopeError<T, E> {
     /// The resource could not be created; the operation did not run.
     Creation(Error),
@@ -67,6 +68,84 @@ pub enum ScopeError<T, E> {
         /// The cleanup error, marked as [`Error::AfterEffect`].
         cleanup: Error,
     },
+}
+
+impl<T, E> ScopeError<T, E> {
+    /// Take the operation's own error, when the operation is what failed.
+    ///
+    /// `None` for a creation failure, where the operation never ran, and for
+    /// a cleanup-only failure, where it succeeded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::ScopeError;
+    ///
+    /// let failed: ScopeError<(), _> = ScopeError::Operation("no route");
+    /// assert_eq!(failed.into_operation(), Some("no route"));
+    /// ```
+    pub fn into_operation(self) -> Option<E> {
+        match self {
+            Self::Operation(operation) | Self::OperationAndCleanup { operation, .. } => {
+                Some(operation)
+            }
+            Self::Creation(_) | Self::Cleanup { .. } => None,
+        }
+    }
+
+    /// Take the value the operation produced before cleanup failed.
+    ///
+    /// `None` unless the operation succeeded, which is the one case where a
+    /// result would otherwise be lost: the outer `Result` is `Err` either way.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// // The work is done even when tearing the session down failed, so the
+    /// // value is worth keeping rather than discarding with the error.
+    /// let outcome = server
+    ///     .with_session("build", async |session| {
+    ///         Ok::<_, libtmux::Error>(session.id().to_string())
+    ///     })
+    ///     .await;
+    ///
+    /// let id = match outcome {
+    ///     Ok(id) => Some(id),
+    ///     Err(error) => error.into_value(),
+    /// };
+    /// # let _ = id;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn into_value(self) -> Option<T> {
+        match self {
+            Self::Cleanup { value, .. } => Some(value),
+            Self::Creation(_) | Self::Operation(_) | Self::OperationAndCleanup { .. } => None,
+        }
+    }
+
+    /// Borrow the tmux error from creation or cleanup.
+    ///
+    /// `None` for [`Self::Operation`], whose `E` is the caller's own type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::ScopeError;
+    ///
+    /// let failed: ScopeError<(), &str> = ScopeError::Operation("no route");
+    /// assert!(failed.tmux_error().is_none());
+    /// ```
+    #[must_use]
+    pub const fn tmux_error(&self) -> Option<&Error> {
+        match self {
+            Self::Creation(error)
+            | Self::Cleanup { cleanup: error, .. }
+            | Self::OperationAndCleanup { cleanup: error, .. } => Some(error),
+            Self::Operation(_) => None,
+        }
+    }
 }
 
 impl<T: fmt::Debug, E: fmt::Debug> fmt::Debug for ScopeError<T, E> {
