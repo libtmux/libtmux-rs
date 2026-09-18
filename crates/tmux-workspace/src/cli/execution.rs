@@ -180,7 +180,16 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
             return Ok(session);
         }
     }
-    let mut sessions = server.sessions().await?;
+    let mut sessions = match server.sessions().await {
+        Err(libtmux::Error::ServerGone { .. }) => Vec::new(),
+        other => other?,
+    };
+    if sessions.is_empty() {
+        return Err(CliError::new(
+            "session_not_found",
+            "no sessions are running",
+        ));
+    }
     if sessions.len() == 1 {
         return sessions
             .pop()
