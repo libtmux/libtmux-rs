@@ -911,6 +911,71 @@ impl Server {
         listing::mutate(&self.core, "set-buffer", command.sensitive_arg(data.into())).await
     }
 
+    /// Fill a paste buffer from a file, letting tmux read it.
+    ///
+    /// [`Self::set_buffer`] carries the data as a command argument, which the
+    /// kernel caps: on Linux a single argument stops at `MAX_ARG_STRLEN`,
+    /// 128 KiB, and a larger one fails with "argument list too long" before
+    /// tmux sees it. tmux opens the file itself here, so size is the file
+    /// system's problem rather than the command line's.
+    ///
+    /// `path` is tmux's to resolve, and tmux reads it as the user running the
+    /// server, which is not necessarily this process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot read the path.
+    pub async fn load_buffer(
+        &self,
+        name: Option<&str>,
+        path: impl AsRef<Path>,
+    ) -> Result<(), Error> {
+        let mut command = Command::new("load-buffer");
+        if let Some(name) = name {
+            command = command.arg("-b").arg(OsString::from(name));
+        }
+
+        listing::mutate(
+            &self.core,
+            "load-buffer",
+            command
+                .arg("--")
+                .arg(path.as_ref().as_os_str().to_os_string()),
+        )
+        .await
+    }
+
+    /// Write a paste buffer to a file, letting tmux do the writing.
+    ///
+    /// The counterpart to [`Self::load_buffer`], and the same reasoning: the
+    /// bytes never cross a command line, so a buffer larger than an argument
+    /// can hold still round-trips. tmux writes as the user running the
+    /// server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the buffer is missing or tmux cannot write the
+    /// path.
+    pub async fn save_buffer(
+        &self,
+        name: Option<&str>,
+        path: impl AsRef<Path>,
+    ) -> Result<(), Error> {
+        let mut command = Command::new("save-buffer");
+        if let Some(name) = name {
+            command = command.arg("-b").arg(OsString::from(name));
+        }
+
+        listing::mutate(
+            &self.core,
+            "save-buffer",
+            command
+                .arg("--")
+                .arg(path.as_ref().as_os_str().to_os_string()),
+        )
+        .await
+    }
+
     /// Read a paste buffer's exact bytes.
     ///
     /// Returns `None` when no buffer has that name. Buffer contents are

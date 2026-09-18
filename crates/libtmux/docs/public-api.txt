@@ -525,6 +525,7 @@ function libtmux::Server::identity: fn(&self) -> &libtmux::ServerIdentity
 function libtmux::Server::is_alive: async fn(&self) -> bool
 function libtmux::Server::key_bindings: async fn(&self, table: Option<&str>) -> Result<Vec<String>, libtmux::Error>
 function libtmux::Server::kill: async fn(&self) -> Result<(), libtmux::Error>
+function libtmux::Server::load_buffer: async fn(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), libtmux::Error>
 function libtmux::Server::lock_all: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Server::lock_channel: async fn(&self, channel: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::new: fn() -> Result<Self, libtmux::Error>
@@ -539,6 +540,7 @@ function libtmux::Server::require_generation: async fn(&self, expected: libtmux:
 function libtmux::Server::resolved_tmux_executable: fn(&self) -> Option<PathBuf>
 function libtmux::Server::revoke_access: async fn(&self, user: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::run_shell: async fn(&self, command: impl Into<OsString>) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::Server::save_buffer: async fn(&self, name: Option<&str>, path: impl AsRef<Path>) -> Result<(), libtmux::Error>
 function libtmux::Server::session: async fn(&self, name: impl AsRef<[u8]>) -> Result<Option<libtmux::Session>, libtmux::Error>
 function libtmux::Server::session_by_id: async fn(&self, id: &libtmux::SessionId) -> Result<Option<libtmux::Session>, libtmux::Error>
 function libtmux::Server::sessions: async fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>

@@ -1210,3 +1210,59 @@ async fn a_channel_lock_is_released_when_the_body_fails() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_buffer_larger_than_an_argument_round_trips_through_files() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let source = scratch.path().join("in");
+    let written = scratch.path().join("out");
+
+    // Past `MAX_ARG_STRLEN`, so `set_buffer` cannot carry it: the kernel
+    // refuses the argument before tmux sees it.
+    let payload = vec![b'x'; 200_000];
+    fs::write(&source, &payload).expect("the source is written");
+
+    assert!(
+        server
+            .set_buffer(Some("big"), os_string_from_bytes(&payload))
+            .await
+            .is_err(),
+        "a 200 KiB argument does not fit on a command line",
+    );
+
+    server
+        .load_buffer(Some("big"), &source)
+        .await
+        .expect("tmux reads the file");
+    // Compared by shape rather than by value: a failed `assert_eq!` on the
+    // whole payload prints 200 KB of `120,` and buries the reason.
+    let loaded = server.buffer("big").await.expect("the buffer reads");
+    assert_eq!(loaded.as_ref().map(Vec::len), Some(payload.len()));
+    assert_eq!(
+        loaded.as_deref(),
+        Some(payload.as_slice()),
+        "the bytes differ"
+    );
+
+    server
+        .save_buffer(Some("big"), &written)
+        .await
+        .expect("tmux writes the file");
+    let read_back = fs::read(&written).expect("the output is readable");
+    assert_eq!(read_back.len(), payload.len());
+    assert!(read_back == payload, "the bytes differ");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "test-support")]
+fn os_string_from_bytes(bytes: &[u8]) -> OsString {
+    use std::os::unix::ffi::OsStringExt as _;
+    OsString::from_vec(bytes.to_vec())
+}
