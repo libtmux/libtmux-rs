@@ -574,6 +574,7 @@ function libtmux::Server::wait_for_channel: async fn(&self, channel: &str, withi
 function libtmux::Server::window_by_id: async fn(&self, id: &libtmux::WindowId) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Server::windows: async fn(&self) -> Result<Vec<libtmux::Window>, libtmux::Error>
 function libtmux::Server::windows_or_empty: async fn(&self) -> Vec<libtmux::Window>
+function libtmux::Server::with_channel_lock: async fn<T, E>(&self, channel: &str, operation: impl AsyncFnOnce(&Self) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
 function libtmux::Server::with_session: async fn<T, E>(&self, options: impl Into<libtmux::NewSessionOptions>, operation: impl AsyncFnOnce(&libtmux::Session) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
 function libtmux::ServerBuilder::build: fn(self) -> Result<libtmux::Server, libtmux::Error>
 function libtmux::ServerBuilder::colors: const fn(self, colors: u16) -> Self

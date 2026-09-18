@@ -35,6 +35,68 @@ impl Server {
         .await
     }
 
+    /// Hold a `wait-for` channel for the length of an operation.
+    ///
+    /// [`Self::lock_channel`] and [`Self::unlock_channel`] as a pair, so a
+    /// locker that returns early, fails, or panics still releases the
+    /// channel: a lock left held wedges every later locker on the server.
+    ///
+    /// This does not cover the other way a channel wedges. Dropping a
+    /// *pending* lock while it is queued behind another locker leaves tmux
+    /// with a queue entry it will hand the lock to and nobody to take it;
+    /// that is a tmux defect (`cmd-wait-for.c`) and no scope can reach it.
+    /// See [`Self::lock_channel`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::ScopeError::Creation`] when tmux refuses the lock,
+    /// `Operation` when the body fails, and `Cleanup` when the unlock fails
+    /// after the body succeeded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    ///
+    /// let count = server
+    ///     .with_channel_lock("deploy", async |server| {
+    ///         Ok::<_, libtmux::Error>(server.sessions().await?.len())
+    ///     })
+    ///     .await?;
+    ///
+    /// // The channel is free again, so the next locker is not blocked.
+    /// server.lock_channel("deploy").await?;
+    /// server.unlock_channel("deploy").await?;
+    /// # let _ = count;
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn with_channel_lock<T, E>(
+        &self,
+        channel: &str,
+        operation: impl AsyncFnOnce(&Self) -> Result<T, E>,
+    ) -> Result<T, crate::ScopeError<T, E>> {
+        let server = self.clone();
+        let channel = channel.to_owned();
+        let held = channel.clone();
+        let unlocking = self.clone();
+
+        crate::internal::scoped::run(
+            "with-channel-lock",
+            async move { server.lock_channel(&held).await.map(|()| server.clone()) },
+            move |_| async move { unlocking.unlock_channel(&channel).await },
+            async |_| operation(self).await,
+        )
+        .await
+    }
+
     /// Lock a `wait-for` channel, blocking later lock attempts on it.
     ///
     /// Dropping this future while it is still queued behind another locker

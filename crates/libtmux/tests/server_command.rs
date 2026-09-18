@@ -1179,3 +1179,34 @@ fn an_absent_tmux_variable_is_told_apart_from_a_malformed_one() {
     Server::from_env_value(Some("/tmp/libtmux-rs-dev/from-env.sock,7,$0"))
         .expect("a triple names a socket");
 }
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_channel_lock_is_released_when_the_body_fails() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+
+    let outcome: Result<(), _> = server
+        .with_channel_lock("deploy", async |_| Err::<(), _>("the body failed"))
+        .await;
+    assert!(matches!(
+        outcome,
+        Err(libtmux::ScopeError::Operation("the body failed"))
+    ));
+
+    // A wedged channel would block this forever, so the fixture deadline is
+    // what would report it; taking the lock is the assertion.
+    server
+        .lock_channel("deploy")
+        .await
+        .expect("the channel was released");
+    server
+        .unlock_channel("deploy")
+        .await
+        .expect("the channel unlocks");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
