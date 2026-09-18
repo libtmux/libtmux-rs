@@ -33,6 +33,34 @@ async fn a_session_name_reaches_tmux_literally() {
     guard.shutdown().await.expect("the fixture shuts down");
 }
 
+/// Creating and then finding by the same name has to agree, or escaping on the
+/// way out would have made the name unreachable on the way back.
+#[tokio::test]
+async fn a_hostile_name_round_trips_through_lookup() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let created = server
+        .new_session(HOSTILE)
+        .await
+        .expect("the session is created");
+
+    assert!(
+        server
+            .has_session(HOSTILE)
+            .await
+            .expect("the listing reads")
+    );
+    let found = server
+        .session(HOSTILE)
+        .await
+        .expect("the listing reads")
+        .expect("the session is found by the name it was given");
+    assert_eq!(found.id(), created.id());
+
+    guard.shutdown().await.expect("the fixture shuts down");
+}
+
 #[tokio::test]
 async fn a_renamed_session_reaches_tmux_literally() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
