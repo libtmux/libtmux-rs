@@ -2961,6 +2961,28 @@ async fn machine_error_codes_match_the_ten_condition_table() {
     guard.shutdown().await.unwrap();
 }
 
+/// A socket whose server has never started holds no session either, so freeze
+/// gives the answer a name that is not running gets, not tmux's transport
+/// error.
+#[tokio::test]
+async fn freezing_a_socket_with_no_server_names_the_missing_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let cold = directory.path().join("cold.sock");
+    let output = at(
+        &["freeze", "-S", cold.to_str().unwrap(), "--json", "nosuch"],
+        directory.path(),
+    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "session_not_found", "{output:?}");
+    assert!(
+        !diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("no server"),
+        "{output:?}"
+    );
+}
+
 #[tokio::test]
 async fn unreadable_pane_state_is_reported_as_itself_rather_than_a_timeout() {
     use std::os::unix::fs::PermissionsExt;

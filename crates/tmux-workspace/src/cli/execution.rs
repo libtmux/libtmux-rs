@@ -152,7 +152,13 @@ pub(super) fn server(args: &ArgMatches) -> Result<Server> {
 
 pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Result<Session> {
     if let Some(name) = name {
-        return server.session(name).await?.ok_or_else(|| {
+        // A socket with no server behind it holds no session either, so it is
+        // the answer a name that is not running gets, not a transport error.
+        let found = match server.session(name).await {
+            Err(libtmux::Error::ServerGone { .. }) => None,
+            other => other?,
+        };
+        return found.ok_or_else(|| {
             CliError::new(
                 "session_not_found",
                 format!("session {name:?} was not found"),
