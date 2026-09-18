@@ -53,7 +53,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dev-dependencies]
-libtmux = { workspace = true, features = ["derive", "test-support"] }
+libtmux = { workspace = true, features = ["control-mode", "derive", "test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
