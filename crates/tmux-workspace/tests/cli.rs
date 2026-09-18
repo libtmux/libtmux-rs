@@ -4013,3 +4013,95 @@ async fn freeze_does_not_carry_the_capturing_terminals_size() {
 
     guard.shutdown().await.unwrap();
 }
+
+/// A document that cannot be built through leaves nothing: not the session,
+/// not the windows that did build, not the bootstrap window. Running it again
+/// therefore fails the same way instead of finding its own wreckage and
+/// calling it done.
+#[tokio::test]
+async fn a_mid_build_failure_removes_the_session_and_the_rerun_fails_the_same_way() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("fail.yaml"),
+        "session_name: rerun\nwindows:\n  - window_name: one\n    panes: [echo A]\n  - window_name: two\n    options:\n      not-a-real-option: 1\n    panes: [echo B]\n  - window_name: three\n    panes: [echo C]\n",
+    )
+    .unwrap();
+    for run in ["first", "second"] {
+        let output = at(
+            &[
+                "load",
+                "-S",
+                guard.socket_path().to_str().unwrap(),
+                "-d",
+                "--json",
+                "fail.yaml",
+            ],
+            directory.path(),
+        );
+        assert_eq!(output.status.code(), Some(1), "{run}: {output:?}");
+        let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        let retained = &diagnostic["retained_state"];
+        assert_eq!(retained["status"], "error", "{run}: {retained}");
+        assert_eq!(
+            retained["errors"][0]["partial_effects"], false,
+            "{run}: {retained}"
+        );
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .contains("the session was removed"),
+            "{run}: {diagnostic}"
+        );
+        assert!(
+            !guard.server().has_session("rerun").await.unwrap(),
+            "{run}: the failed build left its session behind"
+        );
+    }
+    assert!(guard.server().sessions().await.unwrap().is_empty());
+    guard.shutdown().await.unwrap();
+}
+
+/// Reusing a session means the workspace is already there. One that is
+/// missing a window the document asks for is reported as the partial thing
+/// it is, naming what is absent, and is left exactly as it was found.
+#[tokio::test]
+async fn reusing_a_session_without_the_document_s_windows_is_partial() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let session = guard
+        .server()
+        .new_session(libtmux::NewSessionOptions::new("half"))
+        .await
+        .unwrap();
+    let mut window = session.active_window().await.unwrap().unwrap();
+    window.rename("one").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("half.yaml"),
+        "session_name: half\nwindows:\n  - window_name: one\n    panes: [echo A]\n  - window_name: two\n    panes: [echo B]\n",
+    )
+    .unwrap();
+    let output = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "--json",
+            "half.yaml",
+        ],
+        directory.path(),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let message = diagnostic["message"].as_str().unwrap();
+    assert!(message.contains("\"two\""), "{diagnostic}");
+    assert!(!message.contains("\"one\""), "{diagnostic}");
+    assert_eq!(
+        diagnostic["retained_state"]["status"], "partial",
+        "{diagnostic}"
+    );
+    assert_eq!(session.windows().await.unwrap().len(), 1);
+    guard.shutdown().await.unwrap();
+}

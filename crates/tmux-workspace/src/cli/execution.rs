@@ -17,6 +17,10 @@ use super::{
     process,
 };
 
+/// The stage an input reaches when the session it names is already running
+/// and is taken as it stands.
+const REUSED: &str = "reused";
+
 /// Per-load constants that stay the same across every input file, kept
 /// together so passing them to `build` costs one parameter, not two.
 struct Invocation<'a> {
@@ -31,12 +35,15 @@ struct Effects {
     session: Option<Session>,
     owned: bool,
     changed: bool,
+    /// The session is there but does not hold everything the document asks
+    /// for. Nothing was mutated, so `changed` stays false, yet the load is
+    /// not a clean failure either.
+    incomplete: bool,
     mutation_started: Option<&'static str>,
     windows: Vec<String>,
     panes: Vec<String>,
     stage: &'static str,
     script_output: Option<Value>,
-    readiness: bool,
 }
 
 #[derive(Default)]
@@ -54,7 +61,7 @@ impl LoadState {
         let mut results = self.results.clone();
         if let Some(effects) = &self.current {
             let uncertain = error.code == "interrupted" && effects.mutation_started.is_some();
-            partial |= effects.changed || uncertain;
+            partial |= effects.changed || effects.incomplete || uncertain;
             failure["input_index"] = json!(effects.input);
             failure["partial_effects"] = json!(effects.changed);
             failure["effects"] = effects.value();
@@ -73,18 +80,12 @@ impl LoadState {
                 .iter()
                 .any(|record| record["input_index"] == effects.input);
             if !uncertain && !already_recorded {
-                // Every stage a before_script failure or a build failure can
-                // be reached from already reports `reused: false` on
-                // success (build's own early "same name, no append"
-                // shortcut is the only case that reports `true`, and it
-                // returns before configure_session or a window is ever
-                // touched, so it cannot be the input that failed here).
                 results.push(json!({
                     "input": effects.path,
                     "input_index": effects.input,
                     "session_id": effects.session.as_ref().map(|s| s.id().to_string()),
                     "session_name": effects.session.as_ref().map(|s| s.name().to_string_lossy()),
-                    "reused": false,
+                    "reused": effects.stage == REUSED,
                 }));
             }
         }
@@ -507,7 +508,7 @@ async fn load_one(
         "workspace-started",
         json!({"input_index":index,"input":discovery::masked(path)}),
     )?;
-    let (session, reused) = build(
+    let built = build(
         server,
         workspace,
         args,
@@ -516,7 +517,30 @@ async fn load_one(
         invocation,
         borrowed_for_input,
     )
-    .await?;
+    .await;
+    let (session, reused) = match built {
+        Ok(built) => built,
+        Err(error) => return Err(rolled_back(error, effects).await),
+    };
+    // Reusing a session is a claim that the workspace is already there, so it
+    // is checked rather than assumed; converging one that is not is a
+    // separate job this does not do. Declining the prompt asked for no
+    // workspace at all, and the extension route builds through tmuxp, which
+    // decides for itself what reuse means.
+    if reused && !workspace.bridge && !matches!(disposition, Some(Disposition::Decline)) {
+        let missing = missing_windows(&session, workspace).await?;
+        if !missing.is_empty() {
+            effects.incomplete = true;
+            return Err(CliError::new(
+                "session_not_found",
+                format!(
+                    "session {:?} is already running without {}; nothing was changed",
+                    workspace.name,
+                    missing.join(", ")
+                ),
+            ));
+        }
+    }
     let mut result = effects.value();
     result["input"] = json!(discovery::masked(path));
     result["reused"] = json!(reused);
@@ -652,7 +676,7 @@ async fn build(
     if !append && server.is_alive().await {
         if let Some(session) = server.session(&workspace.name).await? {
             effects.session = Some(session.clone());
-            effects.stage = "reused";
+            effects.stage = REUSED;
             return Ok((session, true));
         }
     }
@@ -677,7 +701,8 @@ async fn build(
         session
     };
     effects.session = Some(session.clone());
-    configure_session(server, &session, workspace, report, effects, borrowed).await?;
+    let readiness =
+        configure_session(server, &session, workspace, report, effects, borrowed).await?;
     let mut bootstrap = if append {
         None
     } else {
@@ -696,7 +721,8 @@ async fn build(
     }
     let mut selected = None;
     for (window_index, config) in workspace.windows.iter().enumerate() {
-        let window = build_window(&session, config, report, effects, window_index).await?;
+        let window =
+            build_window(&session, config, report, effects, window_index, readiness).await?;
         // Appending is a guest in a session the client already owns: only an
         // explicit `focus: true` earns a switch. A fresh build still falls
         // back to its first window, the way it always has.
@@ -714,17 +740,97 @@ async fn build(
     Ok((session, false))
 }
 
+/// Which of the document's windows the session does not hold, named the way
+/// the document names them. Matched as a multiset so duplicate and unnamed
+/// window entries each consume one window rather than all matching the same
+/// one.
+async fn missing_windows(
+    session: &Session,
+    workspace: &normalize::Workspace,
+) -> Result<Vec<String>> {
+    let mut present = session
+        .windows()
+        .await?
+        .iter()
+        .map(|window| window.name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut missing = Vec::new();
+    for (index, window) in workspace.windows.iter().enumerate() {
+        let found = match &window.name {
+            Some(name) => present.iter().position(|held| held == name),
+            None => (!present.is_empty()).then_some(0),
+        };
+        if let Some(found) = found {
+            present.remove(found);
+        } else {
+            missing.push(window.name.clone().map_or_else(
+                || format!("a {} window", ordinal(index + 1)),
+                |name| format!("window {name:?}"),
+            ));
+        }
+    }
+    Ok(missing)
+}
+
+fn ordinal(position: usize) -> String {
+    let suffix = match (position % 10, position % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{position}{suffix}")
+}
+
 /// A borrowed session is the caller's; only one this load created is ours
 /// to remove. Once it is, nothing this input did is left behind, so a
 /// caller checking whether effects persisted sees none.
-async fn remove_owned_session(effects: &mut Effects) -> Result<()> {
-    if effects.owned {
-        if let Some(session) = effects.session.clone() {
-            session.kill().await?;
-            effects.changed = false;
+async fn remove_owned_session(effects: &mut Effects) -> Result<bool> {
+    if !effects.owned {
+        return Ok(false);
+    }
+    let Some(session) = effects.session.clone() else {
+        return Ok(false);
+    };
+    session.kill().await?;
+    effects.changed = false;
+    effects.windows.clear();
+    effects.panes.clear();
+    Ok(true)
+}
+
+/// A load that reports failure leaves nothing it created behind, the
+/// bootstrap window with it; a session it borrowed is the caller's and keeps
+/// whatever was added, named so the caller can find it. An interrupted
+/// mutation is neither: what it touched is genuinely unknown, so it is
+/// reported rather than undone.
+async fn rolled_back(mut error: CliError, effects: &mut Effects) -> CliError {
+    if error.code == "interrupted" {
+        return error;
+    }
+    if !effects.owned {
+        if !effects.windows.is_empty() {
+            let _ = write!(
+                error.message,
+                "; the windows it added were kept: {}",
+                effects.windows.join(", ")
+            );
+        }
+        return error;
+    }
+    match remove_owned_session(effects).await {
+        Ok(true) => error.message.push_str("; the session was removed"),
+        Ok(false) => {}
+        Err(removal) => {
+            let _ = write!(
+                error.message,
+                "; the session could not be removed: {}",
+                removal.message
+            );
         }
     }
-    Ok(())
+    error
 }
 
 async fn configure_session(
@@ -734,7 +840,7 @@ async fn configure_session(
     report: &mut Reporter,
     effects: &mut Effects,
     borrowed: Option<&AppendTarget>,
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(script) = &workspace.before_script {
         effects.stage = "before-script";
         effects.changed = true;
@@ -762,10 +868,9 @@ async fn configure_session(
             // Missing or not executable: tmuxp's BeforeLoadScriptNotExists,
             // the same failure as a nonzero exit, not a different one.
             Err(error) if error.code == "child_spawn" => {
-                remove_owned_session(effects).await?;
                 return Err(CliError {
                     code: "script_failed",
-                    message: format!("before_script {}; the session was removed", error.message),
+                    message: format!("before_script {}", error.message),
                     status: 1,
                     retained_state: None,
                 });
@@ -791,13 +896,9 @@ async fn configure_session(
         if output.status != 0 {
             // Its own exit status is not ours: tmuxp and every other port
             // exit 1 here, not the script's code.
-            remove_owned_session(effects).await?;
             return Err(CliError {
                 code: "script_failed",
-                message: format!(
-                    "before_script exited with status {}; the session was removed",
-                    output.status
-                ),
+                message: format!("before_script exited with status {}", output.status),
                 status: 1,
                 retained_state: None,
             });
@@ -826,7 +927,7 @@ async fn configure_session(
     }
     // `auto` waits for the prompt only when the default shell is zsh;
     // every other shell behaves as though `never` had been written.
-    effects.readiness = match workspace.readiness {
+    let readiness = match workspace.readiness {
         Some(wait) => wait,
         None => session
             .get_option("default-shell")
@@ -837,7 +938,7 @@ async fn configure_session(
             )
             .contains("zsh"),
     };
-    Ok(())
+    Ok(readiness)
 }
 
 async fn build_extension(
@@ -914,6 +1015,7 @@ async fn build_window(
     report: &mut Reporter,
     effects: &mut Effects,
     window_index: usize,
+    readiness: bool,
 ) -> Result<libtmux::Window> {
     if let Some(progress) = &mut report.progress {
         progress.window(window_index + 1, config)?;
@@ -980,7 +1082,7 @@ async fn build_window(
         }
         let pane_fields = json!({"input_index":input,"session_id":session.id().to_string(),"window_id":window.id().to_string(),"pane_id":pane.id().to_string(),"pane_index":pane_index});
         report.event("pane-created", pane_fields.clone())?;
-        if effects.readiness && config.shell.is_none() {
+        if readiness && config.shell.is_none() {
             wait_for_prompt(pane, report).await?;
         }
         send_commands(pane, &config.commands).await?;
