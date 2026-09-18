@@ -151,8 +151,8 @@ tmux. Its source is not copied into the crate.
   another clone, avoiding locks and hidden shared state.
 - A real-tmux guard created unique short socket paths, exposed the exact path,
   and removed the daemon and socket on drop.
-- Loud list access and explicit `*_or_empty` access can coexist without making
-  raw command execution swallow failures.
+- List access keeps the reason a listing failed without making raw command
+    execution swallow failures.
 - A failed command at the start of a tmux semicolon chain prevents later
   commands from executing. A control-mode implementation that predicts one
   result block per separator can wait forever for blocks tmux will never send.
@@ -715,9 +715,9 @@ contract:
 
 ```no_run
 # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-let lenient = server.sessions_or_empty().await;
 let loud = server.sessions().await?;
-# let _ = (lenient, loud);
+let quiet = server.sessions().await.unwrap_or_default();
+# let _ = (loud, quiet);
 # Ok(())
 # }
 ```
@@ -1082,10 +1082,8 @@ unrecognized form classifies as `LinkGone` -- the reading that does not license
 discarding a live handle -- so the cost of being wrong is a distinction rather
 than a destroyed handle.
 
-Listing accessors come in pairs, and the split is load-bearing here. The
-`*_or_empty` form returns an empty `Vec` for any failure, which suits a status
-line. The short form propagates, which is the whole reason it exists -- a
-short form that quietly returned no rows for an unreachable daemon would make
+A listing propagates, which is the whole reason it reads this way -- one
+that quietly returned no rows for an unreachable daemon would make
 the pair meaningless.
 
 ## Cost of gathering the hierarchy
@@ -1767,7 +1765,11 @@ a cleanup pass, a workspace builder -- "no sessions" read from an outage is an
 instruction to delete everything.
 
 So the names swapped. `sessions()` returns `Result`, and a caller who wants
-the old behaviour writes `sessions_or_empty()`, which says what it does. The
+the old behaviour writes `sessions().await.unwrap_or_default()`, which says what
+it does at the call site rather than in the method name. An `_or_empty` twin of
+each listing did exist for a while; neither consumer crate ever called one, and
+eleven methods whose whole purpose is to discard a reason are eleven ways to
+discard one by accident, so they went. The
 breaking change is cheap now and would not be later, which is the argument for
 doing it during an alpha rather than after one.
 

@@ -253,17 +253,6 @@ impl Session {
         self.core.configuration().identity()
     }
 
-    /// List the windows linked into this session, in tmux's own order.
-    ///
-    /// This is the lenient form; use [`Session::windows`] when the reason
-    /// for an empty result matters.
-    pub async fn windows_or_empty(&self) -> Vec<Window> {
-        self.windows().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-windows", &error);
-            Vec::new()
-        })
-    }
-
     /// List the windows linked into this session, preserving any failure.
     ///
     /// A window linked into other sessions appears here once, under this
@@ -282,26 +271,6 @@ impl Session {
             .into_iter()
             .map(|projection| Window::new(Arc::clone(&self.core), projection))
             .collect())
-    }
-
-    /// The windows under this session that a matcher accepts.
-    ///
-    /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::search_windows`] when the difference matters.
-    ///
-    /// Filtering happens here rather than in tmux. A [`crate::query::FilterExpr`]
-    /// is built to stay compilable to a tmux `-f` predicate, so pushing one
-    /// down later would change what this costs and not what it answers.
-    #[cfg(feature = "query")]
-    #[must_use]
-    pub async fn search_windows_or_empty<M: crate::query::Matcher<Window>>(
-        &self,
-        matcher: M,
-    ) -> Vec<Window> {
-        self.search_windows(matcher).await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-windows", &error);
-            Vec::new()
-        })
     }
 
     /// The windows under this session that a matcher accepts, reporting why
@@ -445,17 +414,6 @@ impl Session {
     /// snapshot and this call.
     pub async fn active_window(&self) -> Result<Option<Window>, Error> {
         Ok(self.windows().await?.into_iter().find(Window::is_active))
-    }
-
-    /// List every pane in this session, in tmux's own order.
-    ///
-    /// This is the lenient form; use [`Session::panes`] when the reason
-    /// for an empty result matters.
-    pub async fn panes_or_empty(&self) -> Vec<Pane> {
-        self.panes().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-panes", &error);
-            Vec::new()
-        })
     }
 
     /// List every pane in this session, preserving any failure.
@@ -736,7 +694,7 @@ impl Session {
     /// Succeeds when no client was attached. tmux reports that as a failure,
     /// but the state this asks for -- nobody attached to this session -- is
     /// already true, and a caller that has to tell "detached them" from
-    /// "there was nobody" can compare [`crate::Server::clients_or_empty`] before and
+    /// "there was nobody" can compare [`crate::Server::clients`] before and
     /// after.
     ///
     /// # Errors

@@ -277,7 +277,7 @@ async fn an_invalid_plan_refuses_before_its_first_mutation() {
         .await
         .expect_err("the plan is invalid");
     assert!(
-        server.sessions_or_empty().await.is_empty(),
+        server.sessions().await.unwrap_or_default().is_empty(),
         "validation happened after a mutation",
     );
     assert_eq!(failure.kind(), libtmux::ErrorKind::InvalidInput);

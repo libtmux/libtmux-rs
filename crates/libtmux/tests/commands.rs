@@ -994,8 +994,9 @@ async fn searching_a_window_finds_the_pane_that_matches() {
 
     let fields = libtmux::Pane::filter_fields();
     let found = window
-        .search_panes_or_empty(fields.pane_id.eq(wanted.as_str()))
-        .await;
+        .search_panes(fields.pane_id.eq(wanted.as_str()))
+        .await
+        .unwrap_or_default();
 
     assert_eq!(found.len(), 1, "the pane that matches is returned");
     assert_eq!(found[0].id().to_string(), wanted);

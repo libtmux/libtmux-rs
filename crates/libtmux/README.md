@@ -394,11 +394,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Listings come in pairs, and the short name is the honest one. `sessions()`
-returns `Result<Vec<Session>>`, so an unreachable tmux is an error rather than
-an empty list. `sessions_or_empty()` collapses failure into no rows, which
-suits a status line and nothing that reconciles state -- a reconciler reading
-"no sessions" from an outage will happily delete everything.
+A listing keeps the reason it failed. `sessions()` returns
+`Result<Vec<Session>>`, so an unreachable tmux is an error rather than an empty
+list. A caller that would rather show nothing writes
+`sessions().await.unwrap_or_default()`, which suits a status line and nothing
+that reconciles state -- a reconciler reading "no sessions" from an outage will
+happily delete everything, and now has to say so at the call site.
 
 ## Filtering
 

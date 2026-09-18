@@ -39,14 +39,14 @@
 //! # }
 //! ```
 //!
-//! Listings come in pairs. The `_or_empty` form returns an empty `Vec` when
-//! the underlying tmux command fails, which suits a status line; the plain
-//! form keeps the reason, which suits anything that must not guess:
+//! A listing keeps the reason it failed. A caller that would rather show
+//! nothing than an error says so at the call site, where it reads as the
+//! choice it is:
 //!
 //! ```no_run
 //! # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! let quiet = server.sessions_or_empty().await; // empty on failure
-//! let loud = server.sessions().await?;          // Err on failure
+//! let loud = server.sessions().await?;                     // Err on failure
+//! let quiet = server.sessions().await.unwrap_or_default(); // empty on failure
 //! # let _ = (quiet, loud);
 //! # Ok(())
 //! # }

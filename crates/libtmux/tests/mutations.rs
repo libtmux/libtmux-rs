@@ -1795,7 +1795,7 @@ async fn respawning_and_locking_reach_every_level_tmux_offers() {
     // every level rather than reporting it as a failure.
     server.lock_all().await.expect("the server locks");
     session.lock().await.expect("the session locks");
-    for client in server.clients_or_empty().await {
+    for client in server.clients().await.unwrap_or_default() {
         client.lock().await.expect("the client locks");
     }
 

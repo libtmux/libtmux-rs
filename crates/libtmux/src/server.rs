@@ -254,8 +254,8 @@ impl PromptKind {
 /// Each reports `Ok(None)` when tmux does not have it.
 ///
 /// **Listing everything.** [`sessions`], [`windows`], [`panes`], and
-/// [`clients`], each with an `_or_empty` twin that reports no rows rather
-/// than the reason for a failure. [`hierarchy`] gathers the whole tree in
+/// [`clients`]. Each keeps the reason it failed, so an outage does not read
+/// as an empty server. [`hierarchy`] gathers the whole tree in
 /// three tmux commands rather than one per object.
 ///
 /// **Changing things.** [`new_session`], [`kill`], and [`with_session`],
@@ -809,17 +809,6 @@ impl Server {
         Self::builder()
             .socket_path(PathBuf::from(OsString::from_vec(socket.to_vec())))
             .build()
-    }
-
-    /// List the sessions that have at least one client attached.
-    ///
-    /// This is the lenient form; use [`Server::attached_sessions`] when the
-    /// reason for an empty result matters.
-    pub async fn attached_sessions_or_empty(&self) -> Vec<Session> {
-        self.attached_sessions().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-sessions", &error);
-            Vec::new()
-        })
     }
 
     /// List the sessions that have at least one client attached.

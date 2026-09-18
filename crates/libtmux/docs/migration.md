@@ -1,5 +1,21 @@
 # Migrating from 0.1.0-alpha.11
 
+## The `_or_empty` listing twins are gone
+
+Replace `x_or_empty().await` with `x().await.unwrap_or_default()`:
+
+```no_run
+# async fn listing(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+let sessions = server.sessions().await.unwrap_or_default();
+# let _ = sessions;
+# Ok(())
+# }
+```
+
+Worth a moment's thought rather than a blind rewrite: the twins collapsed an
+unreachable tmux into an empty list, and anything that reconciles state should
+take the `?` instead.
+
 ## Names, titles and start directories are text
 
 Every argument tmux expands as a format now takes `TmuxArg`, and every

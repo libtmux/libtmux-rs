@@ -47,9 +47,9 @@ async fn empty_server_lists_nothing_across_the_hierarchy() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    assert!(server.sessions_or_empty().await.is_empty());
-    assert!(server.windows_or_empty().await.is_empty());
-    assert!(server.panes_or_empty().await.is_empty());
+    assert!(server.sessions().await.unwrap_or_default().is_empty());
+    assert!(server.windows().await.unwrap_or_default().is_empty());
+    assert!(server.panes().await.unwrap_or_default().is_empty());
 
     // An empty listing is an ordinary result, not a decoding failure.
     assert!(
@@ -567,9 +567,9 @@ async fn a_dead_server_yields_empty_leniently_and_an_error_loudly() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 
     // The lenient contract hides the cause behind an empty listing.
-    assert!(server.sessions_or_empty().await.is_empty());
-    assert!(server.windows_or_empty().await.is_empty());
-    assert!(server.panes_or_empty().await.is_empty());
+    assert!(server.sessions().await.unwrap_or_default().is_empty());
+    assert!(server.windows().await.unwrap_or_default().is_empty());
+    assert!(server.panes().await.unwrap_or_default().is_empty());
 
     // The loud form keeps it. This is the whole reason both forms exist: the
     // executor is gone, which is a caller mistake rather than an empty server.
@@ -600,7 +600,7 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
         .expect("an inert server handle is built");
 
     assert!(
-        server.sessions_or_empty().await.is_empty(),
+        server.sessions().await.unwrap_or_default().is_empty(),
         "the lenient form suits a status line, which has nothing to say",
     );
 
@@ -693,7 +693,13 @@ async fn attached_sessions_selects_only_sessions_with_clients() {
             .expect("attached sessions")
             .is_empty(),
     );
-    assert!(server.attached_sessions_or_empty().await.is_empty());
+    assert!(
+        server
+            .attached_sessions()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
