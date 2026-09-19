@@ -1677,10 +1677,15 @@ async fn a_caller_can_bound_one_command_with_tokio_timeout() {
 
     // `run-shell` blocks in tmux for as long as the command does, and the
     // server's own default timeout is 30 seconds, so reaching this deadline
-    // is the caller's bound rather than the crate's.
+    // is the caller's bound rather than the crate's. Dispatched with `cmd`
+    // rather than `Server::run_shell`, which refuses outright on 3.3 through
+    // 3.4 -- a version gate on captured output this test does not read.
     let started = Instant::now();
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(400), server.run_shell("sleep 3")).await;
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(400),
+        server.cmd(Command::new("run-shell").arg("sleep 3")),
+    )
+    .await;
 
     assert!(outcome.is_err(), "the caller's deadline ended the wait");
     assert!(
