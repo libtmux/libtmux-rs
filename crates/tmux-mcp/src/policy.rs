@@ -428,6 +428,7 @@ impl Builder {
             capability_report: Arc::new(resolved.report),
             socket: Arc::new(OnceLock::new()),
             tails: Arc::new(Tails::new(identity)),
+            echoes: Arc::new(crate::echo::PaneEchoes::new()),
             tool_router: router,
             nested_tool_router: resolved.nested_router,
             environment_values: Arc::new(self.environment_values),

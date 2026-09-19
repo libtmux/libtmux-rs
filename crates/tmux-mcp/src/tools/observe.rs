@@ -347,10 +347,13 @@ impl TmuxTools {
                        redrawn in place repeats; capture_pane shows the screen. Prefer \
                        run_shell_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
-                       not author, such as a server logging that it is ready. A pattern that is a \
-                       substring of a command you just sent with send_keys can already be on \
-                       screen as its echo; outcome present_at_entry reports that rather than \
-                       matched, so a still-pending command does not read as already done. \
+                       not author, such as a server logging that it is ready. A line this server \
+                       itself typed and submitted with send_keys is discounted from a match for \
+                       a short time afterward, so waiting for text you just sent does not match \
+                       its own echo; output that happens to repeat the same words still does. A \
+                       pattern still on the row being typed into, not yet submitted, reports \
+                       outcome pending instead of matched, and one already on a completed row \
+                       before this call attached reports present_at_entry. \
                        Waiting owns an observer client until the wait ends. Each list accepts \
                        at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time \
                        regex engine.",
@@ -397,10 +400,26 @@ impl TmuxTools {
         let stops = compile(stop.unwrap_or_default())?;
 
         let target = self.find_pane(&pane).await?;
+        // Best-effort: a generation this crate cannot read is not a reason
+        // to refuse the wait, only to skip discounting this server's own
+        // recent echo on it.
+        let key = self.server.generation().await.ok().and_then(|generation| {
+            crate::echo::EchoKey::new(generation, self.server.socket_path(), target.id().as_ref())
+        });
         let view = reporting(
             reporter,
             "still watching for the pattern",
-            exec::wait_for_text(&target, &wanted, &stops, Self::budget(seconds), &cancelled),
+            exec::wait_for_text(
+                &target,
+                &wanted,
+                &stops,
+                Self::budget(seconds),
+                &cancelled,
+                exec::EchoContext {
+                    echoes: &self.echoes,
+                    key: key.as_ref(),
+                },
+            ),
         )
         .await
         .map_err(|e| tmux_error(&e))?;
