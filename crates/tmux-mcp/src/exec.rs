@@ -121,6 +121,10 @@ pub struct RunView {
     pub exit_status: Option<i32>,
     /// Everything the command wrote, stdout and stderr interleaved in the
     /// order the program wrote them.
+    ///
+    /// This is the raw output stream with escape sequences removed, not the
+    /// rendered screen: a line redrawn in place, such as a progress bar,
+    /// repeats. `capture_pane` shows the screen.
     pub output: String,
     /// How many bytes that was, before any truncation.
     pub bytes: usize,
@@ -140,6 +144,10 @@ pub struct WaitView {
     /// The pattern that matched, as it was given.
     pub matched_pattern: Option<String>,
     /// What the pane wrote, with escape sequences removed.
+    ///
+    /// This is the raw output stream, not the rendered screen: a line redrawn
+    /// in place, such as a line editor's echo, repeats. `capture_pane` shows
+    /// the screen.
     pub text: String,
     /// How many bytes arrived, before filtering or truncation.
     pub bytes: usize,

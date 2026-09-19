@@ -169,6 +169,37 @@ fn every_input_property_carries_a_description() -> TestResult {
     Ok(())
 }
 
+/// Streamed text repeats every redraw a line editor makes, so an agent
+/// reading it has to know the screen is elsewhere.
+#[test]
+fn streamed_text_says_it_is_not_the_screen() -> TestResult {
+    let offered = tools("inspect,execute")?.offered();
+    for (name, field) in [
+        ("wait_for_text", "text"),
+        ("capture_since", "text"),
+        ("run_shell_command", "output"),
+    ] {
+        let tool = offered
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("streaming tool");
+        let description = tool.description.as_deref().expect("description");
+        let output =
+            serde_json::Value::Object((**tool.output_schema.as_ref().expect("output")).clone());
+        let field = output["properties"][field]["description"]
+            .as_str()
+            .expect("field description");
+
+        for text in [description, field] {
+            // Rustdoc line breaks reach the wire inside a field description.
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(text.contains("not the rendered screen"), "{name}: {text}");
+            assert!(text.contains("capture_pane"), "{name}: {text}");
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn configured_process_routes_have_no_executable_payload() -> TestResult {
     let tools = tools("execute")?;

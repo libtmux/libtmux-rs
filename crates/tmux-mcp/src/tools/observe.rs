@@ -209,8 +209,10 @@ impl TmuxTools {
         name = "run_shell_command",
         description = "Run a shell command in a pane, wait for it to finish, and report its \
                        exit status with everything it wrote. This is the tool for \"run this \
-                       and tell me if it worked\". Output is read from the pane's live stream, \
-                       so nothing is missed and the shell prompt is not included. The command \
+                       and tell me if it worked\". Output is the pane's raw output stream, not \
+                       the rendered screen: nothing is missed, the shell prompt is not \
+                       included, and a line redrawn in place repeats; capture_pane shows the \
+                       screen. The command \
                        runs in a subshell, so cd and export do not persist and invalid syntax \
                        completes with a nonzero status. Valid inherited Bash and zsh ERR and \
                        DEBUG traps remain visible to the command while parent-shell traps and \
@@ -340,7 +342,9 @@ impl TmuxTools {
     /// Wait until a pane writes something a caller is looking for.
     #[tool(
         description = "Wait until a pane writes matching text. Reads the pane's live output \
-                       stream, so text that scrolls past between checks is still seen. Prefer \
+                       stream, so text that scrolls past between checks is still seen. The \
+                       returned text is that raw stream, not the rendered screen: a line \
+                       redrawn in place repeats; capture_pane shows the screen. Prefer \
                        run_shell_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
                        not author, such as a server logging that it is ready. A pattern that is a \
@@ -408,7 +412,9 @@ impl TmuxTools {
     #[tool(
         description = "Read what a pane wrote since the previous call. The first call, with no \
                        cursor, starts watching and returns a cursor; later calls pass it back \
-                       and receive only what is new. Use this to follow a pane over several \
+                       and receive only what is new, as the raw output stream, not the rendered \
+                       screen: a line redrawn in place repeats; capture_pane shows the screen. \
+                       Use this to follow a pane over several \
                        turns without re-reading the whole screen. The answer says missed=true \
                        if the cursor no longer names retained output, including when the pane \
                        outran the buffer, its live tail was evicted, or the server restarted. \

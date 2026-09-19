@@ -230,6 +230,10 @@ pub struct Since {
     /// The pane that was read.
     pub pane: String,
     /// The text, with escape sequences removed.
+    ///
+    /// After the first answer this is the raw output stream, not the rendered
+    /// screen: a line redrawn in place repeats. `capture_pane` shows the
+    /// screen.
     pub text: String,
     /// The cursor to pass back next time.
     pub cursor: String,

@@ -543,6 +543,11 @@ line that scrolls past between looks is still seen.
 new since the cursor it gave you last time, and says `missed: true` if
 anything was dropped.
 
+`run_shell_command`, `wait_for_text`, and `capture_since` return the output
+stream with escape sequences removed, not the rendered screen. A line redrawn in place -- a line editor's
+echo, a progress bar -- repeats once per redraw. `capture_pane` shows what the
+screen displays.
+
 **Finding where something is.** `search_panes` matches across every pane at
 once and reports the pane and line. The listing tools will not: they read
 names and commands, not what a terminal is showing.
