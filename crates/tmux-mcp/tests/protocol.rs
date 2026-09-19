@@ -357,8 +357,28 @@ async fn capabilities_resource_reports_the_effective_surface() {
             .meta
             .as_ref()
             .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+            .and_then(Value::as_object)
             .unwrap_or_else(|| panic!("{} capability metadata", tool.name));
-        assert_eq!(metadata, row, "{} metadata/report", tool.name);
+        // `_meta` carries only what the tool itself does not.
+        let on_the_tool = [
+            "name",
+            "title",
+            "description",
+            "annotations",
+            "inputSchema",
+            "outputSchema",
+        ];
+        for (key, value) in metadata {
+            assert!(
+                !on_the_tool.contains(&key.as_str()),
+                "{} repeats {key}",
+                tool.name
+            );
+            assert_eq!(&row[key], value, "{} metadata/report {key}", tool.name);
+        }
+        let mut hints = serde_json::to_value(tool.annotations.as_ref().expect("hints")).unwrap();
+        hints.as_object_mut().unwrap().remove("title");
+        assert_eq!(row["annotations"], hints, "{} annotations", tool.name);
         assert_eq!(row["description"].as_str(), tool.description.as_deref());
         assert_eq!(
             row["inputSchema"],

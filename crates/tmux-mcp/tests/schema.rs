@@ -169,6 +169,26 @@ fn every_input_property_carries_a_description() -> TestResult {
     Ok(())
 }
 
+/// A client downloads `tools/list` before its first call, and a copy of
+/// every tool in `_meta` once nearly doubled it unnoticed.
+///
+/// The ceiling leaves room for new descriptions, not for a second copy of
+/// any schema.
+#[test]
+fn default_tool_list_stays_under_its_byte_ceiling() -> TestResult {
+    const CEILING: usize = 120_000;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(Selection::parse_for_socket(None, None, None, true)?)
+        .build();
+    let bytes = serde_json::to_string(&tools.offered())?.len();
+
+    assert!(
+        bytes <= CEILING,
+        "tools/list carries {bytes} bytes of tools, over its {CEILING}-byte ceiling"
+    );
+    Ok(())
+}
+
 /// Streamed text repeats every redraw a line editor makes, so an agent
 /// reading it has to know the screen is elsewhere.
 #[test]

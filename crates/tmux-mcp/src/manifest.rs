@@ -160,7 +160,6 @@ pub(crate) struct PublishedCapability {
     pub(crate) output_classes: BTreeSet<OutputClass>,
     pub(crate) may_expose_secrets: bool,
     pub(crate) may_return_untrusted_content: bool,
-    pub(crate) annotations: Annotations,
     pub(crate) input_literalization: BTreeMap<String, InputLiteralization>,
     pub(crate) nested_authority: BTreeSet<String>,
     pub(crate) amplifies_future_input: bool,
@@ -175,7 +174,6 @@ impl From<&Capability> for PublishedCapability {
             output_classes: definition.output_classes.clone(),
             may_expose_secrets: definition.may_expose_secrets,
             may_return_untrusted_content: definition.may_return_untrusted_content,
-            annotations: definition.annotations(),
             input_literalization: definition.input_literalization.clone(),
             nested_authority: definition.nested_authority.clone(),
             amplifies_future_input: definition.amplifies_future_input,
@@ -284,6 +282,8 @@ pub(crate) struct ReportTool {
     pub(crate) name: String,
     pub(crate) title: String,
     pub(crate) description: String,
+    pub(crate) annotations: Annotations,
+    /// The only part a tool's `_meta` carries: the rest is on the tool.
     #[serde(flatten)]
     pub(crate) capability: PublishedCapability,
     pub(crate) input_schema: serde_json::Value,
@@ -529,6 +529,7 @@ fn finish_route(
         name,
         title,
         description,
+        annotations: row.annotations(),
         capability,
         input_schema: serde_json::Value::Object((*route.attr.input_schema).clone()),
         output_schema: serde_json::Value::Object((**output_schema).clone()),
@@ -568,7 +569,7 @@ fn refresh_metadata(
     row: &ReportTool,
 ) -> Result<(), SurfaceError> {
     let meta = meta.ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no metadata")))?;
-    let value = serde_json::to_value(row).map_err(|error| {
+    let value = serde_json::to_value(&row.capability).map_err(|error| {
         SurfaceError::new(format!(
             "tool {name:?} capability cannot serialize: {error}"
         ))

@@ -249,12 +249,14 @@ invalid-request response before tool dispatch.
 `on_error` is either `stop` or `continue`. Its one client approval covers every
 nested name in its schema; inner tools do not receive separate approval.
 
-The capability row is not a second hand-maintained catalog. The same row a
-client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries the
-native input and output schemas, process reach, effect and output sets,
-schema-keyed input literalization, annotations, and any nested authority. The
-native definition also classifies every input sink, but that validation detail
-is not duplicated on the wire. For example, `get_tmux_variables.names` is
+The capability row is not a second hand-maintained catalog. A client receives
+it under `_meta["com.git-pull.libtmux-mcp/capability"]`, holding only what the
+tool does not already carry: toolset, process reach, effect and output sets,
+the secret and untrusted-content flags, schema-keyed input literalization, any
+nested authority, and future-input amplification. Name, title, description,
+annotations, and schemas stay on the tool, and `tmux://capabilities` reports
+them all together. The native definition also classifies every input sink, but
+that validation detail is not duplicated on the wire. For example, `get_tmux_variables.names` is
 reported as `validated-variable-name`; it is not falsely described as escaped
 literal text.
 
