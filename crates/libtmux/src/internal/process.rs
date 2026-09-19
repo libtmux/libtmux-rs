@@ -448,7 +448,24 @@ impl PersistentChild {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let child = command.spawn().map_err(Error::control_mode)?;
+        let child = command.spawn().map_err(|source| {
+            // The same test the subprocess path applies, so a missing tmux is
+            // `ExecutableNotFound` whichever path meets it first. Anything else
+            // stays a control-mode failure.
+            let executable_not_found = (source.kind() == io::ErrorKind::NotFound
+                && launch.current_dir().is_none_or(Path::is_dir))
+                || launch.executable_missing_from_path();
+            if executable_not_found {
+                Error::spawn(
+                    request.request_id().get(),
+                    request.summary().clone(),
+                    source,
+                    true,
+                )
+            } else {
+                Error::control_mode(source)
+            }
+        })?;
         let process_group = ProcessGroupGuard::new(child.id());
         // `child.id()` is `None` only once the child has already been
         // reaped, which cannot be true immediately after `spawn` returns.

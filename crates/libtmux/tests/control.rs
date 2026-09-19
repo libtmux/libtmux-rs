@@ -2021,3 +2021,32 @@ async fn a_clients_listing_tells_our_own_connection_apart() {
     mode.shutdown().await.expect("the connection closes");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// A missing tmux is the same failure whichever path finds it. `attach`
+/// tolerates a failed version probe and spawns anyway, so it was the path
+/// that found it first -- and classified it as a control-mode transport
+/// failure, which reads as worth retrying, where every other call says the
+/// executable is not there.
+#[tokio::test]
+async fn attach_reports_a_missing_tmux_as_the_process_path_does() {
+    let server = libtmux::Server::builder()
+        .socket_path("/tmp/libtmux-rs-dev/never-bound.sock")
+        .tmux_executable("/nonexistent/libtmux-rs/tmux")
+        .build()
+        .expect("the configuration is valid");
+    let session: libtmux::SessionId = "$0".parse().expect("a session id");
+
+    let Err(attach) = ControlMode::attach(&server, &session).await else {
+        panic!("attach succeeded with no tmux");
+    };
+    let listing = server
+        .sessions()
+        .await
+        .expect_err("a listing fails with no tmux");
+
+    assert!(
+        matches!(attach, libtmux::Error::ExecutableNotFound { .. }),
+        "attach: {attach:?}",
+    );
+    assert_eq!(attach.kind(), listing.kind());
+}
