@@ -157,7 +157,7 @@
 //! sent, output waited for rather than slept on, and a scope that kills the
 //! session whether the body succeeded or not. `watch` reacts to what a server
 //! does over one control-mode connection while driving it down the same one.
-//! `matrix` runs one workload five ways, so the cost of each execution mode is
+//! `matrix` runs one workload six ways, so the cost of each execution mode is
 //! visible side by side. `sweep` reaps servers that abandoned fixtures left
 //! behind, which is maintenance rather than orchestration.
 //!
