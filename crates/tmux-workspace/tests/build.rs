@@ -657,7 +657,7 @@ session_name: original
 windows:
   - window_name: editor
     panes:
-      - sleep 400
+      - blank
       - sleep 401
   - window_name: logs
     panes:
@@ -671,9 +671,34 @@ windows:
         .await
         .expect("the workspace builds");
 
+    // Typed commands start once each shell reads them.
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+        let panes = built.panes().await.unwrap_or_default();
+        panes.len() == 3
+            && panes.iter().skip(1).all(|pane| {
+                pane.current_command()
+                    .is_some_and(|command| command.to_string_lossy() == "sleep")
+            })
+    })
+    .await;
+    assert!(settled.is_ok(), "the typed commands are running");
+
     let frozen = tmux_workspace::freeze(&built)
         .await
         .expect("the session freezes");
+
+    // A pane at its prompt freezes to no command: recording the shell would
+    // start a shell inside it on the way back. A pane running something
+    // freezes to that command's name.
+    assert!(
+        frozen.windows[0].panes[0].shell_commands.is_empty(),
+        "{:?}",
+        frozen.windows[0].panes[0].shell_commands,
+    );
+    assert_eq!(
+        frozen.windows[0].panes[1].shell_commands,
+        [ShellCommand::new("sleep")]
+    );
 
     assert_eq!(frozen.session_name, "original");
     assert_eq!(frozen.windows.len(), 2);
