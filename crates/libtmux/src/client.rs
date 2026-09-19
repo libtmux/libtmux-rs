@@ -5,15 +5,16 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "query")]
 use crate::query::{FilterSchema, Filterable, ReadField};
-use crate::snapshot::ClientInfo;
 #[cfg(feature = "query")]
 use crate::snapshot::{Availability, ClientFields, FieldRef};
+use crate::snapshot::{ClientInfo, stored_time};
 use crate::target::ServerIdentity;
 use crate::{Command, Error, ObjectKind};
 
@@ -89,10 +90,14 @@ impl Client {
         self.info.client_height().copied().available()
     }
 
-    /// Return when the client connected, as a Unix timestamp.
+    /// Return when the client connected.
+    ///
+    /// tmux keeps whole seconds. `ClientFields::client_created` filters and
+    /// reads the same field as the `i64` of Unix seconds tmux reports, because
+    /// the query grammar compares integers.
     #[must_use]
-    pub fn created(&self) -> i64 {
-        *self.info.client_created()
+    pub fn created(&self) -> SystemTime {
+        stored_time(*self.info.client_created())
     }
 
     /// Report whether the client is attached read-only.

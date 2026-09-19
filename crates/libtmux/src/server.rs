@@ -1537,7 +1537,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached, or answers with something
-    /// that is not a pid and a start time.
+    /// that is not a pid and a start time this platform's `SystemTime` holds.
     ///
     /// # Examples
     ///
@@ -1566,12 +1566,13 @@ impl Server {
         let answer = self.format(None, "#{pid} #{start_time}").await?;
         let text = answer.to_string_lossy();
         let mut parts = text.split_whitespace();
-        let parsed = parts
+        let pid = parts.next().and_then(|pid| pid.parse::<u32>().ok());
+        let start_time = parts
             .next()
-            .and_then(|pid| pid.parse::<u32>().ok())
-            .zip(parts.next().and_then(|start| start.parse::<i64>().ok()));
+            .and_then(|start| start.parse::<i64>().ok())
+            .filter(|start| crate::snapshot::unix_time(*start).is_some());
 
-        let Some((pid, start_time)) = parsed else {
+        let (Some(pid), Some(start_time)) = (pid, start_time) else {
             return Err(Error::UnreadableFormatValue {
                 format: "#{pid} #{start_time}",
                 detail: crate::IdParseError::new('#'),

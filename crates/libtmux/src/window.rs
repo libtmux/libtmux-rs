@@ -4,6 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
@@ -13,9 +14,9 @@ use crate::pane::Pane;
 #[cfg(feature = "query")]
 use crate::query::{FilterSchema, Filterable, ReadField};
 use crate::session::Session;
-use crate::snapshot::WindowProjection;
 #[cfg(feature = "query")]
 use crate::snapshot::{Availability, FieldRef, WindowFields, WindowInfo};
+use crate::snapshot::{WindowProjection, stored_time};
 use crate::target::{ServerIdentity, SessionId, WindowId};
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
@@ -256,13 +257,16 @@ impl Window {
         self.projection.link().has_bell()
     }
 
-    /// Return when the window last produced output, in seconds since the
-    /// Unix epoch.
+    /// Return when the window last produced output.
     ///
     /// tmux stamps this on every byte a pane in the window writes, whatever
     /// the window options say. That is what separates it from
     /// [`Self::has_activity`], which is an alert and stays false unless
     /// `monitor-activity` was turned on -- and it is off by default.
+    ///
+    /// tmux keeps whole seconds. `WindowFields::window_activity` filters and
+    /// reads the same field as the `i64` of Unix seconds tmux reports, because
+    /// the query grammar compares integers.
     ///
     /// # Examples
     ///
@@ -270,12 +274,15 @@ impl Window {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
+    /// use std::time::{Duration, SystemTime};
+    ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let session = guard.server().new_session("busy").await?;
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// // A window that has just been made has already produced output.
-    /// assert!(window.last_activity() > 0);
+    /// let idle = SystemTime::now().duration_since(window.last_activity())?;
+    /// assert!(idle < Duration::from_secs(3600));
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -284,8 +291,8 @@ impl Window {
     /// # }
     /// ```
     #[must_use]
-    pub fn last_activity(&self) -> i64 {
-        *self.projection.window().window_activity()
+    pub fn last_activity(&self) -> SystemTime {
+        stored_time(*self.projection.window().window_activity())
     }
 
     /// Report whether one of the window's panes is zoomed to fill it.

@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use crate::formats::{DecoderKind, decode_ascii};
@@ -565,10 +566,35 @@ fn decode_i32(slot: ParsedSlot<'_>) -> Result<i32, FormatCodecError> {
         .ok_or_else(|| invalid_value(&slot))
 }
 
+/// Decode Unix seconds, refusing a value [`unix_time`] cannot convert.
+///
+/// A stored timestamp is therefore always one [`stored_time`] can read.
 fn decode_timestamp(slot: ParsedSlot<'_>) -> Result<i64, FormatCodecError> {
     signed_text(slot.as_bytes())
         .and_then(|text| text.parse::<i64>().ok())
+        .filter(|seconds| unix_time(*seconds).is_some())
         .ok_or_else(|| invalid_value(&slot))
+}
+
+/// Convert Unix seconds, the unit of every tmux timestamp, to a `SystemTime`.
+///
+/// A negative value is a time before 1970. `None` when this platform's
+/// `SystemTime` cannot hold the value.
+pub(crate) fn unix_time(seconds: i64) -> Option<SystemTime> {
+    let offset = Duration::from_secs(seconds.unsigned_abs());
+    if seconds < 0 {
+        UNIX_EPOCH.checked_sub(offset)
+    } else {
+        UNIX_EPOCH.checked_add(offset)
+    }
+}
+
+/// Read a timestamp that [`decode_timestamp`] or a caller already checked.
+///
+/// The fallback exists so an unrepresentable value is not a panic, not
+/// because it is reachable.
+pub(crate) fn stored_time(seconds: i64) -> SystemTime {
+    unix_time(seconds).unwrap_or(UNIX_EPOCH)
 }
 
 fn decode_identity<T>(slot: ParsedSlot<'_>) -> Result<T, FormatCodecError>

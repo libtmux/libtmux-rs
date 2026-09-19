@@ -1081,6 +1081,106 @@ async fn a_client_reports_its_own_terminal_and_type() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Every timestamp accessor is a `SystemTime` inside the test's own window,
+/// and names the moment its filter handle reads as Unix seconds.
+///
+/// A unit error -- milliseconds for seconds, or an offset -- lands outside the
+/// window, which a check for "positive" did not catch.
+#[cfg(all(feature = "control-mode", feature = "query"))]
+#[tokio::test]
+async fn timestamps_are_system_times_that_agree_with_their_handles() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use libtmux::control::ControlMode;
+    use libtmux::query::Filterable as _;
+    use libtmux::{Availability, Client, Session, Window};
+
+    // tmux keeps whole seconds, so the window opens on the second it started.
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is past 1970");
+    let before = UNIX_EPOCH + Duration::from_secs(since_epoch.as_secs());
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let mut session = server.new_session("clock").await.expect("session");
+    let control = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches");
+    retry_until(Duration::from_secs(10), async || {
+        server
+            .clients()
+            .await
+            .is_ok_and(|clients| !clients.is_empty())
+    })
+    .await
+    .expect("the attached client is listed");
+
+    session.refresh().await.expect("session refreshes");
+    let window = session
+        .active_window()
+        .await
+        .expect("window lookup")
+        .expect("a window");
+    let client = server.clients().await.expect("clients").remove(0);
+    let generation = server.generation().await.expect("generation");
+    let after = SystemTime::now();
+
+    let seconds = |time: SystemTime| {
+        let offset = time.duration_since(UNIX_EPOCH).expect("after 1970");
+        i64::try_from(offset.as_secs()).expect("fits tmux's seconds")
+    };
+    let sessions = Session::filter_fields();
+    let last_attached = session.last_attached().expect("a client attached");
+    for (label, time, handle) in [
+        (
+            "session_created",
+            session.created(),
+            session.get(sessions.session_created),
+        ),
+        (
+            "session_last_attached",
+            last_attached,
+            session.get(sessions.session_last_attached),
+        ),
+        (
+            "window_activity",
+            window.last_activity(),
+            window.get(Window::filter_fields().window_activity),
+        ),
+        (
+            "client_created",
+            client.created(),
+            client.get(Client::filter_fields().client_created),
+        ),
+    ] {
+        assert!(
+            before <= time && time <= after,
+            "{label} is {time:?}, outside {before:?}..={after:?}",
+        );
+        assert_eq!(
+            handle,
+            Availability::Available(seconds(time)),
+            "{label}'s handle reads the same moment as Unix seconds",
+        );
+    }
+
+    let started = generation.start_time();
+    assert!(
+        before <= started && started <= after,
+        "start_time is {started:?}, outside {before:?}..={after:?}",
+    );
+    assert!(
+        generation
+            .to_string()
+            .ends_with(&format!(" started {}", seconds(started))),
+        "Display prints the same moment as Unix seconds",
+    );
+
+    let _ = control.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// The remaining dispatch-only commands must reach tmux and be accepted.
 ///
 /// These change something a headless server cannot show back -- a prefix key

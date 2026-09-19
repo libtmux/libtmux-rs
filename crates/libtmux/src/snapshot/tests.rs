@@ -1586,6 +1586,22 @@ fn snapshot_catalog_typed_decoders_reject_noncanonical_or_overflowing_values() {
     }
 }
 
+/// Every Unix second tmux can print converts, before 1970 included, and none
+/// panics on the way: `UNIX_EPOCH + offset` would for a negative value.
+#[test]
+fn unix_time_converts_every_second_an_i64_holds() {
+    use std::time::UNIX_EPOCH;
+
+    for seconds in [i64::MIN, -1, 0, 1, i64::MAX] {
+        let time = super::unix_time(seconds).expect("a Unix SystemTime holds any i64 of seconds");
+        let back = match time.duration_since(UNIX_EPOCH) {
+            Ok(after) => i128::from(after.as_secs()),
+            Err(before) => -i128::from(before.duration().as_secs()),
+        };
+        assert_eq!(back, i128::from(seconds), "{seconds} round-trips");
+    }
+}
+
 #[test]
 fn snapshot_catalog_identity_decoders_reject_noncanonical_or_overflowing_values() {
     for (profile, field, invalid) in [

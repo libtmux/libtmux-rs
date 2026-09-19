@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
@@ -14,9 +15,9 @@ use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
 use crate::query::{FilterSchema, Filterable, ReadField};
-use crate::snapshot::SessionInfo;
 #[cfg(feature = "query")]
 use crate::snapshot::{Availability, FieldRef, SessionFields};
+use crate::snapshot::{SessionInfo, stored_time};
 use crate::target::{ServerIdentity, SessionId};
 use crate::window::Window;
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
@@ -232,19 +233,30 @@ impl Session {
         self.attached_client_count() > 0
     }
 
-    /// Return when the session was created, as a Unix timestamp.
+    /// Return when the session was created.
+    ///
+    /// tmux keeps whole seconds. `SessionFields::session_created` filters and
+    /// reads the same field as the `i64` of Unix seconds tmux reports, because
+    /// the query grammar compares integers.
     #[must_use]
-    pub fn created(&self) -> i64 {
-        *self.info.session_created()
+    pub fn created(&self) -> SystemTime {
+        stored_time(*self.info.session_created())
     }
 
-    /// Return when a client last attached, as a Unix timestamp.
+    /// Return when a client last attached.
     ///
     /// This is `None` for a session that has never been attached, which is the
-    /// ordinary state for one started with `new-session -d`.
+    /// ordinary state for one started with `new-session -d`. tmux keeps whole
+    /// seconds. `SessionFields::session_last_attached` filters and reads the
+    /// same field as the `i64` of Unix seconds tmux reports, because the query
+    /// grammar compares integers.
     #[must_use]
-    pub fn last_attached(&self) -> Option<i64> {
-        self.info.session_last_attached().copied().available()
+    pub fn last_attached(&self) -> Option<SystemTime> {
+        self.info
+            .session_last_attached()
+            .copied()
+            .available()
+            .map(stored_time)
     }
 
     /// Return the identity of the server this session belongs to.

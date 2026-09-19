@@ -315,7 +315,7 @@ function libtmux::CaptureOptions::visible: const fn() -> Self
 function libtmux::Client::attached_pane: async fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Client::attached_session: async fn(&self) -> Result<Option<libtmux::Session>, libtmux::Error>
 function libtmux::Client::attached_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
-function libtmux::Client::created: fn(&self) -> i64
+function libtmux::Client::created: fn(&self) -> SystemTime
 function libtmux::Client::detach: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::Client::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Client::height: fn(&self) -> Option<u32>
@@ -603,12 +603,12 @@ function libtmux::ServerBuilder::socket_name: fn(self, name: impl Into<OsString>
 function libtmux::ServerBuilder::socket_path: fn(self, path: impl Into<PathBuf>) -> Self
 function libtmux::ServerBuilder::tmux_executable: fn(self, executable: impl Into<OsString>) -> Self
 function libtmux::ServerGeneration::pid: const fn(self) -> u32
-function libtmux::ServerGeneration::start_time: const fn(self) -> i64
+function libtmux::ServerGeneration::start_time: fn(self) -> SystemTime
 function libtmux::Session::active_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Session::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Session::attached_client_count: fn(&self) -> u32
 function libtmux::Session::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
-function libtmux::Session::created: fn(&self) -> i64
+function libtmux::Session::created: fn(&self) -> SystemTime
 function libtmux::Session::detach_clients: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Session::display: async fn(&self, message: &str) -> Result<(), libtmux::Error>
 function libtmux::Session::environment: async fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
@@ -623,7 +623,7 @@ function libtmux::Session::hooks: async fn(&self) -> Result<BTreeMap<String, lib
 function libtmux::Session::id: const fn(&self) -> &libtmux::SessionId
 function libtmux::Session::is_attached: fn(&self) -> bool
 function libtmux::Session::kill: async fn(self) -> Result<(), libtmux::Error>
-function libtmux::Session::last_attached: fn(&self) -> Option<i64>
+function libtmux::Session::last_attached: fn(&self) -> Option<SystemTime>
 function libtmux::Session::last_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Session::lock: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Session::name: fn(&self) -> &libtmux::TmuxText
@@ -705,7 +705,7 @@ function libtmux::Window::is_active: const fn(&self) -> bool
 function libtmux::Window::is_linked: const fn(&self) -> bool
 function libtmux::Window::is_zoomed: fn(&self) -> bool
 function libtmux::Window::kill: async fn(self) -> Result<(), libtmux::Error>
-function libtmux::Window::last_activity: fn(&self) -> i64
+function libtmux::Window::last_activity: fn(&self) -> SystemTime
 function libtmux::Window::last_pane: async fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::layout: fn(&self) -> &libtmux::TmuxText
 function libtmux::Window::link_to: async fn(&self, session: &libtmux::Session, index: Option<i32>) -> Result<(), libtmux::Error>

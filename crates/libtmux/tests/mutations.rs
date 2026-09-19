@@ -42,7 +42,7 @@ async fn creating_an_object_returns_it_hydrated_in_one_command() {
     assert_eq!(session.name().as_bytes().to_vec(), b"work".to_vec());
     assert_eq!(session.window_count(), 1);
     // The handle came back populated, so no follow-up listing was needed.
-    assert!(session.created() > 0);
+    assert!(session.created() > std::time::UNIX_EPOCH);
 
     let window = session
         .new_window(NewWindowOptions::new("editor").command("sleep 300"))

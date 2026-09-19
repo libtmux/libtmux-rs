@@ -1,5 +1,29 @@
 # Migrating from 0.1.0-alpha.11
 
+## Timestamps are `SystemTime`
+
+`Session::created`, `Session::last_attached`, `Window::last_activity`,
+`Client::created` and `ServerGeneration::start_time` return
+`std::time::SystemTime` in place of an `i64` of Unix seconds:
+
+```no_run
+# fn age(session: &libtmux::Session) -> Result<(), std::time::SystemTimeError> {
+use std::time::{SystemTime, UNIX_EPOCH};
+
+// was: let created: i64 = session.created();
+let created: SystemTime = session.created();
+let age = SystemTime::now().duration_since(created)?;
+
+// The seconds are one conversion away.
+let seconds = created.duration_since(UNIX_EPOCH)?.as_secs();
+# let _ = (age, seconds);
+# Ok(())
+# }
+```
+
+The field handles are unchanged: `session.get(fields.session_created)` and a
+filter on it still see the `i64` tmux reports.
+
 ## `respawn` and `display_menu` take types, not literals
 
 ```no_run

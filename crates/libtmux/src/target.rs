@@ -6,6 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::SystemTime;
 
 use crate::error::IdParseError;
 
@@ -294,10 +295,13 @@ impl ServerGeneration {
         self.pid
     }
 
-    /// When that server started, as tmux reports it.
+    /// When that server started, to the whole second tmux keeps.
+    ///
+    /// [`Display`](fmt::Display) prints the same moment as the Unix seconds
+    /// tmux reports.
     #[must_use]
-    pub const fn start_time(self) -> i64 {
-        self.start_time
+    pub fn start_time(self) -> SystemTime {
+        crate::snapshot::stored_time(self.start_time)
     }
 }
 

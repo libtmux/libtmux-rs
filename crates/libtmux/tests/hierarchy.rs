@@ -97,7 +97,7 @@ async fn listings_preserve_tmux_order_and_report_snapshot_values() {
             "a detached session reports no clients"
         );
         assert_eq!(session.attached_client_count(), 0);
-        assert!(session.created() > 0);
+        assert!(session.created() > std::time::UNIX_EPOCH);
         assert_eq!(
             session.last_attached(),
             None,
