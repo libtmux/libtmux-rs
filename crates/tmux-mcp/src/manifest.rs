@@ -604,9 +604,12 @@ fn set_nested_operation_schemas(
                 let route = nested.map.get(nested_name.as_str()).ok_or_else(|| {
                     SurfaceError::new(format!("unknown nested tool {nested_name:?}"))
                 })?;
-                let input = inline_local_references(serde_json::Value::Object(
+                let mut input = inline_local_references(serde_json::Value::Object(
                     (*route.attr.input_schema).clone(),
                 ))?;
+                if let Some(input) = input.as_object_mut() {
+                    input.insert("description".to_owned(), "That tool's arguments.".into());
+                }
                 Ok(serde_json::json!({
                     "type": "object",
                     "properties": {

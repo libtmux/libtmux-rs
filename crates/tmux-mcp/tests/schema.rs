@@ -120,6 +120,55 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
     Ok(())
 }
 
+/// Collect every property below `schema` that has no description.
+///
+/// A `const` property is exempt: its one legal value says all there is.
+fn undocumented(schema: &serde_json::Value, path: &str, missing: &mut Vec<String>) {
+    match schema {
+        serde_json::Value::Object(object) => {
+            if let Some(properties) = object
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+            {
+                for (name, property) in properties {
+                    let described = property
+                        .get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty());
+                    if !described && property.get("const").is_none() {
+                        missing.push(format!("{path}.{name}"));
+                    }
+                }
+            }
+            for (key, value) in object {
+                undocumented(value, &format!("{path}/{key}"), missing);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                undocumented(item, &format!("{path}/{index}"), missing);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn every_input_property_carries_a_description() -> TestResult {
+    let mut missing = Vec::new();
+    for tool in tools("inspect,manage,execute,teardown")?.offered() {
+        let input = serde_json::Value::Object((*tool.input_schema).clone());
+        undocumented(&input, &tool.name, &mut missing);
+    }
+
+    assert!(
+        missing.is_empty(),
+        "{} undocumented input properties: {missing:#?}",
+        missing.len()
+    );
+    Ok(())
+}
+
 #[test]
 fn configured_process_routes_have_no_executable_payload() -> TestResult {
     let tools = tools("execute")?;

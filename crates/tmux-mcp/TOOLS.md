@@ -111,7 +111,7 @@ Discard a pane's scrollback, so the next capture_pane returns only what happens 
 
 ## `create_session`
 
-Create a new detached tmux session Start a pane's configured process; accepts no command payload.
+Create a new detached tmux session. Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -126,7 +126,7 @@ Create a new detached tmux session Start a pane's configured process; accepts no
 
 ## `create_window`
 
-Create a window running its configured process Start a pane's configured process; accepts no command payload.
+Create a window running its configured process. Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -141,7 +141,7 @@ Create a window running its configured process Start a pane's configured process
 
 ## `find_pane_by_position`
 
-Find the pane touching a named window corner Inspect tmux metadata; accepts no client-supplied executable input.
+Find the pane touching a named window corner. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -156,7 +156,7 @@ Find the pane touching a named window corner Inspect tmux metadata; accepts no c
 
 ## `get_pane_info`
 
-Return metadata for one pane Inspect tmux metadata; accepts no client-supplied executable input.
+Return metadata for one pane. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -186,7 +186,7 @@ Report every session with its windows and panes, in one call. Prefer this over c
 
 ## `get_session_info`
 
-Return metadata for one session Inspect tmux metadata; accepts no client-supplied executable input.
+Return metadata for one session. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -216,7 +216,7 @@ Read a bounded set of tmux variables against one pane. tmux reads a name it does
 
 ## `get_window_info`
 
-Return metadata for one window Inspect tmux metadata; accepts no client-supplied executable input.
+Return metadata for one window. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -231,7 +231,7 @@ Return metadata for one window Inspect tmux metadata; accepts no client-supplied
 
 ## `kill_pane`
 
-Kill a pane. Killing a window's last pane closes the window Delete tmux state; accepts no command payload.
+Kill a pane. Killing a window's last pane closes the window. Delete tmux state; accepts no command payload.
 
 - Toolset: `teardown`
 - Process reach: `none`
@@ -246,7 +246,7 @@ Kill a pane. Killing a window's last pane closes the window Delete tmux state; a
 
 ## `kill_session`
 
-Kill a tmux session and everything in it Delete tmux state; accepts no command payload.
+Kill a tmux session and everything in it. Delete tmux state; accepts no command payload.
 
 - Toolset: `teardown`
 - Process reach: `none`
@@ -261,7 +261,7 @@ Kill a tmux session and everything in it Delete tmux state; accepts no command p
 
 ## `kill_window`
 
-Kill a window, closing it in every session that links it Delete tmux state; accepts no command payload.
+Kill a window, closing it in every session that links it. Delete tmux state; accepts no command payload.
 
 - Toolset: `teardown`
 - Process reach: `none`
@@ -276,7 +276,7 @@ Kill a window, closing it in every session that links it Delete tmux state; acce
 
 ## `list_panes`
 
-List every pane on the server Inspect tmux metadata; accepts no client-supplied executable input.
+List every pane on the server. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -291,7 +291,7 @@ List every pane on the server Inspect tmux metadata; accepts no client-supplied 
 
 ## `list_sessions`
 
-List every tmux session on the server Inspect tmux metadata; accepts no client-supplied executable input.
+List every tmux session on the server. Inspect tmux metadata; accepts no client-supplied executable input.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -321,7 +321,7 @@ List every window on the server. A window linked into several sessions appears o
 
 ## `move_window`
 
-Move one window to a session and index Change tmux state; no client-supplied executable input.
+Move one window to a session and index. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -351,7 +351,7 @@ Put text into a pane through a tmux paste buffer instead of typing it key by key
 
 ## `rename_session`
 
-Rename one session Change tmux state; no client-supplied executable input.
+Rename one session. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -366,7 +366,7 @@ Rename one session Change tmux state; no client-supplied executable input.
 
 ## `rename_window`
 
-Rename one window Change tmux state; no client-supplied executable input.
+Rename one window. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -381,7 +381,7 @@ Rename one window Change tmux state; no client-supplied executable input.
 
 ## `resize_pane`
 
-Move one edge of a pane by a number of rows or columns Change tmux state; no client-supplied executable input.
+Move one edge of a pane by a number of rows or columns. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -396,7 +396,7 @@ Move one edge of a pane by a number of rows or columns Change tmux state; no cli
 
 ## `resize_window`
 
-Resize one window to exact cell dimensions Change tmux state; no client-supplied executable input.
+Resize one window to exact cell dimensions. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -411,7 +411,7 @@ Resize one window to exact cell dimensions Change tmux state; no client-supplied
 
 ## `respawn_pane`
 
-Restart a pane's configured process with no command payload Start a pane's configured process; accepts no command payload.
+Restart a pane's configured process with no command payload. Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -531,7 +531,7 @@ Send an ordered batch of input operations to panes. Each executed row repeats se
 
 ## `set_history_limit`
 
-Set the scrollback history limit for a session or its global default Change tmux state; no client-supplied executable input.
+Set the scrollback history limit for a session or its global default. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -546,7 +546,7 @@ Set the scrollback history limit for a session or its global default Change tmux
 
 ## `set_mouse_enabled`
 
-Set mouse handling for a session or the global session default Change tmux state; no client-supplied executable input.
+Set mouse handling for a session or the global session default. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -561,7 +561,7 @@ Set mouse handling for a session or the global session default Change tmux state
 
 ## `set_pane_title`
 
-Set one pane's title Change tmux state; no client-supplied executable input.
+Set one pane's title. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
@@ -666,7 +666,7 @@ Read pane content with cursor position, mode state, and scroll position in one r
 
 ## `split_window`
 
-Split a window and start the configured process with no command payload Start a pane's configured process; accepts no command payload.
+Split a window and start the configured process with no command payload. Start a pane's configured process; accepts no command payload.
 
 - Toolset: `execute`
 - Process reach: `configured-process`
@@ -681,7 +681,7 @@ Split a window and start the configured process with no command payload Start a 
 
 ## `swap_pane`
 
-Swap the positions of two panes Change tmux state; no client-supplied executable input.
+Swap the positions of two panes. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`

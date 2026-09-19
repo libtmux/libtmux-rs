@@ -649,6 +649,28 @@ mod tests {
         );
     }
 
+    /// The generated safety sentence follows a tool's own text, so a summary
+    /// with no closing period ran into it: "List every tmux session on the
+    /// server Inspect tmux metadata; ...".
+    #[test]
+    fn every_tools_own_description_ends_its_sentence() {
+        let unfinished: Vec<_> = crate::tools::router()
+            .list_all()
+            .into_iter()
+            .filter(|tool| {
+                !tool
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim_end()
+                    .ends_with(['.', '!', '?'])
+            })
+            .map(|tool| tool.name.into_owned())
+            .collect();
+
+        assert!(unfinished.is_empty(), "no closing period: {unfinished:?}");
+    }
+
     /// Clients auto-approve or prompt from these hints, so a tool that
     /// changes tmux must never claim to be read-only.
     #[test]

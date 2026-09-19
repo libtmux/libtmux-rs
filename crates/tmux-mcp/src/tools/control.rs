@@ -182,7 +182,7 @@ impl TmuxTools {
 impl TmuxTools {
     /// Kill one window.
     #[tool(
-        description = "Kill a window, closing it in every session that links it",
+        description = "Kill a window, closing it in every session that links it.",
         title = "Kill Window",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup]
@@ -202,7 +202,7 @@ impl TmuxTools {
 
     /// Kill one pane.
     #[tool(
-        description = "Kill a pane. Killing a window's last pane closes the window",
+        description = "Kill a pane. Killing a window's last pane closes the window.",
         title = "Kill Pane",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup]
@@ -224,7 +224,7 @@ impl TmuxTools {
 
     /// Create a detached session.
     #[tool(
-        description = "Create a new detached tmux session",
+        description = "Create a new detached tmux session.",
         title = "Create Session",
         meta = crate::capability_meta!(
             Execute, ConfiguredProcess,
@@ -274,7 +274,7 @@ impl TmuxTools {
 
     /// Kill a session and everything in it.
     #[tool(
-        description = "Kill a tmux session and everything in it",
+        description = "Kill a tmux session and everything in it.",
         title = "Kill Session",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup]
@@ -294,7 +294,7 @@ impl TmuxTools {
 
     /// Move one edge of a pane.
     #[tool(
-        description = "Move one edge of a pane by a number of rows or columns",
+        description = "Move one edge of a pane by a number of rows or columns.",
         title = "Resize Pane",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],

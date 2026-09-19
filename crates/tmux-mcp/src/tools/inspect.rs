@@ -108,7 +108,7 @@ impl SearchBudget {
 impl TmuxTools {
     /// List every session on the server.
     #[tool(
-        description = "List every tmux session on the server",
+        description = "List every tmux session on the server.",
         title = "List Sessions",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
@@ -135,7 +135,7 @@ impl TmuxTools {
 
     /// List every pane on the server.
     #[tool(
-        description = "List every pane on the server",
+        description = "List every pane on the server.",
         title = "List Panes",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
