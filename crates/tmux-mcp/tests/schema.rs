@@ -120,6 +120,26 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
     Ok(())
 }
 
+/// The hand-kept lists above, not the capability rows the hints derive from,
+/// say which tools must never look read-only or harmless to a client.
+#[test]
+fn listed_mutating_tools_carry_mutating_hints() -> TestResult {
+    for tool in tools("inspect,manage,execute,teardown")?.offered() {
+        let name = tool.name.as_ref();
+        let hints = tool.annotations.as_ref().expect("annotations");
+        if [MANAGE, EXECUTE, TEARDOWN]
+            .iter()
+            .any(|names| names.contains(&name))
+        {
+            assert_eq!(hints.read_only_hint, Some(false), "{name} readOnlyHint");
+        }
+        if TEARDOWN.contains(&name) {
+            assert_eq!(hints.destructive_hint, Some(true), "{name} destructiveHint");
+        }
+    }
+    Ok(())
+}
+
 /// Collect every property below `schema` that has no description.
 ///
 /// A `const` property is exempt: its one legal value says all there is.
