@@ -1572,6 +1572,19 @@ impl CaptureOptions {
         self
     }
 
+    /// Whether a joined line still needs its blank-cell padding trimmed.
+    ///
+    /// tmux 3.2a's `-J` carries the unwritten cells past a wrapped line's
+    /// last printed row into the join; every later release, `-T` (3.4) or
+    /// not, already drops them. This crate trims the same padding itself
+    /// rather than adding a version gate for one release. Skipped when the
+    /// caller asked to keep exactly what a program printed with
+    /// [`Self::trailing_spaces`], and moot without [`Self::join_wrapped`],
+    /// where every row is tmux's own and already trimmed.
+    pub(crate) const fn needs_wrap_trim(&self) -> bool {
+        self.join_wrapped && !self.trailing_spaces
+    }
+
     /// Lower these options into a `capture-pane` command for one pane.
     ///
     /// Takes the release so a flag cannot reach tmux without the check that

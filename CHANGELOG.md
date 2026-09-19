@@ -290,6 +290,14 @@ full.
   or spending the signal on a client that is gone.
   `Server::with_channel_lock` inherits the lock fix. (#28)
 
+- `Pane::capture_with` and `Pane::wait_until`, joining a wrapped line
+  with `CaptureOptions::join_wrapped`, no longer return it padded with
+  the pane's unwritten cells on tmux 3.2a: every other supported
+  release already drops them, and this crate now trims the same
+  padding there too. A caller matching a joined line for equality
+  rather than `wait_for_text`'s substring saw the pane's width instead
+  of what ran in it. (#28)
+
 ### Removed
 
 - **Breaking.** The eleven `*_or_empty` listing twins
