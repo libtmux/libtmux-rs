@@ -10,6 +10,8 @@ mod generated;
 
 pub use generated::names;
 
+use std::ops::RangeInclusive;
+
 use crate::formats::TmuxText;
 
 /// What kind of value an option holds.
@@ -98,6 +100,8 @@ pub struct OptionSchema {
     name: &'static str,
     kind: OptionKind,
     scopes: &'static [OptionScope],
+    choices: &'static [&'static str],
+    range: Option<(i64, i64)>,
 }
 
 impl OptionSchema {
@@ -106,7 +110,23 @@ impl OptionSchema {
         kind: OptionKind,
         scopes: &'static [OptionScope],
     ) -> Self {
-        Self { name, kind, scopes }
+        Self {
+            name,
+            kind,
+            scopes,
+            choices: &[],
+            range: None,
+        }
+    }
+
+    pub(crate) const fn with_choices(mut self, choices: &'static [&'static str]) -> Self {
+        self.choices = choices;
+        self
+    }
+
+    pub(crate) const fn with_range(mut self, minimum: i64, maximum: i64) -> Self {
+        self.range = Some((minimum, maximum));
+        self
     }
 
     /// Return the option's tmux name.
@@ -139,6 +159,48 @@ impl OptionSchema {
     #[must_use]
     pub fn accepts(&self, scope: OptionScope) -> bool {
         self.scopes.contains(&scope)
+    }
+
+    /// Return the words a [`OptionKind::Choice`] option accepts, in tmux's
+    /// order.
+    ///
+    /// Empty for every other kind. tmux compares a choice exactly, so case
+    /// matters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::option_schema;
+    ///
+    /// let keys = option_schema("mode-keys").expect("a documented option");
+    /// assert_eq!(keys.choices(), ["emacs", "vi"]);
+    ///
+    /// let limit = option_schema("history-limit").expect("a documented option");
+    /// assert!(limit.choices().is_empty());
+    /// ```
+    #[must_use]
+    pub const fn choices(&self) -> &'static [&'static str] {
+        self.choices
+    }
+
+    /// Return the inclusive range a [`OptionKind::Number`] option accepts.
+    ///
+    /// `None` for every other kind.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::option_schema;
+    ///
+    /// let limit = option_schema("buffer-limit").expect("a documented option");
+    /// assert_eq!(limit.range(), Some(1..=i64::from(i32::MAX)));
+    ///
+    /// let keys = option_schema("mode-keys").expect("a documented option");
+    /// assert_eq!(keys.range(), None);
+    /// ```
+    #[must_use]
+    pub fn range(&self) -> Option<RangeInclusive<i64>> {
+        self.range.map(|(minimum, maximum)| minimum..=maximum)
     }
 }
 

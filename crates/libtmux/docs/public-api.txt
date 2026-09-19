@@ -402,8 +402,10 @@ function libtmux::NewWindowOptions::select: const fn(self) -> Self
 function libtmux::NewWindowOptions::start_directory: fn(self, directory: impl Into<libtmux::TmuxArg>) -> Self
 function libtmux::NewWindowOptions::unnamed: const fn() -> Self
 function libtmux::OptionSchema::accepts: fn(&self, scope: libtmux::OptionScope) -> bool
+function libtmux::OptionSchema::choices: const fn(&self) -> &'static [&'static str]
 function libtmux::OptionSchema::kind: const fn(&self) -> libtmux::OptionKind
 function libtmux::OptionSchema::name: const fn(&self) -> &'static str
+function libtmux::OptionSchema::range: fn(&self) -> Option<RangeInclusive<i64>>
 function libtmux::OptionSchema::scopes: const fn(&self) -> &'static [libtmux::OptionScope]
 function libtmux::OutputLimits::max_stderr_bytes: const fn(self, bytes: usize) -> Self
 function libtmux::OutputLimits::max_stdout_bytes: const fn(self, bytes: usize) -> Self

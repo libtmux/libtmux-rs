@@ -11,7 +11,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "activity-action",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
+    )
+    .with_choices(&["none", "any", "current", "other"]),
     OptionSchema::new(
         "after-bind-key",
         OptionKind::Command,
@@ -218,7 +219,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "allow-passthrough",
         OptionKind::Choice,
         &[OptionScope::Window, OptionScope::Pane],
-    ),
+    )
+    .with_choices(&["off", "on", "all"]),
     OptionSchema::new(
         "allow-rename",
         OptionKind::Flag,
@@ -238,7 +240,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "assume-paste-time",
         OptionKind::Number,
         &[OptionScope::Session],
-    ),
+    )
+    .with_range(0, 2_147_483_647),
     OptionSchema::new("automatic-rename", OptionKind::Flag, &[OptionScope::Window]),
     OptionSchema::new(
         "automatic-rename-format",
@@ -246,9 +249,12 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         &[OptionScope::Window],
     ),
     OptionSchema::new("backspace", OptionKind::Key, &[OptionScope::Server]),
-    OptionSchema::new("base-index", OptionKind::Number, &[OptionScope::Session]),
-    OptionSchema::new("bell-action", OptionKind::Choice, &[OptionScope::Session]),
-    OptionSchema::new("buffer-limit", OptionKind::Number, &[OptionScope::Server]),
+    OptionSchema::new("base-index", OptionKind::Number, &[OptionScope::Session])
+        .with_range(0, 2_147_483_647),
+    OptionSchema::new("bell-action", OptionKind::Choice, &[OptionScope::Session])
+        .with_choices(&["none", "any", "current", "other"]),
+    OptionSchema::new("buffer-limit", OptionKind::Number, &[OptionScope::Server])
+        .with_range(1, 2_147_483_647),
     OptionSchema::new(
         "client-active",
         OptionKind::Command,
@@ -303,7 +309,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "clock-mode-style",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&["12", "24", "12-with-seconds", "24-with-seconds"]),
     OptionSchema::new("codepoint-widths", OptionKind::Text, &[OptionScope::Server]),
     OptionSchema::new("command-alias", OptionKind::Text, &[OptionScope::Server]),
     OptionSchema::new(
@@ -331,7 +338,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "copy-mode-line-numbers",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&["off", "default", "absolute", "relative", "hybrid"]),
     OptionSchema::new(
         "copy-mode-mark-style",
         OptionKind::Text,
@@ -366,7 +374,16 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "cursor-style",
         OptionKind::Choice,
         &[OptionScope::Window, OptionScope::Pane],
-    ),
+    )
+    .with_choices(&[
+        "default",
+        "blinking-block",
+        "block",
+        "blinking-underline",
+        "underline",
+        "blinking-bar",
+        "bar",
+    ]),
     OptionSchema::new(
         "default-client-command",
         OptionKind::Command,
@@ -380,12 +397,14 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "destroy-unattached",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
+    )
+    .with_choices(&["off", "on", "keep-last", "keep-group"]),
     OptionSchema::new(
         "detach-on-destroy",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
+    )
+    .with_choices(&["off", "on", "no-detached", "previous", "next"]),
     OptionSchema::new(
         "display-panes-active-colour",
         OptionKind::Colour,
@@ -400,18 +419,23 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "display-panes-time",
         OptionKind::Number,
         &[OptionScope::Session],
-    ),
-    OptionSchema::new("display-time", OptionKind::Number, &[OptionScope::Session]),
+    )
+    .with_range(1, 2_147_483_647),
+    OptionSchema::new("display-time", OptionKind::Number, &[OptionScope::Session])
+        .with_range(0, 2_147_483_647),
     OptionSchema::new("editor", OptionKind::Text, &[OptionScope::Server]),
-    OptionSchema::new("escape-time", OptionKind::Number, &[OptionScope::Server]),
+    OptionSchema::new("escape-time", OptionKind::Number, &[OptionScope::Server])
+        .with_range(0, 2_147_483_647),
     OptionSchema::new("exit-empty", OptionKind::Flag, &[OptionScope::Server]),
     OptionSchema::new("exit-unattached", OptionKind::Flag, &[OptionScope::Server]),
-    OptionSchema::new("extended-keys", OptionKind::Choice, &[OptionScope::Server]),
+    OptionSchema::new("extended-keys", OptionKind::Choice, &[OptionScope::Server])
+        .with_choices(&["off", "on", "always"]),
     OptionSchema::new(
         "extended-keys-format",
         OptionKind::Choice,
         &[OptionScope::Server],
-    ),
+    )
+    .with_choices(&["csi-u", "xterm"]),
     OptionSchema::new("fill-character", OptionKind::Text, &[OptionScope::Window]),
     OptionSchema::new("focus-events", OptionKind::Flag, &[OptionScope::Server]),
     OptionSchema::new(
@@ -419,25 +443,30 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         OptionKind::Flag,
         &[OptionScope::Session],
     ),
-    OptionSchema::new("get-clipboard", OptionKind::Choice, &[OptionScope::Server]),
+    OptionSchema::new("get-clipboard", OptionKind::Choice, &[OptionScope::Server])
+        .with_choices(&["off", "buffer", "request", "both"]),
     OptionSchema::new("history-file", OptionKind::Text, &[OptionScope::Server]),
-    OptionSchema::new("history-limit", OptionKind::Number, &[OptionScope::Session]),
+    OptionSchema::new("history-limit", OptionKind::Number, &[OptionScope::Session])
+        .with_range(0, 2_147_483_647),
     OptionSchema::new(
         "initial-repeat-time",
         OptionKind::Number,
         &[OptionScope::Session],
-    ),
+    )
+    .with_range(0, 2_000_000),
     OptionSchema::new(
         "input-buffer-size",
         OptionKind::Number,
         &[OptionScope::Server],
-    ),
+    )
+    .with_range(1_048_576, 4_294_967_295),
     OptionSchema::new("key-table", OptionKind::Text, &[OptionScope::Session]),
     OptionSchema::new(
         "lock-after-time",
         OptionKind::Number,
         &[OptionScope::Session],
-    ),
+    )
+    .with_range(0, 2_147_483_647),
     OptionSchema::new("lock-command", OptionKind::Text, &[OptionScope::Session]),
     OptionSchema::new("main-pane-height", OptionKind::Text, &[OptionScope::Window]),
     OptionSchema::new("main-pane-width", OptionKind::Text, &[OptionScope::Window]),
@@ -445,7 +474,10 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "menu-border-lines",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&[
+        "single", "double", "heavy", "simple", "rounded", "padded", "none",
+    ]),
     OptionSchema::new(
         "menu-border-style",
         OptionKind::Text,
@@ -463,10 +495,13 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         &[OptionScope::Session],
     ),
     OptionSchema::new("message-format", OptionKind::Text, &[OptionScope::Session]),
-    OptionSchema::new("message-limit", OptionKind::Number, &[OptionScope::Server]),
-    OptionSchema::new("message-line", OptionKind::Choice, &[OptionScope::Session]),
+    OptionSchema::new("message-limit", OptionKind::Number, &[OptionScope::Server])
+        .with_range(0, 2_147_483_647),
+    OptionSchema::new("message-line", OptionKind::Choice, &[OptionScope::Session])
+        .with_choices(&["0", "1", "2", "3", "4"]),
     OptionSchema::new("message-style", OptionKind::Text, &[OptionScope::Session]),
-    OptionSchema::new("mode-keys", OptionKind::Choice, &[OptionScope::Window]),
+    OptionSchema::new("mode-keys", OptionKind::Choice, &[OptionScope::Window])
+        .with_choices(&["emacs", "vi"]),
     OptionSchema::new("mode-style", OptionKind::Text, &[OptionScope::Window]),
     OptionSchema::new("monitor-activity", OptionKind::Flag, &[OptionScope::Window]),
     OptionSchema::new("monitor-bell", OptionKind::Flag, &[OptionScope::Window]),
@@ -474,7 +509,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "monitor-silence",
         OptionKind::Number,
         &[OptionScope::Window],
-    ),
+    )
+    .with_range(0, 2_147_483_647),
     OptionSchema::new("mouse", OptionKind::Flag, &[OptionScope::Session]),
     OptionSchema::new(
         "other-pane-height",
@@ -491,7 +527,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "pane-base-index",
         OptionKind::Number,
         &[OptionScope::Window],
-    ),
+    )
+    .with_range(0, 65_535),
     OptionSchema::new(
         "pane-border-format",
         OptionKind::Text,
@@ -501,17 +538,20 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "pane-border-indicators",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&["off", "colour", "arrows", "both"]),
     OptionSchema::new(
         "pane-border-lines",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&["single", "double", "heavy", "simple", "number", "spaces"]),
     OptionSchema::new(
         "pane-border-status",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&["off", "top", "bottom"]),
     OptionSchema::new(
         "pane-border-style",
         OptionKind::Text,
@@ -551,12 +591,14 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "pane-scrollbars",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&["off", "modal", "on"]),
     OptionSchema::new(
         "pane-scrollbars-position",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&["right", "left"]),
     OptionSchema::new(
         "pane-scrollbars-style",
         OptionKind::Text,
@@ -586,7 +628,10 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "popup-border-lines",
         OptionKind::Choice,
         &[OptionScope::Window],
-    ),
+    )
+    .with_choices(&[
+        "single", "double", "heavy", "simple", "rounded", "padded", "none",
+    ]),
     OptionSchema::new(
         "popup-border-style",
         OptionKind::Text,
@@ -594,13 +639,23 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
     ),
     OptionSchema::new("popup-style", OptionKind::Text, &[OptionScope::Window]),
     OptionSchema::new("prefix", OptionKind::Key, &[OptionScope::Session]),
-    OptionSchema::new("prefix-timeout", OptionKind::Number, &[OptionScope::Server]),
+    OptionSchema::new("prefix-timeout", OptionKind::Number, &[OptionScope::Server])
+        .with_range(0, 2_147_483_647),
     OptionSchema::new("prefix2", OptionKind::Key, &[OptionScope::Session]),
     OptionSchema::new(
         "prompt-command-cursor-style",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
+    )
+    .with_choices(&[
+        "default",
+        "blinking-block",
+        "block",
+        "blinking-underline",
+        "underline",
+        "blinking-bar",
+        "bar",
+    ]),
     OptionSchema::new(
         "prompt-cursor-colour",
         OptionKind::Colour,
@@ -610,17 +665,28 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "prompt-cursor-style",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
+    )
+    .with_choices(&[
+        "default",
+        "blinking-block",
+        "block",
+        "blinking-underline",
+        "underline",
+        "blinking-bar",
+        "bar",
+    ]),
     OptionSchema::new(
         "prompt-history-limit",
         OptionKind::Number,
         &[OptionScope::Server],
-    ),
+    )
+    .with_range(0, 2_147_483_647),
     OptionSchema::new(
         "remain-on-exit",
         OptionKind::Choice,
         &[OptionScope::Window, OptionScope::Pane],
-    ),
+    )
+    .with_choices(&["off", "on", "failed", "key"]),
     OptionSchema::new(
         "remain-on-exit-format",
         OptionKind::Text,
@@ -631,7 +697,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         OptionKind::Flag,
         &[OptionScope::Session],
     ),
-    OptionSchema::new("repeat-time", OptionKind::Number, &[OptionScope::Session]),
+    OptionSchema::new("repeat-time", OptionKind::Number, &[OptionScope::Session])
+        .with_range(0, 2_000_000),
     OptionSchema::new(
         "scroll-on-clear",
         OptionKind::Flag,
@@ -667,7 +734,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         OptionKind::Command,
         &[OptionScope::Session],
     ),
-    OptionSchema::new("set-clipboard", OptionKind::Choice, &[OptionScope::Server]),
+    OptionSchema::new("set-clipboard", OptionKind::Choice, &[OptionScope::Server])
+        .with_choices(&["off", "external", "on"]),
     OptionSchema::new("set-titles", OptionKind::Flag, &[OptionScope::Session]),
     OptionSchema::new(
         "set-titles-string",
@@ -678,8 +746,10 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "silence-action",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
-    OptionSchema::new("status", OptionKind::Choice, &[OptionScope::Session]),
+    )
+    .with_choices(&["none", "any", "current", "other"]),
+    OptionSchema::new("status", OptionKind::Choice, &[OptionScope::Session])
+        .with_choices(&["off", "on", "2", "3", "4", "5"]),
     OptionSchema::new("status-bg", OptionKind::Colour, &[OptionScope::Session]),
     OptionSchema::new("status-fg", OptionKind::Colour, &[OptionScope::Session]),
     OptionSchema::new("status-format", OptionKind::Text, &[OptionScope::Session]),
@@ -687,19 +757,23 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "status-interval",
         OptionKind::Number,
         &[OptionScope::Session],
-    ),
+    )
+    .with_range(0, 2_147_483_647),
     OptionSchema::new(
         "status-justify",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
-    OptionSchema::new("status-keys", OptionKind::Choice, &[OptionScope::Session]),
+    )
+    .with_choices(&["left", "centre", "right", "absolute-centre"]),
+    OptionSchema::new("status-keys", OptionKind::Choice, &[OptionScope::Session])
+        .with_choices(&["emacs", "vi"]),
     OptionSchema::new("status-left", OptionKind::Text, &[OptionScope::Session]),
     OptionSchema::new(
         "status-left-length",
         OptionKind::Number,
         &[OptionScope::Session],
-    ),
+    )
+    .with_range(0, 32_767),
     OptionSchema::new(
         "status-left-style",
         OptionKind::Text,
@@ -709,13 +783,15 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "status-position",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
+    )
+    .with_choices(&["top", "bottom"]),
     OptionSchema::new("status-right", OptionKind::Text, &[OptionScope::Session]),
     OptionSchema::new(
         "status-right-length",
         OptionKind::Number,
         &[OptionScope::Session],
-    ),
+    )
+    .with_range(0, 32_767),
     OptionSchema::new(
         "status-right-style",
         OptionKind::Text,
@@ -741,7 +817,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "tiled-layout-max-columns",
         OptionKind::Number,
         &[OptionScope::Window],
-    ),
+    )
+    .with_range(0, 65_535),
     OptionSchema::new(
         "tree-mode-preview-format",
         OptionKind::Text,
@@ -767,13 +844,16 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         "visual-activity",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
-    OptionSchema::new("visual-bell", OptionKind::Choice, &[OptionScope::Session]),
+    )
+    .with_choices(&["off", "on", "both"]),
+    OptionSchema::new("visual-bell", OptionKind::Choice, &[OptionScope::Session])
+        .with_choices(&["off", "on", "both"]),
     OptionSchema::new(
         "visual-silence",
         OptionKind::Choice,
         &[OptionScope::Session],
-    ),
+    )
+    .with_choices(&["off", "on", "both"]),
     OptionSchema::new(
         "window-active-style",
         OptionKind::Text,
@@ -794,7 +874,8 @@ pub(crate) static OPTION_SCHEMA: [OptionSchema; 217] = [
         OptionKind::Text,
         &[OptionScope::Window],
     ),
-    OptionSchema::new("window-size", OptionKind::Choice, &[OptionScope::Window]),
+    OptionSchema::new("window-size", OptionKind::Choice, &[OptionScope::Window])
+        .with_choices(&["largest", "smallest", "manual", "latest"]),
     OptionSchema::new(
         "window-status-activity-style",
         OptionKind::Text,
