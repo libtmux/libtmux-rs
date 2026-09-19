@@ -94,13 +94,9 @@ async fn creation_options_reach_tmux() {
     // 3.6 uses the default. Asserting the rendered size would be asserting
     // tmux's behaviour rather than the crate's.
     assert_eq!(
-        session
-            .get_option("default-size")
-            .await
-            .expect("read")
-            .expect("new-session -x -y sets it")
-            .as_bytes(),
-        b"120x40",
+        session.typed_option("default-size").await.expect("read"),
+        Some(libtmux::OptionValue::from("120x40")),
+        "new-session -x -y sets it",
     );
 
     let panes = session.panes().await.expect("panes list");

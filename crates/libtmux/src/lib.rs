@@ -88,6 +88,8 @@
 //! tmux reports no type over the command line, so the crate generates the
 //! schema from tmux's own table. That matters more than it sounds: `status`
 //! holds `"on"` but is a choice, because tmux also accepts `2` through `5`.
+//! A typed write is checked against the same table before it is sent;
+//! [`OptionValue`] says how reads and writes fit together.
 //!
 //! ```no_run
 //! # async fn options(server: &libtmux::Server) -> Result<(), libtmux::Error> {
@@ -96,6 +98,10 @@
 //! // Names are constants, so a typo does not compile.
 //! let mouse = server.typed_global_option(option_names::MOUSE).await?;
 //! assert!(matches!(mouse, Some(OptionValue::Flag(_))));
+//!
+//! // A write takes the type a read returns, and a value outside what the
+//! // table declares is refused before tmux sees it.
+//! server.set_typed_global_option(option_names::HISTORY_LIMIT, 50_000).await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -364,7 +370,8 @@ pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};
 pub use options::{
-    OptionKind, OptionSchema, OptionScope, OptionValue, names as option_names, option_schema,
+    OptionKind, OptionSchema, OptionScope, OptionValue, OptionValueRefusal, names as option_names,
+    option_schema,
 };
 pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 pub use server::{

@@ -559,12 +559,8 @@ async fn a_command_holding_spaces_survives_the_text_protocol() {
     assert!(result.succeeded(), "tmux parsed the quoted token");
 
     assert_eq!(
-        server
-            .get_option("@spaced")
-            .await
-            .expect("read")
-            .expect("the option is set"),
-        "a b  c",
+        server.typed_option("@spaced").await.expect("read"),
+        Some(libtmux::OptionValue::from("a b  c")),
     );
 
     control.shutdown().await.expect("control mode shuts down");

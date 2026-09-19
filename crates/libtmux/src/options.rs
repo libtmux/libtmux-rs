@@ -10,6 +10,7 @@ mod generated;
 
 pub use generated::names;
 
+use std::fmt;
 use std::ops::RangeInclusive;
 
 use crate::formats::TmuxText;
@@ -202,6 +203,118 @@ impl OptionSchema {
     pub fn range(&self) -> Option<RangeInclusive<i64>> {
         self.range.map(|(minimum, maximum)| minimum..=maximum)
     }
+
+    /// Check a value against what the table declares, before it is sent.
+    ///
+    /// The value must be the variant [`typed_option`](crate::Server::typed_option)
+    /// reads back for this option.
+    pub(crate) fn check(&self, value: &OptionValue) -> Result<(), OptionValueRefusal> {
+        match (self.kind, value) {
+            (OptionKind::Number, OptionValue::Number(number)) => match self.range() {
+                Some(range) if !range.contains(number) => {
+                    Err(OptionValueRefusal::OutOfRange { range })
+                }
+                _ => Ok(()),
+            },
+            (OptionKind::Choice, OptionValue::Text(text)) => {
+                if self
+                    .choices
+                    .iter()
+                    .any(|choice| choice.as_bytes() == text.as_bytes())
+                {
+                    Ok(())
+                } else {
+                    Err(OptionValueRefusal::NotAChoice {
+                        choices: self.choices,
+                    })
+                }
+            }
+            (OptionKind::Flag, OptionValue::Flag(_))
+            | (
+                OptionKind::Text | OptionKind::Colour | OptionKind::Key | OptionKind::Command,
+                OptionValue::Text(_),
+            ) => Ok(()),
+            _ => Err(OptionValueRefusal::WrongKind {
+                expected: self.kind,
+            }),
+        }
+    }
+}
+
+/// Why a typed option write was refused before it reached tmux.
+///
+/// Carried by [`crate::Error::OptionValueRefused`]. Never holds the value,
+/// which is treated as sensitive like every option value.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{OptionKind, OptionValueRefusal};
+///
+/// fn advise(refusal: &OptionValueRefusal) -> String {
+///     match refusal {
+///         OptionValueRefusal::WrongKind { expected } => format!("pass a {expected:?}"),
+///         OptionValueRefusal::NotAChoice { choices } => format!("pick one of {choices:?}"),
+///         OptionValueRefusal::OutOfRange { range } => format!("stay within {range:?}"),
+///         _ => "check the value".to_owned(),
+///     }
+/// }
+///
+/// let refusal = OptionValueRefusal::WrongKind { expected: OptionKind::Flag };
+/// assert_eq!(advise(&refusal), "pass a Flag");
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum OptionValueRefusal {
+    /// The value is not the variant this option reads back as: a flag needs
+    /// [`OptionValue::Flag`], a number [`OptionValue::Number`], and every
+    /// other kind [`OptionValue::Text`].
+    WrongKind {
+        /// What the option holds.
+        expected: OptionKind,
+    },
+    /// The option holds one of a fixed set of words, and the value is none of
+    /// them.
+    NotAChoice {
+        /// Every word the option accepts.
+        choices: &'static [&'static str],
+    },
+    /// The number is outside the range the option accepts.
+    OutOfRange {
+        /// The inclusive range the option accepts.
+        range: RangeInclusive<i64>,
+    },
+}
+
+impl fmt::Display for OptionValueRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongKind { expected } => {
+                let (holds, variant) = match expected {
+                    OptionKind::Flag => ("a flag", "Flag"),
+                    OptionKind::Number => ("a number", "Number"),
+                    OptionKind::Choice => ("one of a fixed set of words", "Text"),
+                    OptionKind::Text => ("text", "Text"),
+                    OptionKind::Colour => ("a colour", "Text"),
+                    OptionKind::Key => ("a key", "Text"),
+                    OptionKind::Command => ("a command", "Text"),
+                };
+                write!(
+                    formatter,
+                    "it holds {holds}, written as OptionValue::{variant}"
+                )
+            }
+            Self::NotAChoice { choices } => {
+                write!(formatter, "it accepts only {}", choices.join(", "))
+            }
+            Self::OutOfRange { range } => write!(
+                formatter,
+                "it accepts {} through {}",
+                range.start(),
+                range.end()
+            ),
+        }
+    }
 }
 
 /// Look up what tmux declares about one option.
@@ -260,11 +373,46 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
     matched
 }
 
-/// One option's value, decoded according to what tmux declares about it.
+/// One option's value, typed by what tmux's own option table declares.
 ///
-/// This is what [`crate::Server::typed_option`] and its per-object siblings
-/// return, so a caller reading `status` gets a flag without deciding for
-/// itself that `on` means one.
+/// Every handle reads and writes options the same way:
+///
+/// | To | Call |
+/// | --- | --- |
+/// | read one value | `typed_option`, and on [`Server`] also `typed_global_option` and `typed_global_window_option` |
+/// | read every value set at one scope | `options` |
+/// | list the names set at one scope | `option_names` |
+/// | write a value checked against the table | `set_typed_option`, and on [`Server`] also `set_typed_global_option` and `set_typed_global_window_option` |
+/// | write text unchecked | `set_option`, `append_option`, and on [`Server`] `set_global_option`, `set_global_window_option`, and the array writes |
+///
+/// **Reads** decode by declared kind: a flag arrives as [`Self::Flag`], a
+/// number as [`Self::Number`], and everything else as [`Self::Text`]. Nothing
+/// is lost in decoding: `TmuxText::from(value)` gives back the bytes tmux
+/// stored.
+///
+/// **A typed write** takes the variant a read returns, and checks it against
+/// the table before anything is sent. The wrong variant, a word outside a
+/// choice's set, and a number outside its range each fail with
+/// [`Error::OptionValueRefused`](crate::Error::OptionValueRefused) and leave
+/// the option unchanged. `status` reads `on` and is a choice, not a flag, so
+/// it takes `"on"`, not `true`.
+///
+/// Two writes are not checked, because there is nothing to check against:
+///
+/// - A user option, whose name begins with `@`. tmux keeps no type for one, so
+///   the value is stored as the text a read would show for it -- `true` as
+///   `on`, `3` as `3` -- and reads back as [`Self::Text`].
+/// - A name the table does not declare. It is sent as written, and tmux
+///   answers for it.
+///
+/// Appending and the array writes have no typed form: tmux appends to text,
+/// and every array option holds text or commands.
+///
+/// The table is generated from the newest tmux release this crate supports.
+/// An older release refuses what it lacks on its own. A newer one may accept a
+/// word the table does not list; `set_option` sends that unchecked.
+///
+/// [`Server`]: crate::Server
 ///
 /// # Examples
 ///
@@ -272,15 +420,15 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 /// # runtime.block_on(async {
-/// use libtmux::OptionValue;
+/// use libtmux::{Error, OptionValue, OptionValueRefusal};
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let server = guard.server();
 /// server.new_session("typed").await?;
 ///
-/// // `mouse` is a flag, so `on` arrives as one.
-/// let mouse = server.typed_global_option("mouse").await?.expect("mouse is set");
-/// assert!(matches!(mouse, OptionValue::Flag(false)));
+/// // `mouse` is a flag, so it is written and read back as one.
+/// server.set_typed_global_option("mouse", true).await?;
+/// assert_eq!(server.typed_global_option("mouse").await?, Some(OptionValue::Flag(true)));
 ///
 /// // `status` also reads `on`, and is *not* a flag: tmux accepts `on`, `off`,
 /// // and `2` through `5`. Inferring the type from the value would call this a
@@ -288,6 +436,16 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
 /// // schema is generated from tmux's own option table instead.
 /// let status = server.typed_global_option("status").await?.expect("status is set");
 /// assert!(matches!(status, OptionValue::Text(_)));
+///
+/// // A word tmux's table does not list for a choice is refused unsent.
+/// let refused = server
+///     .set_typed_global_option("status-position", "sideways")
+///     .await
+///     .expect_err("not a position tmux has");
+/// assert!(matches!(
+///     refused,
+///     Error::OptionValueRefused { reason: OptionValueRefusal::NotAChoice { .. }, .. },
+/// ));
 ///
 /// guard.shutdown().await?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -305,9 +463,73 @@ pub enum OptionValue {
     /// Text, which covers choices, colours, keys, commands, and user options.
     ///
     /// tmux validates a choice when it is set, so a value read back is one
-    /// tmux accepted. The variants are not enumerated here because they differ
-    /// per option and per release.
+    /// tmux accepted. [`OptionSchema::choices`] lists the words a choice
+    /// takes.
     Text(TmuxText),
+}
+
+impl From<bool> for OptionValue {
+    fn from(value: bool) -> Self {
+        Self::Flag(value)
+    }
+}
+
+// Only the integers every value of which fits tmux's `i64`: a `u64` or `usize`
+// caller converts with `i64::try_from` and decides what an overflow means.
+macro_rules! number_from {
+    ($($integer:ty),*) => {$(
+        impl From<$integer> for OptionValue {
+            fn from(value: $integer) -> Self {
+                Self::Number(i64::from(value))
+            }
+        }
+    )*};
+}
+
+number_from!(i8, i16, i32, i64, u8, u16, u32);
+
+impl From<&str> for OptionValue {
+    fn from(value: &str) -> Self {
+        Self::Text(TmuxText::from(value))
+    }
+}
+
+impl From<String> for OptionValue {
+    fn from(value: String) -> Self {
+        Self::Text(TmuxText::from(value))
+    }
+}
+
+impl From<TmuxText> for OptionValue {
+    fn from(value: TmuxText) -> Self {
+        Self::Text(value)
+    }
+}
+
+/// The bytes tmux stores for a value: `on` or `off` for a flag, decimal for a
+/// number, and text unchanged.
+///
+/// Exact for a value read back through `typed_option`, since tmux prints a
+/// flag and a number in these same forms.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::{OptionValue, TmuxText};
+///
+/// assert_eq!(TmuxText::from(OptionValue::Flag(true)), "on");
+/// assert_eq!(TmuxText::from(OptionValue::Number(-3)), "-3");
+/// assert_eq!(TmuxText::from(OptionValue::from("vi")), "vi");
+/// ```
+impl From<OptionValue> for TmuxText {
+    fn from(value: OptionValue) -> Self {
+        match value {
+            OptionValue::Flag(true) => Self::from("on"),
+            OptionValue::Flag(false) => Self::from("off"),
+            OptionValue::Number(number) => Self::from(number.to_string()),
+            OptionValue::Text(text) => text,
+        }
+    }
 }
 
 impl OptionValue {

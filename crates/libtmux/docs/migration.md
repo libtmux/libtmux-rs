@@ -32,6 +32,29 @@ let handle: TextField<Pane, PaneId> = Pane::filter_fields().pane_id;
 let _ = handle.eq("%1");
 ```
 
+## One option reader: `typed_option`
+
+`get_option` on `Server`, `Session`, `Window` and `Pane`, and
+`Server::{get_global_option, get_global_window_option}`, are gone. Read with
+`typed_option`, `Server::typed_global_option` or
+`Server::typed_global_window_option`. A flag now arrives as a `bool` and a
+number as an `i64`; where the bytes are wanted, `TmuxText::from` gives back
+exactly what the removed reader returned:
+
+```no_run
+# async fn read(session: &libtmux::Session) -> Result<(), libtmux::Error> {
+use libtmux::TmuxText;
+
+// was: session.get_option("status-left").await?
+let left = session.typed_option("status-left").await?.map(TmuxText::from);
+# let _ = left;
+# Ok(())
+# }
+```
+
+`set_typed_option` writes the same types back, checked against tmux's option
+table; `set_option` is unchanged.
+
 ## The `_or_empty` listing twins are gone
 
 Replace `x_or_empty().await` with `x().await.unwrap_or_default()`:

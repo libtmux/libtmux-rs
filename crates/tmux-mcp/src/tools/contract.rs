@@ -738,12 +738,12 @@ impl TmuxTools {
         if let Some(name) = session.as_deref() {
             self.find_session(name)
                 .await?
-                .set_option("mouse", value)
+                .set_typed_option("mouse", enabled)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         } else {
             self.server
-                .set_global_option("mouse", value)
+                .set_typed_global_option("mouse", enabled)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         }
@@ -768,12 +768,12 @@ impl TmuxTools {
         if let Some(name) = session.as_deref() {
             self.find_session(name)
                 .await?
-                .set_option("history-limit", limit.to_string())
+                .set_typed_option("history-limit", limit)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         } else {
             self.server
-                .set_global_option("history-limit", limit.to_string())
+                .set_typed_global_option("history-limit", limit)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         }
@@ -924,7 +924,7 @@ impl TmuxTools {
         let value = if enabled { "on" } else { "off" };
         self.find_window(&window)
             .await?
-            .set_option("synchronize-panes", value)
+            .set_typed_option("synchronize-panes", enabled)
             .await
             .map_err(|error| tmux_error(&error))?;
         Ok(Json(SettingChanged {

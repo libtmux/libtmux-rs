@@ -497,13 +497,8 @@ windows:
         Some(libtmux::EnvironmentEntry::Set(value)) if value.as_bytes() == b"applied",
     ));
     assert_eq!(
-        session
-            .get_option("base-index")
-            .await
-            .expect("read")
-            .expect("the option is set")
-            .as_bytes(),
-        b"3",
+        session.typed_option("base-index").await.expect("read"),
+        Some(libtmux::OptionValue::Number(3)),
     );
 
     let window = session
@@ -514,13 +509,8 @@ windows:
         .next()
         .expect("one window");
     assert_eq!(
-        window
-            .get_option("main-pane-width")
-            .await
-            .expect("read")
-            .expect("the option is set")
-            .as_bytes(),
-        b"42",
+        window.typed_option("main-pane-width").await.expect("read"),
+        Some(libtmux::OptionValue::from("42")),
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

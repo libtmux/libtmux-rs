@@ -2102,7 +2102,7 @@ async fn run_refuses_initial_input_before_watcher_setup() {
         assert_eq!(
             guard
                 .server()
-                .get_global_option("@mcp-initial-watcher")
+                .typed_global_option("@mcp-initial-watcher")
                 .await
                 .expect("hook record is read"),
             None,
@@ -2296,7 +2296,7 @@ async fn assert_terminal_control_route_is_preflight_failure(
     assert_eq!(client_count(&bootstrap).await, baseline_clients);
     assert_eq!(
         bootstrap
-            .get_global_option("@mcp-route-watcher")
+            .typed_global_option("@mcp-route-watcher")
             .await
             .expect("watcher record is read"),
         None,
@@ -2304,7 +2304,7 @@ async fn assert_terminal_control_route_is_preflight_failure(
     );
     assert_eq!(
         bootstrap
-            .get_global_option("@mcp-route-display")
+            .typed_global_option("@mcp-route-display")
             .await
             .expect("display record is read"),
         None,

@@ -121,6 +121,17 @@ pub(crate) async fn get(
     Ok(Some(TmuxText::from(value.to_vec())))
 }
 
+/// Read one option, decoded by its declared kind.
+pub(crate) async fn get_typed(
+    core: &Core,
+    scope: Scope<'_>,
+    name: &str,
+) -> Result<Option<OptionValue>, Error> {
+    Ok(get(core, scope, name)
+        .await?
+        .map(|value| OptionValue::decode(name, value)))
+}
+
 /// List the option names present at one scope.
 ///
 /// Array options repeat once per index, so a name may carry an `[n]` suffix
@@ -166,6 +177,38 @@ pub(crate) async fn set(
             .arg("--")
             .arg(escape_format(name))
             .sensitive_arg(value.into()),
+    )
+    .await
+}
+
+/// Check a typed value against tmux's option table, then set it.
+///
+/// Checked before `set` runs `ensure_scope`, which may ask tmux for its
+/// version, so a refused value costs no tmux command.
+pub(crate) async fn set_typed(
+    core: &Core,
+    scope: Scope<'_>,
+    name: &str,
+    value: OptionValue,
+) -> Result<(), Error> {
+    // A user option has no entry in the table, and neither has a name newer
+    // than it; both go to tmux as written.
+    if let Some(schema) = crate::option_schema(name) {
+        schema
+            .check(&value)
+            .map_err(|reason| Error::OptionValueRefused {
+                option: schema.name(),
+                reason,
+            })?;
+    }
+
+    let text = TmuxText::from(value);
+    set(
+        core,
+        scope,
+        name,
+        OsString::from_vec(text.as_bytes().to_vec()),
+        false,
     )
     .await
 }

@@ -29,24 +29,11 @@ fn array_scope(name: &str) -> options::Scope<'static> {
 }
 
 impl Server {
-    /// Read one server option's exact stored value.
-    ///
-    /// Returns `None` when the option is known but holds no value. tmux
-    /// prints nothing in that case, so an option set to the empty string
-    /// cannot be told apart from an unset one.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        options::get(&self.core, options::Scope::Server, name).await
-    }
-
     /// List the server option names.
     ///
     /// Values are not included: tmux renders them for display with three
     /// different quoting styles, so re-parsing them would be guesswork. Read
-    /// each value with [`Server::get_option`], which returns exact bytes.
+    /// each value with [`Self::typed_option`], which decodes the exact bytes.
     ///
     /// # Errors
     ///
@@ -97,13 +84,44 @@ impl Server {
         options::typed_all(&self.core, options::Scope::Server).await
     }
 
-    /// Set one server option.
+    /// Set one server option to text, unchecked.
+    ///
+    /// tmux validates the value itself. [`Self::set_typed_option`] checks it
+    /// against tmux's option table first; [`OptionValue`] compares the two.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux rejects the name or value.
     pub async fn set_option(&self, name: &str, value: impl Into<OsString>) -> Result<(), Error> {
         options::set(&self.core, options::Scope::Server, name, value, false).await
+    }
+
+    /// Set one server option to a typed value, checked before it is sent.
+    ///
+    /// The value must be the variant [`Self::typed_option`] reads back for
+    /// the option; [`OptionValue`] gives the rules, and what is not checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OptionValueRefused`] without sending anything when
+    /// tmux's option table refuses the value, and
+    /// [`Error::OptionScopeMismatch`] when the option is not a server option.
+    /// Otherwise returns an error when tmux rejects the name or value.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// server.set_typed_option("escape-time", 10).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn set_typed_option(
+        &self,
+        name: &str,
+        value: impl Into<OptionValue>,
+    ) -> Result<(), Error> {
+        options::set_typed(&self.core, options::Scope::Server, name, value.into()).await
     }
 
     /// Remove one server option.
@@ -115,18 +133,10 @@ impl Server {
         options::unset(&self.core, options::Scope::Server, name).await
     }
 
-    /// Read one global session option.
+    /// Set one global session option to text, unchecked.
     ///
     /// Sessions inherit from this table, so it is where a default belongs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_global_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        options::get(&self.core, options::Scope::GlobalSession, name).await
-    }
-
-    /// Set one global session option.
+    /// [`Self::set_typed_global_option`] checks the value first.
     ///
     /// # Errors
     ///
@@ -142,6 +152,44 @@ impl Server {
             name,
             value,
             false,
+        )
+        .await
+    }
+
+    /// Set one global session option to a typed value, checked before it is
+    /// sent.
+    ///
+    /// The value must be the variant [`Self::typed_global_option`] reads back
+    /// for the option; [`OptionValue`] gives the rules, and what is not
+    /// checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OptionValueRefused`] without sending anything when
+    /// tmux's option table refuses the value, and
+    /// [`Error::OptionScopeMismatch`] when the option is not a session option.
+    /// Otherwise returns an error when tmux rejects the name or value.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// server.set_typed_global_option("mouse", true).await?;
+    /// server.set_typed_global_option("history-limit", 50_000).await?;
+    /// server.set_typed_global_option("status-position", "top").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn set_typed_global_option(
+        &self,
+        name: &str,
+        value: impl Into<OptionValue>,
+    ) -> Result<(), Error> {
+        options::set_typed(
+            &self.core,
+            options::Scope::GlobalSession,
+            name,
+            value.into(),
         )
         .await
     }
@@ -363,16 +411,9 @@ impl Server {
         options::unset(&self.core, array_scope(name), &format!("{name}[{index}]")).await
     }
 
-    /// Read one global window option.
+    /// Set one global window option to text, unchecked.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_global_window_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        options::get(&self.core, options::Scope::GlobalWindow, name).await
-    }
-
-    /// Set one global window option.
+    /// [`Self::set_typed_global_window_option`] checks the value first.
     ///
     /// # Errors
     ///
@@ -385,10 +426,40 @@ impl Server {
         options::set(&self.core, options::Scope::GlobalWindow, name, value, false).await
     }
 
+    /// Set one global window option to a typed value, checked before it is
+    /// sent.
+    ///
+    /// The value must be the variant [`Self::typed_global_window_option`]
+    /// reads back for the option; [`OptionValue`] gives the rules, and what
+    /// is not checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OptionValueRefused`] without sending anything when
+    /// tmux's option table refuses the value, and
+    /// [`Error::OptionScopeMismatch`] when the option is not a window option.
+    /// Otherwise returns an error when tmux rejects the name or value.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// server.set_typed_global_window_option("mode-keys", "vi").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn set_typed_global_window_option(
+        &self,
+        name: &str,
+        value: impl Into<OptionValue>,
+    ) -> Result<(), Error> {
+        options::set_typed(&self.core, options::Scope::GlobalWindow, name, value.into()).await
+    }
+
     /// Set one global hook.
     ///
-    /// Hooks live in the option tables, so [`Server::get_global_option`] reads
-    /// one back under an indexed name such as `after-new-window[0]`.
+    /// Hooks live in the option tables, so [`Server::typed_global_option`]
+    /// reads one back under an indexed name such as `after-new-window[0]`.
     ///
     /// # Errors
     ///
@@ -531,25 +602,57 @@ impl Server {
 
     /// Read one server option, decoded according to its declared kind.
     ///
+    /// The one way to read a single option; [`OptionValue`] says how reads
+    /// and writes fit together. `TmuxText::from(value)` recovers the exact
+    /// bytes tmux stored.
+    ///
+    /// `None` means the option holds nothing: a built-in option that is unset,
+    /// or a user option that was never set. tmux prints nothing for an option
+    /// set to the empty string either, so that also reads as `None`.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
     pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
-        Ok(options::get(&self.core, options::Scope::Server, name)
-            .await?
-            .map(|value| OptionValue::decode(name, value)))
+        options::get_typed(&self.core, options::Scope::Server, name).await
     }
 
     /// Read one global session option, decoded according to its declared kind.
+    ///
+    /// Sessions inherit from this table. Absence and decoding work as in
+    /// [`Self::typed_option`].
     ///
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
     pub async fn typed_global_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
-        Ok(
-            options::get(&self.core, options::Scope::GlobalSession, name)
-                .await?
-                .map(|value| OptionValue::decode(name, value)),
-        )
+        options::get_typed(&self.core, options::Scope::GlobalSession, name).await
+    }
+
+    /// Read one global window option, decoded according to its declared kind.
+    ///
+    /// Windows inherit from this table. Absence and decoding work as in
+    /// [`Self::typed_option`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux does not recognize the option name.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// use libtmux::OptionValue;
+    ///
+    /// let base = server.typed_global_window_option("pane-base-index").await?;
+    /// assert!(matches!(base, Some(OptionValue::Number(_))));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn typed_global_window_option(
+        &self,
+        name: &str,
+    ) -> Result<Option<OptionValue>, Error> {
+        options::get_typed(&self.core, options::Scope::GlobalWindow, name).await
     }
 }

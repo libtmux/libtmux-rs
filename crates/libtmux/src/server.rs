@@ -260,10 +260,11 @@ impl PromptKind {
 /// **Changing things.** [`new_session`], [`kill`], and [`with_session`],
 /// which cleans up after itself whether the body succeeded or not.
 ///
-/// **Options and hooks.** [`get_option`] and [`set_option`] for this server,
-/// [`get_global_option`] and [`set_global_option`] for the session and window
-/// defaults, [`typed_option`] to get a value tmux's own schema has typed, and
-/// [`set_hook`] and [`unset_hook`].
+/// **Options and hooks.** [`typed_option`] and [`set_typed_option`] for this
+/// server, [`typed_global_option`] and [`set_typed_global_option`] for the
+/// session defaults, [`set_option`] to send text tmux's option table does not
+/// check, and [`set_hook`] and [`unset_hook`]. [`OptionValue`] says how the
+/// reads and writes fit together.
 ///
 /// **Everything else tmux keeps.** Paste buffers ([`buffer`], [`set_buffer`],
 /// [`buffer_names`], [`delete_buffer`]), key bindings ([`bind_key`],
@@ -297,11 +298,12 @@ impl PromptKind {
 /// [`new_session`]: Server::new_session
 /// [`kill`]: Server::kill
 /// [`with_session`]: Server::with_session
-/// [`get_option`]: Server::get_option
-/// [`set_option`]: Server::set_option
-/// [`get_global_option`]: Server::get_global_option
-/// [`set_global_option`]: Server::set_global_option
 /// [`typed_option`]: Server::typed_option
+/// [`set_typed_option`]: Server::set_typed_option
+/// [`typed_global_option`]: Server::typed_global_option
+/// [`set_typed_global_option`]: Server::set_typed_global_option
+/// [`set_option`]: Server::set_option
+/// [`OptionValue`]: crate::OptionValue
 /// [`set_hook`]: Server::set_hook
 /// [`unset_hook`]: Server::unset_hook
 /// [`buffer`]: Server::buffer

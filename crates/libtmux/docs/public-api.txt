@@ -258,6 +258,7 @@ enum libtmux::OptionErrorKind
 enum libtmux::OptionKind
 enum libtmux::OptionScope
 enum libtmux::OptionValue
+enum libtmux::OptionValueRefusal
 enum libtmux::PaneDirection
 enum libtmux::PaneProgressState
 enum libtmux::PaneSize
@@ -428,7 +429,6 @@ function libtmux::Pane::format: async fn(&self, template: &str) -> Result<libtmu
 function libtmux::Pane::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Pane::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Pane::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
-function libtmux::Pane::get_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Pane::height: fn(&self) -> u32
 function libtmux::Pane::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
 function libtmux::Pane::id: const fn(&self) -> &libtmux::PaneId
@@ -466,6 +466,7 @@ function libtmux::Pane::session_id: const fn(&self) -> &libtmux::SessionId
 function libtmux::Pane::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Pane::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Pane::set_title: async fn(&mut self, title: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
 function libtmux::Pane::split: async fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<Self, libtmux::Error>
 function libtmux::Pane::stream_output: async fn(&self) -> Result<libtmux::control::PaneOutput, libtmux::Error>
 function libtmux::Pane::stream_output_with_limits: async fn(&self, limits: libtmux::ControlLimits) -> Result<libtmux::control::PaneOutput, libtmux::Error>
@@ -528,9 +529,6 @@ function libtmux::Server::format: async fn(&self, pane: Option<&libtmux::Pane>, 
 function libtmux::Server::from_env: fn() -> Result<Self, libtmux::Error>
 function libtmux::Server::from_env_value: fn(value: Option<impl Into<OsString>>) -> Result<Self, libtmux::Error>
 function libtmux::Server::generation: async fn(&self) -> Result<libtmux::ServerGeneration, libtmux::Error>
-function libtmux::Server::get_global_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
-function libtmux::Server::get_global_window_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
-function libtmux::Server::get_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Server::grant_access: async fn(&self, user: &str, mode: libtmux::AccessMode) -> Result<(), libtmux::Error>
 function libtmux::Server::has_session: async fn(&self, name: impl AsRef<[u8]>) -> Result<bool, libtmux::Error>
 function libtmux::Server::hide_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
@@ -569,6 +567,9 @@ function libtmux::Server::set_global_window_option: async fn(&self, name: &str, 
 function libtmux::Server::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::set_hooks: async fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
 function libtmux::Server::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_typed_global_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_typed_global_window_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
+function libtmux::Server::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
 function libtmux::Server::shutdown: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Server::signal_channel: async fn(&self, channel: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::socket_name: fn(&self) -> Option<&OsStr>
@@ -578,6 +579,7 @@ function libtmux::Server::spawn_shell: async fn(&self, command: impl Into<OsStri
 function libtmux::Server::start: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Server::tmux_executable: fn(&self) -> &OsStr
 function libtmux::Server::typed_global_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Server::typed_global_window_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
 function libtmux::Server::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
 function libtmux::Server::unbind_key: async fn(&self, table: &str, key: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::unlock_channel: async fn(&self, channel: &str) -> Result<(), libtmux::Error>
@@ -615,7 +617,6 @@ function libtmux::Session::format: async fn(&self, template: &str) -> Result<lib
 function libtmux::Session::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Session::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Session::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
-function libtmux::Session::get_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Session::hide_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Session::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
 function libtmux::Session::hooks: async fn(&self) -> Result<BTreeMap<String, libtmux::IndexedHooks>, libtmux::Error>
@@ -641,6 +642,7 @@ function libtmux::Session::set_environment: async fn(&self, name: &str, value: i
 function libtmux::Session::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Session::set_hooks: async fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
 function libtmux::Session::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Session::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
 function libtmux::Session::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
 function libtmux::Session::unset_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Session::unset_hook: async fn(&self, name: &str) -> Result<(), libtmux::Error>
@@ -693,7 +695,6 @@ function libtmux::Window::format: async fn(&self, template: &str) -> Result<libt
 function libtmux::Window::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Window::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Window::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
-function libtmux::Window::get_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Window::has_activity: const fn(&self) -> bool
 function libtmux::Window::has_bell: const fn(&self) -> bool
 function libtmux::Window::height: fn(&self) -> u32
@@ -733,6 +734,7 @@ function libtmux::Window::session_id: const fn(&self) -> &libtmux::SessionId
 function libtmux::Window::set_hook: async fn(&self, name: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Window::set_hooks: async fn(&self, name: &str, hooks: &libtmux::IndexedHooks, replace: libtmux::ReplaceMode) -> Result<(), libtmux::Error>
 function libtmux::Window::set_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Window::set_typed_option: async fn(&self, name: &str, value: impl Into<libtmux::OptionValue>) -> Result<(), libtmux::Error>
 function libtmux::Window::split: async fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<libtmux::Pane, libtmux::Error>
 function libtmux::Window::swap_with: async fn(&mut self, other: &Self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
@@ -1027,6 +1029,7 @@ impl Clone for libtmux::OptionKind
 impl Clone for libtmux::OptionSchema
 impl Clone for libtmux::OptionScope
 impl Clone for libtmux::OptionValue
+impl Clone for libtmux::OptionValueRefusal
 impl Clone for libtmux::OutputLimits
 impl Clone for libtmux::Pane
 impl Clone for libtmux::PaneDirection
@@ -1201,6 +1204,7 @@ impl Debug for libtmux::OptionKind
 impl Debug for libtmux::OptionSchema
 impl Debug for libtmux::OptionScope
 impl Debug for libtmux::OptionValue
+impl Debug for libtmux::OptionValueRefusal
 impl Debug for libtmux::OutputLimits
 impl Debug for libtmux::Pane
 impl Debug for libtmux::PaneDirection
@@ -1308,6 +1312,7 @@ impl Display for libtmux::IdParseError
 impl Display for libtmux::Layout
 impl Display for libtmux::ListingDecodeError
 impl Display for libtmux::ObjectKind
+impl Display for libtmux::OptionValueRefusal
 impl Display for libtmux::Pane
 impl Display for libtmux::PaneId
 impl Display for libtmux::PaneSize
@@ -1359,6 +1364,7 @@ impl Eq for libtmux::OptionKind
 impl Eq for libtmux::OptionSchema
 impl Eq for libtmux::OptionScope
 impl Eq for libtmux::OptionValue
+impl Eq for libtmux::OptionValueRefusal
 impl Eq for libtmux::OutputLimits
 impl Eq for libtmux::Pane
 impl Eq for libtmux::PaneDirection
@@ -1441,21 +1447,30 @@ impl From<&String> for libtmux::TmuxArg
 impl From<&libtmux::TmuxText> for libtmux::LayoutSpec
 impl From<&libtmux::TmuxText> for libtmux::TmuxArg
 impl From<&str> for libtmux::LayoutSpec
+impl From<&str> for libtmux::OptionValue
 impl From<&str> for libtmux::TmuxArg
 impl From<&str> for libtmux::TmuxText
 impl From<OsString> for libtmux::LayoutSpec
 impl From<OsString> for libtmux::TmuxArg
 impl From<PathBuf> for libtmux::TmuxArg
 impl From<String> for libtmux::LayoutSpec
+impl From<String> for libtmux::OptionValue
 impl From<String> for libtmux::TmuxArg
 impl From<String> for libtmux::TmuxText
 impl From<Vec<u8>> for libtmux::TmuxText
+impl From<bool> for libtmux::OptionValue
+impl From<i16> for libtmux::OptionValue
+impl From<i32> for libtmux::OptionValue
+impl From<i64> for libtmux::OptionValue
+impl From<i8> for libtmux::OptionValue
 impl From<libtmux::Layout> for libtmux::LayoutSpec
+impl From<libtmux::OptionValue> for libtmux::TmuxText
 impl From<libtmux::PaneId> for libtmux::PaneTarget
 impl From<libtmux::PaneId> for libtmux::plan::PaneTarget
 impl From<libtmux::SessionId> for libtmux::SessionTarget
 impl From<libtmux::SessionId> for libtmux::plan::SessionTarget
 impl From<libtmux::SplitDirection> for libtmux::SplitOptions
+impl From<libtmux::TmuxText> for libtmux::OptionValue
 impl From<libtmux::WindowId> for libtmux::WindowTarget
 impl From<libtmux::WindowId> for libtmux::plan::WindowTarget
 impl From<libtmux::plan::CapturePane> for libtmux::plan::Op
@@ -1474,6 +1489,9 @@ impl From<libtmux::plan::Slot<libtmux::plan::PaneSlot>> for libtmux::plan::PaneT
 impl From<libtmux::plan::Slot<libtmux::plan::SessionSlot>> for libtmux::plan::SessionTarget
 impl From<libtmux::plan::Slot<libtmux::plan::WindowSlot>> for libtmux::plan::WindowTarget
 impl From<libtmux::plan::SplitWindow> for libtmux::plan::Op
+impl From<u16> for libtmux::OptionValue
+impl From<u32> for libtmux::OptionValue
+impl From<u8> for libtmux::OptionValue
 impl FromStr for libtmux::PaneId
 impl FromStr for libtmux::SessionId
 impl FromStr for libtmux::SessionName
@@ -1569,6 +1587,7 @@ impl PartialEq for libtmux::OptionKind
 impl PartialEq for libtmux::OptionSchema
 impl PartialEq for libtmux::OptionScope
 impl PartialEq for libtmux::OptionValue
+impl PartialEq for libtmux::OptionValueRefusal
 impl PartialEq for libtmux::OutputLimits
 impl PartialEq for libtmux::Pane
 impl PartialEq for libtmux::PaneDirection
@@ -1988,6 +2007,8 @@ struct_field libtmux::Error::OptionRejected::kind: libtmux::OptionErrorKind
 struct_field libtmux::Error::OptionScopeMismatch::declared: &'static [libtmux::OptionScope]
 struct_field libtmux::Error::OptionScopeMismatch::option: String
 struct_field libtmux::Error::OptionScopeMismatch::requested: libtmux::OptionScope
+struct_field libtmux::Error::OptionValueRefused::option: &'static str
+struct_field libtmux::Error::OptionValueRefused::reason: libtmux::OptionValueRefusal
 struct_field libtmux::Error::OutputLimitExceeded::command: libtmux::CommandSummary
 struct_field libtmux::Error::OutputLimitExceeded::limit: usize
 struct_field libtmux::Error::OutputLimitExceeded::request_id: u64
@@ -2034,6 +2055,9 @@ struct_field libtmux::LayoutSpec::Saved::0: std::ffi::OsString
 struct_field libtmux::OptionValue::Flag::0: bool
 struct_field libtmux::OptionValue::Number::0: i64
 struct_field libtmux::OptionValue::Text::0: libtmux::TmuxText
+struct_field libtmux::OptionValueRefusal::NotAChoice::choices: &'static [&'static str]
+struct_field libtmux::OptionValueRefusal::OutOfRange::range: std::ops::RangeInclusive<i64>
+struct_field libtmux::OptionValueRefusal::WrongKind::expected: libtmux::OptionKind
 struct_field libtmux::PaneFields::alternate_saved_x: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::PaneFields::alternate_saved_y: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::PaneFields::bracket_paste_flag: libtmux::query::BoolField<Target>
@@ -2275,6 +2299,7 @@ variant libtmux::Error::NoEffect
 variant libtmux::Error::ObjectGone
 variant libtmux::Error::OptionRejected
 variant libtmux::Error::OptionScopeMismatch
+variant libtmux::Error::OptionValueRefused
 variant libtmux::Error::OutputLimitExceeded
 variant libtmux::Error::Overloaded
 variant libtmux::Error::ReadOutput
@@ -2334,6 +2359,9 @@ variant libtmux::OptionScope::Window
 variant libtmux::OptionValue::Flag
 variant libtmux::OptionValue::Number
 variant libtmux::OptionValue::Text
+variant libtmux::OptionValueRefusal::NotAChoice
+variant libtmux::OptionValueRefusal::OutOfRange
+variant libtmux::OptionValueRefusal::WrongKind
 variant libtmux::PaneDirection::Above
 variant libtmux::PaneDirection::Below
 variant libtmux::PaneDirection::Left

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use libtmux::{CaptureOptions, Command};
+use libtmux::{CaptureOptions, Command, TmuxText};
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{tool, tool_router};
 
@@ -488,12 +488,12 @@ impl TmuxTools {
             .option_scope(scope.as_deref(), target.as_deref())
             .await?;
         let value = match scope {
-            OptionScope::Server => self.server.get_option(&name).await,
-            OptionScope::GlobalSession => self.server.get_global_option(&name).await,
-            OptionScope::GlobalWindow => self.server.get_global_window_option(&name).await,
-            OptionScope::Session(session) => session.get_option(&name).await,
-            OptionScope::Window(window) => window.get_option(&name).await,
-            OptionScope::Pane(pane) => pane.get_option(&name).await,
+            OptionScope::Server => self.server.typed_option(&name).await,
+            OptionScope::GlobalSession => self.server.typed_global_option(&name).await,
+            OptionScope::GlobalWindow => self.server.typed_global_window_option(&name).await,
+            OptionScope::Session(session) => session.typed_option(&name).await,
+            OptionScope::Window(window) => window.typed_option(&name).await,
+            OptionScope::Pane(pane) => pane.typed_option(&name).await,
         }
         .map_err(|e| tmux_error(&e))?;
 
@@ -501,7 +501,7 @@ impl TmuxTools {
             name,
             // Absent and empty are different answers: tmux reports no value
             // for an option that has never been set at that scope.
-            value: value.as_ref().map(lossy),
+            value: value.map(TmuxText::from).as_ref().map(lossy),
         }))
     }
 

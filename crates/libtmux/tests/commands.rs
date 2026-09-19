@@ -159,13 +159,9 @@ async fn sourcing_a_file_applies_its_commands() {
 
     server.source_file(&config).await.expect("file is sourced");
     assert_eq!(
-        server
-            .get_option("@sourced")
-            .await
-            .expect("read")
-            .expect("the sourced option is set")
-            .as_bytes(),
-        b"yes",
+        server.typed_option("@sourced").await.expect("read"),
+        Some(libtmux::OptionValue::from("yes")),
+        "the sourced option is set",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -785,13 +781,12 @@ async fn a_global_window_option_is_read_globally() {
         .expect("the window takes a value of its own");
 
     let read = server
-        .get_global_window_option("main-pane-width")
+        .typed_global_window_option("main-pane-width")
         .await
-        .expect("the option is readable")
-        .expect("the option is set");
+        .expect("the option is readable");
     assert_eq!(
-        read.as_str().expect("the width is text"),
-        "123",
+        read,
+        Some(libtmux::OptionValue::from("123")),
         "the global read is not answered by the window's own value"
     );
 
@@ -1306,7 +1301,7 @@ async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
 /// tmux has two vocabularies for it. `cmd-find.c` resolves a target and says
 /// "can't find pane"; `options.c` resolves its own and says "no such pane".
 /// Matching only the first meant `is_object_gone` answered `true` from
-/// `capture` and `false` from `get_option` about the same dead pane.
+/// `capture` and `false` from `typed_option` about the same dead pane.
 ///
 /// The `@` branch made it worse than inconsistent. A user option that is not
 /// set is unknown to tmux, so that failure is the answer `None` -- but the
@@ -1342,14 +1337,8 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
         .await
         .expect("the user option is set");
     assert_eq!(
-        doomed
-            .get_option("@marker")
-            .await
-            .expect("readable")
-            .expect("set")
-            .as_str()
-            .expect("text"),
-        "here"
+        doomed.typed_option("@marker").await.expect("readable"),
+        Some(libtmux::OptionValue::from("here")),
     );
 
     // `kill` consumes the handle, so the questions afterwards are asked
@@ -1372,7 +1361,7 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
     );
 
     let by_option = doomed
-        .get_option("remain-on-exit")
+        .typed_option("remain-on-exit")
         .await
         .expect_err("the pane is gone");
     assert!(
@@ -1381,7 +1370,7 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
     );
 
     let by_user_option = doomed
-        .get_option("@marker")
+        .typed_option("@marker")
         .await
         .expect_err("the pane is gone, not the option unset");
     assert!(

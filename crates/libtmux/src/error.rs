@@ -498,6 +498,21 @@ pub enum Error {
         declared: &'static [crate::OptionScope],
     },
 
+    /// A typed option write that tmux's option table refuses, so nothing was
+    /// sent.
+    ///
+    /// Raised by `set_typed_option` and its siblings before dispatch, never by
+    /// tmux, and the option is left as it was. [`crate::OptionValue`] says
+    /// which variant each kind of option takes. The value is not kept, as no
+    /// option value is; `reason` says what the option takes instead.
+    #[error("refused to write {option} before sending it: {reason}")]
+    OptionValueRefused {
+        /// The option, as tmux's table names it.
+        option: &'static str,
+        /// What the option takes that the value is not.
+        reason: crate::OptionValueRefusal,
+    },
+
     /// tmux answered a format query with a value this crate cannot read.
     ///
     /// Reports a disagreement between the crate and the tmux that answered,
@@ -1376,6 +1391,11 @@ impl fmt::Debug for Error {
                 .field("option", option)
                 .field("requested", requested)
                 .field("declared", declared)
+                .finish(),
+            Self::OptionValueRefused { option, reason } => formatter
+                .debug_struct("OptionValueRefused")
+                .field("option", option)
+                .field("reason", reason)
                 .finish(),
             Self::RuntimeNested => formatter.debug_struct("RuntimeNested").finish(),
             Self::UnrecognizedLayout => formatter.debug_struct("UnrecognizedLayout").finish(),

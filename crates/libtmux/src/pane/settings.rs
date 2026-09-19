@@ -3,33 +3,17 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
-use crate::formats::TmuxText;
 use crate::internal::options;
 use crate::{Error, IndexedHooks, OptionValue};
 
 use super::Pane;
 
 impl Pane {
-    /// Read one option's exact stored value.
-    ///
-    /// A user option, whose name begins with `@`, exists only while it is
-    /// set, so an unset one reports `None`. A built-in option always exists,
-    /// so an unset one also reports `None`. An unrecognized built-in name is
-    /// an error.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when tmux does not recognize the option name.
-    pub async fn get_option(&self, name: &str) -> Result<Option<TmuxText>, Error> {
-        let target = self.id().to_string();
-        options::get(&self.core, options::Scope::Pane(&target), name).await
-    }
-
     /// List the option names set at this pane's scope.
     ///
     /// Values are not included: tmux renders them for display with three
     /// different quoting styles, so re-parsing them would be guesswork. Read
-    /// each value with [`Self::get_option`], which returns exact bytes.
+    /// each value with [`Self::typed_option`], which decodes the exact bytes.
     ///
     /// # Errors
     ///
@@ -80,10 +64,11 @@ impl Pane {
         options::typed_all(&self.core, options::Scope::Pane(&target)).await
     }
 
-    /// Set one option.
+    /// Set one option to text, unchecked.
     ///
     /// The value is marked sensitive, so it never reaches `Debug`, an error,
-    /// or a tracing span.
+    /// or a tracing span. tmux validates it; [`Self::set_typed_option`]
+    /// checks it against tmux's option table first.
     ///
     /// # Errors
     ///
@@ -99,6 +84,46 @@ impl Pane {
             name,
             value,
             false,
+        )
+        .await
+    }
+
+    /// Set one option to a typed value, checked before it is sent.
+    ///
+    /// The value must be the variant [`Self::typed_option`] reads back for
+    /// the option; [`OptionValue`] gives the rules, and the two writes it
+    /// cannot check. The value is marked sensitive, as in
+    /// [`Self::set_option`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::OptionValueRefused`] without sending anything
+    /// when tmux's option table refuses the value.
+    ///
+    /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
+    /// option in another of its tables, and an error when tmux rejects the
+    /// name or value.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+    /// // A choice takes the word it reads back as, not a flag.
+    /// pane.set_typed_option("remain-on-exit", "failed").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn set_typed_option(
+        &self,
+        name: &str,
+        value: impl Into<OptionValue>,
+    ) -> Result<(), Error> {
+        let target = self.id().to_string();
+        options::set_typed(
+            &self.core,
+            options::Scope::Pane(&target),
+            name,
+            value.into(),
         )
         .await
     }
@@ -132,7 +157,7 @@ impl Pane {
     /// Set one hook to a tmux command.
     ///
     /// Hooks live in the same option tables, so a hook is an array option and
-    /// [`Self::get_option`] reads it under an indexed name such as
+    /// [`Self::typed_option`] reads it under an indexed name such as
     /// `after-new-window[0]`.
     ///
     /// # Errors
@@ -204,16 +229,18 @@ impl Pane {
     /// A flag comes back as [`OptionValue::Flag`] and a number as
     /// [`OptionValue::Number`], so a caller does not decide for itself that
     /// `on` means one. Everything else, including user options, stays text.
+    /// The one way to read a single option; [`OptionValue`] says how reads
+    /// and writes fit together.
+    ///
+    /// `None` means the option holds nothing at this pane. A user option,
+    /// whose name begins with `@`, exists only while it is set, and a built-in
+    /// one always exists, so both report an unset option as `None`.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux does not recognize the option name.
     pub async fn typed_option(&self, name: &str) -> Result<Option<OptionValue>, Error> {
         let target = self.id().to_string();
-        Ok(
-            options::get(&self.core, options::Scope::Pane(&target), name)
-                .await?
-                .map(|value| OptionValue::decode(name, value)),
-        )
+        options::get_typed(&self.core, options::Scope::Pane(&target), name).await
     }
 }

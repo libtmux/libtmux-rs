@@ -96,7 +96,8 @@ impl Error {
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
             Self::InvalidCommandInput { .. }
             | Self::ServerMismatch { .. }
-            | Self::OptionScopeMismatch { .. } => ErrorKind::InvalidInput,
+            | Self::OptionScopeMismatch { .. }
+            | Self::OptionValueRefused { .. } => ErrorKind::InvalidInput,
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => ErrorKind::InvalidInput,
             Self::Spawn { .. }
@@ -182,6 +183,7 @@ impl Error {
             | Self::VersionProbeFailed { .. }
             | Self::InvalidCommandInput { .. }
             | Self::OptionScopeMismatch { .. }
+            | Self::OptionValueRefused { .. }
             | Self::ServerMismatch { .. }
             | Self::ExecutableNotFound { .. }
             | Self::ExecutorShutdown { .. }
