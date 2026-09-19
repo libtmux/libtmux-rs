@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use libtmux::test::{TestServer, retry_until};
+use libtmux::test::{TestServer, retry_until, scaled};
 use libtmux::{ErrorKind, Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
@@ -513,7 +513,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
     });
     assert_eq!(
         server
-            .wait_for_channel(accepted, Duration::from_secs(5))
+            .wait_for_channel(accepted, scaled(Duration::from_secs(5)))
             .await
             .expect("the send can signal"),
         libtmux::ChannelWait::Signalled,
@@ -534,7 +534,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
 
     assert_eq!(
         server
-            .wait_for_channel(ran, Duration::from_secs(1))
+            .wait_for_channel(ran, scaled(Duration::from_secs(1)))
             .await
             .expect("the command signal can be read"),
         libtmux::ChannelWait::Signalled,
