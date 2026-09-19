@@ -445,6 +445,7 @@ async fn load_setup(
         None
     };
     server.validate_layouts(native_layouts(&workspaces)).await?;
+    warn_absent_directories(&workspaces, report)?;
     let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
         Some(process::python().await?)
     } else {
@@ -458,6 +459,36 @@ async fn load_setup(
         dimensions,
         inside_tmux,
     ))
+}
+
+/// tmux starts a pane in `$HOME` when the directory it was given is not
+/// there, and says nothing about it, so a typo in a workspace file otherwise
+/// shows up only as panes in the wrong place. Said once per directory,
+/// before anything is built.
+fn warn_absent_directories(
+    workspaces: &[(PathBuf, normalize::Workspace)],
+    report: &mut Reporter,
+) -> Result<()> {
+    let mut said = std::collections::BTreeSet::new();
+    for (_, workspace) in workspaces {
+        let panes = workspace
+            .windows
+            .iter()
+            .flat_map(|window| window.panes.iter().map(|pane| &pane.directory));
+        for directory in std::iter::once(&workspace.directory).chain(panes) {
+            if directory.is_dir() || !said.insert(directory.clone()) {
+                continue;
+            }
+            report.warn(
+                "start_directory_absent",
+                &format!(
+                    "start_directory is not a directory, so tmux will start the pane in $HOME: {}",
+                    discovery::masked(directory)
+                ),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Builds (or reuses, or appends) one workspace input, after asking whatever

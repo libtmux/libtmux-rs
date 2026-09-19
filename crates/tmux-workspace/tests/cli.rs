@@ -4221,3 +4221,63 @@ async fn a_window_option_under_session_options_lands_on_the_windows() {
     assert_eq!(windows[0].index(), 1, "base-index was not applied");
     guard.shutdown().await.unwrap();
 }
+
+/// YAML reads a bare `~` as null, which names no path at all, so the pane
+/// starts where the load was run — the same as leaving the key out. A
+/// directory that is named but is not there still builds, and is said out
+/// loud rather than silently becoming $HOME.
+#[tokio::test]
+async fn a_null_start_directory_is_absent_and_an_absent_one_is_reported() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let elsewhere = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let invocation = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        elsewhere.path().join("nulldir.yaml"),
+        "session_name: nulldir\nstart_directory: ~\nwindows:\n  - panes: [blank]\n",
+    )
+    .unwrap();
+    let document = elsewhere.path().join("nulldir.yaml");
+    let output = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            document.to_str().unwrap(),
+        ],
+        invocation.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let session = guard.server().session("nulldir").await.unwrap().unwrap();
+    let panes = session.windows().await.unwrap()[0].panes().await.unwrap();
+    let started = panes[0].current_path().unwrap().to_string_lossy();
+    assert_eq!(
+        std::fs::canonicalize(started.as_ref()).unwrap(),
+        std::fs::canonicalize(invocation.path()).unwrap(),
+        "a null start_directory did not use the invocation directory"
+    );
+
+    std::fs::write(
+        invocation.path().join("gone.yaml"),
+        "session_name: gone\nstart_directory: /nonexistent/definitely/not/here\nwindows:\n  - panes: [blank]\n",
+    )
+    .unwrap();
+    let output = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "gone.yaml",
+        ],
+        invocation.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("/nonexistent/definitely/not/here"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("$HOME"), "{stderr}");
+    guard.shutdown().await.unwrap();
+}

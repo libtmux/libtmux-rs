@@ -257,10 +257,14 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         )?;
     }
     let readiness = readiness(&value["workspace_builder_options"])?;
-    // With no start_directory at all, panes start in the invocation
-    // directory, matching tmuxp; an explicit one still resolves against
-    // the document's directory.
-    let directory = if value.get("start_directory").is_some() {
+    // With no start_directory, panes start in the invocation directory,
+    // matching tmuxp; an explicit one resolves against the document's
+    // directory. YAML reads a bare `~` as null, which says nothing about a
+    // path, so it is the same as leaving the key out.
+    let directory = if value
+        .get("start_directory")
+        .is_some_and(|value| !value.is_null())
+    {
         directory(
             &value["start_directory"],
             path.parent().unwrap_or_else(|| Path::new(".")),
