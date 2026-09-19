@@ -110,6 +110,38 @@ impl Client {
         *self.info.client_control_mode()
     }
 
+    /// Report whether this process opened this client itself.
+    ///
+    /// tmux counts a control connection as an attached client, and this crate
+    /// opens them: [`crate::Pane::stream_output`],
+    /// [`crate::control::ControlMode::attach`] and the waits built on them all
+    /// show up in a client listing beside a human's terminal. A caller asking
+    /// "is anybody watching this session" means anybody *else*, so this is the
+    /// question to ask before counting.
+    ///
+    /// `false` for every client once this process ends, since the answer is
+    /// about connections this `Server` is still holding open.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn watchers(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// let others = server
+    ///     .clients()
+    ///     .await?
+    ///     .into_iter()
+    ///     .filter(|client| !client.is_own())
+    ///     .count();
+    /// # let _ = others;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "control-mode")]
+    #[must_use]
+    pub fn is_own(&self) -> bool {
+        self.core.owns_control_client(self.pid())
+    }
+
     /// Return the identity of the server this client is attached to.
     pub(crate) fn server_identity(&self) -> &ServerIdentity {
         self.core.configuration().identity()

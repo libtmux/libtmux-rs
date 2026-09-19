@@ -313,6 +313,7 @@ function libtmux::Client::created: fn(&self) -> i64
 function libtmux::Client::detach: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::Client::height: fn(&self) -> Option<u32>
 function libtmux::Client::is_control_mode: fn(&self) -> bool
+function libtmux::Client::is_own: fn(&self) -> bool
 function libtmux::Client::is_readonly: fn(&self) -> bool
 function libtmux::Client::lock: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Client::name: const fn(&self) -> &libtmux::TmuxText

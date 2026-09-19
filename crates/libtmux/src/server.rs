@@ -401,6 +401,12 @@ impl Server {
     /// Report whether this process itself opened the control client with
     /// this pid, and it is still running.
     ///
+    /// [`crate::Client::is_own`] is the usual form, and reads better: ask a handle
+    /// from [`Self::clients`] rather than doing pid arithmetic. This one is
+    /// for a caller that already has a pid and no handle -- reading
+    /// `list-clients` itself to get sessions and pids in one command, which a
+    /// per-client lookup would turn into one command each.
+    ///
     /// [`crate::Pane::stream_output`], [`crate::Client::pid`] and friends can
     /// all open or report a control-mode connection; tmux counts any of them
     /// as an attached client the same as a human's terminal. A caller telling

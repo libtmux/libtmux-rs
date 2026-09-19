@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use libtmux::control::{ControlEvents, ControlMode, ControlSender, Event, Subscription};
 use libtmux::test::TestServer;
-use libtmux::{Command, NewWindowOptions};
+use libtmux::{Client, Command, NewWindowOptions};
 use static_assertions::assert_impl_all;
 use tokio_stream::StreamExt as _;
 
@@ -145,7 +145,7 @@ async fn owns_control_client_reports_its_own_spawned_connections() {
         .expect("control mode attaches");
 
     let clients = server.clients().await.expect("clients list");
-    let pids: Vec<u32> = clients.iter().map(libtmux::Client::pid).collect();
+    let pids: Vec<u32> = clients.iter().map(Client::pid).collect();
     assert_eq!(pids.len(), 1, "exactly one client is attached: {pids:?}");
     let pid = pids[0];
     assert!(
@@ -1987,5 +1987,41 @@ async fn a_pane_is_watched_wherever_it_now_lives() {
     assert!(!chunk.is_empty(), "the relocated pane wrote something");
 
     output.shutdown().await.expect("the stream shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// tmux counts a control connection as an attached client, and this crate
+/// opens them, so "is anybody watching" has to mean anybody else.
+#[tokio::test]
+async fn a_clients_listing_tells_our_own_connection_apart() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("watched").await.expect("session");
+
+    // No connection yet: nothing on the server is ours.
+    assert!(
+        server
+            .clients()
+            .await
+            .expect("clients list")
+            .iter()
+            .all(|client| !client.is_own()),
+    );
+
+    let mode = ControlMode::attach(server, session.id())
+        .await
+        .expect("the connection attaches");
+
+    let clients = server.clients().await.expect("clients list");
+    let ours = clients.iter().filter(|client| client.is_own()).count();
+    assert_eq!(ours, 1, "our own control client, and only it: {clients:?}");
+    assert!(
+        clients
+            .iter()
+            .filter(|client| client.is_own())
+            .all(Client::is_control_mode),
+    );
+
+    mode.shutdown().await.expect("the connection closes");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
