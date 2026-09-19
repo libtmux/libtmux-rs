@@ -7,8 +7,9 @@ use rmcp::{tool, tool_router};
 use crate::exec::Patterns;
 use crate::{
     Branch, BranchPane, BranchWindow, Capture, CapturePaneArgs, Environment, EnvironmentEntry,
-    Hook, Hooks, Marks, MatchView, Matches, OptionArgs, OptionValue, Panes, SearchPanesArgs,
-    Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs, TmuxTools, Tree, Windows,
+    EnvironmentState, Hook, Hooks, Marks, MatchView, Matches, OptionArgs, OptionValue, Panes,
+    SearchPanesArgs, Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs,
+    TmuxTools, Tree, Windows,
 };
 
 use super::error::{ToolError, bad_input, tmux_error};
@@ -505,11 +506,16 @@ impl TmuxTools {
         }))
     }
 
-    /// Read a tmux environment.
+    /// Read the names in a tmux environment, and the values the operator allowed.
     #[tool(
-        description = "Read the environment tmux hands to processes it starts, for the server \
-                       or for one session. This is not the environment of anything already \
-                       running: a pane started before a change keeps what it was given.",
+        description = "List the variables tmux hands to processes it starts, for the server \
+                       or for one session, and whether each is set or marked for removal. \
+                       Values are withheld: a tmux server inherits the environment of the \
+                       shell that started it, tokens and keys included. A value is returned \
+                       only for a name the operator listed in LIBTMUX_ENVIRONMENT_VALUES at \
+                       startup, and is then returned in clear. This is not the environment of \
+                       anything already running: a pane started before a change keeps what it \
+                       was given.",
         title = "Show tmux Environment",
         meta = crate::capability_meta!(Inspect, None, [Observe], [ProcessEnvironment], true, true, {
             "session" => [TmuxLookup]
@@ -528,11 +534,21 @@ impl TmuxTools {
         Ok(Json(Environment {
             entries: entries
                 .into_iter()
-                .map(|(name, entry)| EnvironmentEntry {
-                    name,
-                    value: match entry {
-                        libtmux::EnvironmentEntry::Set(value) => Some(lossy(&value)),
-                        libtmux::EnvironmentEntry::Removed => None,
+                .map(|(name, entry)| match entry {
+                    libtmux::EnvironmentEntry::Set(value) => {
+                        let allowed = self.environment_values.contains(&name);
+                        EnvironmentEntry {
+                            name,
+                            state: EnvironmentState::Set,
+                            value: allowed.then(|| lossy(&value)),
+                            withheld: !allowed,
+                        }
+                    }
+                    libtmux::EnvironmentEntry::Removed => EnvironmentEntry {
+                        name,
+                        state: EnvironmentState::Removed,
+                        value: None,
+                        withheld: false,
                     },
                 })
                 .collect(),

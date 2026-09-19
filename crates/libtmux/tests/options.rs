@@ -574,8 +574,23 @@ async fn an_environment_value_survives_what_a_line_listing_would_split() {
         .set_environment("SPACED", "x  y")
         .await
         .expect("a value with runs of spaces");
+    // Shaped like the listing's own framing, and carrying every byte the
+    // listing escapes, so a value that ends early reads as another variable.
+    session
+        .set_environment("FRAMED", "a\"; export FRAMED;\nFORGED=\"b\\$c`d\\\\")
+        .await
+        .expect("a value shaped like framing");
 
     let environment = session.environment_all().await.expect("listing");
+
+    for name in ["MULTILINE", "SPACED", "FRAMED"] {
+        assert_eq!(
+            environment.get(name),
+            session.environment(name).await.expect("read").as_ref(),
+            "{name} reads the same whole as alone",
+        );
+    }
+    assert_eq!(environment.get("FORGED"), None, "framing inside a value");
 
     assert!(matches!(
         environment.get("MULTILINE"),

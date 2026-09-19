@@ -152,6 +152,7 @@ fn base_command() -> Command {
         .env_remove("LIBTMUX_SOCKET")
         .env_remove("LIBTMUX_SOCKET_PATH")
         .env_remove("LIBTMUX_TMUX_CONFIG")
+        .env_remove("LIBTMUX_ENVIRONMENT_VALUES")
         .env_remove("TMUX_TMPDIR")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -520,6 +521,78 @@ fn default_daemon_loads_the_shipped_minimal_configuration() {
 
     process.finish();
     std::fs::remove_dir_all(root).expect("fixture cleanup");
+}
+
+/// Measured over JSON-RPC, because a transcript is where a value leaks to.
+///
+/// The fixture daemon inherits this test's environment, so no failure message
+/// prints a response.
+#[test]
+fn environment_values_stay_off_the_wire_unless_allowed() {
+    const SECRET: &str = "planted-secret-2d7e";
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard = runtime.block_on(async {
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let server = guard.server();
+        server.new_session("wire").await.expect("session starts");
+        server
+            .set_environment("PLANTED_API_KEY", SECRET)
+            .await
+            .expect("secret is planted");
+        server
+            .set_environment("PLANTED_ALLOWED", "allowed-value")
+            .await
+            .expect("allowed value is planted");
+        guard
+    });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let calls = [
+        json!({"name": "show_environment", "arguments": {}}),
+        json!({"name": "get_tmux_variables", "arguments": {"names": ["PLANTED_API_KEY"]}}),
+        json!({
+            "name": "call_read_tools_batch",
+            "arguments": {"operations": [
+                {"tool": "show_environment", "arguments": {}},
+                {"tool": "get_tmux_variables", "arguments": {"names": ["PLANTED_API_KEY"]}}
+            ]}
+        }),
+    ];
+
+    let mut default = Process::start(&["--socket", socket], &[]);
+    for call in &calls {
+        let response = default.request("tools/call", call).to_string();
+        assert!(
+            !response.contains(SECRET),
+            "{} put a withheld value on the wire",
+            call["name"]
+        );
+    }
+    default.finish();
+
+    let mut allowed = Process::start(
+        &["--socket", socket],
+        &[("LIBTMUX_ENVIRONMENT_VALUES", "PLANTED_ALLOWED")],
+    );
+    for call in &calls {
+        let response = allowed.request("tools/call", call).to_string();
+        assert!(
+            !response.contains(SECRET),
+            "{} put a withheld value on the wire",
+            call["name"]
+        );
+    }
+    let listing = allowed.request("tools/call", &calls[0]).to_string();
+    assert!(
+        listing.contains("allowed-value"),
+        "an allowed value is returned"
+    );
+    allowed.finish();
+
+    let refused = failed_start(&[("LIBTMUX_ENVIRONMENT_VALUES", "A=B")]);
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success());
+    assert!(stderr.contains("LIBTMUX_ENVIRONMENT_VALUES"), "{stderr}");
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
 }
 
 #[test]

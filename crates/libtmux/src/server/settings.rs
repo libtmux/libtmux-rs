@@ -271,17 +271,16 @@ impl Server {
 
     /// Read the server's whole environment.
     ///
-    /// Costs one tmux command per variable, for the reason given on
-    /// [`Session::environment_all`](crate::Session::environment_all): a value
-    /// containing a newline occupies
-    /// more than one line of the listing, and a continuation line holding an
-    /// `=` cannot be told from the next variable.
+    /// Costs one tmux command, read the way
+    /// [`Session::environment_all`](crate::Session::environment_all)
+    /// describes: each value reads exactly as [`Self::environment`] reads it.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    /// An empty map means the server holds nothing, never that the listing
-    /// failed.
+    /// Returns an error when tmux cannot be reached or refuses the listing,
+    /// and [`Error::DecodeListing`] when the listing is not in the shape tmux
+    /// prints. An empty map means the server holds nothing, never that the
+    /// listing failed.
     pub async fn environment_all(&self) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
         environment::all(&self.core, environment::Scope::Global).await
     }

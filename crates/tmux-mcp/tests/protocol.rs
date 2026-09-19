@@ -137,7 +137,7 @@ async fn descriptions_annotations_and_manifest_metadata_survive_the_wire() {
         assert!(
             description.ends_with("Inspect tmux metadata; accepts no client-supplied executable input.")
                 || description.ends_with("Returned content may be sensitive or untrusted.")
-                || description.ends_with("Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets.")
+                || description.ends_with("Read the tmux environment; accepts no client-supplied executable input. Values are withheld unless the operator allowed the name.")
                 || description.ends_with("Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration.")
                 || description.ends_with("Change tmux state; no client-supplied executable input.")
                 || description.ends_with("Start a pane's configured process; accepts no command payload.")

@@ -1288,7 +1288,12 @@ because that is the only place the rules are visible.
 a `Scope` that is either `-g` or `-t <target>`. The part worth sharing is not
 the flag but the reading: a value containing a newline occupies more than one
 line of `show-environment`, and a continuation line holding an `=` cannot be
-told from the next variable, so every name is read back on its own.
+told from the next variable. `show-environment -s` prints each entry as a
+shell statement with every `"`, `\`, `$` and backtick in the value escaped, so
+the first unescaped `"` ends a value on every supported release and the whole
+environment is one command. Only that escaping is undone: tmux 3.4 and later
+also escape bytes for display, `$` among them, in both listings alike, so a
+value read whole matches the same value read by name.
 
 ### `run-shell` output goes nowhere on tmux 3.3 through 3.4
 

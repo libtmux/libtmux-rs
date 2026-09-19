@@ -28,6 +28,46 @@ pub const EXCLUDE_TOOLS_ENV: &str = "LIBTMUX_EXCLUDE_TOOLS";
 /// The retired ordered-safety setting, rejected rather than ignored.
 pub const RETIRED_SAFETY_ENV: &str = "LIBTMUX_SAFETY";
 
+/// The tmux environment variables whose values tools may return.
+pub const ENVIRONMENT_VALUES_ENV: &str = "LIBTMUX_ENVIRONMENT_VALUES";
+
+/// The most names [`ENVIRONMENT_VALUES_ENV`] may allow.
+const MAX_ENVIRONMENT_VALUES: usize = 32;
+
+/// Parse the operator's allowed environment names.
+///
+/// Absent or empty allows none. A name is compared exactly, so `PATH` does
+/// not allow `path`.
+///
+/// # Errors
+///
+/// Returns an error for an empty element, a name containing `=` or NUL, or
+/// more than 32 names.
+pub fn parse_environment_values(value: Option<&str>) -> Result<BTreeSet<String>, SurfaceError> {
+    let names = parse_optional_names(value, ENVIRONMENT_VALUES_ENV)?;
+    if let Some(name) = names.iter().find(|name| name.contains(['=', '\0'])) {
+        return Err(SurfaceError::new(format!(
+            "{ENVIRONMENT_VALUES_ENV} names {name:?}, which is not a variable name"
+        )));
+    }
+    if names.len() > MAX_ENVIRONMENT_VALUES {
+        return Err(SurfaceError::new(format!(
+            "{ENVIRONMENT_VALUES_ENV} allows at most {MAX_ENVIRONMENT_VALUES} names"
+        )));
+    }
+    Ok(names)
+}
+
+/// Read [`ENVIRONMENT_VALUES_ENV`] before serving MCP.
+///
+/// # Errors
+///
+/// Returns an error for invalid UTF-8 or any error
+/// [`parse_environment_values`] reports.
+pub fn environment_values_from_env() -> Result<BTreeSet<String>, SurfaceError> {
+    parse_environment_values(unicode_env(ENVIRONMENT_VALUES_ENV)?.as_deref())
+}
+
 /// One mechanical group in the advertised MCP tool inventory.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -311,9 +351,22 @@ pub struct Builder {
     caller: Option<CallerIdentity>,
     selection: Selection,
     socket_provenance: SocketProvenance,
+    environment_values: BTreeSet<String>,
 }
 
 impl Builder {
+    /// Allow tools to return the values of these tmux environment variables.
+    ///
+    /// None are allowed by default: `show_environment` reports names and
+    /// state, and `get_tmux_variables` refuses a name the environment holds.
+    /// A tmux server inherits the environment of the shell that started it,
+    /// so its values are the user's tokens and keys.
+    #[must_use]
+    pub fn environment_values(mut self, names: BTreeSet<String>) -> Self {
+        self.environment_values = names;
+        self
+    }
+
     /// Say where this process is running, rather than reading the environment.
     #[must_use]
     pub fn caller(mut self, caller: Option<CallerIdentity>) -> Self {
@@ -377,6 +430,7 @@ impl Builder {
             tails: Arc::new(Tails::new(identity)),
             tool_router: router,
             nested_tool_router: resolved.nested_router,
+            environment_values: Arc::new(self.environment_values),
         })
     }
 }
@@ -505,6 +559,7 @@ impl TmuxTools {
                 exclude: BTreeSet::new(),
             },
             socket_provenance: SocketProvenance::Unknown,
+            environment_values: BTreeSet::new(),
         }
     }
 }

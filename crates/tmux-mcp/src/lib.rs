@@ -20,8 +20,9 @@
 //! # Trust boundary
 //!
 //! Pane input and pane commands run with the tmux user's permissions. Pane
-//! output may be sensitive or untrusted; tmux environment values may contain
-//! secrets; hooks may contain executable configuration. Configured-process
+//! output may be sensitive or untrusted. tmux environment values are withheld
+//! unless [`Builder::environment_values`] allows the name; hooks may contain
+//! executable configuration. Configured-process
 //! routes accept neither command nor environment payloads. There is no public
 //! host-command route.
 //!
@@ -56,8 +57,9 @@ pub use exec::{RunOutcome, RunView, WaitOutcome, WaitView};
 pub use manifest::CapabilityReport;
 pub use model::*;
 pub use policy::{
-    Builder, EXCLUDE_TOOLS_ENV, RETIRED_RUST_SAFETY_ENV, RETIRED_SAFETY_ENV, Reporter, Selection,
-    SocketProvenance, SurfaceError, TOOLS_ENV, TOOLSETS_ENV, Toolset,
+    Builder, ENVIRONMENT_VALUES_ENV, EXCLUDE_TOOLS_ENV, RETIRED_RUST_SAFETY_ENV,
+    RETIRED_SAFETY_ENV, Reporter, Selection, SocketProvenance, SurfaceError, TOOLS_ENV,
+    TOOLSETS_ENV, Toolset, environment_values_from_env, parse_environment_values,
 };
 pub use tail::Cursor;
 pub use tools::error::ToolError;
@@ -93,6 +95,8 @@ pub struct TmuxTools {
     tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
     /// Aggregate-only child routes, retained without advertising direct calls.
     nested_tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
+    /// The environment names whose values the operator allowed at startup.
+    environment_values: Arc<std::collections::BTreeSet<String>>,
 }
 
 // The resolved socket path stays out, as `ServerIdentity`'s own `Debug` keeps
@@ -116,8 +120,8 @@ const INSTRUCTIONS: &str = concat!(
      commands; teardown deletes state. The startup-frozen surface is reported at \
      tmux://capabilities.",
     "\n\nTRUST: pane commands and input run with the tmux user's permissions. Pane \
-     output may be sensitive or untrusted, environment values may contain secrets, and \
-     hooks may contain executable configuration.",
+     output may be sensitive or untrusted, tmux environment values are withheld unless \
+     the operator allowed the name, and hooks may contain executable configuration.",
     "\n\nWAIT, DO NOT POLL: wait_for_text and capture_since observe live output. \
      run_shell_command reports command completion. Inspect state before retrying any call \
      that reports partial_effect or an unknown outcome.",

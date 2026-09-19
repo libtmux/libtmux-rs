@@ -425,6 +425,78 @@ fn is_variable_name(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// Separates `#{session_id}` from the variable in one `get_tmux_variables`
+/// expansion. U+241E, as `snapshot_pane` uses, because a `%` would be read
+/// as a time conversion.
+const VARIABLE_SEPARATOR: &str = "\u{241e}";
+
+fn decode_error(message: String) -> ToolError {
+    ErrorData::internal_error(
+        message,
+        Some(serde_json::json!({
+            "kind": "decode",
+            "retryable": false,
+            "stale": false,
+        })),
+    )
+    .into()
+}
+
+impl TmuxTools {
+    /// Refuse a variable name the environment holds, unless the operator
+    /// allowed it.
+    ///
+    /// tmux expands a name that is neither an option nor a format from the
+    /// target session's environment and then the server's, so `#{NAME}` reads
+    /// every value `show_environment` withholds.
+    async fn withhold_environment_values(
+        &self,
+        names: impl Iterator<Item = &String>,
+        sessions: &BTreeSet<String>,
+    ) -> Result<(), ToolError> {
+        let guarded: Vec<&String> = names
+            .filter(|name| !self.environment_values.contains(*name))
+            .collect();
+        if guarded.is_empty() {
+            return Ok(());
+        }
+        let mut held: BTreeSet<String> = self
+            .server
+            .environment_all()
+            .await
+            .map_err(|error| tmux_error(&error))?
+            .into_keys()
+            .collect();
+        for session in sessions.iter().filter(|session| !session.is_empty()) {
+            let id: libtmux::SessionId = session
+                .parse()
+                .map_err(|_| decode_error(format!("tmux expanded session_id as {session:?}")))?;
+            let Some(session) = self
+                .server
+                .session_by_id(&id)
+                .await
+                .map_err(|error| tmux_error(&error))?
+            else {
+                return Err(object_gone("session", session));
+            };
+            held.extend(
+                session
+                    .environment_all()
+                    .await
+                    .map_err(|error| tmux_error(&error))?
+                    .into_keys(),
+            );
+        }
+        match guarded.into_iter().find(|name| held.contains(*name)) {
+            Some(name) => Err(bad_input(format!(
+                "{name} is a tmux environment variable, and its value is withheld; the \
+                 operator can allow it with LIBTMUX_ENVIRONMENT_VALUES at startup"
+            ))),
+            None => Ok(()),
+        }
+    }
+}
+
 #[tool_router(router = contract_router, vis = "pub(super)")]
 impl TmuxTools {
     #[tool(
@@ -525,7 +597,10 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Read a bounded set of tmux variables against one pane",
+        description = "Read a bounded set of tmux variables against one pane. tmux reads a \
+                       name it does not know as a format from its environment, so a name the \
+                       server or session environment holds is refused unless the operator \
+                       listed it in LIBTMUX_ENVIRONMENT_VALUES at startup.",
         title = "Get tmux Variables",
         meta = crate::capability_meta!(
             Inspect, None,
@@ -555,20 +630,30 @@ impl TmuxTools {
             None => None,
         };
         let mut values = BTreeMap::new();
+        let mut sessions = BTreeSet::new();
         for name in names {
             if !is_variable_name(&name) {
                 return Err(bad_input(format!(
                     "{name:?} is not a tmux variable name; use letters, digits, and underscores"
                 )));
             }
-            let format = format!("#{{{name}}}");
+            // The session rides along so the environment tmux consulted for
+            // this very expansion is known.
+            let format = format!("#{{session_id}}{VARIABLE_SEPARATOR}#{{{name}}}");
             let value = self
                 .server
                 .format(pane.as_ref(), &format)
                 .await
                 .map_err(|error| tmux_error(&error))?;
-            values.insert(name, lossy(&value));
+            let value = lossy(&value);
+            let (session, value) = value.split_once(VARIABLE_SEPARATOR).ok_or_else(|| {
+                decode_error(format!("tmux did not expand {name} with its session"))
+            })?;
+            sessions.insert(session.to_owned());
+            values.insert(name, value.to_owned());
         }
+        self.withhold_environment_values(values.keys(), &sessions)
+            .await?;
         Ok(Json(VariablesValue { values }))
     }
 

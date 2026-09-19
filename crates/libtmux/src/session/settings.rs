@@ -432,18 +432,17 @@ impl Session {
     /// inherit it. Both appear in the listing, and [`EnvironmentEntry`] keeps
     /// them apart, exactly as [`Self::environment`] does for a single name.
     ///
-    /// Costs one tmux command per variable. The listing alone cannot be
-    /// trusted: a value containing a newline occupies more than one line, and
-    /// a continuation line holding an `=` is indistinguishable from the next
-    /// variable. Each name is therefore read back on its own, which also
-    /// discards the continuation lines, because tmux refuses a name it does
-    /// not hold.
+    /// Costs one tmux command. The listing is read in tmux's shell form,
+    /// which escapes each value, so a value containing a newline or an `=`
+    /// is not mistaken for the next variable. Each value reads exactly as
+    /// [`Self::environment`] reads it.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be reached or refuses the listing.
-    /// An empty map means the session holds nothing, never that the listing
-    /// failed.
+    /// Returns an error when tmux cannot be reached or refuses the listing,
+    /// and [`Error::DecodeListing`] when the listing is not in the shape tmux
+    /// prints. An empty map means the session holds nothing, never that the
+    /// listing failed.
     ///
     /// # Examples
     ///

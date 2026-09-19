@@ -6,6 +6,8 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
+use crate::error::ListingDecodeError;
+use crate::formats::FormatCodecError;
 use crate::internal::core::Core;
 use crate::internal::listing;
 use crate::{Command, EnvironmentEntry, Error, TmuxText};
@@ -137,19 +139,20 @@ pub(crate) async fn get(
     ))))
 }
 
-/// Read the whole environment.
+/// Read the whole environment in one command.
 ///
-/// Costs one tmux command per variable. The listing alone cannot be trusted:
-/// a value containing a newline occupies more than one line, and a
-/// continuation line holding an `=` is indistinguishable from the next
-/// variable. Each name is therefore read back on its own, which also discards
-/// the continuation lines, because tmux refuses a name it does not hold.
+/// The plain listing cannot be framed: a value containing a newline occupies
+/// more than one line, and a continuation line holding an `=` reads as the
+/// next variable. `-s` prints each entry as a shell statement instead, with
+/// every `"`, `\`, `$` and backtick in the value escaped, so the first
+/// unescaped `"` ends the value. That escaping is undone and nothing else is,
+/// so each value reads exactly as [`get`] reads it.
 pub(crate) async fn all(
     core: &Core,
     scope: Scope<'_>,
 ) -> Result<BTreeMap<String, EnvironmentEntry>, Error> {
     let result = core
-        .execute(scope.apply(Command::new("show-environment")))
+        .execute(scope.apply(Command::new("show-environment")).arg("-s"))
         .await?;
     if !result.success() {
         return Err(Error::from_refused_result(
@@ -159,23 +162,156 @@ pub(crate) async fn all(
         ));
     }
 
-    let candidates: Vec<String> = result
-        .stdout_lossy()
-        .lines()
-        .filter_map(|line| {
-            line.strip_prefix('-')
-                .map_or_else(|| line.split_once('=').map(|(name, _)| name), Some)
-        })
-        .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
+    parse_shell_listing(result.stdout()).map_err(|(row, offset)| Error::DecodeListing {
+        list_command: "show-environment",
+        detail: ListingDecodeError::new(FormatCodecError::row_mismatch(
+            row,
+            None,
+            None,
+            Some(offset),
+        )),
+    })
+}
 
+/// Parse `show-environment -s`, reporting the entry and byte offset that
+/// failed rather than guessing past it.
+fn parse_shell_listing(
+    stdout: &[u8],
+) -> Result<BTreeMap<String, EnvironmentEntry>, (usize, usize)> {
     let mut environment = BTreeMap::new();
-    for name in candidates {
-        if let Some(entry) = get(core, scope, &name).await? {
-            environment.insert(name, entry);
+    let mut at = 0;
+    let mut row = 0;
+    while at < stdout.len() {
+        let rest = &stdout[at..];
+        let (name, entry, consumed) = parse_unset(rest)
+            .or_else(|| parse_exported(rest))
+            .ok_or((row, at))?;
+        environment.insert(name, entry);
+        at += consumed;
+        row += 1;
+    }
+    Ok(environment)
+}
+
+/// `unset NAME;` and its newline.
+///
+/// tmux refuses a name containing `=`, which is how an exported entry whose
+/// name merely begins `unset ` is told from this.
+fn parse_unset(rest: &[u8]) -> Option<(String, EnvironmentEntry, usize)> {
+    let body = rest.strip_prefix(b"unset ")?;
+    let end = body.windows(2).position(|pair| pair == b";\n")?;
+    let name = &body[..end];
+    if name.is_empty() || name.contains(&b'=') {
+        return None;
+    }
+    Some((
+        String::from_utf8_lossy(name).into_owned(),
+        EnvironmentEntry::Removed,
+        b"unset ".len() + end + 2,
+    ))
+}
+
+/// `NAME="VALUE"; export NAME;` and its newline.
+fn parse_exported(rest: &[u8]) -> Option<(String, EnvironmentEntry, usize)> {
+    // tmux refuses a name containing `=`, so the first one ends the name.
+    let equals = rest.iter().position(|byte| *byte == b'=')?;
+    let name = &rest[..equals];
+    if name.is_empty() || rest.get(equals + 1) != Some(&b'"') {
+        return None;
+    }
+    let mut at = equals + 2;
+    let mut value = Vec::new();
+    loop {
+        match *rest.get(at)? {
+            b'"' => break,
+            b'\\' => {
+                let next = *rest.get(at + 1)?;
+                if matches!(next, b'"' | b'\\' | b'$' | b'`') {
+                    value.push(next);
+                    at += 2;
+                } else {
+                    // tmux's own rendering of a byte, such as `\033`, which
+                    // the plain listing carries too.
+                    value.push(b'\\');
+                    at += 1;
+                }
+            }
+            byte => {
+                value.push(byte);
+                at += 1;
+            }
         }
     }
+    at += 1;
+    let suffix = [b"; export ".as_slice(), name, b";\n"].concat();
+    if !rest[at..].starts_with(&suffix) {
+        return None;
+    }
+    Some((
+        String::from_utf8_lossy(name).into_owned(),
+        EnvironmentEntry::Set(TmuxText::from(value)),
+        at + suffix.len(),
+    ))
+}
 
-    Ok(environment)
+#[cfg(test)]
+mod tests {
+    use super::parse_shell_listing;
+    use crate::{EnvironmentEntry, TmuxText};
+
+    fn set(value: &[u8]) -> EnvironmentEntry {
+        EnvironmentEntry::Set(TmuxText::from(value.to_vec()))
+    }
+
+    /// Bytes tmux 3.7d printed. `a$b` arrives as `a\\$b`: `-s` escapes the
+    /// `$` for a shell, and tmux escapes it again for display, as the plain
+    /// listing that `get` reads does too.
+    #[test]
+    fn shell_listing_undoes_only_the_shell_escaping() {
+        let listing = b"V_BS=\"a\\\\b\"; export V_BS;\n\
+                        V_DOLLAR=\"a\\\\$b\"; export V_DOLLAR;\n\
+                        V_DQ=\"a\\\"b\"; export V_DQ;\n\
+                        V_ESC=\"a\\033b\"; export V_ESC;\n\
+                        V_TAB=\"a\tb\"; export V_TAB;\n";
+        let parsed = parse_shell_listing(listing).expect("listing parses");
+
+        assert_eq!(parsed["V_BS"], set(b"a\\b"));
+        assert_eq!(parsed["V_DOLLAR"], set(b"a\\$b"));
+        assert_eq!(parsed["V_DQ"], set(b"a\"b"));
+        assert_eq!(parsed["V_ESC"], set(b"a\\033b"));
+        assert_eq!(parsed["V_TAB"], set(b"a\tb"));
+    }
+
+    #[test]
+    fn a_value_shaped_like_framing_stays_one_value() {
+        let listing = b"MULTI=\"first\nDECOY=x\n\\\"; export X;\nY=\\\"z\"; export MULTI;\n\
+                        unset GONE;\n\
+                        unset A=\"v\"; export unset A;\n";
+        let parsed = parse_shell_listing(listing).expect("listing parses");
+
+        assert_eq!(parsed.len(), 3, "{parsed:?}");
+        assert_eq!(
+            parsed["MULTI"],
+            set(b"first\nDECOY=x\n\"; export X;\nY=\"z")
+        );
+        assert_eq!(parsed["GONE"], EnvironmentEntry::Removed);
+        assert_eq!(parsed["unset A"], set(b"v"));
+    }
+
+    #[test]
+    fn unframed_output_is_refused_not_guessed() {
+        for listing in [
+            b"PLAIN=value\n".as_slice(),
+            b"OPEN=\"never closed; export OPEN;\n",
+            b"MISMATCH=\"v\"; export OTHER;\n",
+            b"unset ;\n",
+            b"TRUNCATED=\"v\"; export TRUNCATED;",
+        ] {
+            assert!(
+                parse_shell_listing(listing).is_err(),
+                "accepted {:?}",
+                String::from_utf8_lossy(listing)
+            );
+        }
+    }
 }

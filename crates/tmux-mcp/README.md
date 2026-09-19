@@ -362,6 +362,7 @@ now run in the client. Update existing client calls with this mapping:
 | `clear_pane` | Use teardown tool `clear_pane_scrollback`. |
 | `set_option` | Use constrained tools such as `set_mouse_enabled`, `set_history_limit`, or `set_synchronize_panes`. |
 | `set_environment` | No generic caller-controlled environment route remains. |
+| `show_environment` values | Values are withheld by default; allow names with `LIBTMUX_ENVIRONMENT_VALUES`. |
 | `run_plan` | Use `call_read_tools_batch` for inspect-only batches; issue typed state-changing calls separately. |
 | `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
 | `tmux://server` | Use `get_server_info`; `tmux://capabilities` adds the frozen connection and selection boundary. |
@@ -439,11 +440,27 @@ configuration, not a sandbox boundary. Valid inherited Bash and zsh `ERR` and
 `DEBUG` traps remain visible to the authored command; parent-shell traps and
 the `errexit`, `xtrace`, and `noglob` options remain unchanged.
 
-Pane output and tmux metadata may contain sensitive or untrusted text.
-Environment values may contain secrets. Hooks may contain executable
-configuration. Existing aliases, hooks, plugins, status jobs, and pane
-processes can add effects to any call. Standard MCP annotations describe the
-whole call for client consent; they do not enforce authority.
+Pane output and tmux metadata may contain sensitive or untrusted text. Hooks
+may contain executable configuration. Existing aliases, hooks, plugins, status
+jobs, and pane processes can add effects to any call. Standard MCP annotations
+describe the whole call for client consent; they do not enforce authority.
+
+A tmux server holds the environment of the shell that started it, tokens and
+keys included. No tool returns an environment value by default.
+`show_environment` lists each name and whether it is set or marked for
+removal, and withholds the value. `get_tmux_variables` refuses a name the
+server or session environment holds, because tmux expands a name it does not
+know as a format from the environment. `LIBTMUX_ENVIRONMENT_VALUES` names, at
+startup, the variables whose values both tools may return; a named value
+reaches the client in clear. It takes up to 32 comma-separated names, matched
+exactly:
+
+```console
+$ LIBTMUX_ENVIRONMENT_VALUES=TERM,LANG tmux-mcp
+```
+
+This covers what tmux holds, not what a pane's program can print: a command
+sent through an execute tool runs with the tmux user's environment.
 
 ## What it feels like
 
@@ -518,7 +535,9 @@ is excluded.
 **Reading tmux variables.** `get_tmux_variables` accepts one to 32 validated
 variable names and constructs bounded `#{variable}` references itself. The
 manifest records `validated-variable-name` under `inputLiteralization`. It
-does not accept arbitrary or shell-command formats.
+does not accept arbitrary or shell-command formats, and refuses a name the
+tmux environment holds unless the operator allowed it (see
+[Trust boundary](#trust-boundary)).
 
 ## Answers are typed
 

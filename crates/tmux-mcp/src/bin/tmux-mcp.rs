@@ -13,7 +13,7 @@ use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport, stdio};
 use rmcp::{RoleServer, ServiceExt as _};
 use tmux_mcp::cli::{HELP, Options, Stop};
-use tmux_mcp::{Selection, SocketProvenance, TmuxTools};
+use tmux_mcp::{Selection, SocketProvenance, TmuxTools, environment_values_from_env};
 
 const DEFAULT_SOCKET: &str = "libtmux-mcp";
 const SOCKET_ENV: &str = "LIBTMUX_SOCKET";
@@ -194,6 +194,7 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     TmuxTools::builder(server.clone())
         .selection(validation_selection)
         .try_build()?;
+    let environment_values = environment_values_from_env()?;
 
     let existing_before = match server.check_alive().await {
         Ok(()) => true,
@@ -258,6 +259,7 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
     let tools = TmuxTools::builder(server.clone())
         .selection(selection)
         .socket_provenance(provenance)
+        .environment_values(environment_values)
         .try_build()?;
 
     // Log the frozen surface and socket choice once at startup.

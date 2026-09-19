@@ -201,7 +201,7 @@ Return metadata for one session Inspect tmux metadata; accepts no client-supplie
 
 ## `get_tmux_variables`
 
-Read a bounded set of tmux variables against one pane Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration.
+Read a bounded set of tmux variables against one pane. tmux reads a name it does not know as a format from its environment, so a name the server or session environment holds is refused unless the operator listed it in LIBTMUX_ENVIRONMENT_VALUES at startup. Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration.
 
 - Toolset: `inspect`
 - Process reach: `none`
@@ -591,7 +591,7 @@ Set the window default for synchronized pane input. Individual pane overrides st
 
 ## `show_environment`
 
-Read the environment tmux hands to processes it starts, for the server or for one session. This is not the environment of anything already running: a pane started before a change keeps what it was given. Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets.
+List the variables tmux hands to processes it starts, for the server or for one session, and whether each is set or marked for removal. Values are withheld: a tmux server inherits the environment of the shell that started it, tokens and keys included. A value is returned only for a name the operator listed in LIBTMUX_ENVIRONMENT_VALUES at startup, and is then returned in clear. This is not the environment of anything already running: a pane started before a change keeps what it was given. Read the tmux environment; accepts no client-supplied executable input. Values are withheld unless the operator allowed the name.
 
 - Toolset: `inspect`
 - Process reach: `none`

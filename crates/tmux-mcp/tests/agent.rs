@@ -3194,7 +3194,162 @@ async fn search_snapshot_and_configuration_reads_are_structured() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| { entry["name"] == "TMUX_MCP_PROBE" && entry["value"] == "secret-like" })
+            .any(|entry| { entry["name"] == "TMUX_MCP_PROBE" && entry["withheld"] == true })
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+const PLANTED_SECRET: &str = "planted-secret-9c41";
+
+/// Plant a server secret, a session secret, an allowed value, and a removal.
+async fn plant_environment(server: &Server) {
+    let session = server
+        .new_session("withheld")
+        .await
+        .expect("session starts");
+    server
+        .set_environment("PLANTED_API_KEY", PLANTED_SECRET)
+        .await
+        .expect("server secret is planted");
+    session
+        .set_environment("PLANTED_SESSION_TOKEN", PLANTED_SECRET)
+        .await
+        .expect("session secret is planted");
+    server
+        .set_environment("PLANTED_ALLOWED", "allowed-value")
+        .await
+        .expect("allowed value is planted");
+    server
+        .hide_environment("PLANTED_REMOVED")
+        .await
+        .expect("removal is planted");
+}
+
+/// Find one entry without printing the listing, which may hold real tokens.
+fn environment_entry(listing: &Value, name: &str) -> Value {
+    listing["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["name"] == name)
+        .cloned()
+        .unwrap_or_else(|| panic!("{name} is not listed"))
+}
+
+/// A tmux server holds the environment of the shell that started it, so the
+/// default answer names each variable and returns no value, and a format
+/// that falls back to the environment is refused the same way.
+///
+/// The fixture daemon inherits this test's own environment, so no failure
+/// message here prints a listing: a regression would print real tokens.
+#[tokio::test]
+async fn environment_values_are_withheld_by_default() {
+    const SECRET: &str = PLANTED_SECRET;
+    let logged = LoggedTmux::new();
+    let guard = TestServer::builder()
+        .tmux_executable(&logged.executable)
+        .start()
+        .await
+        .expect("logging tmux starts");
+    let server = guard.server();
+    plant_environment(server).await;
+    let entry = environment_entry;
+
+    let tools = bare_tools(server);
+    logged.clear();
+    let listing = call_tool(tools.clone(), "show_environment", serde_json::json!({})).await;
+    let dispatches = logged.command_dispatches("show-environment");
+    let wire = serde_json::to_string(&listing).expect("result serializes");
+    assert!(
+        !wire.contains(SECRET),
+        "a withheld value reached the client"
+    );
+    assert_eq!(dispatches, 1, "the listing is one tmux command");
+    let listing = listing.structured_content.expect("structured listing");
+    assert!(
+        listing["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .all(|entry| entry["value"].is_null()),
+        "a value was returned for a name nobody allowed"
+    );
+    let secret = entry(&listing, "PLANTED_API_KEY");
+    assert_eq!(secret["state"], "set");
+    assert_eq!(secret["withheld"], true);
+    let removed = entry(&listing, "PLANTED_REMOVED");
+    assert_eq!(removed["state"], "removed");
+    assert_eq!(removed["withheld"], false);
+
+    let session_listing = call_tool(
+        tools.clone(),
+        "show_environment",
+        serde_json::json!({"session": "withheld"}),
+    )
+    .await;
+    let wire = serde_json::to_string(&session_listing).expect("result serializes");
+    assert!(!wire.contains(SECRET), "a session value reached the client");
+
+    for name in ["PLANTED_API_KEY", "PLANTED_SESSION_TOKEN"] {
+        let refused = call_tool(
+            tools.clone(),
+            "get_tmux_variables",
+            serde_json::json!({"names": ["session_name", name]}),
+        )
+        .await;
+        let wire = serde_json::to_string(&refused).expect("result serializes");
+        assert!(
+            !wire.contains(SECRET),
+            "{name} reached the client as a format"
+        );
+        assert_eq!(refused.is_error, Some(true), "{name} was not refused");
+        assert!(wire.contains("invalid_input"), "{name} was refused untyped");
+    }
+    let formats = call_tool(
+        tools.clone(),
+        "get_tmux_variables",
+        serde_json::json!({"names": ["session_name"]}),
+    )
+    .await;
+    assert_eq!(
+        formats.structured_content.expect("variables")["values"]["session_name"],
+        "withheld"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The operator's allowance releases the names it lists and no others.
+#[tokio::test]
+async fn an_allowed_environment_name_returns_its_value() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    plant_environment(server).await;
+
+    let allowed = TmuxTools::builder(server.clone())
+        .caller(None)
+        .environment_values(BTreeSet::from(["PLANTED_ALLOWED".to_owned()]))
+        .build();
+    let listing = call_tool(allowed.clone(), "show_environment", serde_json::json!({})).await;
+    let wire = serde_json::to_string(&listing).expect("result serializes");
+    assert!(
+        !wire.contains(PLANTED_SECRET),
+        "allowing one name released another"
+    );
+    let listing = listing.structured_content.expect("structured listing");
+    let named = environment_entry(&listing, "PLANTED_ALLOWED");
+    assert_eq!(named["value"], "allowed-value");
+    assert_eq!(named["withheld"], false);
+    let variables = call_tool(
+        allowed,
+        "get_tmux_variables",
+        serde_json::json!({"names": ["PLANTED_ALLOWED"]}),
+    )
+    .await;
+    assert_eq!(
+        variables.structured_content.expect("variables")["values"]["PLANTED_ALLOWED"],
+        "allowed-value"
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

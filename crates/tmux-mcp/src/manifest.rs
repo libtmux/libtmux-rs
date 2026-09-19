@@ -214,7 +214,7 @@ fn controlled_opener(
                 "Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted."
             }
             Toolset::Inspect if output_classes.contains(&OutputClass::ProcessEnvironment) => {
-                "Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets."
+                "Read the tmux environment; accepts no client-supplied executable input. Values are withheld unless the operator allowed the name."
             }
             Toolset::Inspect if output_classes.contains(&OutputClass::ConfiguredCommand) => {
                 "Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration."
