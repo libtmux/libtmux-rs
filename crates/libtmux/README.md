@@ -620,6 +620,17 @@ best-effort cleanup even after the runtime has ended. On Linux, cleanup also
 sweeps processes by an exact environment marker through pidfds, so PID reuse
 cannot redirect a signal.
 
+There is no mock and no replay mode: a test here talks to tmux, because what
+tmux answers is the thing under test. CI needs tmux installed, which on a
+GitHub Actions Ubuntu runner is one step:
+
+```yaml
+- run: sudo apt-get install -y --no-install-recommends tmux
+```
+
+`LIBTMUX_TEST_TMUX` points the guard at a specific build when one release
+matters.
+
 The guarantees and their limits are set out in `docs/design.md`, which ships
 with the crate.
 
