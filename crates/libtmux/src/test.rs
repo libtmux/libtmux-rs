@@ -323,6 +323,22 @@ pub struct TestServerBuilder {
     control_client_limits: ControlClientLimits,
 }
 
+/// What the fixture's tmux keeps of the test process's environment.
+///
+/// `TMUX` and `TMUX_PANE` are deliberately absent: a fixture started from
+/// inside tmux must not read as nested. `TERM` is set rather than inherited.
+const INHERITED_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMUX_TMPDIR",
+];
+
 /// The tmux to run, unless a caller names one.
 ///
 /// `LIBTMUX_TEST_TMUX` first, then `tmux` resolved through `PATH`. The
@@ -483,10 +499,20 @@ impl TestServerBuilder {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .env_remove("TMUX")
-            .env_remove("TMUX_PANE")
-            .env("TERM", TERM)
             .process_group(0);
+        // tmux hands its own environment to every session and every pane, and
+        // `show-environment` reads it back, so a fixture that isolates the
+        // socket and the config and not the environment is isolated only
+        // halfway: a test that lists the environment prints whatever the
+        // developer exported, secrets included. Only what tmux and a pane's
+        // shell need is passed through.
+        command.env_clear();
+        for name in INHERITED_ENVIRONMENT {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command.env("TERM", TERM);
         files.containment.configure(&mut command);
         let child = match command.spawn() {
             Ok(child) => child,

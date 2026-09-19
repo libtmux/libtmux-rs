@@ -618,7 +618,10 @@ libtmux = { version = "0.1.0-alpha.11", features = ["test-support"] }
 ```
 
 Each guard owns a tmux child on a private socket with an empty config, so tests
-cannot reach your real server or each other. `shutdown().await` closes escaped
+cannot reach your real server or each other, and it is given only the
+environment tmux and a pane's shell need -- `PATH`, `HOME`, `USER`, `LOGNAME`,
+`SHELL`, the locale variables and `TMUX_TMPDIR` -- so a test that reads the
+environment cannot read yours. `shutdown().await` closes escaped
 clients, waits the daemon, and reports cleanup failures; `Drop` forces
 best-effort cleanup even after the runtime has ended. On Linux, cleanup also
 sweeps processes by an exact environment marker through pidfds, so PID reuse

@@ -2181,3 +2181,39 @@ async fn a_replacement_daemon_on_the_same_socket_is_a_different_generation() {
     );
     assert!(error.is_object_gone(), "{error}");
 }
+
+/// The fixture's tmux must not inherit the test process's environment.
+///
+/// tmux hands its own environment to every session and pane, and
+/// `show-environment` reads it back, so whatever a developer exported --
+/// tokens included -- was one tool call away from a test's output. This
+/// asserts on presence only, and never formats an environment value into a
+/// message.
+#[tokio::test]
+async fn the_fixture_does_not_hand_tmux_the_test_environment() {
+    // `cargo test` sets this in the test process, so it is a variable known to
+    // be inheritable, without planting one (`set_var` is unsafe, and this
+    // crate forbids unsafe code).
+    assert!(
+        std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+        "the control variable is set in this process",
+    );
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let environment = guard
+        .server()
+        .environment_all()
+        .await
+        .expect("the server environment reads");
+
+    assert!(
+        !environment.contains_key("CARGO_MANIFEST_DIR"),
+        "the fixture's tmux inherited this process's environment",
+    );
+    assert!(
+        environment.contains_key("PATH"),
+        "the allowlist still passes what tmux needs",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
