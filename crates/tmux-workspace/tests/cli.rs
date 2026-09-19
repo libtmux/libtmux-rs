@@ -846,7 +846,9 @@ async fn new_session_prompt_answered_append_appends_the_current_session() {
     guard.shutdown().await.unwrap();
 }
 
-/// An already-running session, answered "n": nothing changes, exit 0.
+/// An already-running session, answered "n": nothing changes, exit 0, and
+/// the report names what was not done rather than claiming a reuse that
+/// never happened.
 #[tokio::test]
 async fn exists_prompt_answered_no_changes_nothing() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
@@ -880,6 +882,11 @@ async fn exists_prompt_answered_no_changes_nothing() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("RC=0"), "{text}");
+    assert!(
+        !text.contains("Reused"),
+        "a declined attach is not a reuse: {text}"
+    );
+    assert!(text.contains("Not attached"), "{text}");
     pane.window().await.unwrap().unwrap().kill().await.unwrap();
     guard.shutdown().await.unwrap();
 }
