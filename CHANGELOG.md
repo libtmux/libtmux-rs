@@ -16,6 +16,180 @@ full.
 
 ## Unreleased
 
+### Fixed
+
+- Creation commands and plans, shell commands, messages, key bindings and
+  access rules treat caller text beginning with `-` as a value instead of a
+  tmux flag. (#28)
+
+- `PaneOutput` ends when its pane or window closes. (#28)
+
+- `Pane::stream_output` preserves frame-limit errors while opening its
+  output stream. (#28)
+
+- `ControlSender::resume_pane` and `unmute_pane` restore output after
+  muting. (#28)
+
+- `ControlSender::watch_only` leaves panes in other sessions unchanged. (#28)
+
+- `Server::lock_channel` and `wait_for_channel` preserve locks and signals
+  when a waiting call is cancelled or times out. (#28)
+
+- `Pane::capture_with` trims unwritten padding from joined lines on tmux
+  3.2a, so equality checks see the text the pane printed. (#28)
+
+- `Server::environment_all` and `Session::environment_all` accept variable
+  names and values containing shell punctuation or newlines. (#28)
+
+- Replacing `set_hooks` no longer leaves a hook cleared but unwritten when
+  the call is cancelled. (#28)
+
+- Object listings decode the additional format escapes emitted by newer
+  tmux builds. (#28)
+
+- `tmux-mcp`'s `wait_for_text` ignores echoed input from `send_keys`,
+  `paste_text` and `run_shell_command` when matching command output. (#28)
+
+- `tmux-mcp`'s streamed captures and waits keep reading output after an
+  unterminated terminal escape string. (#28)
+
+- `tmux-mcp` reports tool refusals as tool errors, with structured reasons
+  for clients deciding whether to retry. (#28)
+
+- `tmux-mcp` accepts session IDs returned by its own listings. (#28)
+
+- `tmux-mcp` treats empty `TMUX` and `TMUX_PANE` as detached operation. (#28)
+
+- `tmux-mcp` accepts interrupt keys while `run_shell_command` owns a pane,
+  so callers can stop a running command. (#28)
+
+- `tmux-mcp` keeps its shared daemon alive while another instance uses it.
+  (#28)
+
+- `tmux-workspace` executes tmuxp's command shorthand and creates empty
+  panes from its blank-pane forms. (#28)
+
+- `tmux-workspace` resolves inherited and relative start directories and
+  expands environment variables as tmuxp does. (#28)
+
+- `tmux_workspace::freeze` records an idle shell as an empty pane, so
+  rebuilding it does not start a nested shell. (#28)
+
+### Added
+
+- `Server::over_control_mode` routes typed operations through an existing
+  control connection; blocking operations require the original server. (#28)
+
+- `Server::owns_control_client` and `Client::is_own` identify this process's
+  control clients. MCP attachment reports exclude those clients. (#28)
+
+- `plan::Pause` delays later operations in a plan. Control-mode plans
+  refuse pauses before running any operations. (#28)
+
+- `Server::typed_key_bindings` reads key bindings as structured values on
+  tmux 3.7 and newer. (#28)
+
+- `Pane::get`, `Window::get`, `Session::get` and `Client::get` read fields
+  already fetched by a listing, including fields without named getters. (#28)
+
+- `set_typed_option` validates option values before writing them. (#28)
+
+- `Server::load_buffer` and `save_buffer` transfer buffer contents through
+  files, including buffers too large for command arguments. (#28)
+
+- `Server::with_channel_lock` releases its lock when the operation ends,
+  including failure or cancellation. (#28)
+
+- `NewSessionOptions::environment` sets environment variables for a
+  session's first process. (#28)
+
+- `Pane::wait_until` waits for a predicate over captured lines and reports
+  arrival, pane death or timeout. (#28)
+
+- `TmuxVersion::has_behavior` checks capabilities on development builds
+  using the same rules as `Server::require`. (#28)
+
+- `Pane::stream_output_with_limits` lets callers bound streamed output.
+  (#28)
+
+### Changed
+
+- **Breaking.** `Session`, `Window`, `Client` and `ServerGeneration`
+  timestamp accessors return `SystemTime`; convert through `UNIX_EPOCH`
+  when Unix seconds are needed. (#28)
+
+- **Breaking.** Buffer names use `TmuxText` to preserve arbitrary bytes;
+  pass listed names directly to buffer reads and deletion. (#28)
+
+- **Breaking.** Pane and window respawning use `Respawn::Replacing` or
+  `Respawn::OnlyIfDead` in place of a boolean. (#28)
+
+- **Breaking.** `Server::display_menu` accepts `MenuItem` values in place
+  of tuples. (#28)
+
+- **Breaking.** ID field handles carry their ID type; update explicit
+  `TextField` annotations as shown in the migration guide. (#28)
+
+- **Breaking.** `ControlEvents` reports stream failures during iteration.
+  Handle each event's error before reading the event. (#28)
+
+- **Breaking.** `with_session`, `with_window` and `with_pane` report
+  `ScopeError`, preserving both operation and cleanup failures. (#28)
+
+- **Breaking.** Query iterators support owned values through
+  `matching_owned`; update explicit trait bounds using the migration guide.
+  (#28)
+
+- **Breaking.** `AccessRule::name` replaces `user`, and `principal`
+  distinguishes users from groups. (#28)
+
+- **Breaking.** `Pane::pid` can be absent for a dead pane; use `is_dead`
+  to check liveness. (#28)
+
+- `Window::select_layout` and layout operations in plans, workspaces and
+  MCP refuse invalid layouts before dispatch. Unique preset prefixes remain
+  accepted. (#28)
+
+- **Breaking.** `tmux-mcp` tool methods return `ToolError` for refusals.
+  (#28)
+
+- **Breaking.** `tmux-mcp`'s `wait_for_text` distinguishes output present
+  at entry, pending input and output received during the wait. (#28)
+
+- **Breaking.** MCP tool metadata omits repeated descriptions and schemas;
+  read them from the tool or `tmux://capabilities`. (#28)
+
+- `tmux-mcp` requires the `teardown` toolset for `set_history_limit`. (#28)
+
+- **Breaking.** `tmux-workspace` configuration errors include line and
+  column fields; update matches on `ConfigError`. (#28)
+
+- **Breaking.** `tmux-workspace` suppresses shell history by default; set
+  `suppress_history: false` to record commands. (#28)
+
+- **Breaking.** `PaneConfig::shell_commands` uses `ShellCommand` values to
+  support tmuxp's per-command Enter and delay settings. (#28)
+
+### Removed
+
+- **Breaking.** The `*_or_empty` listing helpers are removed. Handle
+  listing errors or apply `unwrap_or_default` at the call site. (#28)
+
+- **Breaking.** `get_option` and its global variants are removed; use
+  `typed_option` and the corresponding typed global readers. (#28)
+
+### Security
+
+- Names, titles and start directories are literal text by default. Drop
+  manual format escaping; use `TmuxArg::format` for intentional templates.
+  (#28)
+
+- `test::TestServer` limits inherited environment variables so tests do not
+  expose unrelated exported values through tmux. (#28)
+
+- **Breaking.** MCP environment tools withhold values unless their names
+  appear in `LIBTMUX_ENVIRONMENT_VALUES`. (#28)
+
 ## 0.1.0-alpha.11 - 2026-09-12
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.11;
