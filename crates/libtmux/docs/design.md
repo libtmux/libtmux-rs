@@ -1957,6 +1957,16 @@ below rather than the clock. The clock now says it would be worth having --
 under three milliseconds on a marker, six times on a moderate flood, nothing
 once the flood is large enough -- and a default build still cannot reach it.
 
+`Pane::wait_until` runs the same loop with a predicate over the captured lines,
+for what a literal needle cannot say. It polls on a handle from
+`Server::over_control_mode` as well, where `control-mode` is on and the feature
+argument does not apply. The reason there is ownership: a connection's
+`%output` goes to whoever holds its events, and the handle holds only the
+sender, so waking on output would attach a second client for every wait -- the
+cost the `streamed` lane leaves out of its number. Over a connection a look is
+a line rather than a process, so the round trip a doorbell would save shrinks
+as well.
+
 What follows is why, and it is kept because the constraints it records are the
 ones the implementation had to meet.
 

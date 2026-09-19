@@ -470,6 +470,7 @@ function libtmux::Pane::unset_hook: async fn(&self, name: &str) -> Result<(), li
 function libtmux::Pane::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Pane::wait_for_quiet: async fn(&self, quiet_for: Duration, within: Duration) -> Result<libtmux::PaneWait, libtmux::Error>
 function libtmux::Pane::wait_for_text: async fn(&self, needle: impl AsRef<[u8]>, within: Duration) -> Result<libtmux::PaneWait, libtmux::Error>
+function libtmux::Pane::wait_until: async fn(&self, within: Duration, settled: impl FnMut(&[libtmux::TmuxText]) -> bool) -> Result<libtmux::PaneWait, libtmux::Error>
 function libtmux::Pane::width: fn(&self) -> u32
 function libtmux::Pane::window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Pane::window_id: const fn(&self) -> &libtmux::WindowId

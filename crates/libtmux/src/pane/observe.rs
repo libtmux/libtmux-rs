@@ -164,18 +164,7 @@ impl Pane {
             ));
         }
 
-        // tmux terminates every line, including the last, so a trailing empty
-        // element after the final newline is framing rather than content.
-        let stdout = result.stdout();
-        let stdout = stdout.strip_suffix(b"\n").unwrap_or(stdout);
-        if stdout.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        Ok(stdout
-            .split(|byte| *byte == b'\n')
-            .map(|line| TmuxText::from(line.to_vec()))
-            .collect())
+        Ok(split_lines(result.stdout()))
     }
 
     /// Capture with the per-line flags tmux records, marking shell prompts.
@@ -235,6 +224,8 @@ impl Pane {
     }
 
     /// Wait until this pane's output contains `needle`.
+    ///
+    /// [`Pane::wait_until`] takes a predicate over the lines instead.
     ///
     /// Polls rather than streams, so it needs no feature: a caller who
     /// dispatches a command needs to know when it finished, and
@@ -298,7 +289,7 @@ impl Pane {
         within: Duration,
     ) -> Result<PaneWait, Error> {
         let needle = needle.as_ref();
-        self.wait_until(within, |text, _| contains(text, needle))
+        self.look_until(within, |text, _| contains(text, needle))
             .await
     }
 
@@ -345,7 +336,7 @@ impl Pane {
     ) -> Result<PaneWait, Error> {
         let mut last_change = tokio::time::Instant::now();
         let mut previous: Option<Vec<u8>> = None;
-        self.wait_until(within, move |text, now| {
+        self.look_until(within, move |text, now| {
             if previous.as_deref() == Some(text) {
                 return now.duration_since(last_change) >= quiet_for;
             }
@@ -356,8 +347,77 @@ impl Pane {
         .await
     }
 
+    /// Wait until `settled` holds for this pane's captured lines.
+    ///
+    /// For what a literal [`Pane::wait_for_text`] cannot say: a line equal to
+    /// something rather than containing it, a count, a pattern, the shape of
+    /// the last line. `settled` sees what [`Pane::capture_with`] returns for
+    /// `CaptureOptions::history().join_wrapped()`: scrollback and screen, one
+    /// entry per line, a line tmux wrapped joined back into one, and the
+    /// screen's unused rows as empty lines at the end.
+    ///
+    /// Looks are the ones [`Pane::wait_for_text`] describes: 120ms apart,
+    /// the first before any sleep, so lines already there answer at once. A
+    /// pane whose process ends answers [`PaneWait::Dead`] rather than running
+    /// to the deadline. It polls even on a handle routed through
+    /// `Server::over_control_mode`, because that connection's `%output`
+    /// belongs to whoever reads its events, so waking on it would attach a
+    /// second client per wait to save under three milliseconds on a marker
+    /// (`benches/waits.rs`).
+    ///
+    /// A `query::Matcher` over one line fits as
+    /// `|lines| lines.iter().any(|line| matcher.matches(line))`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses a look, which
+    /// includes a pane that has been closed. Running out of time is
+    /// [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened. A look only reads, so a future dropped mid-look
+    /// leaves tmux as it was, and output produced in the meantime stays in the
+    /// scrollback, up to `history-limit`, for the next wait to find.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::PaneWait;
+    /// use std::time::Duration;
+    ///
+    /// # let guard = libtmux::test::TestServer::builder().start().await?;
+    /// # let session = guard.server().new_session("counting").await?;
+    /// # let pane = session.panes().await?.remove(0);
+    /// pane.send_line("for n in 1 2 3; do echo tick; done").await?;
+    ///
+    /// // The echoed command contains `tick`; only the output is a line equal to it.
+    /// let ticked = pane
+    ///     .wait_until(Duration::from_secs(10), |lines| {
+    ///         lines.iter().filter(|line| **line == "tick").count() == 3
+    ///     })
+    ///     .await?;
+    /// assert_eq!(ticked, PaneWait::Arrived);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_until(
+        &self,
+        within: Duration,
+        mut settled: impl FnMut(&[TmuxText]) -> bool,
+    ) -> Result<PaneWait, Error> {
+        self.look_until(within, |text, _| settled(&split_lines(text)))
+            .await
+    }
+
     /// The shared loop: look, decide, sleep, repeat until the deadline.
-    async fn wait_until(
+    async fn look_until(
         &self,
         within: Duration,
         mut settled: impl FnMut(&[u8], tokio::time::Instant) -> bool,
@@ -417,6 +477,22 @@ impl Pane {
             tokio::time::sleep(POLL_INTERVAL.min(within)).await;
         }
     }
+}
+
+/// Split `capture-pane` output into lines.
+///
+/// tmux terminates every line, including the last, so a trailing empty element
+/// after the final newline is framing rather than content.
+fn split_lines(stdout: &[u8]) -> Vec<TmuxText> {
+    let stdout = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+    if stdout.is_empty() {
+        return Vec::new();
+    }
+
+    stdout
+        .split(|byte| *byte == b'\n')
+        .map(|line| TmuxText::from(line.to_vec()))
+        .collect()
 }
 
 /// Split one look's output into the pane's dead flag and its capture.

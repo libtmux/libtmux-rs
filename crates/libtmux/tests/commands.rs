@@ -2153,6 +2153,128 @@ async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A predicate wait sees whole lines, answers when they satisfy it, and holds
+/// an unmet one to the deadline rather than past or short of it.
+#[tokio::test]
+async fn a_predicate_wait_arrives_or_runs_to_its_deadline() {
+    use libtmux::PaneWait;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("predicate").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    // Wider than the pane, so equality holds only if the wrap is joined; and
+    // the echoed command contains the text without being equal to it.
+    let wide = "P".repeat(300);
+    pane.send_line(format!("printf '%s\\n' {wide} {wide}"))
+        .await
+        .expect("keys are sent");
+    let outcome = pane
+        .wait_until(Duration::from_secs(10), |lines| {
+            lines.iter().filter(|line| **line == *wide).count() == 2
+        })
+        .await
+        .expect("waiting is not an error");
+    assert_eq!(outcome, PaneWait::Arrived, "both printed lines were seen");
+
+    let within = Duration::from_millis(400);
+    let started = std::time::Instant::now();
+    let outcome = tokio::time::timeout(
+        within * 10,
+        pane.wait_until(within, |lines| lines.iter().any(|line| *line == "absent")),
+    )
+    .await
+    .expect("an unmet wait ends near its deadline, not long after it")
+    .expect("a deadline is not an error");
+    let waited = started.elapsed();
+
+    assert_eq!(outcome, PaneWait::TimedOut);
+    assert!(
+        waited >= within,
+        "an unmet wait answers at its deadline, not before: {waited:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A predicate wait on a dead pane ends early, as `wait_for_text` does.
+#[tokio::test]
+async fn a_predicate_wait_ends_when_the_pane_dies() {
+    use libtmux::PaneWait;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("dying").await.expect("session");
+    server
+        .cmd(
+            Command::new("set-option")
+                .arg("-g")
+                .arg("remain-on-exit")
+                .arg("on"),
+        )
+        .await
+        .expect("panes remain after exit");
+    let window = session
+        .new_window(NewWindowOptions::new("shortlived").command("true"))
+        .await
+        .expect("window");
+    let pane = window.panes().await.expect("panes").remove(0);
+
+    let started = std::time::Instant::now();
+    let outcome = pane
+        .wait_until(Duration::from_secs(20), |_| false)
+        .await
+        .expect("waiting is not an error");
+    let waited = started.elapsed();
+
+    assert_eq!(outcome, PaneWait::Dead);
+    assert!(
+        waited < Duration::from_secs(15),
+        "a dead pane ends the wait early rather than at the deadline: {waited:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane reached over a control connection waits over that connection.
+///
+/// A look is a two-command chain, so this is the path where it has to travel
+/// as one control-mode line and come back as one block.
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn a_predicate_wait_runs_over_a_control_connection() {
+    use libtmux::PaneWait;
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard.server().new_session("routed").await.expect("session");
+    let (sender, events) = ControlMode::attach(guard.server(), session.id())
+        .await
+        .expect("a control connection")
+        .split();
+    let routed = guard
+        .server()
+        .over_control_mode(&sender)
+        .await
+        .expect("a routed handle");
+    let pane = routed.panes().await.expect("panes").remove(0);
+
+    pane.send_line("printf 'ROUTED-%s\\n' 1")
+        .await
+        .expect("keys are sent");
+    let outcome = pane
+        .wait_until(Duration::from_secs(10), |lines| {
+            lines.iter().any(|line| *line == "ROUTED-1")
+        })
+        .await
+        .expect("waiting is not an error");
+    assert_eq!(outcome, PaneWait::Arrived);
+
+    events.shutdown().await.expect("the connection closes");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A quiet shorter than the polling interval costs one interval anyway.
 ///
 /// `wait_for_quiet` compares one look with the last, so the shortest silence
