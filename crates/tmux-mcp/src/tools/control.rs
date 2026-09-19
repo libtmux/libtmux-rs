@@ -18,6 +18,13 @@ use super::pane_input::{MissingSource, PaneInputReach, active_run_error};
 /// Numbers temporary paste buffers so concurrent calls cannot share one.
 static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Keys that pass an active run's reservation when sent alone.
+///
+/// Compared exactly: any other spelling is ordinary input and waits for the
+/// run. The run frame survives both, so the command's completion is still
+/// proved and the reservation released.
+const INTERRUPT_KEYS: [&str; 2] = ["C-c", "C-\\"];
+
 fn literal_input(pane: &str, text: String) -> Command {
     Command::new("send-keys")
         .arg("-t")
@@ -118,26 +125,33 @@ impl TmuxTools {
         if text.is_none() && keys.is_empty() && !enter {
             return Err(bad_input("send_keys needs text, keys, or enter".to_owned()));
         }
+        let interrupt = text.is_none()
+            && !enter
+            && keys
+                .iter()
+                .all(|key| INTERRUPT_KEYS.contains(&key.as_str()));
 
-        let initial = self
-            .preflight_pane_input(
-                &pane,
-                PaneInputReach::Synchronized,
-                MissingSource::CallerInput,
-            )
-            .await?;
-        let reservation = initial
-            .reserve()
-            .ok_or_else(|| active_run_error(initial.target.id().as_ref()))?;
-        let plan = self
-            .preflight_reserved_pane_input(
-                &pane,
-                PaneInputReach::Synchronized,
-                MissingSource::CallerInput,
-                &reservation,
-            )
-            .await?;
-        if !initial.same_authority(&plan) || !plan.owns(&reservation) {
+        let reach = PaneInputReach::Synchronized;
+        let missing = MissingSource::CallerInput;
+        let (initial, reservation, plan) = if interrupt {
+            let initial = self.preflight_interrupt(&pane, reach, missing).await?;
+            let plan = self.preflight_interrupt(&pane, reach, missing).await?;
+            (initial, None, plan)
+        } else {
+            let initial = self.preflight_pane_input(&pane, reach, missing).await?;
+            let reservation = initial
+                .reserve()
+                .ok_or_else(|| active_run_error(initial.target.id().as_ref()))?;
+            let plan = self
+                .preflight_reserved_pane_input(&pane, reach, missing, &reservation)
+                .await?;
+            (initial, Some(reservation), plan)
+        };
+        if !initial.same_authority(&plan)
+            || reservation
+                .as_ref()
+                .is_some_and(|reservation| !plan.owns(reservation))
+        {
             return Err(bad_input(format!(
                 "pane {pane} changed its configured input authority before send dispatch"
             )));
@@ -325,8 +339,9 @@ impl TmuxTools {
                        dispatch. Before input, the configured synchronized-pane cohort is \
                        observed; a dead, \
                        input-disabled, mode-owned, terminal-attended, or inherited-caller member \
-                       refuses the whole call. Returned pane IDs describe configured membership, \
-                       not confirmed delivery. The \
+                       refuses the whole call, and so does an active run_shell_command, except \
+                       for keys C-c or C-\\ sent alone, which interrupt it. Returned pane IDs \
+                       describe configured membership, not confirmed delivery. The \
                        observation can race with tmux processing the input.",
         title = "Send Keys To Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {

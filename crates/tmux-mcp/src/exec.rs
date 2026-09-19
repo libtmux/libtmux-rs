@@ -50,9 +50,9 @@ pub enum RunOutcome {
     Completed,
     /// The time the caller allowed ran out.
     ///
-    /// This ends the waiting, not the command. The pane keeps working, so the
-    /// next thing typed at it lands in the running command rather than at a
-    /// prompt.
+    /// This ends the waiting, not the command. The pane stays reserved for it
+    /// until it ends, so other pane input is refused; `send_keys` with keys
+    /// `["C-c"]` alone interrupts it.
     Deadline,
     /// The pane stopped writing for good.
     PaneClosed,

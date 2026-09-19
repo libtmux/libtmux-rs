@@ -162,7 +162,9 @@ fn missing_source_error(pane: &str, missing: MissingSource) -> ToolError {
 pub(crate) fn active_run_error(pane: &str) -> ToolError {
     ErrorData::internal_error(
         format!(
-            "pane {pane} has an active run_shell_command; wait for its completion or pane closure before sending more input"
+            "pane {pane} has an active run_shell_command; wait for it to complete, or stop it \
+             with send_keys keys [\"C-c\"], which passes the reservation and releases it once \
+             the command ends"
         ),
         Some(serde_json::json!({
             "kind": "active_run",
@@ -351,19 +353,30 @@ fn pane_snapshot(panes: &[libtmux::Pane]) -> Result<PaneSnapshot, &'static str> 
     Ok(PaneSnapshot { handles, members })
 }
 
+/// How pane input treats a pane an active `run_shell_command` reserves.
+#[derive(Clone, Copy)]
+enum RunGate<'a> {
+    /// Refuse it, unless this input holds the reservation.
+    Respect(Option<&'a PaneReservation>),
+    /// Pass it: an interrupt is meant to reach the running command.
+    Interrupt,
+}
+
 fn validate_configured_members(
     configured: &[String],
     members: &BTreeMap<String, PaneMember>,
     attended: &BTreeSet<String>,
     generation: ServerGeneration,
     endpoint: &Path,
-    reservation: Option<&PaneReservation>,
+    gate: RunGate<'_>,
 ) -> Result<(), ToolError> {
     for id in configured {
         let candidate = members
             .get(id)
             .ok_or_else(|| pane_snapshot_error("a selected pane disappeared"))?;
-        if run_request::is_reserved(generation, endpoint, id, reservation) {
+        if let RunGate::Respect(reservation) = gate
+            && run_request::is_reserved(generation, endpoint, id, reservation)
+        {
             return Err(active_run_error(id));
         }
         if attended.contains(id) {
@@ -433,7 +446,7 @@ impl TmuxTools {
         reach: PaneInputReach,
         missing: MissingSource,
     ) -> Result<PaneInputPlan, ToolError> {
-        self.preflight_pane_input_with_run(pane, reach, missing, None)
+        self.preflight_pane_input_with_run(pane, reach, missing, RunGate::Respect(None))
             .await
     }
 
@@ -444,7 +457,25 @@ impl TmuxTools {
         missing: MissingSource,
         reservation: &PaneReservation,
     ) -> Result<PaneInputPlan, ToolError> {
-        self.preflight_pane_input_with_run(pane, reach, missing, Some(reservation))
+        self.preflight_pane_input_with_run(
+            pane,
+            reach,
+            missing,
+            RunGate::Respect(Some(reservation)),
+        )
+        .await
+    }
+
+    /// Check an interrupt, which passes an active run's reservation.
+    ///
+    /// Every other refusal still applies.
+    pub(crate) async fn preflight_interrupt(
+        &self,
+        pane: &str,
+        reach: PaneInputReach,
+        missing: MissingSource,
+    ) -> Result<PaneInputPlan, ToolError> {
+        self.preflight_pane_input_with_run(pane, reach, missing, RunGate::Interrupt)
             .await
     }
 
@@ -453,7 +484,7 @@ impl TmuxTools {
         pane: &str,
         reach: PaneInputReach,
         missing: MissingSource,
-        reservation: Option<&PaneReservation>,
+        reservation: RunGate<'_>,
     ) -> Result<PaneInputPlan, ToolError> {
         let generation = self
             .server

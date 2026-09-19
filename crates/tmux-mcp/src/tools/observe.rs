@@ -225,7 +225,9 @@ impl TmuxTools {
                        race with dispatch. The pane shell, tmux server, and configuration must be \
                        trusted. Reaching the deadline, cancelling, or an uncertain dispatch stops \
                        this request while its watcher keeps the reservation until completion is \
-                       proved.",
+                       proved. To stop the command, send_keys with keys [\"C-c\"] alone passes \
+                       the reservation, and the command reports completion when it ends; \
+                       respawn_pane with kill_first replaces a program that ignores C-c and C-\\.",
         title = "Run Command In Pane",
         meta = crate::capability_meta!(Execute, PaneCommand, [Change], [TmuxMetadata, TerminalContent], true, true, {
             "pane" => [TmuxLookup],

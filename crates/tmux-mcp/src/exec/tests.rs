@@ -198,8 +198,9 @@ case $- in
 case $- in
 *e*)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set -e; \eval '\set -x
+( \trap - INT QUIT; \set -e; \eval '\set -x
 printf body # trailing comment' )
 \set -- "$?"
 {separator}
@@ -208,8 +209,9 @@ fi
 ;;
 *)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set +e; \eval '\set -x
+( \trap - INT QUIT; \set +e; \eval '\set -x
 printf body # trailing comment' )
 \set -- "$?"
 {separator}
@@ -222,8 +224,9 @@ esac
 case $- in
 *e*)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set -e; \eval 'printf body # trailing comment' )
+( \trap - INT QUIT; \set -e; \eval 'printf body # trailing comment' )
 \set -- "$?"
 {separator}
 {closing}
@@ -231,8 +234,9 @@ fi
 ;;
 *)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set +e; \eval 'printf body # trailing comment' )
+( \trap - INT QUIT; \set +e; \eval 'printf body # trailing comment' )
 \set -- "$?"
 {separator}
 {closing}

@@ -1625,6 +1625,163 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A run that outlives its deadline keeps its pane reserved, and the recovery
+/// the README prescribes has to reach it: `C-c` alone passes the reservation,
+/// the frame survives the interrupt to report completion, and the pane is
+/// free for the next run. Before this the interrupt was refused, and when it
+/// did land the whole frame died without a marker, reserving the pane until
+/// it closed.
+#[tokio::test]
+async fn an_interrupt_ends_a_run_that_outlived_its_deadline() {
+    for (shell, flags) in [
+        ("/bin/sh", None),
+        ("/bin/bash", Some("--noprofile --norc")),
+        ("/bin/zsh", Some("-f")),
+    ] {
+        if !std::path::Path::new(shell).is_file() {
+            continue;
+        }
+        let shell_name = shell.rsplit('/').next().expect("shell basename");
+        let (guard, tools, pane) = typing_fixture(&format!("interrupt-{shell_name}")).await;
+        if let Some(flags) = flags {
+            pane_handle(guard.server(), &pane)
+                .await
+                .respawn(
+                    Some(&format!("exec {shell} {flags}")),
+                    libtmux::Respawn::Replacing,
+                )
+                .await
+                .expect("fixture pane changes shell");
+            libtmux::test::retry_until(Duration::from_secs(2), async || {
+                pane_handle(guard.server(), &pane)
+                    .await
+                    .current_command()
+                    .is_some_and(|command| command.as_bytes() == shell_name.as_bytes())
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{shell_name} becomes the foreground shell"));
+            prompt_ready(guard.server(), &pane).await;
+        }
+        let baseline = client_count(guard.server()).await;
+        // `sleep`, not `tmux wait-for`: a tmux command client ignores SIGINT.
+        let started = format!("mcp-interrupt-{shell_name}-started");
+        let request = tokio::spawn({
+            let tools = tools.clone();
+            let pane = pane.clone();
+            let command = format!("tmux wait-for -S {started}; sleep 30");
+            async move {
+                tools
+                    .run_command(
+                        args(serde_json::json!({
+                            "pane": pane,
+                            "command": command,
+                            "seconds": 1
+                        })),
+                        CancellationToken::new(),
+                        tmux_mcp::Reporter::none(),
+                    )
+                    .await
+                    .map_err(tmux_mcp::ToolError::into_error_data)
+            }
+        });
+        await_channel(guard.server(), &started).await;
+        let stopped = json(request.await.expect("request joins").expect("run answers"));
+        assert_eq!(stopped["outcome"], "deadline", "{shell_name}");
+        let refused = tools
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .err()
+            .expect("other input waits for the run")
+            .into_error_data();
+        assert_active_run(&refused, shell_name);
+
+        tools
+            .send_keys(args(serde_json::json!({"pane": pane, "keys": ["C-c"]})))
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{shell_name}: the interrupt was refused: {}",
+                    error.into_error_data()
+                )
+            });
+        assert_eq!(
+            clients_settle(guard.server(), baseline).await,
+            baseline,
+            "{shell_name}: the interrupted run never proved its completion"
+        );
+        libtmux::test::retry_until(Duration::from_secs(5), async || {
+            tools
+                .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+                .await
+                .is_ok()
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{shell_name}: the reservation outlived the run"));
+        prompt_ready(guard.server(), &pane).await;
+        assert_eq!(
+            run_view(&tools, &pane, "true").await["exit_status"],
+            0,
+            "{shell_name}"
+        );
+
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+}
+
+/// A command that ignores both interrupts still leaves an escape short of
+/// teardown: respawning the pane replaces the shell that ran the frame, and
+/// the new process is the proof the run is over.
+#[tokio::test]
+async fn respawning_releases_a_run_that_ignores_interrupts() {
+    let (guard, tools, pane) = typing_fixture("interrupt-ignored").await;
+    let started = "mcp-interrupt-ignored-started";
+    let request = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .run_command(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "command": format!("trap '' INT QUIT; tmux wait-for -S {started}; sleep 30"),
+                        "seconds": 1
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+                .map_err(tmux_mcp::ToolError::into_error_data)
+        }
+    });
+    await_channel(guard.server(), started).await;
+    let stopped = json(request.await.expect("request joins").expect("run answers"));
+    assert_eq!(stopped["outcome"], "deadline");
+    tools
+        .send_keys(args(serde_json::json!({"pane": pane, "keys": ["C-c"]})))
+        .await
+        .expect("an interrupt passes the reservation");
+
+    let respawned = call_tool(
+        tools.clone(),
+        "respawn_pane",
+        serde_json::json!({"pane": pane, "kill_first": true}),
+    )
+    .await;
+    assert_ne!(respawned.is_error, Some(true), "{respawned:?}");
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        tools
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .is_ok()
+    })
+    .await
+    .expect("respawning released the reservation");
+    prompt_ready(guard.server(), &pane).await;
+    assert_eq!(run_view(&tools, &pane, "true").await["exit_status"], 0);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A server that exited is an answer about its panes, not a fault.
 ///
 /// The settlement test above reaches this branch only when tmux declines to

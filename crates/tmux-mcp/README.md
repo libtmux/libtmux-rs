@@ -236,8 +236,9 @@ without Enter stays buffer-free. The tool repeats the target check immediately
 before target-only paste and deletes the buffer after refusal or delivery.
 Synchronized input never expands paste.
 `run_shell_command` requires a single configured recipient and reserves its
-resolved server and pane process-wide until completion or pane closure is
-proved. Every MCP pane-input route observes that reservation.
+resolved server and pane process-wide until completion, pane closure, or a
+respawn is proved. Every MCP pane-input route observes that reservation except
+`send_keys` with only `C-c` or `C-\` keys, which interrupts the command.
 `call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
 the complete JSON-RPC response line, including its request ID and newline, at
 1,000,000 bytes. Truncated payloads and omitted bytes are explicit, and every
@@ -372,7 +373,7 @@ now run in the client. Update existing client calls with this mapping:
 | `tmux://panes/{id}/content` | Use `capture_pane` or continue from a cursor with `capture_since`. |
 | `enter_copy_mode`, `exit_copy_mode` | Read with capture, snapshot, search, or cursor tools. The attached person owns pane modes. |
 | Prompt `run_and_wait` | Use one `run_shell_command`; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
-| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`, then observe with `capture_since` or `wait_for_text`. `keys: ["C-\\"]` is stronger; do not turn pane recovery into teardown. |
+| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`, then observe with `capture_since` or `wait_for_text`. `keys: ["C-\\"]` is stronger. Either, sent alone, reaches a command an active `run_shell_command` still reserves; `respawn_pane` with `kill_first: true` replaces a program that ignores both. Do not turn pane recovery into teardown. |
 | Prompt `diagnose_pane` | Start with `snapshot_pane`; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with `capture_since`, and use `search_panes` if the target is uncertain. |
 
 ### Asking first
@@ -517,7 +518,10 @@ relation, foreground shell, route, and active-run ownership at exactly two
 checkpoints: before watcher setup and immediately before its single dispatch.
 Invalid syntax completes with a nonzero shell status. The process-wide
 reservation blocks other MCP pane input until completion is proved, but does
-not lock tmux against an external client changing the pane.
+not lock tmux against an external client changing the pane. `C-c` or `C-\`
+sent alone passes the reservation, and the interrupted command still reports
+completion, which releases the pane; `respawn_pane` with `kill_first: true`
+releases it from a program that ignores both.
 
 **Waiting for something you did not start.** `wait_for_text` watches the
 pane's output stream for a pattern, with stop patterns for the failures you
