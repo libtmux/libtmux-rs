@@ -371,7 +371,7 @@ returns the global `window_client_mode.default_format`.
 | `pane_z` | pane | pane | all | 3.7 | u32 | required | pane-info |
 | `pane_zoomed_flag` | pane | pane | all | 3.7 | bool | required | pane-info |
 | `pid` | server | none | all | 3.2a | u32 | required | catalog-only |
-| `scroll_position` | copy-mode | copy-mode | none | 3.2a | i32 | required | catalog-only |
+| `scroll_position` | copy-mode | pane | all | 3.2a | i32 | absent | pane-info |
 | `scroll_region_lower` | pane | pane | all | 3.2a | u32 | required | pane-info |
 | `scroll_region_upper` | pane | pane | all | 3.2a | u32 | required | pane-info |
 | `search_match` | copy-mode | copy-mode | none | 3.2a | text | absent | catalog-only |

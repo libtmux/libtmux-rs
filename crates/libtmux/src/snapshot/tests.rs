@@ -594,7 +594,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
         flat,
         [pane_bottom, pane_left, pane_right, pane_top]
     );
-    assert_stored_fields!(pane, i32, evidence, [pane_x, pane_y]);
+    assert_stored_fields!(pane, i32, evidence, [pane_x, pane_y, scroll_position]);
     assert_stored_fields!(pane, u8, evidence, [pane_dead_status, pane_pb_progress]);
     assert_stored_fields!(
         pane,
@@ -847,6 +847,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
             pane_y,
             pane_z,
             pane_zoomed_flag,
+            scroll_position,
             scroll_region_lower,
             scroll_region_upper,
             synchronized_output_flag,
@@ -1004,7 +1005,15 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
         i32,
         b"-7",
         -7_i32,
-        [pane_bottom, pane_left, pane_right, pane_top, pane_x, pane_y]
+        [
+            pane_bottom,
+            pane_left,
+            pane_right,
+            pane_top,
+            pane_x,
+            pane_y,
+            scroll_position
+        ]
     );
     assert_integer_handles!(
         pane_fields,
@@ -2377,12 +2386,12 @@ fn snapshot_projection_value_shapes_accessors_and_traits_are_exact() {
 #[test]
 fn snapshot_projection_plans_have_exact_order_state_and_templates() {
     let cases = [
-        (b"tmux 3.2a\n".as_slice(), 57, 15, 0),
-        (b"tmux 3.3\n".as_slice(), 60, 12, 0),
-        (b"tmux 3.6\n".as_slice(), 61, 11, 0),
-        (b"tmux 3.7\n".as_slice(), 72, 0, 0),
-        (b"tmux master\n".as_slice(), 57, 0, 15),
-        (b"tmux next-3.8\n".as_slice(), 57, 0, 15),
+        (b"tmux 3.2a\n".as_slice(), 58, 15, 0),
+        (b"tmux 3.3\n".as_slice(), 61, 12, 0),
+        (b"tmux 3.6\n".as_slice(), 62, 11, 0),
+        (b"tmux 3.7\n".as_slice(), 73, 0, 0),
+        (b"tmux master\n".as_slice(), 58, 0, 15),
+        (b"tmux next-3.8\n".as_slice(), 58, 0, 15),
     ];
     let expected_window: Vec<_> = WINDOW_INFO_DESCRIPTORS
         .iter()
@@ -2426,7 +2435,7 @@ fn snapshot_projection_plans_have_exact_order_state_and_templates() {
             .collect();
         assert_eq!(pane_plan.profile(), ListProfile::Panes);
         assert_eq!(pane_plan.purpose(), PlanPurpose::Projection);
-        assert_eq!(pane_plan.planned().len(), 72);
+        assert_eq!(pane_plan.planned().len(), 73);
         assert_eq!(pane_plan.descriptors_for_test().len(), pane_selected);
         assert_descriptor_sequence(pane_plan.descriptors_for_test(), &expected_selected);
         assert_eq!(
@@ -3038,12 +3047,12 @@ fn snapshot_projection_pane_trailing_descriptor_requires_finish() {
         &row,
     ));
 
-    assert_eq!(trailing.planned().len(), 73);
-    assert_eq!(trailing.descriptors_for_test().len(), 73);
+    assert_eq!(trailing.planned().len(), 74);
+    assert_eq!(trailing.descriptors_for_test().len(), 74);
     assert_eq!(error.kind(), FormatCodecErrorKind::PlanRowMismatch);
     assert_eq!(error.phase(), FormatCodecPhase::Decode);
     assert_eq!(error.row(), Some(0));
-    assert_eq!(error.field(), Some(72));
+    assert_eq!(error.field(), Some(73));
     assert_eq!(error.field_name(), Some("client_mode_format"));
     assert_eq!(error.expected(), None);
     assert_eq!(error.offset(), None);

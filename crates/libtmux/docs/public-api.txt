@@ -2058,6 +2058,7 @@ struct_field libtmux::PaneFields::pane_x: libtmux::query::IntegerField<Target, i
 struct_field libtmux::PaneFields::pane_y: libtmux::query::IntegerField<Target, i32>
 struct_field libtmux::PaneFields::pane_z: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::PaneFields::pane_zoomed_flag: libtmux::query::BoolField<Target>
+struct_field libtmux::PaneFields::scroll_position: libtmux::query::IntegerField<Target, i32>
 struct_field libtmux::PaneFields::scroll_region_lower: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::PaneFields::scroll_region_upper: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::PaneFields::synchronized_output_flag: libtmux::query::BoolField<Target>

@@ -57,7 +57,7 @@ windows (31 fields)
   window_width
   window_zoomed_flag
 
-panes (72 fields)
+panes (73 fields)
   alternate_saved_x
   alternate_saved_y
   bracket_paste_flag
@@ -123,6 +123,7 @@ panes (72 fields)
   pane_y
   pane_z
   pane_zoomed_flag
+  scroll_position
   scroll_region_lower
   scroll_region_upper
   session_id

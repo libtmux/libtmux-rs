@@ -433,7 +433,7 @@ fn format_codec_normal_profiles_store_exact_identity_and_version_evidence() {
             SemanticOwner::Pane,
             RequiredContext::Pane,
             DecoderKind::PaneId,
-            57,
+            58,
         ),
         (
             ListProfile::Clients,
@@ -1316,18 +1316,18 @@ fn format_catalog_checked_parity_partitions_are_exact() {
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.profiles)),
-        std::collections::BTreeMap::from([("all", 135), ("clients", 27), ("none", 17)])
+        std::collections::BTreeMap::from([("all", 136), ("clients", 27), ("none", 16)])
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.empty)),
-        std::collections::BTreeMap::from([("absent", 31), ("available", 28), ("required", 120),])
+        std::collections::BTreeMap::from([("absent", 32), ("available", 28), ("required", 119),])
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.placement)),
         std::collections::BTreeMap::from([
-            ("catalog-only", 68),
+            ("catalog-only", 67),
             ("client-info", 22),
-            ("pane-info", 69),
+            ("pane-info", 70),
             ("session-info", 9),
             ("window-info", 11),
         ])
@@ -1356,11 +1356,11 @@ fn format_catalog_checked_parity_partitions_are_exact() {
             ("client", 27),
             ("command", 3),
             ("config", 1),
-            ("copy-mode", 10),
+            ("copy-mode", 9),
             ("format-type", 3),
             ("list-row", 1),
             ("none", 9),
-            ("pane", 70),
+            ("pane", 71),
             ("session", 22),
             ("window", 11),
             ("window-link", 19),
@@ -1482,13 +1482,13 @@ fn format_catalog_info_orders_and_supplements_are_exact() {
 #[test]
 fn format_catalog_profile_plans_are_baseline_first_and_exact_once() {
     let versions = [
-        (b"tmux 3.2a\n".as_slice(), [9, 11, 54, 20]),
-        (b"tmux 3.3\n".as_slice(), [9, 11, 57, 22]),
-        (b"tmux 3.6\n".as_slice(), [9, 11, 58, 22]),
-        (b"tmux 3.7\n".as_slice(), [9, 11, 69, 22]),
-        (b"tmux 3.8\n".as_slice(), [9, 11, 69, 22]),
-        (b"tmux master\n".as_slice(), [9, 11, 54, 20]),
-        (b"tmux next-3.8\n".as_slice(), [9, 11, 54, 20]),
+        (b"tmux 3.2a\n".as_slice(), [9, 11, 55, 20]),
+        (b"tmux 3.3\n".as_slice(), [9, 11, 58, 22]),
+        (b"tmux 3.6\n".as_slice(), [9, 11, 59, 22]),
+        (b"tmux 3.7\n".as_slice(), [9, 11, 70, 22]),
+        (b"tmux 3.8\n".as_slice(), [9, 11, 70, 22]),
+        (b"tmux master\n".as_slice(), [9, 11, 55, 20]),
+        (b"tmux next-3.8\n".as_slice(), [9, 11, 55, 20]),
     ];
     let profiles = [
         (ListProfile::Sessions, SESSION_INFO_DESCRIPTORS),
