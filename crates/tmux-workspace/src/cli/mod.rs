@@ -57,9 +57,14 @@ type Result<T> = std::result::Result<T, CliError>;
 /// - The `child_*` family (`child_spawn`, `child_failed`, `child_identity`,
 ///   `child_stream`, `child_wait`) names which step of running a child
 ///   process under `shell`/`edit` failed, not why tmux did.
-/// - `io`, `encoding`, `cancelled`, `log_file` are this tool's own plumbing:
-///   a file it could not read or write, JSON it could not decode, an
-///   interactive prompt declined, or a log sink that would not open.
+/// - `io`, `encoding`, `log_file` are this tool's own plumbing: a file it
+///   could not read or write, JSON it could not decode, or a log sink that
+///   would not open. A signal is `interrupted`, exit 130, the only spelling
+///   D4c allows for it; this crate's one other use of a `cancelled` code was
+///   the confirm prompt below declining, and D4c retires that use rather
+///   than keeping a second spelling. Declining is not represented as a code
+///   at all now: it is a normal outcome the caller reports as itself, exit
+///   0, the same as answering no to load's "already running, attach?".
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 struct CliError {
@@ -272,8 +277,14 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
         .map(std::path::PathBuf::from)
         .or_else(|| (!report.machine()).then(|| source.with_extension(format)));
     if let Some(path) = destination {
-        if !report.machine() && !options.get_flag("yes") {
-            confirm(&format!("Save {}?", path.display()))?;
+        // Declining is not cancellation: it is a normal outcome, exit 0,
+        // that changed nothing, the same as answering no to load's "already
+        // running, attach?" prompt.
+        if !report.machine()
+            && !options.get_flag("yes")
+            && !confirm(&format!("Save {}?", path.display()))?
+        {
+            return report.line("warning", "Not saved", &discovery::masked(&path));
         }
         document::save(&path, &value, format, options.get_flag("force"))?;
         if report.machine() {
@@ -288,7 +299,12 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
     }
 }
 
-fn confirm(question: &str) -> Result<()> {
+/// Asks a yes/no question and reports the answer. A terminal is required to
+/// ask at all; without one there is nothing to answer, so that is `usage`,
+/// not a cancellation. Declining itself is not an error the caller reports:
+/// it is a normal answer this returns as `Ok(false)` for the caller to act
+/// on.
+fn confirm(question: &str) -> Result<bool> {
     use std::io::IsTerminal;
     if !io::stdin().is_terminal() {
         return Err(CliError::usage(
@@ -299,11 +315,10 @@ fn confirm(question: &str) -> Result<()> {
     io::stderr().flush()?;
     let mut response = String::new();
     io::stdin().read_line(&mut response)?;
-    if matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        Ok(())
-    } else {
-        Err(CliError::new("cancelled", "operation declined"))
-    }
+    Ok(matches!(
+        response.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 fn diagnostic(machine: bool, error: &CliError) {
