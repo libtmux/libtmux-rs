@@ -1266,3 +1266,37 @@ fn os_string_from_bytes(bytes: &[u8]) -> OsString {
     use std::os::unix::ffi::OsStringExt as _;
     OsString::from_vec(bytes.to_vec())
 }
+
+/// A caller who wants a deadline shorter than the server's default does not
+/// need an API for it: dropping the command future signals the process group
+/// and reaps it, so `tokio::time::timeout` is a per-call deadline with the
+/// cleanup already attached.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_caller_can_bound_one_command_with_tokio_timeout() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+
+    // `run-shell` blocks in tmux for as long as the command does, and the
+    // server's own default timeout is 30 seconds, so reaching this deadline
+    // is the caller's bound rather than the crate's.
+    let started = Instant::now();
+    let outcome =
+        tokio::time::timeout(Duration::from_millis(400), server.run_shell("sleep 3")).await;
+
+    assert!(outcome.is_err(), "the caller's deadline ended the wait");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "it ended at the caller's deadline, not the server's: {:?}",
+        started.elapsed(),
+    );
+
+    // The server is still usable afterwards: a bounded call is not a broken
+    // connection.
+    server.sessions().await.expect("the server still answers");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

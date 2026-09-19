@@ -550,6 +550,35 @@ handshake and each command response use the same default timeout; a response's
 deadline starts before its line is written and ends with the complete block.
 Dropping both handles terminates and reaps the connection.
 
+A caller that wants a shorter deadline for one command does not need an API
+for it. Dropping the future is what signals the group, so wrapping the call is
+a per-call deadline with the cleanup already attached:
+
+```rust
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = libtmux::test::TestServer::new().await?;
+    let server = guard.server();
+
+    // Ends at 400ms rather than the server's 30-second default, and the
+    // command's process group is signalled and reaped on the way out.
+    let bounded = tokio::time::timeout(
+        Duration::from_millis(400),
+        server.run_shell("sleep 3"),
+    )
+    .await;
+    assert!(bounded.is_err());
+
+    // The server is still usable: a bounded call is not a broken connection.
+    server.sessions().await?;
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
+
 `Server::shutdown()` is shared by all clones: it cancels active subprocess
 work and persistent control connections, rejects later commands and attaches,
 and is safe to call concurrently or repeatedly. Await it, or await your
