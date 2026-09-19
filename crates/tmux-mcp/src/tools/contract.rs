@@ -889,9 +889,11 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Set the scrollback history limit for a session or its global default.",
+        description = "Set the scrollback history limit for a session or its global default. \
+                       From tmux 3.7 existing panes take it too, and lowering it discards \
+                       their scrollback past the new limit.",
         title = "Set History Limit",
-        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+        meta = crate::capability_meta!(Manage, None, [Change, Delete], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup], "limit" => [TmuxState]
         }; idempotent)
     )]

@@ -680,6 +680,7 @@ mod tests {
         let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
             .expect("complete manifest");
         let mut distinct = BTreeSet::new();
+        let mut destructive_tools = BTreeSet::new();
 
         for tool in resolved.router.list_all() {
             let row = &resolved
@@ -706,6 +707,9 @@ mod tests {
 
             assert_eq!(read_only, !changes_tmux, "{} readOnlyHint", tool.name);
             assert_eq!(destructive, can_destroy, "{} destructiveHint", tool.name);
+            if destructive {
+                destructive_tools.insert(tool.name.to_string());
+            }
             distinct.insert((
                 read_only,
                 destructive,
@@ -714,6 +718,9 @@ mod tests {
             ));
         }
         assert!(distinct.len() > 3, "hints barely vary: {distinct:?}");
+        // tmux 3.7 applies a lowered history limit to existing panes,
+        // discarding their scrollback.
+        assert!(destructive_tools.contains("set_history_limit"));
     }
 
     #[test]
