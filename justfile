@@ -369,6 +369,11 @@ bench *args:
 bench-waits *args:
     cargo bench --features test-support,control-mode --bench waits -- {{ args }}
 
+# Compare an installed workspace CLI binary against real tmux; pass --binary
+[group: 'bench']
+bench-cli *args:
+    python3 scripts/bench-workspace-cli.py {{ args }}
+
 # Build the crates that get published, and verify what they contain
 #
 # --allow-dirty so this stays runnable mid-change; `cargo publish` does its
