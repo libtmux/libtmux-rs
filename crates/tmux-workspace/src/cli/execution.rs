@@ -29,9 +29,12 @@ struct LoadContext {
     python: Option<std::ffi::OsString>,
     dimensions: Option<(u32, u32)>,
     borrowed: Option<AppendTarget>,
-    /// Whether to ask before building: a terminal, no `--yes`, and a load
-    /// that would attach.
-    interactive: bool,
+    /// The answer to the one question an interactive load asks before it
+    /// builds anything: a terminal, no `--yes`, and a load that would attach.
+    /// The question names the last input, the session the load would end
+    /// on, and the answer governs every input the way the matching flag
+    /// would; only a declined attach is about that one input alone.
+    disposition: Option<Disposition>,
     /// Whether the load is inside tmux on the server it targets. `None` when
     /// `-d` or `--append` mean it never attaches.
     inside_tmux: Option<bool>,
@@ -278,6 +281,7 @@ pub(super) async fn load(
         let outcome = load_one(
             &context,
             workspace,
+            index + 1 == workspaces.len(),
             args,
             report,
             effects,
@@ -329,8 +333,7 @@ pub(super) async fn load(
     })
 }
 
-/// What an interactive prompt decided for one workspace, beyond the load's
-/// own flags.
+/// What a load's interactive prompt decided, beyond the load's own flags.
 enum Disposition {
     /// Build (or reuse) and attach at the end, same as the unprompted default.
     Switch,
@@ -343,9 +346,9 @@ enum Disposition {
 }
 
 /// Asks whether to switch, load detached or append (a session that does not
-/// yet exist, inside tmux), or attach (one that already does). Only reached
-/// when stdin is a terminal, `--yes` was not given, and the load is neither
-/// detached nor appending.
+/// yet exist, inside tmux), or attach (one that already does), about a load's
+/// last input. Only reached when stdin is a terminal, `--yes` was not given,
+/// and the load is neither detached nor appending.
 async fn prompt_disposition(
     server: &Server,
     workspace: &normalize::Workspace,
@@ -438,6 +441,14 @@ async fn load_setup(
         None
     };
     let attach = !flag(args, "detached") && !flag(args, "append");
+    let interactive =
+        !report.machine() && !flag(args, "yes") && attach && std::io::stdin().is_terminal();
+    let disposition = match workspaces.last() {
+        Some((_, last)) if interactive => {
+            Some(prompt_disposition(&server, last, inside_tmux.unwrap_or(false)).await?)
+        }
+        _ => None,
+    };
     Ok((
         workspaces,
         LoadContext {
@@ -445,10 +456,7 @@ async fn load_setup(
             python,
             dimensions,
             borrowed,
-            interactive: !report.machine()
-                && !flag(args, "yes")
-                && attach
-                && std::io::stdin().is_terminal(),
+            disposition,
             inside_tmux,
             attach,
         },
@@ -487,8 +495,8 @@ fn warn_about_inputs(
     Ok(())
 }
 
-/// Builds (or reuses, or appends) one workspace input, after asking whatever
-/// interactive prompt applies. Returns the session, whether the load should
+/// Builds (or reuses, or appends) one workspace input, as the load's flags
+/// and any answered prompt direct. Returns the session, whether the load should
 /// attach to it at the end, and whether this input was appended rather than
 /// created or reused.
 ///
@@ -498,25 +506,16 @@ fn warn_about_inputs(
 async fn load_one(
     context: &LoadContext,
     workspace: &normalize::Workspace,
+    asked_about: bool,
     args: &ArgMatches,
     report: &mut Reporter,
     effects: &mut Effects,
     results: &mut Vec<Value>,
 ) -> Result<(Session, bool, bool)> {
     let inherited = context.borrowed.as_ref();
-    let disposition = if context.interactive {
-        Some(
-            prompt_disposition(
-                &context.server,
-                workspace,
-                context.inside_tmux.unwrap_or(false),
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let (borrowed_for_input, attach_this_input) = match &disposition {
+    let disposition = context.disposition.as_ref();
+    let declined = asked_about && matches!(disposition, Some(Disposition::Decline));
+    let (borrowed_for_input, attach_this_input) = match disposition {
         None => (inherited, context.attach),
         Some(Disposition::Switch) => (inherited, true),
         Some(Disposition::Detached | Disposition::Decline) => (inherited, false),
@@ -548,7 +547,7 @@ async fn load_one(
     // is `session_mismatch`, not `session_not_found`: it is right there, so a
     // consumer branching on "go find it" would look forever. Nothing was
     // built or changed, so this reports `error`, never `partial`.
-    if reused && !workspace.bridge && !matches!(disposition, Some(Disposition::Decline)) {
+    if reused && !workspace.bridge && !declined {
         let missing = missing_windows(&session, workspace).await?;
         if let Some(first) = missing.first() {
             return Err(CliError::new(

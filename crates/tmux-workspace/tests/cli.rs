@@ -797,8 +797,9 @@ async fn new_session_prompt_answered_detached_builds_without_appending() {
     guard.shutdown().await.unwrap();
 }
 
-/// New session, inside tmux, answered "a": appends into the current session
-/// rather than building one named by the workspace.
+/// New sessions, inside tmux, answered "a": appends every input into the
+/// current session, as `--append` would, rather than building sessions named
+/// by the workspaces.
 #[tokio::test]
 async fn new_session_prompt_answered_append_appends_the_current_session() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
@@ -809,6 +810,11 @@ async fn new_session_prompt_answered_append_appends_the_current_session() {
         serde_json::json!({"session_name":"prompted-new","windows":[{"window_name":"pnew","panes":["blank"]}]}).to_string(),
     )
     .unwrap();
+    std::fs::write(
+        directory.path().join("earlier.json"),
+        serde_json::json!({"session_name":"prompted-earlier","windows":[{"window_name":"pearlier","panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
     let driver = PromptDriver {
         guard: &guard,
         keeper: &keeper,
@@ -816,25 +822,26 @@ async fn new_session_prompt_answered_append_appends_the_current_session() {
         socket: guard.socket_path().to_str().unwrap(),
         directory: directory.path(),
     };
-    let pane = driver.ask("new.json", NEW_SESSION_PROMPT, 'a').await;
-    assert!(
-        guard
-            .server()
-            .session("prompted-new")
-            .await
-            .unwrap()
-            .is_none(),
-        "answering a still built the workspace's own session"
-    );
-    assert!(
-        keeper
-            .windows()
-            .await
-            .unwrap()
-            .iter()
-            .any(|window| window.name().to_string_lossy() == "pnew"),
-        "answering a did not append the workspace's window"
-    );
+    let pane = driver
+        .ask("earlier.json new.json", NEW_SESSION_PROMPT, 'a')
+        .await;
+    let names: Vec<_> = keeper
+        .windows()
+        .await
+        .unwrap()
+        .iter()
+        .map(|window| window.name().to_string_lossy().into_owned())
+        .collect();
+    for (session, window) in [("prompted-earlier", "pearlier"), ("prompted-new", "pnew")] {
+        assert!(
+            guard.server().session(session).await.unwrap().is_none(),
+            "answering a still built {session}"
+        );
+        assert!(
+            names.iter().any(|name| name == window),
+            "answering a did not append {window}: {names:?}"
+        );
+    }
     pane.window().await.unwrap().unwrap().kill().await.unwrap();
     guard.shutdown().await.unwrap();
 }
@@ -873,6 +880,60 @@ async fn exists_prompt_answered_no_changes_nothing() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("RC=0"), "{text}");
+    pane.window().await.unwrap().unwrap().kill().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
+/// Two inputs, inside tmux: only the last is asked about. The first builds
+/// detached without a question of its own, and declining the second leaves
+/// its session as it was.
+#[tokio::test]
+async fn only_the_last_input_is_asked_about() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("keeper").await.unwrap();
+    let existing = guard.session("already-there").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("new.json"),
+        serde_json::json!({"session_name":"prompted-new","windows":[{"window_name":"pnew","panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("exists.json"),
+        serde_json::json!({"session_name":"already-there","windows":[{"window_name":"unwanted","panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let driver = PromptDriver {
+        guard: &guard,
+        keeper: &keeper,
+        binary: env!("CARGO_BIN_EXE_tmux-workspace"),
+        socket: guard.socket_path().to_str().unwrap(),
+        directory: directory.path(),
+    };
+    let pane = driver
+        .ask("new.json exists.json", "already running. Attach?", 'n')
+        .await;
+    let text = pane.capture().await.unwrap();
+    let text = text
+        .iter()
+        .map(|line| line.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.contains(NEW_SESSION_PROMPT), "{text}");
+    // Asked before any progress frame is drawn, so no redraw erases the
+    // question or the answer to it.
+    assert!(text.contains("already running. Attach? [Y/n] n"), "{text}");
+    assert!(text.contains("RC=0"), "{text}");
+    assert!(
+        guard
+            .server()
+            .session("prompted-new")
+            .await
+            .unwrap()
+            .is_some(),
+        "the first input was not built"
+    );
+    assert_eq!(existing.windows().await.unwrap().len(), 1);
     pane.window().await.unwrap().unwrap().kill().await.unwrap();
     guard.shutdown().await.unwrap();
 }
