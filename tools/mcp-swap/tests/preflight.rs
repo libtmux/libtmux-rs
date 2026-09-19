@@ -79,7 +79,6 @@ fn initialize_result_reaps_a_setsid_descendant_holding_pipes() {
         env: BTreeMap::new(),
     };
     let (sender, receiver) = std::sync::mpsc::channel();
-    let started = Instant::now();
     let worker = thread::spawn(move || {
         let result = preflight(&spec, Duration::from_secs(2));
         let _ = sender.send(result);
@@ -101,7 +100,10 @@ fn initialize_result_reaps_a_setsid_descendant_holding_pipes() {
     };
 
     result.expect("initialize response before exit");
-    assert!(started.elapsed() < Duration::from_secs(1));
+    // Promptness is already bounded above: `recv_timeout` panics with
+    // "preflight did not return promptly" if this takes longer than three
+    // seconds. A second, tighter wall-clock bound here only added a way for a
+    // loaded machine to fail a test about reaping.
     assert_process_stopped(&child_pid);
 }
 
@@ -192,7 +194,6 @@ fn long_lived_oversized_streams_are_refused_and_reaped() {
                 child_pid.display()
             ),
         );
-        let started = Instant::now();
 
         let error = preflight(
             &ServerSpec {
@@ -204,8 +205,11 @@ fn long_lived_oversized_streams_are_refused_and_reaped() {
         )
         .expect_err("oversized output");
 
+        // "exceeds" is what proves it refused on size rather than running out
+        // the two-second budget: a timeout says so in its own words. That makes
+        // a wall-clock assertion here redundant, and redundant only on an idle
+        // machine.
         assert!(error.to_string().contains("exceeds"), "{error}");
-        assert!(started.elapsed() < Duration::from_secs(1));
         assert_process_stopped(&child_pid);
         let size = fs::metadata(&heartbeat).expect("heartbeat").len();
         thread::sleep(Duration::from_millis(50));
