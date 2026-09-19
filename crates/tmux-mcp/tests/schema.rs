@@ -44,7 +44,6 @@ const MANAGE: &[&str] = &[
     "wait_for_channel",
     "signal_channel",
     "set_mouse_enabled",
-    "set_history_limit",
 ];
 const EXECUTE: &[&str] = &[
     "create_session",
@@ -59,6 +58,7 @@ const EXECUTE: &[&str] = &[
 ];
 const TEARDOWN: &[&str] = &[
     "clear_pane_scrollback",
+    "set_history_limit",
     "kill_pane",
     "kill_window",
     "kill_session",

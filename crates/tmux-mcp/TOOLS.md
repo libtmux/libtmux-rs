@@ -531,9 +531,9 @@ Send an ordered batch of input operations to panes. Each executed row repeats se
 
 ## `set_history_limit`
 
-Set the scrollback history limit for a session or its global default. From tmux 3.7 existing panes take it too, and lowering it discards their scrollback past the new limit. Change tmux state; no client-supplied executable input.
+Set the scrollback history limit for a session or its global default. From tmux 3.7 existing panes take it too, and lowering it discards their scrollback past the new limit. Delete tmux state; accepts no command payload.
 
-- Toolset: `manage`
+- Toolset: `teardown`
 - Process reach: `none`
 - Tmux effects: `["change","delete"]`
 - Output classes: `["tmux-metadata"]`

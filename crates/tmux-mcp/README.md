@@ -216,9 +216,9 @@ directly from that registry.
 | Toolset | Intent | Tools |
 |---|---|---|
 | `inspect` (18) | Read bounded tmux state and terminal output | `call_read_tools_batch`, `capture_pane`, `capture_since`, `find_pane_by_position`, `get_pane_info`, `get_server_info`, `get_session_info`, `get_tmux_variables`, `get_window_info`, `list_panes`, `list_sessions`, `list_windows`, `search_panes`, `show_environment`, `show_hooks`, `show_option`, `snapshot_pane`, `wait_for_text` |
-| `manage` (14) | Change tmux objects without starting a process | `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_history_limit`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
+| `manage` (13) | Change tmux objects without starting a process | `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
 | `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
-| `teardown` (4) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window` |
+| `teardown` (5) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window`, `set_history_limit` |
 
 `set_synchronize_panes` changes the window default; individual pane overrides
 determine the effective configured recipient cohort. `send_keys` observes that
@@ -394,16 +394,16 @@ rename, are `idempotentHint: true`. Starting or driving a process, or
 returning terminal text, is `openWorldHint: true`. `wait_for_text` is not
 read-only: it attaches a client while it waits. `set_history_limit` is
 destructive: from tmux 3.7 a lower limit discards existing panes' scrollback
-past it.
+past it, so it is in `teardown` beside `clear_pane_scrollback`.
 
 When launched from tmux, the process inherits a pane ID, session number, server
 PID, and socket. Pane listings mark that pane `caller: "self"` only when the
-socket matches the selected server. Pane-input and teardown tools additionally
-resolve the complete identity against a fresh selected-daemon snapshot before
-acting. A complete identity on another physical socket is foreign; malformed or
-inconsistent context on the selected socket fails closed. The comparison weighs
-the socket as well as the pane ID because `%1` names a different pane on every
-tmux server.
+socket matches the selected server. Pane-input tools and the three kill tools
+additionally resolve the complete identity against a fresh selected-daemon
+snapshot before acting. A complete identity on another physical socket is
+foreign; malformed or inconsistent context on the selected socket fails closed.
+The comparison weighs the socket as well as the pane ID because `%1` names a
+different pane on every tmux server.
 
 Pane input also refuses a configured pane visible to a non-control tmux client.
 In an unzoomed window every visible pane is attended; in a zoomed window only

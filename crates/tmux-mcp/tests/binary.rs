@@ -219,7 +219,7 @@ fn explicit_existing_socket_defaults_without_teardown() {
         &json!({"name": "list_sessions", "arguments": {}}),
     );
 
-    assert_eq!(names.len(), 41);
+    assert_eq!(names.len(), 40);
     assert!(!names.iter().any(|name| name == "kill_session"));
     assert_eq!(
         listed["result"]["structuredContent"]["sessions"][0]["name"],
@@ -487,7 +487,7 @@ fn only_the_process_whose_config_marker_loaded_claims_minimal_provenance() {
         follower_report["socket"]["configurationProvenance"],
         "unknown"
     );
-    assert_eq!(follower_report["toolCount"], 41);
+    assert_eq!(follower_report["toolCount"], 40);
 }
 
 /// Two clients on the default socket share one daemon, so the one that
