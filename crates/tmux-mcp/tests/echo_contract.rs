@@ -492,3 +492,157 @@ async fn a_resize_between_submit_and_output_does_not_defeat_the_mask() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// S2 via `paste_text`: a line this server pastes and submits with Enter is
+/// not the match; only the command's own output is.
+#[tokio::test]
+async fn s2_pasted_text_with_enter_is_not_the_match() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = bare_tools(guard.server());
+    tools
+        .create_session(args(serde_json::json!({"name": "s2-paste"})))
+        .await
+        .expect("session starts");
+    let pane = json(tools.list_panes().await.expect("panes"))["panes"][0]["id"]
+        .as_str()
+        .expect("pane id")
+        .to_owned();
+    prompt_ready(guard.server(), &pane).await;
+
+    tools
+        .paste_text(args(serde_json::json!({
+            "pane": pane,
+            "text": "sleep 1; echo MARKER",
+            "enter": true
+        })))
+        .await
+        .expect("the command is pasted and this call returns only once it is");
+
+    let started = Instant::now();
+    let view = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "patterns": ["MARKER"],
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait completes"),
+    );
+
+    assert_eq!(
+        view["outcome"], "matched",
+        "must not time out over a masked echo either: {view}"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(800),
+        "matched after only {:?}, too fast to be sleep 1's real output -- the paste's own echo, \
+         not the output, was matched",
+        started.elapsed()
+    );
+    assert!(
+        view["text"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line.trim() == "MARKER"),
+        "the bare output line must be in the reported text: {view}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// S2 via `run_shell_command`: the short line it types to load and run its
+/// staged command frame must not read as a later wait's match; the
+/// command's real output still does.
+///
+/// The window is widened before dispatch: the staged-frame line's length
+/// depends on its random nonce and can approach the default 80-column
+/// width, and a wrapped line is past what the whole-line mask can find --
+/// the gap `wait_for_text` documents.
+#[tokio::test]
+async fn s2_run_shell_commands_dispatch_line_is_not_the_match() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = bare_tools(guard.server());
+    tools
+        .create_session(args(serde_json::json!({"name": "s2-run"})))
+        .await
+        .expect("session starts");
+    let pane = json(tools.list_panes().await.expect("panes"))["panes"][0]["id"]
+        .as_str()
+        .expect("pane id")
+        .to_owned();
+    prompt_ready(guard.server(), &pane).await;
+    guard
+        .server()
+        .cmd(
+            libtmux::Command::new("resize-window")
+                .arg("-t")
+                .arg(&pane)
+                .arg("-x")
+                .arg("120")
+                .arg("-y")
+                .arg("24"),
+        )
+        .await
+        .expect("the window widens past the staged frame line's length");
+
+    let finished = json(
+        tools
+            .run_command(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "command": "printf done",
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("the command runs"),
+    );
+    assert_eq!(finished["outcome"], "completed", "{finished}");
+
+    // "eval" names no output of "printf done"; its only appearance on the
+    // pane is the line run_shell_command itself typed to load and run the
+    // staged frame. A wait for it must not read that echo as a match.
+    let echo = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({"pane": pane, "patterns": ["eval"], "seconds": 1})),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait completes"),
+    );
+    assert!(
+        !matches!(
+            echo["outcome"].as_str(),
+            Some("matched" | "present_at_entry")
+        ),
+        "run_shell_command's own dispatch line must not read as a match: {echo}"
+    );
+
+    // The command's real output is unaffected by masking the dispatch line.
+    let output = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({"pane": pane, "patterns": ["done"], "seconds": 1})),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait completes"),
+    );
+    assert_eq!(
+        output["outcome"], "present_at_entry",
+        "the command's real output must still be found: {output}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

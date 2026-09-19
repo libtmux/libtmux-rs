@@ -614,7 +614,9 @@ impl TmuxTools {
                        synchronized input is enabled. A dead, input-disabled, mode-owned, \
                        terminal-attended, or inherited-caller target is refused before setup \
                        and again immediately before paste. The private buffer is deleted after \
-                       setup, refusal, and paste outcomes; observations can still race with tmux.",
+                       setup, refusal, and paste outcomes; observations can still race with tmux. \
+                       A submitted paste is remembered briefly so wait_for_text can discount its \
+                       own echo.",
         title = "Paste Text Into Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],
@@ -640,6 +642,7 @@ impl TmuxTools {
                 bytes,
             }));
         }
+        let echoed_text = text.clone();
         let mut payload = text;
         if enter {
             payload.push('\n');
@@ -667,7 +670,7 @@ impl TmuxTools {
                 delete_private_paste_buffer(&self.server, &buffer).await,
             ));
         };
-        let target = match self
+        let plan = match self
             .preflight_reserved_pane_input(
                 &pane,
                 PaneInputReach::TargetOnly,
@@ -676,7 +679,7 @@ impl TmuxTools {
             )
             .await
         {
-            Ok(plan) if initial.same_authority(&plan) && plan.owns(&reservation) => plan.target,
+            Ok(plan) if initial.same_authority(&plan) && plan.owns(&reservation) => plan,
             Ok(_) => {
                 return Err(cleanup_after_refusal(
                     bad_input(format!(
@@ -692,12 +695,35 @@ impl TmuxTools {
                 ));
             }
         };
-        let pasted = target.paste_buffer(Some(&buffer)).await;
+
+        // Recorded before dispatch, the same as send_keys: a paste's echo
+        // can reach a waiting `wait_for_text` client before this call even
+        // returns.
+        let target_id = plan.target.id().to_string();
+        let mut tracked_keys = Vec::new();
+        if enter {
+            tracked_keys.push("Enter".to_owned());
+        }
+        let echo_text = (!echoed_text.is_empty()).then_some(echoed_text.as_str());
+        let echo_update = self.echoes.apply(
+            plan.generation,
+            &plan.endpoint,
+            std::slice::from_ref(&target_id),
+            echo_text,
+            &tracked_keys,
+        );
+
+        let pasted = plan.target.paste_buffer(Some(&buffer)).await;
+        if pasted.is_ok() {
+            self.echoes.commit(echo_update);
+        } else {
+            self.echoes.abandon(echo_update);
+        }
         let deleted = delete_private_paste_buffer(&self.server, &buffer).await;
         paste_outcome(pasted, deleted).map_err(|error| tmux_error(&error))?;
 
         Ok(Json(Pasted {
-            pane: target.id().to_string(),
+            pane: plan.target.id().to_string(),
             bytes,
         }))
     }

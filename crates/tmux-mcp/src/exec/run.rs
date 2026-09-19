@@ -340,6 +340,15 @@ async fn remove_frame(path: &Path) {
 }
 
 impl PreparedRun {
+    /// The exact line this run's dispatch will type into the pane.
+    ///
+    /// Not the requested command: the command runs from a staged frame file
+    /// this loads and evaluates, so this is the short loader line the pane's
+    /// terminal actually echoes.
+    pub(crate) fn typed_line(&self) -> &OsStr {
+        &self.staged
+    }
+
     /// Send the prepared payload and Enter while retaining its watcher.
     pub(crate) async fn dispatch(self) -> RunDispatch {
         let Self {

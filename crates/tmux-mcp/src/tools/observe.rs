@@ -329,6 +329,7 @@ impl TmuxTools {
                     endpoint: &route.endpoint,
                     shell: foreground.as_bytes(),
                     lease,
+                    echoes: self.echoes.as_ref(),
                 },
                 final_check,
             ),
@@ -348,12 +349,14 @@ impl TmuxTools {
                        run_shell_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
                        not author, such as a server logging that it is ready. A line this server \
-                       itself typed and submitted with send_keys is discounted from a match for \
-                       a short time afterward, so waiting for text you just sent does not match \
+                       itself types and submits -- with send_keys, paste_text, or \
+                       run_shell_command's own dispatch -- is discounted from a match for a \
+                       short time afterward, so waiting for text you just sent does not match \
                        its own echo; output that happens to repeat the same words still does. A \
-                       pattern still on the row being typed into, not yet submitted, reports \
-                       outcome pending instead of matched, and one already on a completed row \
-                       before this call attached reports present_at_entry. \
+                       submitted line that wrapped across terminal rows when it was typed is not \
+                       discounted. A pattern still on the row being typed into, not yet \
+                       submitted, reports outcome pending instead of matched, and one already on \
+                       a completed row before this call attached reports present_at_entry. \
                        Waiting owns an observer client until the wait ends. Each list accepts \
                        at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time \
                        regex engine.",
@@ -782,6 +785,7 @@ mod tests {
                     endpoint: &socket,
                     shell: foreground.as_bytes(),
                     lease,
+                    echoes: tools.echoes.as_ref(),
                 },
                 final_check,
             )

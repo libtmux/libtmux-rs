@@ -132,7 +132,7 @@ impl PaneRecord {
     }
 }
 
-/// What one `send_keys` dispatch does to a pane's still-being-typed line.
+/// What one pane-input dispatch does to a pane's still-being-typed line.
 struct DispatchOutcome {
     /// The line this dispatch submitted, when one of its keys did.
     submitted: Option<String>,
@@ -199,8 +199,9 @@ fn apply_dispatch(pending: &mut String, text: Option<&str>, keys: &[String]) -> 
 ///
 /// Dropping this without calling either leaks that dispatch's share of
 /// `in_flight`, which would leave the pane's line permanently excluded from
-/// [`PaneEchoes::has_pending`]'s relaxation; every path in `send_keys_one`
-/// that can end a dispatch must reach one of the two.
+/// [`PaneEchoes::has_pending`]'s relaxation; every path in `send_keys_one`,
+/// `paste_text`, and `run_request::run` that can end a dispatch must reach
+/// one of the two.
 pub(crate) struct EchoUpdate {
     /// The pane's line as it will read once this dispatch is confirmed.
     pending: Vec<(EchoKey, String)>,
