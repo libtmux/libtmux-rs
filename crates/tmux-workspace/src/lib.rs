@@ -6,6 +6,13 @@
 //! way a real consumer would. It reads the parts of a tmuxp workspace file a
 //! builder needs and reproduces them with tmux.
 //!
+//! The `tmux-workspace` command in this same package does not use any of
+//! this: it has its own parser and its own builder, and reads a larger
+//! document language with different defaults. A file that loads through both
+//! does not necessarily mean the same thing through both. The README's "The
+//! library and the `tmux-workspace` command read different documents" names
+//! every place they disagree.
+//!
 //! ```no_run
 //! use tmux_workspace::{Workspace, WorkspaceBuilder};
 //!
@@ -191,6 +198,11 @@ impl<'server> WorkspaceBuilder<'server> {
                 }
                 source = plan.add(split);
                 panes.push(source);
+                // Halving each pane in turn runs out of rows before the
+                // fifth at a default terminal size; rebalancing after every
+                // split reclaims them. The window's own layout, below, still
+                // has the last say.
+                plan.add(SelectLayout::new(window, "tiled"));
             }
 
             // Layout is applied once the pane count is final, or tmux would

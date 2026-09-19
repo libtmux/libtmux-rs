@@ -1,3 +1,9 @@
+//! The `tmux-workspace` command: a drop-in for tmuxp.
+//!
+//! This reads a larger document language than the library beside it, with
+//! different defaults, and shares no parser or builder with it. The README
+//! names every place the two disagree on the same file.
+
 mod args;
 mod bridge;
 mod discovery;

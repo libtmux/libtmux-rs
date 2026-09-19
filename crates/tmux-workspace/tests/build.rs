@@ -1657,3 +1657,37 @@ async fn freeze_recognizes_a_default_shell_whose_running_name_differs() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// Halving each pane in turn runs out of rows before the fifth at a default
+/// terminal size. The builder rebalances between splits so a window the file
+/// asks for is a window the builder can make.
+#[tokio::test]
+async fn a_window_of_six_panes_builds_at_a_default_terminal_size() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: crowded
+windows:
+  - window_name: six
+    panes:
+      - sleep 300
+      - sleep 300
+      - sleep 300
+      - sleep 300
+      - sleep 300
+      - sleep 300
+",
+    )
+    .expect("configuration parses");
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("a six-pane window builds");
+    let windows = session.windows().await.expect("windows list");
+    assert_eq!(windows[0].pane_count(), 6);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
