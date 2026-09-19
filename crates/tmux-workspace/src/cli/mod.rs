@@ -70,8 +70,12 @@ impl From<libtmux::Error> for CliError {
         // it rather than re-deriving the same split from Error's variants.
         let code = match error.kind() {
             libtmux::ErrorKind::Unreachable | libtmux::ErrorKind::ServerGone => "tmux_unavailable",
-            libtmux::ErrorKind::Refused => "tmux_failed",
-            _ => "tmux",
+            // Everything rejected before a command is sent was rejected for
+            // what the document said: a layout name that is not one, an
+            // option tmux keeps somewhere else. That is a defect in the
+            // workspace, not a failure of tmux.
+            libtmux::ErrorKind::InvalidInput => "invalid_workspace",
+            _ => "tmux_failed",
         };
         Self::new(code, error.to_string())
     }
@@ -246,8 +250,7 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
 fn confirm(question: &str) -> Result<()> {
     use std::io::IsTerminal;
     if !io::stdin().is_terminal() {
-        return Err(CliError::new(
-            "confirmation_required",
+        return Err(CliError::usage(
             "confirmation requires a terminal; supply --yes or explicit machine arguments",
         ));
     }
