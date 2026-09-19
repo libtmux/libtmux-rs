@@ -840,6 +840,7 @@ impl Pane {
             .cmd(
                 Command::new("display-message")
                     .arg("-p")
+                    .arg("--")
                     .arg(OsString::from(template)),
             )
             .await?;
@@ -872,7 +873,11 @@ impl Pane {
     /// Returns an error when tmux cannot be reached or refuses the message.
     pub async fn display(&self, message: &str) -> Result<(), Error> {
         let result = self
-            .cmd(Command::new("display-message").arg(OsString::from(message)))
+            .cmd(
+                Command::new("display-message")
+                    .arg("--")
+                    .arg(OsString::from(message)),
+            )
             .await?;
         if result.success() {
             return Ok(());

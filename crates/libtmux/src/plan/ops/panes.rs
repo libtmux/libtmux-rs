@@ -184,7 +184,7 @@ impl SplitWindow {
             command = command.arg("-e").sensitive_arg(assignment(name, value));
         }
         if let Some(shell_command) = &self.command {
-            command = command.sensitive_arg(shell_command.clone());
+            command = command.arg("--").sensitive_arg(shell_command.clone());
         }
         Some(command)
     }

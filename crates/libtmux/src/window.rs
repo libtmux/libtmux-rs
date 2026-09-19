@@ -791,6 +791,7 @@ impl Window {
             .cmd(
                 Command::new("display-message")
                     .arg("-p")
+                    .arg("--")
                     .arg(OsString::from(template)),
             )
             .await?;
@@ -823,7 +824,11 @@ impl Window {
     /// Returns an error when tmux cannot be reached or refuses the message.
     pub async fn display(&self, message: &str) -> Result<(), Error> {
         let result = self
-            .cmd(Command::new("display-message").arg(OsString::from(message)))
+            .cmd(
+                Command::new("display-message")
+                    .arg("--")
+                    .arg(OsString::from(message)),
+            )
             .await?;
         if result.success() {
             return Ok(());
@@ -1963,7 +1968,7 @@ impl SplitOptions {
             command = command.arg("-e").sensitive_arg(assignment(&name, &value));
         }
         if let Some(shell_command) = self.command {
-            command = command.sensitive_arg(shell_command);
+            command = command.arg("--").sensitive_arg(shell_command);
         }
         command
     }

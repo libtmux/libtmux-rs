@@ -1093,6 +1093,7 @@ impl Server {
             Command::new("bind-key")
                 .arg("-T")
                 .arg(OsString::from(table))
+                .arg("--")
                 .arg(OsString::from(key))
                 .arg(command.into()),
         )
@@ -1111,6 +1112,7 @@ impl Server {
             Command::new("unbind-key")
                 .arg("-T")
                 .arg(OsString::from(table))
+                .arg("--")
                 .arg(OsString::from(key)),
         )
         .await
@@ -1192,7 +1194,9 @@ impl Server {
             command = command.arg("-t").arg(pane.id().to_string());
         }
 
-        let result = self.cmd(command.arg(OsString::from(format))).await?;
+        let result = self
+            .cmd(command.arg("--").arg(OsString::from(format)))
+            .await?;
         if !result.success() {
             return Err(Error::from_refused_result("display-message", &result, None));
         }
@@ -1395,6 +1399,7 @@ impl Server {
                     AccessMode::ReadOnly => "-r",
                     AccessMode::Write => "-w",
                 })
+                .arg("--")
                 .arg(OsString::from(user)),
         )
         .await
@@ -1415,6 +1420,7 @@ impl Server {
             "server-access",
             Command::new("server-access")
                 .arg("-d")
+                .arg("--")
                 .arg(OsString::from(user)),
         )
         .await
@@ -1501,7 +1507,11 @@ impl Server {
         .await?;
 
         let result = self
-            .cmd(Command::new("run-shell").sensitive_arg(command.into()))
+            .cmd(
+                Command::new("run-shell")
+                    .arg("--")
+                    .sensitive_arg(command.into()),
+            )
             .await?;
         if !result.success() {
             return Err(Error::from_refused_result("run-shell", &result, None));
@@ -1533,6 +1543,7 @@ impl Server {
             "run-shell",
             Command::new("run-shell")
                 .arg("-b")
+                .arg("--")
                 .sensitive_arg(command.into()),
         )
         .await
@@ -2263,7 +2274,7 @@ impl NewSessionOptions {
                 .sensitive_arg(crate::window::assignment(&name, &value));
         }
         if let Some(shell_command) = self.command {
-            command = command.sensitive_arg(shell_command);
+            command = command.arg("--").sensitive_arg(shell_command);
         }
         command
     }

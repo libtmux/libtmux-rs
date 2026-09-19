@@ -169,7 +169,7 @@ impl NewWindow {
         // The shell command is positional, so it goes last: tmux stops parsing
         // flags at the first one.
         if let Some(shell_command) = &self.command {
-            command = command.sensitive_arg(shell_command.clone());
+            command = command.arg("--").sensitive_arg(shell_command.clone());
         }
         Some(command)
     }
