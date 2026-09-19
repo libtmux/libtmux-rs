@@ -437,7 +437,9 @@ impl Session {
     /// Costs one tmux command. The listing is read in tmux's shell form,
     /// which escapes each value, so a value containing a newline or an `=`
     /// is not mistaken for the next variable. Each value reads exactly as
-    /// [`Self::environment`] reads it.
+    /// [`Self::environment`] reads it. Names are not escaped: a removed name
+    /// holding `;` and a newline lists exactly as two removed names do, and
+    /// reads as them.
     ///
     /// # Errors
     ///

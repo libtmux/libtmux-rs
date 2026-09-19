@@ -183,8 +183,12 @@ fn parse_shell_listing(
     let mut row = 0;
     while at < stdout.len() {
         let rest = &stdout[at..];
-        let (name, entry, consumed) = parse_unset(rest)
-            .or_else(|| parse_exported(rest))
+        // An exported entry first: its name is printed twice, so the second
+        // copy confirms where the first ended. `unset NAME;` carries no such
+        // check, and read first it took the start of an exported name such
+        // as `unset X;\nY` for a removal of `X`.
+        let (name, entry, consumed) = parse_exported(rest)
+            .or_else(|| parse_unset(rest))
             .ok_or((row, at))?;
         environment.insert(name, entry);
         at += consumed;
@@ -195,8 +199,9 @@ fn parse_shell_listing(
 
 /// `unset NAME;` and its newline.
 ///
-/// tmux refuses a name containing `=`, which is how an exported entry whose
-/// name merely begins `unset ` is told from this.
+/// The first `;` and newline end the name. tmux accepts a name holding that
+/// pair, and `unset A;\nunset B;` is then one removal or two: the bytes are
+/// the same either way, and this reads two.
 fn parse_unset(rest: &[u8]) -> Option<(String, EnvironmentEntry, usize)> {
     let body = rest.strip_prefix(b"unset ")?;
     let end = body.windows(2).position(|pair| pair == b";\n")?;
@@ -254,6 +259,76 @@ fn parse_exported(rest: &[u8]) -> Option<(String, EnvironmentEntry, usize)> {
     ))
 }
 
+/// Parse arbitrary `show-environment -s` output, then check that parsing
+/// inverts tmux's rendering.
+///
+/// The bytes are parsed as a listing first. Then, split at NUL, each chunk is
+/// read as one variable -- its first byte's low bit picks set or removed, and
+/// the rest splits at its first `=` into name and value -- rendered as
+/// `cmd_show_environment_print` writes it, and parsed back.
+///
+/// # Panics
+///
+/// When a listing tmux could print does not parse back to its variables.
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub fn __fuzz_environment_listing(data: &[u8]) {
+    let _ = parse_shell_listing(data);
+
+    let mut variables: BTreeMap<&[u8], Option<&[u8]>> = BTreeMap::new();
+    for chunk in data.split(|&byte| byte == 0) {
+        let Some((&kind, rest)) = chunk.split_first() else {
+            continue;
+        };
+        let (name, value) = match rest.iter().position(|&byte| byte == b'=') {
+            Some(equals) => (&rest[..equals], &rest[equals + 1..]),
+            None => (rest, &[][..]),
+        };
+        let set = kind & 1 == 1;
+        // tmux refuses an empty name and one holding `=`. It accepts a
+        // removed name holding `;` and a newline, which prints exactly as two
+        // removed names do, so no parser can tell them apart.
+        if name.is_empty() || (!set && name.windows(2).any(|pair| pair == b";\n")) {
+            continue;
+        }
+        variables.insert(name, set.then_some(value));
+    }
+
+    // tmux prints in name order, which is this map's.
+    let mut wire = Vec::new();
+    for (name, value) in &variables {
+        if let Some(value) = value {
+            wire.extend_from_slice(name);
+            wire.extend_from_slice(b"=\"");
+            for &byte in *value {
+                if matches!(byte, b'$' | b'`' | b'"' | b'\\') {
+                    wire.push(b'\\');
+                }
+                wire.push(byte);
+            }
+            wire.extend_from_slice(b"\"; export ");
+            wire.extend_from_slice(name);
+            wire.extend_from_slice(b";\n");
+        } else {
+            wire.extend_from_slice(b"unset ");
+            wire.extend_from_slice(name);
+            wire.extend_from_slice(b";\n");
+        }
+    }
+
+    let expected: BTreeMap<String, EnvironmentEntry> = variables
+        .iter()
+        .map(|(name, value)| {
+            let entry = match value {
+                Some(value) => EnvironmentEntry::Set(TmuxText::from(value.to_vec())),
+                None => EnvironmentEntry::Removed,
+            };
+            (String::from_utf8_lossy(name).into_owned(), entry)
+        })
+        .collect();
+    assert_eq!(parse_shell_listing(&wire), Ok(expected), "{wire:?}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_shell_listing;
@@ -296,6 +371,21 @@ mod tests {
         );
         assert_eq!(parsed["GONE"], EnvironmentEntry::Removed);
         assert_eq!(parsed["unset A"], set(b"v"));
+    }
+
+    /// Found by the `environment_listing` fuzz target: a name tmux accepts,
+    /// beginning `unset ` and holding `;` and a newline, failed the whole
+    /// listing.
+    #[test]
+    fn an_exported_name_shaped_like_a_removal_stays_one_variable() {
+        let listing = b"unset X;\nY=\"v\"; export unset X;\nY;\n\
+                        unset A;\nB=\"w\"; export B;\n";
+        let parsed = parse_shell_listing(listing).expect("listing parses");
+
+        assert_eq!(parsed.len(), 3, "{parsed:?}");
+        assert_eq!(parsed["unset X;\nY"], set(b"v"));
+        assert_eq!(parsed["A"], EnvironmentEntry::Removed);
+        assert_eq!(parsed["B"], set(b"w"));
     }
 
     #[test]

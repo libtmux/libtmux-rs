@@ -30,6 +30,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "environment_listing"
+path = "fuzz_targets/environment_listing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "filter_expr_json"
 path = "fuzz_targets/filter_expr_json.rs"
 test = false

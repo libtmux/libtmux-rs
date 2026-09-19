@@ -375,6 +375,9 @@ pub use error::{
 pub use formats::__fuzz_format_rows;
 pub use formats::TmuxText;
 pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use internal::environment::__fuzz_environment_listing;
 #[cfg(feature = "control-mode")]
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};

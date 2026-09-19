@@ -1,0 +1,6 @@
+MULTI="first
+DECOY=x
+\"; export X;
+Y=\"z"; export MULTI;
+unset GONE;
+unset A="v"; export unset A;

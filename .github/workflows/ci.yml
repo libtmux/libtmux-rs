@@ -130,6 +130,7 @@ jobs:
         target:
           - control_block
           - control_line
+          - environment_listing
           - filter_expr_json
           - format_rows
           - text_filter
