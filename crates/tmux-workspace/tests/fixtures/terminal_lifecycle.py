@@ -50,7 +50,9 @@ def run_supervisor(argv):
             "termios_before": repr(original),
             "termios_after": repr(termios.tcgetattr(0)),
         }
-        (directory / "supervisor.json").write_text(json.dumps(result))
+        report_tmp = directory / "supervisor.json.tmp"
+        report_tmp.write_text(json.dumps(result))
+        os.replace(report_tmp, directory / "supervisor.json")
         deadline = time.monotonic() + 3
         while not (directory / "ack").exists() and time.monotonic() < deadline:
             time.sleep(0.005)
