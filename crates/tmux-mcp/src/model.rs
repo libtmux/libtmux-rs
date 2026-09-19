@@ -21,7 +21,8 @@ pub struct SessionArgs {
 pub struct CreateSessionArgs {
     /// The name for the new session. It must not already exist.
     pub name: String,
-    /// An optional working directory for the session's first window.
+    /// The first window's working directory. Omit for the directory this MCP
+    /// server started in.
     pub start_directory: Option<String>,
 }
 
@@ -133,7 +134,8 @@ pub struct WaitForTextArgs {
     /// Text that ends the wait successfully. Omit to wait for any output.
     #[schemars(length(max = 32))]
     pub patterns: Option<Vec<String>>,
-    /// Text that ends the wait as a failure, reported as `stopped`.
+    /// Text that ends the wait as a failure, reported as `stopped`. Omit for
+    /// none.
     ///
     /// Give the failure markers you already know — `error:`, `Traceback` — and
     /// a failed run returns at once instead of at the deadline.
@@ -190,9 +192,11 @@ pub struct SearchPanesArgs {
     /// Search scrollback as well as the visible screen.
     #[serde(default)]
     pub history: bool,
-    /// Only search panes in this session, by `$`-prefixed id or name.
+    /// Only search panes in this session, by `$`-prefixed id or name. Omit
+    /// for every session.
     pub session: Option<String>,
-    /// Only search panes in this window, by `@`-prefixed id.
+    /// Only search panes in this window, by `@`-prefixed id. Omit for every
+    /// window.
     pub window: Option<String>,
 }
 
@@ -209,7 +213,8 @@ pub struct OptionArgs {
     /// setting an option without a target means in tmux.
     #[schemars(with = "Option<OptionScopeSchema>")]
     pub scope: Option<String>,
-    /// The `$`, `@` or `%`-prefixed id, for the scopes that need one.
+    /// The `$`, `@` or `%`-prefixed id, for the scopes that need one. Omit
+    /// for the others.
     pub target: Option<String>,
 }
 
@@ -271,9 +276,10 @@ pub struct CapturePaneArgs {
     #[serde(default)]
     pub last_command: bool,
     /// Start at this line. Zero is the top of the screen, negative is
-    /// scrollback.
+    /// scrollback. Omit for the top of the screen, or of the scrollback with
+    /// `history`.
     pub start: Option<i32>,
-    /// End at this line.
+    /// End at this line. Omit for the bottom of the screen.
     pub end: Option<i32>,
 }
 
@@ -283,13 +289,15 @@ pub struct CapturePaneArgs {
 pub struct SendKeysArgs {
     /// The `%`-prefixed pane id.
     pub pane: String,
-    /// Text typed literally into the pane. Key names are not interpreted.
+    /// Text typed literally into the pane. Key names are not interpreted. Omit
+    /// to type none.
     pub text: Option<String>,
     /// tmux key names to press, in order, after any text.
     ///
     /// These are interpreted rather than typed, which is the only way to send
     /// a key that has no character: `C-c` to interrupt, `Escape`, `Up`,
     /// `C-d`. Sending `C-c` as `text` would type those three characters.
+    /// Omit to press none.
     pub keys: Option<Vec<String>>,
     /// Whether to press Enter afterwards.
     #[serde(default)]

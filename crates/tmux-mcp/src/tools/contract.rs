@@ -154,7 +154,8 @@ pub(crate) struct CreateWindowArgs {
     pub(crate) session: String,
     /// The window name. Omit to let tmux name it after its running command.
     pub(crate) name: Option<String>,
-    /// The window's working directory. Omit for tmux's default.
+    /// The window's working directory. Omit for the directory this MCP
+    /// server started in.
     pub(crate) start_directory: Option<String>,
 }
 
@@ -168,8 +169,8 @@ pub(crate) struct SplitWindowArgs {
     pub(crate) direction: Option<String>,
     /// The new pane's share of the split, 1 to 100. Defaults to half.
     pub(crate) percent: Option<u32>,
-    /// The new pane's working directory. Omit for tmux's default, which is
-    /// not `pane`'s current directory.
+    /// The new pane's working directory. Omit for the directory this MCP
+    /// server started in, not `pane`'s current directory.
     pub(crate) start_directory: Option<String>,
 }
 
@@ -189,11 +190,14 @@ pub(crate) struct RespawnArgs {
 pub(crate) struct SendOperation {
     /// The `%`-prefixed pane id.
     pub(crate) pane: String,
-    /// Text typed literally. Key names are not interpreted.
+    /// Text typed literally. Key names are not interpreted. Omit to type
+    /// none.
     pub(crate) text: Option<String>,
-    /// tmux key names to press, in order, after any text, such as `C-c`.
+    /// tmux key names to press, in order, after any text, such as `C-c`. Omit
+    /// to press none.
     pub(crate) keys: Option<Vec<String>>,
     /// Whether to press Enter afterwards.
+    #[serde(default)]
     pub(crate) enter: bool,
 }
 
