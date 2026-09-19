@@ -39,7 +39,7 @@ tempfile = { workspace = true, optional = true }
 rustix = { version = "1.1.4", optional = true, features = ["fs", "process", "termios"] }
 anstyle-parse = { version = "1.0.0", optional = true, features = ["core"] }
 unicode-width = { version = "0.2.2", optional = true, default-features = false }
-unicode-segmentation = { version = "=1.12.0", optional = true }
+unicode-segmentation = { version = "1.12.0", optional = true }
 
 [target.'cfg(not(any(target_os = "cygwin", target_os = "emscripten", target_os = "fuchsia", target_os = "horizon", target_os = "netbsd", target_os = "openbsd", target_os = "redox", target_os = "wasi")))'.dependencies]
 nix = { workspace = true, optional = true }
