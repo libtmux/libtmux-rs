@@ -953,7 +953,7 @@ async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mu
                 .unwrap();
                 if output.status.success()
                     || !output.stdout.is_empty()
-                    || !String::from_utf8_lossy(&output.stderr).contains("append_context")
+                    || !String::from_utf8_lossy(&output.stderr).contains("\"usage\"")
                     || marker.exists()
                 {
                     failures.push(format!("retarget={retarget} bridge={bridge} mode={mode}: {output:?}; Python invoked={}", marker.exists()));
@@ -1176,7 +1176,7 @@ async fn append_rechecks_after_python_runtime_and_before_script() {
             "runtime={runtime}: {output:?}; changed={changed}"
         );
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(value["errors"][0]["code"], "append_context");
+        assert_eq!(value["errors"][0]["code"], "usage");
         assert_eq!(value["status"], if runtime { "error" } else { "partial" });
         assert_eq!(value["errors"][0]["effects"]["owned_session"], false);
         assert_eq!(value["errors"][0]["effects"]["session_name"], "original");
@@ -1289,7 +1289,7 @@ fn legacy_color_mode_is_rejected_before_reading_inputs() {
             assert!(!output.stderr.contains(&0x1b));
             if mode.is_some() {
                 let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-                assert_eq!(error["code"], "unsupported_color_mode");
+                assert_eq!(error["code"], "usage");
             } else {
                 assert!(String::from_utf8_lossy(&output.stderr).contains("88-color"));
             }
@@ -4103,5 +4103,87 @@ async fn reusing_a_session_without_the_document_s_windows_is_partial() {
         "{diagnostic}"
     );
     assert_eq!(session.windows().await.unwrap().len(), 1);
+    guard.shutdown().await.unwrap();
+}
+
+/// Every machine code a refusal reports is one a consumer can switch on: the
+/// nine conditions the envelope defines, plus the interruption record, which
+/// is its own contract. A layout name that is not a layout is a defect in the
+/// document, caught before any tmux command, and is reported as one.
+#[tokio::test]
+async fn refusals_report_only_shared_machine_codes() {
+    const SHARED: [&str; 10] = [
+        "workspace_not_found",
+        "invalid_workspace",
+        "unsupported_key",
+        "session_not_found",
+        "tmux_unavailable",
+        "tmux_failed",
+        "script_failed",
+        "destination_exists",
+        "usage",
+        "interrupted",
+    ];
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let socket = guard.socket_path().to_str().unwrap().to_owned();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    for (name, body) in [
+        (
+            "namedlayout.yaml",
+            "session_name: nl\nwindows:\n  - panes: [echo A]\n  - layout: definitely-not-a-layout\n    panes: [echo B]\n",
+        ),
+        (
+            "badoption.yaml",
+            "session_name: bo\nwindows:\n  - options:\n      not-a-real-option: 1\n    panes: [echo A]\n",
+        ),
+        (
+            "ok.yaml",
+            "session_name: ok\nwindows:\n  - panes: [echo A]\n",
+        ),
+        ("broken.yaml", "a: [\n"),
+        ("missing.yaml", "session_name: m\n"),
+    ] {
+        std::fs::write(directory.path().join(name), body).unwrap();
+    }
+    let cases: [(&str, Vec<&str>, &str); 6] = [
+        (
+            "layout name",
+            vec!["load", "-S", &socket, "-d", "--json", "namedlayout.yaml"],
+            "invalid_workspace",
+        ),
+        (
+            "window option",
+            vec!["load", "-S", &socket, "-d", "--json", "badoption.yaml"],
+            "tmux_failed",
+        ),
+        (
+            "no windows",
+            vec!["load", "-S", &socket, "-d", "--json", "missing.yaml"],
+            "invalid_workspace",
+        ),
+        (
+            "legacy colors",
+            vec!["load", "-S", &socket, "-d", "-8", "--json", "ok.yaml"],
+            "usage",
+        ),
+        (
+            "malformed document",
+            vec!["convert", "--json", "broken.yaml"],
+            "invalid_workspace",
+        ),
+        (
+            "unparsable pattern",
+            vec!["search", "--json", "--name", "a("],
+            "usage",
+        ),
+    ];
+    for (case, arguments, expected) in cases {
+        let output = at(&arguments, directory.path());
+        assert!(!output.status.success(), "{case}: {output:?}");
+        let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        let code = diagnostic["code"].as_str().unwrap_or_default();
+        assert_eq!(code, expected, "{case}: {diagnostic}");
+        assert!(SHARED.contains(&code), "{case}: {code} is outside the set");
+    }
     guard.shutdown().await.unwrap();
 }

@@ -197,8 +197,8 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
             .ok_or_else(|| CliError::new("session_not_found", "no session"));
     }
     Err(CliError::new(
-        "session_required",
-        "select a session by name",
+        "session_not_found",
+        "more than one session is running; select one by name",
     ))
 }
 
@@ -250,12 +250,9 @@ pub(super) async fn load(
 ) -> Result<()> {
     state.started = true;
     if flag(args, "colors88") {
-        return Err(CliError {
-            code: "unsupported_color_mode",
-            message: "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2".into(),
-            status: 2,
-            retained_state: None,
-        });
+        return Err(CliError::usage(
+            "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2",
+        ));
     }
     if report.machine() && !flag(args, "detached") && !flag(args, "append") {
         return Err(CliError::usage("machine load requires -d or --append"));
@@ -570,8 +567,10 @@ impl AppendTarget {
     }
 }
 
+/// An append whose inherited context no longer holds is a refusal about how
+/// the command was invoked, the same family as an unusable pane.
 fn append_context(message: impl Into<String>) -> CliError {
-    CliError::new("append_context", message)
+    CliError::usage(message)
 }
 
 /// The one reader of `TMUX` in this command.
@@ -998,12 +997,12 @@ async fn build_extension(
     effects.changed = effects.owned || !effects.windows.is_empty() || append;
     output
         .success()
-        .map_err(|error| CliError::new("python_extension", error.message))?;
+        .map_err(|error| CliError::new("script_failed", error.message))?;
     effects.stage = "completed";
     let session = current.ok_or_else(|| {
         CliError::new(
-            "python_extension",
-            "Python builder completed without a session",
+            "script_failed",
+            "the workspace builder finished without a session",
         )
     })?;
     Ok((session, !append && prior.is_some()))
@@ -1051,7 +1050,7 @@ async fn build_window(
         window
             .active_pane()
             .await?
-            .ok_or_else(|| CliError::new("pane_missing", "new window has no pane"))?,
+            .ok_or_else(|| CliError::new("tmux_failed", "the new window has no pane"))?,
     ];
     effects.panes.push(panes[0].id().to_string());
     // Split from the previous pane, not the window: `-t <window>` always
