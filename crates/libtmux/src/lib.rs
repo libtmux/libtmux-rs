@@ -7,9 +7,15 @@
 //! [`query::QueryIteratorExt::matching`] for a portable expression or a named
 //! [`query::Matcher`]. Exact cardinality inspects at most two items.
 //!
-//! If another iterator extension trait, such as `itertools::Itertools`, adds
-//! the same method name, use universal function call syntax to select this
-//! crate's method:
+//! `matching` and `matching_owned` are this trait's own; `exactly_one` and
+//! `one_or_none` deliberately overlap with `itertools::Itertools`, which has
+//! `exactly_one` and `at_most_one`. The overlap is kept rather than renamed
+//! around: the names are the obvious ones, and the shapes differ where it
+//! matters. [`query::ExactlyOneError`] is a plain `NoItems`/`MultipleItems`
+//! enum that is `Eq` and cheap to match, where itertools' error owns the
+//! iterator so it can replay it. With both traits imported a call is
+//! ambiguous, which is a compile error naming both candidates rather than a
+//! silent choice; universal function call syntax picks one:
 //!
 //! ```
 //! use libtmux::query::QueryIteratorExt;

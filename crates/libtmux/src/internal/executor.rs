@@ -44,6 +44,17 @@ impl Future for ShutdownFuture {
     }
 }
 
+/// How a built command reaches tmux.
+///
+/// Not every path to tmux comes through here, and the exception matters when
+/// reasoning about what installing an executor changes:
+/// [`crate::internal::core::Core::spawn_control`] builds a `CommandRequest`
+/// and then hands it to [`crate::internal::process::PersistentChild::spawn`]
+/// directly, using the launch context rather than this trait. A control-mode
+/// connection is a long-lived child with its own protocol on its pipes, not a
+/// request with one answer, so it has nothing to return through
+/// `DispatchFuture`. The consequence: opening a connection always forks tmux,
+/// including the connection that a `ControlModeExecutor` then dispatches over.
 pub(crate) trait Executor: Send + Sync + 'static {
     fn execute(&self, request: CommandRequest) -> DispatchFuture;
 
