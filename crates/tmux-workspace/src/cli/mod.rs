@@ -25,6 +25,41 @@ use serde_json::json;
 
 type Result<T> = std::result::Result<T, CliError>;
 
+/// The `code` on a terminal error record — a load, freeze, convert, import or
+/// search failure, reported once and never retried — is one of the ten every
+/// port agrees on (SPEC-5 D4/D4a), or `interrupted` for a mutation an actual
+/// `SIGINT`/`SIGTERM` cut off mid-flight (its own contract: `outcome_unknown`
+/// plus `retained_state`, not a refusal about what was asked):
+///
+/// - `workspace_not_found` — the named file or session was not found.
+/// - `invalid_workspace` — the document, or something in it, is not valid.
+/// - `unsupported_key` — the document names a key this port refuses.
+/// - `session_not_found` — no session answers the name or selector given.
+/// - `session_mismatch` — the named session exists and does not satisfy the
+///   document: found, not missing, so `session_not_found` here would send a
+///   consumer looking for a session that is right there.
+/// - `tmux_unavailable` — no tmux executable, or its server is unreachable.
+/// - `tmux_failed` — tmux rejected a command this port sent it.
+/// - `script_failed` — a `before_script` is missing, not executable, or
+///   exited nonzero.
+/// - `destination_exists` — a write target is already there and nothing
+///   said to replace it.
+/// - `usage` — how the command was invoked is wrong, not what it names;
+///   exit 2 rather than 1.
+///
+/// D4a scopes that agreement to this one field on a terminal error record.
+/// Outside it, by design, and not required to collapse into the above:
+/// - Warning codes (`unsupported_builder_option`, `start_directory_absent`)
+///   ride the `warning` event, never a failure; a load that only warns still
+///   completes.
+/// - `python_runtime` names a checked Python runtime that will not run — a
+///   fact about this machine, not about the document.
+/// - The `child_*` family (`child_spawn`, `child_failed`, `child_identity`,
+///   `child_stream`, `child_wait`) names which step of running a child
+///   process under `shell`/`edit` failed, not why tmux did.
+/// - `io`, `encoding`, `cancelled`, `log_file` are this tool's own plumbing:
+///   a file it could not read or write, JSON it could not decode, an
+///   interactive prompt declined, or a log sink that would not open.
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 struct CliError {

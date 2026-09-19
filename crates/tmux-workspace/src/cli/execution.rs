@@ -601,6 +601,17 @@ fn append_context(message: impl Into<String>) -> CliError {
 /// tmux itself truncates at the first one; every path that resolves an
 /// endpoint from the variable goes through here so that the same value never
 /// names two different servers.
+///
+/// This is a deliberate, verified difference from tmux, not an oversight:
+/// tmux's own `main()` (`tmux.c`) resolves `$TMUX` with
+/// `path[strcspn(path, ",")] = '\0'`, the first comma, so a socket path
+/// holding one truncates there for tmux itself. Splitting from the right
+/// instead means this command can resolve a `$TMUX` that tmux's own client
+/// would treat as naming a different, truncated socket. The trade accepted:
+/// every reader inside this command agreeing with itself, over agreeing with
+/// a tmux binary that would refuse the same variable outright — a client run
+/// against a comma-bearing socket path already gets a truncated `$TMUX`
+/// tmux cannot use to reattach either way.
 fn tmux_context(context: &str) -> Result<(&str, u32)> {
     let parsed = context.rsplit_once(',').and_then(|(prefix, session)| {
         session.parse::<u32>().ok()?;
