@@ -4402,3 +4402,67 @@ async fn a_window_with_no_declared_focus_ends_on_its_last_pane() {
     }
     guard.shutdown().await.unwrap();
 }
+
+/// The client the load hands over to is the same tmux the rest of the load
+/// talked to, so it is started with the same endpoint flags rather than
+/// tmux's defaults.
+#[tokio::test]
+async fn the_attach_handoff_carries_the_endpoint_flags() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("handoff-keeper").await.unwrap();
+    let pane = current_pane(&keeper).await;
+    let control = libtmux::control::ControlMode::attach(guard.server(), keeper.id())
+        .await
+        .unwrap();
+    wait_for_client(guard.server(), keeper.id().as_ref()).await;
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let trace = directory.path().join("trace");
+    let wrapper = directory.path().join("tmux");
+    std::fs::write(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = directory.path().join("tmux.conf");
+    std::fs::write(&config, "").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"handed-over","windows":[{"panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-2",
+            "-f",
+            config.to_str().unwrap(),
+            "workspace.json",
+        ],
+        directory.path(),
+    )
+    .env("LIBTMUX_TEST_TMUX", &wrapper)
+    .env("WORKSPACE_TMUX_TRACE", &trace)
+    .env(
+        "WORKSPACE_REAL_TMUX",
+        std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into()),
+    )
+    .env("TMUX_PANE", &pane)
+    .env(
+        "TMUX",
+        format!("{},{},0", guard.socket_path().display(), guard.daemon_pid()),
+    )
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let calls = std::fs::read_to_string(&trace).unwrap();
+    let handoff = calls
+        .lines()
+        .find(|line| line.contains("<switch-client>"))
+        .unwrap_or_else(|| panic!("no handoff recorded: {calls}"));
+    assert!(handoff.contains("<-2>"), "{handoff}");
+    assert!(handoff.contains("<-f>"), "{handoff}");
+    drop(control);
+    guard.shutdown().await.unwrap();
+}
