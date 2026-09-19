@@ -1409,6 +1409,17 @@ wait. And `Server::shutdown` kills what is parked, because a shutdown that
 waits on tmux is not a shutdown, which leaves the tmux defect behind on a
 channel that was still parked.
 
+Routing a blocking `wait-for` is refused for a different reason.
+`cmdq_fire_command` writes the block's `end` guard as soon as `entry->exec`
+returns, and `cmd_wait_for_wait` returns `CMD_RETURN_WAIT` with its item still
+on the queue, so a control client is told the command finished and then runs
+nothing else until the channel releases it. Measured through the crate on 3.7d: a
+routed `wait_for_channel` on a channel nobody signalled returned `Signalled`
+in 190us, and the next routed call answered nothing within two seconds. So
+`wait_for_channel` and `lock_channel` refuse a routed handle with
+`ControlModeErrorKind::BlockingCommand`; `signal_channel` and
+`unlock_channel` do not block and still route.
+
 ### Two shapes that make a test flaky under load
 
 Both of these passed locally for a long time and failed in CI, which has fewer

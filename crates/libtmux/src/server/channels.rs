@@ -98,7 +98,8 @@ impl Server {
     ///
     /// Returns an error when tmux refuses the channel name, and
     /// [`crate::ErrorKind::Timeout`] when the channel is still held after
-    /// [`Server::default_timeout`].
+    /// [`Server::default_timeout`]. A handle from `Server::over_control_mode`
+    /// is refused, for the reason [`Self::wait_for_channel`] gives.
     ///
     /// # Cancel safety
     ///
@@ -171,6 +172,12 @@ impl Server {
     /// reached. Running out of time is [`ChannelWait::TimedOut`] rather than
     /// an error, so "nothing signalled it" stays distinct from "the command
     /// did not get through" -- the caller retries only one of those.
+    ///
+    /// A handle from `Server::over_control_mode` is refused with
+    /// [`crate::ControlModeErrorKind::BlockingCommand`]: a connection runs one
+    /// command at a time, and tmux closes a blocking `wait-for` the moment it
+    /// queues it, so the wait would neither wait nor let anything else
+    /// through. `Server::signal_channel` routes as usual.
     ///
     /// # Cancel safety
     ///

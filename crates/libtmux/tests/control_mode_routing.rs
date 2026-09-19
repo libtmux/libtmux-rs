@@ -249,6 +249,66 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     guard.shutdown().await.expect("the fixture stops");
 }
 
+/// A connection runs one command at a time, and tmux closes a blocking
+/// `wait-for` as soon as it queues it: routed, the wait would report a signal
+/// nobody sent and the connection would answer nothing else until the channel
+/// was signalled.
+#[tokio::test]
+async fn a_blocking_channel_call_is_refused_rather_than_routed() {
+    let guard = TestServer::new().await.expect("a private tmux starts");
+    let real = guard.server().clone();
+    let session = real
+        .new_session("routed")
+        .await
+        .expect("the fixture holds a session");
+
+    let control = ControlMode::attach(&real, session.id())
+        .await
+        .expect("a control client attaches");
+    let (sender, events) = control.split();
+    let routed = real
+        .over_control_mode(&sender)
+        .await
+        .expect("the connection reaches the same server");
+
+    for refused in [
+        routed
+            .wait_for_channel("never-signalled", std::time::Duration::from_secs(5))
+            .await
+            .err(),
+        routed.lock_channel("never-signalled").await.err(),
+    ] {
+        let refused = refused.expect("a blocking channel call is refused");
+        assert!(
+            matches!(
+                refused,
+                libtmux::Error::ControlMode {
+                    kind: libtmux::ControlModeErrorKind::BlockingCommand,
+                    ..
+                }
+            ),
+            "refused for blocking the connection: {refused:?}",
+        );
+    }
+
+    // The connection still answers, and the half that does not block routes.
+    routed
+        .signal_channel("never-signalled")
+        .await
+        .expect("signalling does not block, so it routes");
+    assert_eq!(
+        routed
+            .sessions()
+            .await
+            .expect("the connection still answers")
+            .len(),
+        1,
+    );
+
+    events.shutdown().await.expect("the connection closes");
+    guard.shutdown().await.expect("the fixture stops");
+}
+
 #[tokio::test]
 async fn a_sender_for_another_server_is_refused() {
     let first = TestServer::new().await.expect("a private tmux starts");

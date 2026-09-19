@@ -150,8 +150,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 tmux keeps a signal nobody is waiting on, so the job finishing first does not
 lose the race, and nothing polls. A wait that runs out of time keeps its
 client on the channel rather than killing it, so the signal is still there for
-the next wait: tmux cannot take a waiter back out, and a killed one would eat
-the signal instead. `examples/orchestrate.rs` runs three jobs this way.
+this process's next wait: tmux cannot take a waiter back out, and a killed one
+would eat the signal instead. `examples/orchestrate.rs` runs three jobs this
+way.
 
 For a pane that was *not* written to announce itself, `Pane::wait_for_text`
 does the same job without a channel:

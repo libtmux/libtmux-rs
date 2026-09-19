@@ -163,6 +163,14 @@ pub enum ControlModeErrorKind {
     /// the rest of the request with it. Refused here rather than sent,
     /// because tmux accepts the result and reports no error.
     InvalidSubscriptionName,
+    /// The command would hold the connection's one command queue.
+    ///
+    /// A connection runs one command at a time, and tmux closes a blocking
+    /// `wait-for` the moment it queues it: routed, the call would report
+    /// success without waiting, and nothing else would be answered on that
+    /// connection until the channel released it. Run it from a handle that
+    /// starts its own clients.
+    BlockingCommand,
 }
 
 /// What tmux says when it holds no session to resolve a target against.
@@ -1130,6 +1138,15 @@ impl Error {
     pub(crate) const fn control_mode_unrepresentable() -> Self {
         Self::ControlMode {
             kind: ControlModeErrorKind::UnrepresentableCommand,
+            source: None,
+        }
+    }
+
+    /// A command would hold a connection's one command queue.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_blocking() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::BlockingCommand,
             source: None,
         }
     }

@@ -2282,6 +2282,7 @@ variant libtmux::Chooser::Buffer
 variant libtmux::Chooser::Client
 variant libtmux::Chooser::Customize
 variant libtmux::Chooser::Tree
+variant libtmux::ControlModeErrorKind::BlockingCommand
 variant libtmux::ControlModeErrorKind::Closed
 variant libtmux::ControlModeErrorKind::DispatchTimedOut
 variant libtmux::ControlModeErrorKind::InvalidSubscriptionName

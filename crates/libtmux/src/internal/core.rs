@@ -473,6 +473,16 @@ impl Core {
         &self.channel_waits
     }
 
+    /// Whether this handle dispatches over a connection someone else holds.
+    ///
+    /// A connection runs one command at a time, so a command that blocks in
+    /// tmux blocks the connection; the callers that would are the ones that
+    /// ask.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn routes_over_control_mode(&self) -> bool {
+        self.executor.renders_control_line()
+    }
+
     pub(crate) async fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
         #[cfg(feature = "control-mode")]
         let control_line = self

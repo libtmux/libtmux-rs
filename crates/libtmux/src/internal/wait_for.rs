@@ -209,6 +209,8 @@ pub(crate) async fn wait(
     channel: &str,
     budget: Duration,
 ) -> Result<ChannelWait, Error> {
+    #[cfg(feature = "control-mode")]
+    refuse_if_routed(core)?;
     let deadline = Instant::now().checked_add(budget);
     loop {
         let mut waiter = match core.channel_waits().join(channel) {
@@ -255,6 +257,8 @@ fn park(core: &Arc<Core>, channel: &str) {
 /// alive, so the client stays queued after the caller gives up and unlocks as
 /// soon as it is granted.
 pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> Result<(), Error> {
+    #[cfg(feature = "control-mode")]
+    refuse_if_routed(core)?;
     let command = channel_command(Some("-L"), channel);
     let summary = command.summary();
     let (request_id, dispatch) = core.dispatch_without_deadline(command);
@@ -273,13 +277,62 @@ pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> R
         }
     });
 
+    let mut grant = Grant {
+        taken,
+        core: Arc::clone(core),
+        channel: channel.to_owned(),
+        settled: false,
+    };
     let deadline = Instant::now().checked_add(budget);
     tokio::select! {
-        outcome = taken => match outcome {
+        outcome = &mut grant.taken => match outcome {
             Ok(outcome) => outcome,
             Err(_) => Err(Error::supervisor_lost(request_id.get(), summary)),
         },
-        () = elapsed(deadline) => Err(Error::timeout(request_id.get(), summary, budget)),
+        () = elapsed(deadline) => grant
+            .close()
+            .unwrap_or_else(|| Err(Error::timeout(request_id.get(), summary, budget))),
+    }
+}
+
+/// The caller's end of a queued lock, which gives back a grant it cannot take.
+///
+/// A grant that crosses the channel as the caller stops waiting would
+/// otherwise be dropped with the receiver, leaving the lock held by nobody:
+/// closing the receiver first makes the task's send fail, and anything that
+/// arrived before the close is read back here.
+struct Grant {
+    taken: oneshot::Receiver<Result<(), Error>>,
+    core: Arc<Core>,
+    channel: String,
+    settled: bool,
+}
+
+impl Grant {
+    /// Stop the lock task sending, and take what it already sent.
+    fn close(&mut self) -> Option<Result<(), Error>> {
+        self.settled = true;
+        self.taken.close();
+        self.taken.try_recv().ok()
+    }
+}
+
+impl Drop for Grant {
+    fn drop(&mut self) {
+        if self.settled || !matches!(self.close(), Some(Ok(()))) {
+            return;
+        }
+        // The caller was dropped holding a lock it never saw. Without a
+        // runtime there is nothing left to release it with, and the client
+        // holding it is going with the process.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let core = Arc::clone(&self.core);
+        let channel = std::mem::take(&mut self.channel);
+        spawn(async move {
+            let _ = unlock(&core, &channel).await;
+        });
     }
 }
 
@@ -291,6 +344,19 @@ pub(crate) async fn unlock(core: &Arc<Core>, channel: &str) -> Result<(), Error>
 /// Signal `channel`, releasing everything waiting on it.
 pub(crate) async fn signal(core: &Arc<Core>, channel: &str) -> Result<(), Error> {
     listing::mutate(core, "wait-for", channel_command(Some("-S"), channel)).await
+}
+
+/// Refuse a command that would sit on a connection's one command queue.
+///
+/// tmux closes a blocking `wait-for` as soon as it queues it, so over a
+/// connection the call would report success without waiting and the
+/// connection would answer nothing else until the channel released it.
+#[cfg(feature = "control-mode")]
+fn refuse_if_routed(core: &Arc<Core>) -> Result<(), Error> {
+    if core.routes_over_control_mode() {
+        return Err(Error::control_mode_blocking());
+    }
+    Ok(())
 }
 
 fn channel_command(flag: Option<&'static str>, channel: &str) -> Command {

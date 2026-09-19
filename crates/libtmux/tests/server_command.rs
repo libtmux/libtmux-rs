@@ -1514,6 +1514,53 @@ async fn a_lock_scope_that_ran_out_of_time_while_queued_leaves_the_channel_locka
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A lock dropped while still queued is granted in turn and released, rather
+/// than held by a caller that is no longer there.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_lock_dropped_while_queued_leaves_the_channel_lockable() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let channel = libtmux::test::unique_name("dropped-lock");
+
+    server
+        .lock_channel(&channel)
+        .await
+        .expect("the channel locks");
+
+    assert!(
+        tokio::time::timeout(
+            scaled(Duration::from_millis(400)),
+            server.lock_channel(&channel),
+        )
+        .await
+        .is_err(),
+        "the second lock is still queued behind the holder",
+    );
+
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the holder releases the channel");
+
+    tokio::time::timeout(
+        scaled(Duration::from_secs(5)),
+        server.lock_channel(&channel),
+    )
+    .await
+    .expect("the channel is not wedged")
+    .expect("the channel locks again");
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the channel unlocks");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A lock scope dropped while its lock is still queued: the lock runs in a
 /// task of its own, so the drop cannot strand it.
 #[cfg(feature = "test-support")]

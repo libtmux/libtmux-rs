@@ -116,7 +116,8 @@ impl Error {
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, .. } => match kind {
                 ControlModeErrorKind::UnrepresentableCommand
-                | ControlModeErrorKind::InvalidSubscriptionName => ErrorKind::InvalidInput,
+                | ControlModeErrorKind::InvalidSubscriptionName
+                | ControlModeErrorKind::BlockingCommand => ErrorKind::InvalidInput,
                 // A limit was reached and the command was not carried out,
                 // which is what `Refused` says. The connection is fine.
                 ControlModeErrorKind::Unread => ErrorKind::Refused,
