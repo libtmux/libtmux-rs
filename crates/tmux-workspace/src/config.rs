@@ -99,6 +99,8 @@ pub struct Workspace {
     /// Commands run in every pane before its own, in order.
     pub shell_command_before: Vec<String>,
     /// Whether to keep pane commands out of the shell's history.
+    ///
+    /// A file that does not say reads as `true`, as in tmuxp.
     pub suppress_history: bool,
     /// The windows to create, in order.
     pub windows: Vec<WindowConfig>,
@@ -234,7 +236,9 @@ impl Workspace {
                 &document["shell_command_before"],
                 "shell_command_before",
             )?,
-            suppress_history: is_true(&document["suppress_history"], "suppress_history")?,
+            // tmuxp suppresses unless a file says otherwise.
+            suppress_history: optional_bool(&document["suppress_history"], "suppress_history")?
+                .unwrap_or(true),
             windows,
             unsupported_keys: unsupported(document, SESSION_KEYS),
         })
@@ -521,8 +525,8 @@ impl Workspace {
         if let Some(directory) = &self.start_directory {
             let _ = writeln!(out, "start_directory: {}", path(directory));
         }
-        if self.suppress_history {
-            out.push_str("suppress_history: true\n");
+        if !self.suppress_history {
+            out.push_str("suppress_history: false\n");
         }
         write_pairs(&mut out, Some("environment"), &self.environment, 2);
         write_pairs(&mut out, Some("options"), &self.options, 2);

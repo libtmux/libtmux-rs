@@ -107,7 +107,7 @@ pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
         options: Vec::new(),
         global_options: Vec::new(),
         shell_command_before: Vec::new(),
-        suppress_history: false,
+        suppress_history: true,
         windows,
         unsupported_keys: Vec::new(),
     })

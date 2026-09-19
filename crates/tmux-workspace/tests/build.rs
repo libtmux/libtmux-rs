@@ -787,6 +787,80 @@ windows:
     drop(session);
 }
 
+/// The line some pane of `session` shows holding exactly `text`, once one does.
+///
+/// Callers point `default-command` at `cat`, so a pane shows exactly what was
+/// typed into it: a command kept out of history is the line that starts with
+/// a space.
+async fn typed_line(session: &libtmux::Session, text: &str) -> String {
+    let mut seen = None;
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+        for pane in session.panes().await.unwrap_or_default() {
+            seen = pane.capture().await.ok().and_then(|lines| {
+                lines
+                    .iter()
+                    .map(|line| line.to_string_lossy().trim_end().to_owned())
+                    .find(|line| line.trim_start() == text)
+            });
+            if seen.is_some() {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert!(settled.is_ok(), "{text:?} reached a pane");
+    seen.expect("the line was seen")
+}
+
+/// tmuxp keeps a file's commands out of shell history unless it says not to,
+/// by typing each with a leading space.
+#[tokio::test]
+async fn commands_stay_out_of_history_unless_the_file_says_otherwise() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut silent = Workspace::from_yaml(
+        "session_name: silent\nwindows:\n  - panes:\n      - typed by default\n",
+    )
+    .expect("configuration parses");
+    // tmuxp's own example: the session records, one window and one pane opt
+    // back out.
+    let mut example = Workspace::from_yaml(include_str!("fixtures/tmuxp/suppress-history.yaml"))
+        .expect("tmuxp's example parses");
+    for workspace in [&mut silent, &mut example] {
+        workspace
+            .global_options
+            .push(("default-command".to_owned(), "exec cat".to_owned()));
+    }
+
+    let silent = WorkspaceBuilder::new(server)
+        .build(&silent)
+        .await
+        .expect("workspace builds");
+    assert_eq!(
+        typed_line(&silent, "typed by default").await,
+        " typed by default"
+    );
+
+    let example = WorkspaceBuilder::new(server)
+        .build(&example)
+        .await
+        .expect("tmuxp's example builds");
+    for (command, suppressed) in [
+        (r#"echo "window in the history!""#, false),
+        (r#"echo "window not in the history!""#, true),
+        (r#"echo "session in the history!""#, false),
+        (r#"echo "command in the history!""#, false),
+        (r#"echo "command not in the history!""#, true),
+    ] {
+        let line = typed_line(&example, command).await;
+        assert_eq!(line.starts_with(' '), suppressed, "{line:?}");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A file is fixed in an editor, so an error names the line to go to.
 #[test]
 fn an_error_names_the_line_and_column_to_fix() {
