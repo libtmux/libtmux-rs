@@ -2,18 +2,22 @@
 
 use crate::version::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
 
+#[cfg(feature = "unstable-fuzzing")]
+mod fuzz;
 mod plan;
 mod row;
 mod text;
 
+#[cfg(feature = "unstable-fuzzing")]
+pub use fuzz::__fuzz_format_rows;
 pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose};
 #[cfg(test)]
 use plan::{PlanVersion, TransportDialect, for_profile_selection_test};
 #[cfg(test)]
-use row::QUOTE_SHELL_SPECIALS;
-#[cfg(test)]
 pub(crate) use row::{FIELD_SEPARATOR, FormatCodecPhase, decode_ascii};
 pub(crate) use row::{FormatCodecError, FormatCodecErrorKind, ParsedRow, ParsedSlot, decode_text};
+#[cfg(test)]
+use row::{QUOTE_SHELL_SPECIALS, encode_like_tmux};
 pub use text::TmuxText;
 
 /// Decoder applied to a parsed format slot.

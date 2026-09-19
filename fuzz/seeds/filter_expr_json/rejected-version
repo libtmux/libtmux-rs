@@ -1,0 +1,1 @@
+{"version":2,"target":"pane","expr":{"op":"eq","field":"pane_active","value":true}}

@@ -334,11 +334,12 @@ not in its generated output, and survive rerecording. A `missing` row is a
 field a listing could carry and does not; adding one is ordinary work, leaving
 it unrecorded is not.
 
-**Parsers that read from outside are fuzzed.** The control-mode line parser,
-the filter-expression wire format, and the workspace YAML loader each have a
-target under `fuzz/`. Add one when adding a parser that reads bytes this crate
-did not write, and seed it — an unseeded target proves only that arbitrary
-input is not valid input.
+**Parsers that read from outside are fuzzed.** `just fuzz-list` names a target
+for each; `design.md` says what each checks. Add one when adding a parser that
+reads bytes this workspace did not write, seed it from real output, and give it
+an oracle where one exists — an unseeded target proves only that arbitrary
+input is not valid input, and one without an oracle proves only that it does
+not panic.
 
 **Packaging is a gate.** `just package` builds the published crates and
 verifies what the tarballs contain. A packaged crate ships its README, so a

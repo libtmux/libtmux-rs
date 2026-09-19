@@ -364,6 +364,9 @@ pub use error::{
     Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind, ScopeError,
     ServerConfigurationErrorKind, ServerGoneKind,
 };
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use formats::__fuzz_format_rows;
 pub use formats::TmuxText;
 pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[cfg(feature = "control-mode")]

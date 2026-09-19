@@ -1791,14 +1791,25 @@ doing it during an alpha rather than after one.
 
 ### Fuzzing the parsers that read from outside
 
-Three surfaces take bytes this crate did not write, and each is fuzzed:
+Every surface that takes bytes this workspace did not write is fuzzed:
 
-- the control-mode line parser, which reads from a tmux that keeps running, so
-  a malformed line is not a command that failed but bytes it has to survive;
-- the versioned filter-expression wire format, which can arrive from a config
-  file, a CLI argument, or an MCP tool call;
-- the tmuxp-style workspace loader, which walks a hand-written nested document
-  deciding what each value means.
+- the control-mode line parser (`control_line`), which reads from a tmux that
+  keeps running, so a malformed line is not a command that failed but bytes it
+  has to survive;
+- control-mode block framing (`control_block`): a stream read inside and
+  outside `%begin` blocks, each closed block handed to the slots that assemble
+  a chain's reply, checked that no line escapes its block and no reply holds
+  blocks another command owns;
+- the format-row codec every listing decodes through (`format_rows`), whose
+  names, paths and titles users and programs write, checked by writing values
+  the way each dialect of tmux prints them and decoding them back;
+- the versioned filter-expression wire format (`filter_expr_json`), which can
+  arrive from a config file, a CLI argument, or an MCP tool call, checked that
+  what it accepts writes out and reads back as the same expression;
+- the tmuxp-style workspace loader (`workspace_yaml`), which walks a
+  hand-written nested document deciding what each value means;
+- tmux-mcp's escape filter (`text_filter`), which reads pane output, checked
+  that text written after a sequence tmux would have ended is never swallowed.
 
 `fuzz/` is not a workspace member. It needs nightly and a sanitizer, and
 `just check` has to stay runnable on stable, so it is excluded and reached
@@ -1812,13 +1823,16 @@ command. `fuzz/seeds/` carries those shapes -- including a line that is not
 UTF-8, because pane output is not required to be. What the fuzzer discovers
 from them is not checked in; the seeds are.
 
-`__fuzz_parse_control_line` exists because the parser is private and should
-stay private. It is behind `unstable-fuzzing`, which is not in `full` and
-which nothing but `fuzz/` turns on.
+The `__fuzz_*` functions exist because the parsers are private and should stay
+private. They are behind `unstable-fuzzing`, which is not in `full` and which
+nothing but `fuzz/` turns on. tmux-mcp's filter needs only `std`, so the
+target compiles its source file instead of adding a feature to a published
+binary crate.
 
 CI runs them weekly rather than per-push. This kind of testing finds things by
 running for a long time, so a schedule is worth more than a gate nobody can
-wait for, and a crash is uploaded as an artifact rather than left in a log.
+wait for. Each target's corpus is cached between runs, since the corpus is
+what grows, and a crash is uploaded as an artifact rather than left in a log.
 
 ### The public surface is recorded, because nothing else reports drift
 

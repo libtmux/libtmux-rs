@@ -9,7 +9,7 @@ use super::{
     PANE_INFO_SUPPLEMENTS, ParsedRow, ParsedSlot, PlanFieldState, PlanPurpose, PlanVersion,
     ProfileSet, QUOTE_SHELL_SPECIALS, RequiredContext, SESSION_ID, SESSION_INFO_DESCRIPTORS,
     SESSION_INFO_SUPPLEMENTS, SemanticOwner, TransportDialect, WINDOW_ID, WINDOW_INFO_DESCRIPTORS,
-    WINDOW_INFO_SUPPLEMENTS, for_profile_selection_test,
+    WINDOW_INFO_SUPPLEMENTS, encode_like_tmux, for_profile_selection_test,
 };
 #[cfg(feature = "test-support")]
 use crate::Command;
@@ -213,7 +213,7 @@ fn format_codec_round_trips_every_byte_through_the_vis_dialect() {
 
     for byte in 1..=u8::MAX {
         let mut wire = Vec::new();
-        encode_like_tmux_vis(byte, &mut wire);
+        encode_like_tmux(&[byte], &Q_SHELL_ESCAPED, TransportDialect::Vis, &mut wire);
         wire.push(b'=');
         wire.push(b'\n');
 
@@ -225,39 +225,6 @@ fn format_codec_round_trips_every_byte_through_the_vis_dialect() {
 
         assert_eq!(slots, [[byte].as_slice()], "byte {byte:#04x} round-trips");
     }
-}
-
-/// Reproduce tmux's `#{q:}` then `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH` output
-/// for one single-byte value.
-fn encode_like_tmux_vis(byte: u8, wire: &mut Vec<u8>) {
-    if QUOTE_SHELL_SPECIALS.contains(&byte) {
-        wire.push(b'\\');
-        wire.push(byte);
-        return;
-    }
-    // `isvisible` keeps printable ASCII, space, tab, and newline literal.
-    if byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t' | b'\n') {
-        wire.push(byte);
-        return;
-    }
-    if let Some(letter) = [
-        (0x07, b'a'),
-        (0x08, b'b'),
-        (0x0b, b'v'),
-        (0x0c, b'f'),
-        (0x0d, b'r'),
-    ]
-    .into_iter()
-    .find_map(|(control, letter)| (byte == control).then_some(letter))
-    {
-        wire.push(b'\\');
-        wire.push(letter);
-        return;
-    }
-    wire.push(b'\\');
-    wire.push(b'0' + (byte >> 6));
-    wire.push(b'0' + ((byte >> 3) & 0o7));
-    wire.push(b'0' + (byte & 0o7));
 }
 
 fn rows(plan: &FormatPlan, stdout: &[u8]) -> Vec<ParsedRow> {

@@ -360,7 +360,7 @@ impl Hash for ServerIdentity {
 }
 
 impl ServerIdentity {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "unstable-fuzzing"))]
     pub(crate) fn from_socket_path(socket_path: PathBuf) -> Self {
         Self { socket_path }
     }

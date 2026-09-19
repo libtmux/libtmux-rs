@@ -1,0 +1,1 @@
+{"version":1,"target":"pane","expr":{"op":"not","expr":{"op":"or","args":[{"op":"starts_with_ignore_case","field":"pane_title","value":"Build"},{"op":"not_in","field":"pane_index","value":["0","4294967295"]}]}}}

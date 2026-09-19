@@ -62,6 +62,8 @@ use crate::version::since::CONTROL_PANE_OFF;
 use crate::{Command, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId};
 
 mod actor;
+#[cfg(feature = "unstable-fuzzing")]
+mod fuzz;
 mod protocol;
 
 #[cfg(test)]
@@ -1595,6 +1597,10 @@ impl Stream for PaneOutput {
 pub fn __fuzz_parse_control_line(line: &[u8]) {
     let _ = Line::parse(line);
 }
+
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use fuzz::__fuzz_control_blocks;
 
 #[cfg(test)]
 mod tests;

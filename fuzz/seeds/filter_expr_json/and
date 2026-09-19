@@ -1,1 +1,1 @@
-{"version":1,"target":"pane","expr":{"and":[{"field":"pane_index","op":"gt","value":1}]}}
+{"version":1,"target":"pane","expr":{"op":"and","args":[{"op":"gt","field":"pane_index","value":"1"},{"op":"eq","field":"pane_active","value":true},{"op":"regex","field":"pane_current_command","value":"^(vim|nvim)$"},{"op":"in","field":"pane_title","value":["a","b"]}]}}

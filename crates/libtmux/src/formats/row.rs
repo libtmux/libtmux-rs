@@ -263,6 +263,50 @@ const fn vis_cstyle_byte(letter: u8) -> Option<u8> {
     }
 }
 
+/// Write `value` as tmux prints `#{q:value}`: a backslash before each byte of
+/// `escaped`, then, for [`TransportDialect::Vis`], `VIS_OCTAL|VIS_CSTYLE|
+/// VIS_NOSLASH` over the result.
+///
+/// Written from tmux's side rather than from the decoder's constants, so a
+/// round trip through it checks the decoder against tmux.
+#[cfg(any(test, feature = "unstable-fuzzing"))]
+pub(crate) fn encode_like_tmux(
+    value: &[u8],
+    escaped: &[u8],
+    dialect: TransportDialect,
+    wire: &mut Vec<u8>,
+) {
+    for &byte in value {
+        if escaped.contains(&byte) {
+            wire.extend_from_slice(&[b'\\', byte]);
+        } else if dialect == TransportDialect::RawQ
+            // `isvisible` keeps printable ASCII, space, tab, and newline.
+            || byte.is_ascii_graphic()
+            || matches!(byte, b' ' | b'\t' | b'\n')
+        {
+            wire.push(byte);
+        } else if let Some(letter) = [
+            (0x07, b'a'),
+            (0x08, b'b'),
+            (0x0b, b'v'),
+            (0x0c, b'f'),
+            (0x0d, b'r'),
+        ]
+        .into_iter()
+        .find_map(|(control, letter)| (byte == control).then_some(letter))
+        {
+            wire.extend_from_slice(&[b'\\', letter]);
+        } else {
+            wire.extend_from_slice(&[
+                b'\\',
+                b'0' + (byte >> 6),
+                b'0' + ((byte >> 3) & 0o7),
+                b'0' + (byte & 0o7),
+            ]);
+        }
+    }
+}
+
 /// Decode exactly three octal digits into one byte.
 fn decode_octal_escape(digits: &[u8]) -> Option<u8> {
     let mut value: u8 = 0;

@@ -236,7 +236,7 @@ impl ReplySlots {
         self.push_ordered(result, deadline, None, 1);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "unstable-fuzzing"))]
     pub(super) fn push_chain(
         &mut self,
         result: oneshot::Sender<Result<BlockResult, Error>>,
