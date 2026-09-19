@@ -41,9 +41,10 @@ const TEMPLATE: &str =
 /// let version = server.capabilities().await?.tmux_version().clone();
 /// if version.has_behavior(&libtmux::since::LIST_KEYS_FORMAT) {
 ///     let bindings = server.typed_key_bindings(Some("prefix")).await?;
-///     let bound = bindings.iter().find(|binding| binding.key() == "Y");
-///
-///     let bound = bound.expect("the binding is listed");
+///     let bound = bindings
+///         .iter()
+///         .find(|binding| binding.key() == "Y")
+///         .ok_or("the binding is listed")?;
 ///     assert_eq!(bound.command(), "display-message hello");
 ///     assert!(!bound.repeats());
 ///     assert_eq!(bound.note(), None);

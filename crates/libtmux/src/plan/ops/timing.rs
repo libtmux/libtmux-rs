@@ -28,6 +28,7 @@ use super::{Chainable, Effects, Op, Operation, Safety};
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::time::Duration;
 ///
 /// use libtmux::PaneId;
@@ -39,9 +40,10 @@ use super::{Chainable, Effects, Op, Operation, Safety};
 /// plan.add(Pause::new(Duration::from_millis(1500)));
 /// plan.add(SendKeys::new(pane).text("./migrate").enter());
 ///
-/// let pause = plan.preview().remove(1).expect("a pause renders");
+/// let pause = plan.preview().remove(1).ok_or("a pause renders")?;
 /// assert_eq!(pause.summary().to_string(), r#""run-shell" "-d" "1.5""#);
-/// # Ok::<(), libtmux::IdParseError>(())
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
