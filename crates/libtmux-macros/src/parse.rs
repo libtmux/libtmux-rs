@@ -160,13 +160,8 @@ fn parse_crate_path(meta: Meta, options: &mut ContainerOptions, errors: &mut Err
 }
 
 pub(super) fn parse_field(field: &Field, errors: &mut Errors) -> Option<FieldSpec> {
-    let Some(ident) = field.ident.clone() else {
-        errors.push(syn::Error::new(
-            field.span(),
-            "Filterable fields must have identifiers",
-        ));
-        return None;
-    };
+    // Always present: `named_fields` hands over the fields of a named struct.
+    let ident = field.ident.clone()?;
     let mut options = FieldOptions::default();
     for_each_filterable_meta(&field.attrs, errors, |meta, errors| {
         parse_field_meta(meta, &mut options, errors);

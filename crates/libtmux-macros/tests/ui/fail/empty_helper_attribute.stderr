@@ -1,0 +1,5 @@
+error: filterable attributes require at least one option
+ --> tests/ui/fail/empty_helper_attribute.rs:5:1
+  |
+5 | #[filterable()]
+  | ^

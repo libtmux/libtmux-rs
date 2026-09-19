@@ -1,0 +1,5 @@
+error: unknown filterable container option
+ --> tests/ui/fail/container_option_path.rs:4:41
+  |
+4 | #[filterable(target = "container_path", serde::rename = "other")]
+  |                                         ^^^^^

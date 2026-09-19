@@ -372,6 +372,11 @@ The floor is stated in several places, and they have to agree:
 then the `tmux-mcp` tests on 1.88.0. `rust-toolchain.toml` pins a much newer
 toolchain for day-to-day work; it is not the floor and does not prove one.
 
+The derive's compile-fail cases pin rustc's diagnostics, which change between
+releases, so they run on the pinned toolchain only; the MSRV run checks the
+passing cases. After a toolchain bump, `just macros-ui-bless` rewrites their
+`.stderr` files; review the diff before committing it.
+
 ## Dependencies
 
 - A declared version is the **minimum supported**, not the newest published,

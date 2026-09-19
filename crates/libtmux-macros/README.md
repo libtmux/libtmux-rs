@@ -68,8 +68,8 @@ naming the field, not an expression that quietly matches nothing.
 | `#[filterable(rename = "…")]` | field | Uses a different name in expressions |
 | `#[filterable(skip)]` | field | Leaves the field out |
 | `#[filterable(enum)]` | field | Treats the field as a closed set of values |
-| `#[filterable(many = …)]` | field | Declares a one-to-many relation |
-| `#[filterable(one = …)]` | field | Declares a one-to-one relation |
+| `#[filterable(many)]` | `Vec<T>` field | Declares a one-to-many relation |
+| `#[filterable(one)]` | `Option<T>` field | Declares a one-to-one relation |
 
 A relation lets a question about what a value *contains* stay one expression:
 `parents.children.any(children.name.eq("build"))`.

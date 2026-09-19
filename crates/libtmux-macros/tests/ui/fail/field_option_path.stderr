@@ -1,0 +1,5 @@
+error: unknown filterable field option
+ --> tests/ui/fail/field_option_path.rs:6:18
+  |
+6 |     #[filterable(serde::skip)]
+  |                  ^^^^^
