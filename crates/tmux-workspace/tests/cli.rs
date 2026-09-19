@@ -4059,10 +4059,13 @@ async fn a_mid_build_failure_removes_the_session_and_the_rerun_fails_the_same_wa
 }
 
 /// Reusing a session means the workspace is already there. One that is
-/// missing a window the document asks for is reported as the partial thing
-/// it is, naming what is absent, and is left exactly as it was found.
+/// missing a window the document asks for is found, not missing, so this is
+/// `session_mismatch` rather than `session_not_found`: nothing was built or
+/// changed, so `status` is `error` rather than `partial`, and the message
+/// names the first thing absent. The session is left exactly as it was
+/// found.
 #[tokio::test]
-async fn reusing_a_session_without_the_document_s_windows_is_partial() {
+async fn reusing_a_session_without_the_document_s_windows_is_a_mismatch() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let session = guard
         .server()
@@ -4090,11 +4093,12 @@ async fn reusing_a_session_without_the_document_s_windows_is_partial() {
     );
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "session_mismatch", "{diagnostic}");
     let message = diagnostic["message"].as_str().unwrap();
     assert!(message.contains("\"two\""), "{diagnostic}");
     assert!(!message.contains("\"one\""), "{diagnostic}");
     assert_eq!(
-        diagnostic["retained_state"]["status"], "partial",
+        diagnostic["retained_state"]["status"], "error",
         "{diagnostic}"
     );
     assert_eq!(session.windows().await.unwrap().len(), 1);
@@ -4102,16 +4106,17 @@ async fn reusing_a_session_without_the_document_s_windows_is_partial() {
 }
 
 /// Every machine code a refusal reports is one a consumer can switch on: the
-/// nine conditions the envelope defines, plus the interruption record, which
+/// ten conditions the envelope defines, plus the interruption record, which
 /// is its own contract. A layout name that is not a layout is a defect in the
 /// document, caught before any tmux command, and is reported as one.
 #[tokio::test]
 async fn refusals_report_only_shared_machine_codes() {
-    const SHARED: [&str; 10] = [
+    const SHARED: [&str; 11] = [
         "workspace_not_found",
         "invalid_workspace",
         "unsupported_key",
         "session_not_found",
+        "session_mismatch",
         "tmux_unavailable",
         "tmux_failed",
         "script_failed",

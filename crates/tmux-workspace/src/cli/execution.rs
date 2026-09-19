@@ -46,10 +46,6 @@ struct Effects {
     session: Option<Session>,
     owned: bool,
     changed: bool,
-    /// The session is there but does not hold everything the document asks
-    /// for. Nothing was mutated, so `changed` stays false, yet the load is
-    /// not a clean failure either.
-    incomplete: bool,
     mutation_started: Option<&'static str>,
     windows: Vec<String>,
     panes: Vec<String>,
@@ -72,7 +68,7 @@ impl LoadState {
         let mut results = self.results.clone();
         if let Some(effects) = &self.current {
             let uncertain = error.code == "interrupted" && effects.mutation_started.is_some();
-            partial |= effects.changed || effects.incomplete || uncertain;
+            partial |= effects.changed || uncertain;
             failure["input_index"] = json!(effects.input);
             failure["partial_effects"] = json!(effects.changed);
             failure["effects"] = effects.value();
@@ -548,17 +544,18 @@ async fn load_one(
     // is checked rather than assumed; converging one that is not is a
     // separate job this does not do. Declining the prompt asked for no
     // workspace at all, and the extension route builds through tmuxp, which
-    // decides for itself what reuse means.
+    // decides for itself what reuse means. A session found but found wanting
+    // is `session_mismatch`, not `session_not_found`: it is right there, so a
+    // consumer branching on "go find it" would look forever. Nothing was
+    // built or changed, so this reports `error`, never `partial`.
     if reused && !workspace.bridge && !matches!(disposition, Some(Disposition::Decline)) {
         let missing = missing_windows(&session, workspace).await?;
-        if !missing.is_empty() {
-            effects.incomplete = true;
+        if let Some(first) = missing.first() {
             return Err(CliError::new(
-                "session_not_found",
+                "session_mismatch",
                 format!(
-                    "session {:?} is already running without {}; nothing was changed",
-                    workspace.name,
-                    missing.join(", ")
+                    "session {:?} is already running without {first}; nothing was changed",
+                    workspace.name
                 ),
             ));
         }
