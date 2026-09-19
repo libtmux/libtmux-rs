@@ -84,6 +84,7 @@ impl Reporter {
     }
 
     /// Something the command carries on past and a person still needs told.
+    ///
     /// The machine modes already carry every event; this adds the line the
     /// human mode otherwise never shows, on stderr so it never mixes with a
     /// captured document.

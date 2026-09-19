@@ -4278,6 +4278,7 @@ async fn a_null_start_directory_is_absent_and_an_absent_one_is_reported() {
 }
 
 /// A pane's command waits for that pane's shell, whatever shell that is.
+///
 /// Sent before the line editor owns the terminal, the text is echoed by the
 /// tty and redrawn by the editor, so the command reads twice. A shell that
 /// never reaches a prompt is how the wait itself is observed: it runs, and
