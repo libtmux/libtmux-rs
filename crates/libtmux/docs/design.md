@@ -63,6 +63,16 @@ object APIs.
 - Reproducing Python's `QueryList` type, its equality and lookup-suffix
   defects, stale fields, or cross-server identity defects.
 - A process-global engine or operation registry.
+- Runtime independence. `tokio` is a required dependency, not an optional one:
+  the crate spawns and supervises child processes, bounds every dispatch with a
+  timer, and multiplexes a control connection, so it needs a runtime's process
+  reaping and timers rather than only its executor. `async-std` and `smol`
+  offer no compatible child supervision, and abstracting over the parts that
+  differ would mean either a lowest-common-denominator transport or a second
+  one to keep in step. `blocking::Runtime` is how code that is not async calls
+  in; it is a `tokio` current-thread runtime, so entering it from inside
+  another runtime is a panic rather than a nested executor -- use
+  `blocking::Runtime::try_run` where that is possible.
 
 ## Compatibility contract
 
