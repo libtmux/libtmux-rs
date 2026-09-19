@@ -78,9 +78,12 @@ fn directory(value: &Value, parent: &Path) -> Result<PathBuf> {
     })
 }
 
-/// The separator in a session name that tmux would read as the start of a
-/// window or pane in target syntax, which leaves the session unaddressable.
-/// One rule, so what `freeze` writes is what `load` accepts.
+/// The separator in a session name that an ordinary `-t name` target reads
+/// as the start of a window or pane rather than part of the name. tmux
+/// 3.7a and later can still reach such a session with an explicit `name:`
+/// terminator, but no plain target -- the kind a person or another tool
+/// types -- can, so this refuses the name outright. One rule, so what
+/// `freeze` writes is what `load` accepts.
 pub(super) fn unaddressable(name: &str) -> Option<char> {
     name.chars().find(|c| matches!(c, ':' | '.'))
 }

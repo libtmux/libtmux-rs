@@ -26,6 +26,12 @@ full.
   `session_not_found`, the same answer a name that is not running gets, whether
   or not a name was supplied. (#27)
 
+- `tmux-workspace freeze <name>` refuses a name containing `:` or `.` on the
+  name alone, before asking tmux whether a session by it exists: `load` would
+  refuse the same document regardless, and asking tmux first would answer
+  `session_not_found` for a name that could never resolve as typed either way.
+  (#27)
+
 - `tmux-workspace freeze` writes only where `--save-to` names it to, and returns
   the captured document on stdout under `--json` or `--ndjson`. No destination
   is derived from the session, because tmux allows a session name to hold path
@@ -189,9 +195,12 @@ full.
   (#27)
 
 - **Breaking.** `Workspace::from_yaml` refuses a `session_name` containing `:`
-  or `.`. tmux stores the name verbatim, and those characters are the window and
-  pane separators in a `-t` target, so such a session could be created but never
-  addressed by name again -- not even to kill it. (#27)
+  or `.`. Those characters are the window and pane separators in a `-t`
+  target: some tmux releases silently rewrite one out of the name at session
+  creation, one refuses the name outright, and releases that keep it verbatim
+  still misread an ordinary `-t name` target as a window or pane rather than
+  the session -- reaching it afterward needs a `name:` terminator, which
+  nothing that types a plain target uses. (#27)
 
 - `tmux_workspace::freeze()` omits a pane's `shell_command` when it is sitting
   at an ordinary interactive shell rather than naming that shell, which built a

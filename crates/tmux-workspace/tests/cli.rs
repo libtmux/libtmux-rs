@@ -4404,19 +4404,16 @@ async fn a_pane_command_waits_for_any_shell_not_only_zsh() {
     guard.shutdown().await.unwrap();
 }
 
-/// tmux runs a session whose name holds a target separator; a workspace file
-/// naming one cannot be loaded, because the name cannot be addressed. Capture
-/// refuses it where the session is, rather than writing a file that is
-/// rejected the moment it is used.
+/// A workspace file naming a session whose name holds a target separator
+/// cannot be loaded, because no plain target reaches such a session on any
+/// tmux release. `freeze` refuses the name outright, before ever asking
+/// tmux whether a session by it exists: the answer does not depend on
+/// whether that session is running, was renamed at creation, or was refused
+/// there, so this needs no live session and no tmux-version gate to hold on
+/// every supported release.
 #[tokio::test]
 async fn freeze_refuses_a_session_name_load_would_not_accept() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
-    guard
-        .server()
-        .new_session(libtmux::NewSessionOptions::new("my.proj"))
-        .await
-        .unwrap();
-    assert!(guard.server().has_session("my.proj").await.unwrap());
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let destination = directory.path().join("frozen.yaml");
     let output = at(
@@ -4438,6 +4435,52 @@ async fn freeze_refuses_a_session_name_load_would_not_accept() {
         diagnostic["message"].as_str().unwrap().contains("my.proj"),
         "{diagnostic}"
     );
+    assert!(!destination.exists(), "the refused capture wrote a file");
+    guard.shutdown().await.unwrap();
+}
+
+/// Refusing the name alone, before any lookup, means an existing session by
+/// that literal name is refused exactly like one that was never there --
+/// not read back as `session_not_found`, which would send someone looking
+/// for a session that is, in fact, right there.
+///
+/// Only tmux 3.7a and later ever keeps `new-session -s my.proj` verbatim;
+/// earlier releases rewrite the separator out and 3.7 refuses the name at
+/// creation, so this skips itself rather than assume a version where the
+/// live session this test needs cannot exist.
+#[tokio::test]
+async fn freeze_refuses_an_existing_dotted_session_the_same_way() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let Ok(session) = guard
+        .server()
+        .new_session(libtmux::NewSessionOptions::new("my.proj"))
+        .await
+    else {
+        guard.shutdown().await.unwrap();
+        return;
+    };
+    if session.name().to_string_lossy() != "my.proj" {
+        guard.shutdown().await.unwrap();
+        return;
+    }
+
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let destination = directory.path().join("frozen.yaml");
+    let output = at(
+        &[
+            "freeze",
+            "my.proj",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--json",
+            "--save-to",
+            destination.to_str().unwrap(),
+        ],
+        directory.path(),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "invalid_workspace", "{diagnostic}");
     assert!(!destination.exists(), "the refused capture wrote a file");
     guard.shutdown().await.unwrap();
 }

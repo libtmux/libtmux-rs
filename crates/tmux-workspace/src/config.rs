@@ -162,8 +162,11 @@ impl Workspace {
             .as_str()
             .ok_or_else(|| ConfigError::invalid("session_name must be a string"))?
             .to_owned();
-        // tmux stores the name verbatim; `:` and `.` are `-t`'s window and
-        // pane separators, so a name with either becomes unaddressable.
+        // `:` and `.` are `-t`'s window and pane separators, so an ordinary
+        // target misreads a name that holds either. Some tmux releases
+        // rewrite the character out at session creation and one refuses the
+        // name outright; on releases that keep it, only a `name:`
+        // terminator reaches the session, which no plain target uses.
         if let Some(separator) = session_name.chars().find(|c| matches!(c, ':' | '.')) {
             return Err(ConfigError::invalid(format!(
                 "session_name must not contain {separator:?}; tmux reads it as a target separator and the session could not be addressed afterward"

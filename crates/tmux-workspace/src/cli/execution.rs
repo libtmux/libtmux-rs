@@ -1207,15 +1207,21 @@ fn session_dimensions() -> Result<Option<(u32, u32)>> {
     Ok(Some((width, height)))
 }
 
-pub(super) async fn capture(session: &Session) -> Result<Value> {
-    // Capture is only worth anything if the result loads again, so a name
-    // load would refuse is refused here, before a file is written.
-    let name = session.name().to_string_lossy().into_owned();
-    if let Some(separator) = normalize::unaddressable(&name) {
+// Capture is only worth anything if the result loads again, so a name
+// `load` would refuse is refused here too, before a file is written or tmux
+// is even asked whether the session exists.
+fn refuse_unaddressable_name(name: &str) -> Result<()> {
+    if let Some(separator) = normalize::unaddressable(name) {
         return Err(CliError::invalid(format!(
             "session {name:?} cannot be captured: its name contains {separator:?}, which tmux reads as a target separator, so the workspace could not be loaded back"
         )));
     }
+    Ok(())
+}
+
+pub(super) async fn capture(session: &Session) -> Result<Value> {
+    let name = session.name().to_string_lossy().into_owned();
+    refuse_unaddressable_name(&name)?;
     let workspace = tmux_workspace::freeze(session).await?;
     let mut value = document::parse(&workspace.to_yaml())?;
     let windows = session.windows().await?;
@@ -1264,8 +1270,16 @@ fn option_value(value: libtmux::OptionValue) -> Value {
 
 pub(super) async fn freeze(args: &ArgMatches, report: &Reporter) -> Result<()> {
     let server = server(args)?;
-    let session =
-        selected_session(&server, option(args, "session_name").map(String::as_str)).await?;
+    let requested = option(args, "session_name");
+    // A name typed on the command line is refused on the name alone, before
+    // asking tmux whether a session by it exists: a name with a separator
+    // reads the same document `load` refuses whether or not tmux currently
+    // holds a session by it, and asking tmux first would answer
+    // `session_not_found` for a name that never had a chance either way.
+    if let Some(name) = requested {
+        refuse_unaddressable_name(name)?;
+    }
+    let session = selected_session(&server, requested.map(String::as_str)).await?;
     let value = capture(&session).await?;
     let format = option(args, "workspace-format").map_or("yaml", String::as_str);
     // A destination is never derived from the captured session: tmux lets a
