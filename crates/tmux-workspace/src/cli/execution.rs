@@ -1390,9 +1390,18 @@ async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result
     } else {
         "attach-session"
     };
-    let status = tokio::process::Command::new(server.tmux_executable())
-        .arg("-S")
-        .arg(server.socket_path())
+    let mut command = tokio::process::Command::new(server.tmux_executable());
+    command.arg("-S").arg(server.socket_path());
+    // The handoff is the same tmux the rest of the load talked to, so it is
+    // given the same endpoint flags: a client that ignored -2 or -f would
+    // come up with different colours or a different configuration.
+    if let Some(path) = server.config_file() {
+        command.arg("-f").arg(path);
+    }
+    if server.colors() == Some(256) {
+        command.arg("-2");
+    }
+    let status = command
         .arg(action)
         .arg("-t")
         .arg(session.id().to_string())
