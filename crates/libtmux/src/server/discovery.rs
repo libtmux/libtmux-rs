@@ -149,6 +149,14 @@ impl Server {
     /// predicate's meaning, and tmux documents no escaping for those values,
     /// so a lookup would be an injection point.
     ///
+    /// This also finds a session whose name holds `:` or `.`, which `-t
+    /// name` and `-t =name` both misread as a window or pane separator on
+    /// every tmux release, `=` included: tmux splits a target on `:`/`.`
+    /// before it looks for `=`. `docs/design.md` has the detail, including
+    /// the `name:` spelling that tmux 3.7a and later do accept for such a
+    /// name. Prefer [`Session::id`] over the name for any target built after
+    /// this call; an ID target parses with no split at all.
+    ///
     /// # Errors
     ///
     /// Returns an error when the session listing fails.
@@ -315,7 +323,9 @@ impl Server {
     /// Report whether a session with this exact name exists.
     ///
     /// The comparison is over raw bytes, because tmux permits session names
-    /// that are not valid UTF-8.
+    /// that are not valid UTF-8. It answers correctly for a name holding
+    /// `:` or `.` too, on releases that keep such a name at all -- see
+    /// [`Server::session`] for what that name then cannot be targeted with.
     ///
     /// # Errors
     ///

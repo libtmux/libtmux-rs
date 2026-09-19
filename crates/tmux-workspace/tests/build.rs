@@ -9,6 +9,45 @@ use libtmux::plan::Planner;
 use libtmux::test::TestServer;
 use tmux_workspace::{BuildError, Workspace, WorkspaceBuilder};
 
+#[tokio::test]
+async fn layout_preflight_precedes_workspace_creation() {
+    let guard = TestServer::new().await.unwrap();
+    let keeper = guard.session("layout-builder-keeper").await.unwrap();
+    let workspace = Workspace::from_yaml(
+        "session_name: layout-invalid\nwindows:\n- layout: b25d,80x24,0,0,0\n  panes: ['true', 'true']\n",
+    ).unwrap();
+    assert!(
+        !WorkspaceBuilder::new(guard.server())
+            .plan(&workspace)
+            .is_empty()
+    );
+    assert!(
+        WorkspaceBuilder::new(guard.server())
+            .build(&workspace)
+            .await
+            .is_err()
+    );
+    let sessions = guard.server().sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id(), keeper.id());
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn layout_preflight_empty_layout_keeps_default() {
+    let guard = TestServer::new().await.unwrap();
+    let workspace = Workspace::from_yaml(
+        "session_name: empty-layout\nwindows:\n- layout: ''\n  panes: ['true', 'true']\n",
+    )
+    .unwrap();
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .unwrap();
+    assert_eq!(session.panes().await.unwrap().len(), 2);
+    guard.shutdown().await.unwrap();
+}
+
 fn text(value: &TmuxText) -> String {
     String::from_utf8(value.as_bytes().to_vec()).expect("fixture values are UTF-8")
 }
@@ -64,6 +103,20 @@ windows:
 fn a_missing_session_name_is_rejected() {
     let error = Workspace::from_yaml("windows: []").expect_err("session_name is required");
     assert!(matches!(error, tmux_workspace::ConfigError::Invalid { .. },));
+}
+
+#[test]
+fn a_session_name_tmux_could_not_address_is_rejected() {
+    // tmux stores the name verbatim; `:` and `.` are `-t`'s window and
+    // pane separators, so a name with either becomes unaddressable.
+    for name in ["a:b", "a.b"] {
+        let error = Workspace::from_yaml(&format!("session_name: {name:?}\nwindows: []"))
+            .expect_err("an unaddressable session_name should be refused");
+        assert!(
+            matches!(error, tmux_workspace::ConfigError::Invalid { .. }),
+            "{name}: {error:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -727,15 +780,23 @@ async fn a_name_from_the_file_cannot_run_a_command() {
     // it would otherwise choose what runs.
     let directory = tempfile::tempdir().expect("a temporary directory");
     let marker = directory.path().join("marker");
+    // A dotted marker path would trip session_name's own refusal of `.`,
+    // for a reason this test is not about, so it gets a dot-free directory.
+    let session_directory = tempfile::Builder::new()
+        .prefix("session-name-guard")
+        .tempdir()
+        .expect("a temporary directory without a dot in its name");
+    let session_marker = session_directory.path().join("marker");
     let workspace = Workspace::from_yaml(&format!(
         "
 session_name: \"#(touch {0})\"
 windows:
-  - window_name: \"#(touch {0})\"
+  - window_name: \"#(touch {1})\"
     panes:
       - sleep 300
 ",
-        marker.display()
+        session_marker.display(),
+        marker.display(),
     ))
     .expect("configuration parses");
 
@@ -747,6 +808,10 @@ windows:
         .expect("the workspace builds");
 
     assert!(!marker.exists(), "a name from the file ran a command");
+    assert!(
+        !session_marker.exists(),
+        "a name from the file ran a command"
+    );
 
     // The name survives as the text it was, rather than being dropped.
     let windows = session.windows().await.expect("windows");
@@ -795,4 +860,192 @@ windows:
 
     guard.shutdown().await.expect("tmux fixture shuts down");
     drop(session);
+}
+
+#[tokio::test]
+async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
+    // The default shell round-trips with shell_command omitted; emitting
+    // it would reload the shell as an explicit command inside itself.
+    use libtmux::SplitDirection;
+
+    let guard = TestServer::new().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("freeze-shell")
+        .await
+        .expect("session starts");
+    let window = session
+        .active_window()
+        .await
+        .expect("window lookup")
+        .expect("a session has a window");
+    // Typed rather than passed as split-window's own command: some
+    // shells (dash) don't exec-replace a `-c` command, which would
+    // leave the wrapping shell as pane_current_command forever.
+    let other = window.split(SplitDirection::Below).await.expect("split");
+    other.send_line("sleep 300").await.expect("type command");
+
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(10), async || {
+        let Ok(refreshed) = other.refreshed().await else {
+            return false;
+        };
+        refreshed
+            .current_command()
+            .is_some_and(|command| command.to_string_lossy() == "sleep")
+    })
+    .await;
+    assert!(settled.is_ok(), "the split pane's command settled");
+
+    let frozen = tmux_workspace::freeze(&session)
+        .await
+        .expect("the session freezes");
+
+    assert!(
+        frozen.windows[0].panes[0].shell_commands.is_empty(),
+        "the untouched pane runs the default shell and should omit shell_command: {:?}",
+        frozen.windows[0].panes[0].shell_commands
+    );
+    // pane_current_command is the command name only, not its arguments.
+    assert_eq!(frozen.windows[0].panes[1].shell_commands, ["sleep"]);
+
+    let yaml = frozen.to_yaml();
+    assert!(
+        yaml.contains("shell_command:\n") && yaml.contains("- \"sleep\""),
+        "a single shell_command must render as a YAML list:\n{yaml}"
+    );
+    assert!(
+        !yaml.contains("shell_command: \"sleep\""),
+        "shell_command must never render as a bare scalar:\n{yaml}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn library_builder_places_panes_after_the_first_in_config_order() {
+    // `-t <window>` always divides the active pane, which a detached
+    // split never changes, so splitting the window repeatedly reverses
+    // everything after the first pane.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: libpaneorder
+windows:
+  - window_name: plain
+    panes:
+      - printf 'MARK-A\\n'; sleep 300
+      - printf 'MARK-B\\n'; sleep 300
+      - printf 'MARK-C\\n'; sleep 300
+      - printf 'MARK-D\\n'; sleep 300
+",
+    )
+    .expect("the workspace parses");
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    let window = session.windows().await.expect("windows").remove(0);
+    let panes = window.panes().await.expect("panes");
+    assert_eq!(panes.len(), 4);
+
+    for (index, (pane, marker)) in panes
+        .iter()
+        .zip(["MARK-A", "MARK-B", "MARK-C", "MARK-D"])
+        .enumerate()
+    {
+        let seen = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
+            pane.capture().await.is_ok_and(|lines| {
+                lines
+                    .iter()
+                    .any(|line| line.to_string_lossy().contains(marker))
+            })
+        })
+        .await;
+        assert!(seen.is_ok(), "pane index {index} should show {marker}");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn freeze_recognizes_a_default_shell_whose_running_name_differs() {
+    // default-shell is a path, but on macOS /bin/sh runs as bash, so a
+    // bare pane's current command differs from its basename.
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    server
+        .set_global_option("default-command", "/bin/bash -i")
+        .await
+        .expect("override default-command");
+
+    let workspace =
+        Workspace::from_yaml("session_name: shellalias\nwindows:\n  - panes:\n      - blank\n")
+            .expect("the workspace parses");
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+
+    let pane = session.panes().await.expect("panes").remove(0);
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(10), async || {
+        let Ok(refreshed) = pane.refreshed().await else {
+            return false;
+        };
+        refreshed
+            .current_command()
+            .is_some_and(|command| command.to_string_lossy() == "bash")
+    })
+    .await;
+    assert!(settled.is_ok(), "the pane's command settled to bash");
+
+    let frozen = tmux_workspace::freeze(&session)
+        .await
+        .expect("the session freezes");
+
+    assert!(
+        frozen.windows[0].panes[0].shell_commands.is_empty(),
+        "an ordinary interactive shell should omit shell_command even when \
+         its reported name differs from default-shell's basename: {:?}",
+        frozen.windows[0].panes[0].shell_commands
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Halving each pane in turn runs out of rows before the fifth at a default
+/// terminal size. The builder rebalances between splits so a window the file
+/// asks for is a window the builder can make.
+#[tokio::test]
+async fn a_window_of_six_panes_builds_at_a_default_terminal_size() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: crowded
+windows:
+  - window_name: six
+    panes:
+      - sleep 300
+      - sleep 300
+      - sleep 300
+      - sleep 300
+      - sleep 300
+      - sleep 300
+",
+    )
+    .expect("configuration parses");
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("a six-pane window builds");
+    let windows = session.windows().await.expect("windows list");
+    assert_eq!(windows[0].pane_count(), 6);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }

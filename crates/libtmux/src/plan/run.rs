@@ -8,12 +8,12 @@
 //! guessing past it.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::str::FromStr as _;
 
 use super::planner::Planner;
-use super::{Op, OperationKind, Part, Plan, Scope, Step};
+use super::{Op, OperationKind, Part, Plan, Scope, SplitTarget, Step, WindowTarget};
 use crate::error::ListingDecodeError;
 use crate::formats::FormatCodecError;
 use crate::{
@@ -256,9 +256,9 @@ impl PlanResult {
         &self.steps
     }
 
-    /// How many tmux invocations the run cost.
+    /// How many invocations dispatched the recorded plan operations.
     ///
-    /// This is the number the planner changes, and the reason to change it.
+    /// The planner changes this count. Metadata and preflight probes are excluded.
     #[must_use]
     pub const fn dispatches(&self) -> usize {
         self.dispatches
@@ -282,6 +282,56 @@ impl PlanResult {
     }
 }
 
+/// Every recorded layout, paired with the panes its window will hold.
+///
+/// The count is a floor: the window's own pane, plus the splits the plan adds
+/// to it beforehand. tmux refuses a tree with fewer cells than panes, so a
+/// floor can miss such a refusal but never invent one -- a window the plan did
+/// not build may already hold more panes than the plan can see.
+fn layouts(steps: &[Op]) -> impl Iterator<Item = (&OsStr, usize)> {
+    steps.iter().enumerate().filter_map(|(step, op)| match op {
+        Op::SelectLayout(layout) => Some((
+            layout.layout.as_os_str(),
+            panes_in(&steps[..step], &layout.target),
+        )),
+        _ => None,
+    })
+}
+
+fn panes_in(before: &[Op], window: &WindowTarget) -> usize {
+    // A split may target a pane an earlier step made, not just the window,
+    // so track which pane identities (creating step, which output) trace
+    // back to this window, seeded from its own implicit first pane.
+    let mut known: Vec<(usize, Part)> = window
+        .slot()
+        .map(|first| (first.source_step, Part::FirstPane))
+        .into_iter()
+        .collect();
+    let mut panes = 1;
+    for (step, op) in before.iter().enumerate() {
+        match op {
+            Op::SplitWindow(split) => {
+                let belongs = match &split.target {
+                    SplitTarget::Window(target) => target == window,
+                    SplitTarget::Pane(pane) => pane
+                        .slot()
+                        .is_some_and(|slot| known.contains(&(slot.source_step, slot.part))),
+                };
+                if belongs {
+                    panes += 1;
+                    known.push((step, Part::Created));
+                }
+            }
+            // Attributing a killed pane to a window would need tmux, so a plan
+            // that kills one first falls back to the floor rather than risk
+            // refusing a layout that fits.
+            Op::KillPane(_) => return 1,
+            _ => {}
+        }
+    }
+    panes
+}
+
 impl Plan {
     /// Run this plan, grouping it with `planner`.
     ///
@@ -292,13 +342,15 @@ impl Plan {
     ///
     /// Returns an error when tmux cannot be reached, a process cannot be
     /// captured, a slot dependency is invalid, or a creating operation does
-    /// not return valid IDs. Validation happens before the first command. A
+    /// not return valid IDs, or a layout is invalid. Validation happens before
+    /// the first recorded command. Version-sensitive layouts may query metadata. A
     /// command tmux *refuses* is reported through the returned [`PlanResult`],
     /// not as an error, because a plan may expect one.
     pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.validate_option_scopes()?;
+        server.validate_layouts(layouts(self.steps())).await?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -699,7 +751,8 @@ impl Plan {
     ///
     /// Returns an error when the connection is closed, a command cannot be
     /// written, a slot dependency is invalid, or a creating operation does not
-    /// return valid IDs. Validation happens before the first command. A command
+    /// return valid IDs, or a layout is invalid. Validation happens before the
+    /// first recorded command. Version-sensitive layouts may query metadata. A command
     /// tmux refuses is reported in the [`PlanResult`].
     pub async fn run_over_control_mode(
         &self,
@@ -707,6 +760,24 @@ impl Plan {
     ) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
+        let pending = crate::layout::prepare(layouts(self.steps()))?;
+        if !pending.is_empty() {
+            let block = sender.send(crate::layout::version_command()).await?;
+            if let Some(error) = block.refusal_for("display-message") {
+                return Err(error);
+            }
+            let output = block
+                .output()
+                .iter()
+                .flat_map(|line| {
+                    line.as_bytes()
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(b'\n'))
+                })
+                .collect::<Vec<_>>();
+            crate::layout::resolve(&pending, &crate::TmuxVersion::parse_output(&output)?)?;
+        }
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());

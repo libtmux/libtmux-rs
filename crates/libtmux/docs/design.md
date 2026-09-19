@@ -1456,6 +1456,36 @@ session reports the same one, and one client changing it changes it for all of
 them. The pane follows from the window, because tmux keeps no per-client
 focus.
 
+### A name with `:` or `.` needs a terminator, and `=` does not help
+
+`Server::session` and `Server::has_session` find a session named `a:b` or
+`a.b` on any release that keeps such a name at all, because they compare
+`list-sessions` output in process rather than asking tmux to resolve a `-t`
+target for that name. Building a `-t` target from the bare name instead
+misreads it on every release: `cmd-find.c` splits the target on the first
+`:`, then on the first `.` in whatever follows the colon, before it ever
+looks for a leading `=`. `-t my.proj` reads as window `my`, pane `proj` in
+the current session; `-t =my.proj` fares no better, because `=` only marks
+whichever piece the split left it attached to as exact, and that piece is
+not the whole name.
+
+Appending a trailing `:` sidesteps the split: `-t my.proj:` and
+`-t =my.proj:` both resolve session `my.proj`, because the colon consumes
+the split point and leaves nothing after it for `.` to divide. That works on
+tmux 3.7a and later, which is also the range that keeps such a name rather
+than rewriting or refusing it. Measured against 3.7a, 3.7c, and master with
+`display-message -t <target> -p '#{session_name}'`.
+
+None of this makes the name safe to hand out. `name:` is not a spelling
+anyone reaches for, an ordinary `-t name` from a person or another tool
+still misreads it, and a session created before 3.7a never had the name to
+begin with. `tmux-workspace` refuses `:` and `.` in a `session_name` up
+front for that reason: a workspace built around a name most tooling cannot
+address is not a workspace `load` could reliably run again. Code in this
+crate that must build a `-t` target from something other than an ID resolves
+the session first and targets it by `SessionId`, which parses with no split
+at all.
+
 ### `list-clients` collapses three ways of being absent
 
 A client that is suspended, one that is locked, one that is dying and one that

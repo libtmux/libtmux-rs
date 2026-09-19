@@ -335,6 +335,8 @@ operation!(
 ///
 /// Applied once the pane count is final: tmux rebalances a layout on the next
 /// split, so applying it earlier is work the next split undoes.
+/// Plan execution checks every layout before dispatching recorded operations;
+/// constructing or previewing this operation performs no I/O.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
@@ -349,7 +351,7 @@ pub struct SelectLayout {
         )
     )]
     #[cfg_attr(feature = "schema", schemars(with = "crate::plan::wire::Argument"))]
-    layout: OsString,
+    pub(crate) layout: OsString,
 }
 
 impl SelectLayout {

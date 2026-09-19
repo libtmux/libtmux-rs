@@ -11,8 +11,72 @@ use super::{
     Chainable, Effects, Op, Operation, PaneSlot, PaneTarget, Safety, Scope, Slot, WindowTarget,
 };
 use super::{PANE_FORMAT, Resolver};
+#[cfg(feature = "serde")]
+use crate::plan::ProducerIdentity;
+use crate::plan::SlotUse;
 use crate::window::assignment;
 use crate::{Command, SplitDirection};
+
+/// `split-window`'s `-t`: a window (its active pane divides) or an exact
+/// pane. `-t <window>` always resolves to the active pane, which a
+/// detached split never changes, so a chain of splits needs the pane
+/// form (`SplitWindow::from_pane`) after the first.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum SplitTarget {
+    /// Divides whichever pane in the window is currently active.
+    Window(WindowTarget),
+    /// Divides this exact pane, regardless of which one is active.
+    Pane(PaneTarget),
+}
+
+impl SplitTarget {
+    pub(in crate::plan) fn slot(&self) -> Option<SlotUse> {
+        match self {
+            Self::Window(target) => target.slot(),
+            Self::Pane(target) => target.slot(),
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    pub(in crate::plan) fn rebind(&mut self, producers: &[Option<ProducerIdentity>]) {
+        match self {
+            Self::Window(target) => target.rebind(producers),
+            Self::Pane(target) => target.rebind(producers),
+        }
+    }
+
+    pub(crate) fn token(&self, resolve: Resolver<'_>) -> Option<OsString> {
+        match self {
+            Self::Window(target) => target.token(resolve),
+            Self::Pane(target) => target.token(resolve),
+        }
+    }
+}
+
+/// An older plan stores a bare [`WindowTarget`] here instead of today's
+/// tagged `{"Window":...}`/`{"Pane":...}`; the two shapes share no tag
+/// name, so falling back to the bare form is unambiguous.
+#[cfg(feature = "serde")]
+fn deserialize_split_target<'de, D>(deserializer: D) -> Result<SplitTarget, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Current(SplitTarget),
+        Legacy(WindowTarget),
+    }
+    Ok(match Wire::deserialize(deserializer)? {
+        Wire::Current(target) => target,
+        Wire::Legacy(target) => SplitTarget::Window(target),
+    })
+}
 
 /// Split a window, making a pane.
 #[derive(Clone)]
@@ -20,7 +84,11 @@ use crate::{Command, SplitDirection};
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SplitWindow {
-    pub(crate) target: WindowTarget,
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "deserialize_split_target")
+    )]
+    pub(crate) target: SplitTarget,
     vertical: bool,
     /// tmux's `-b`, which puts the new pane before the one being divided.
     ///
@@ -70,10 +138,32 @@ pub struct SplitWindow {
 
 impl SplitWindow {
     /// Split this window, leaving the new pane unfocused.
+    ///
+    /// Divides whichever pane is active. [`SplitWindow::from_pane`] is for
+    /// every split after the first in a chain.
     #[must_use]
     pub fn new(target: impl Into<WindowTarget>) -> Self {
         Self {
-            target: target.into(),
+            target: SplitTarget::Window(target.into()),
+            vertical: true,
+            before: false,
+            start_directory: None,
+            command: None,
+            environment: Vec::new(),
+            focus: false,
+        }
+    }
+
+    /// Split this pane, putting a new one beside it.
+    ///
+    /// Unlike [`SplitWindow::new`], divides the exact pane named -- pass
+    /// the [`Slot<PaneSlot>`] the previous split, or [`Slot::pane`], made.
+    ///
+    /// [`Slot::pane`]: crate::plan::Slot::pane
+    #[must_use]
+    pub fn from_pane(target: impl Into<PaneTarget>) -> Self {
+        Self {
+            target: SplitTarget::Pane(target.into()),
             vertical: true,
             before: false,
             start_directory: None,

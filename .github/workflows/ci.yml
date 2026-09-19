@@ -127,7 +127,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [control_line, filter_expr_json, workspace_yaml]
+        target: [control_line, filter_expr_json, workspace_yaml, layout]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1

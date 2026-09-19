@@ -2953,7 +2953,7 @@ async fn mcp_flag_shaped_metadata_operands_stay_literal() {
     };
     assert!(
         !layout_error.message.contains("unknown flag"),
-        "the layout reached tmux as an operand: {layout_error:?}"
+        "the layout must never be parsed as an option: {layout_error:?}"
     );
 
     tools

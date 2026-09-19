@@ -2,15 +2,18 @@
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use mcp_swap::catalog::{Paths, known_clients};
+use mcp_swap::config::{Scope, ServerSpec};
 use mcp_swap::fs::{resolve_config_route, stable_snapshot};
 use mcp_swap::recovery::load_ledger;
 use mcp_swap::source::{Source, SourceOptions, resolve_repo_meta, source_spec};
+use mcp_swap::transaction::{UseRequest, use_clients_with_hook};
 use tempfile::TempDir;
 
 struct CliFixture {
@@ -321,7 +324,7 @@ fn dry_run_selectors_do_not_build_preflight_or_write() {
     for (path, bytes) in originals {
         assert_eq!(fs::read(path).expect("unchanged config"), bytes);
     }
-    assert!(!paths.state_dir().exists());
+    assert!(!paths.lock_dir().exists());
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 output");
     assert!(stdout.contains("agy"));
     assert!(stdout.contains("pi"));
@@ -477,6 +480,119 @@ fn detect_and_doctor_are_read_only() {
             .contains("mcp-swap doctor")
     );
     assert!(!fixture.state.join("libtmux-mcp-dev/swap").exists());
+}
+
+struct RunningCli(Option<std::process::Child>);
+
+impl Drop for RunningCli {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[test]
+fn concurrent_cli_planning_waits_until_backup_and_ledger_are_published() {
+    let fixture = CliFixture::new();
+    fixture.seed(&["cursor"]);
+    let paths = Paths::from_roots(&fixture.home, &fixture.config, &fixture.state).expect("paths");
+    let client = known_clients(&paths)
+        .into_iter()
+        .find(|client| client.name.as_str() == "cursor")
+        .expect("cursor");
+    let pristine = fs::read(&client.config_path).expect("pristine config");
+    let request = UseRequest {
+        repo: fixture.repo.clone(),
+        server: "tmux".into(),
+        scope: Scope::User,
+        spec: ServerSpec {
+            command: fixture.binary.to_string_lossy().into_owned(),
+            args: vec![],
+            env: BTreeMap::new(),
+        },
+    };
+    let mut second = None;
+    let mut early_exit = None;
+    use_clients_with_hook(&paths, &[&client], &request, false, &mut |boundary| {
+        if boundary == "before-state-publish" {
+            assert!(!paths.state_file().exists(), "ledger is not published yet");
+            let child = fixture
+                .command()
+                .args([
+                    "use",
+                    "--repo",
+                    fixture.repo.to_str().expect("repo"),
+                    "--source",
+                    "path",
+                    "--bin",
+                    fixture.binary.to_str().expect("binary"),
+                    "--no-preflight",
+                    "--cli",
+                    "cursor",
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("second CLI");
+            let mut child = RunningCli(Some(child));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(750);
+            while std::time::Instant::now() < deadline {
+                if let Some(status) = child
+                    .0
+                    .as_mut()
+                    .expect("child")
+                    .try_wait()
+                    .expect("second status")
+                {
+                    early_exit = Some(status);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            second = Some(child);
+        }
+        Ok(())
+    })
+    .expect("first transaction");
+    let mut second = second.expect("planning boundary reached");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while second
+        .0
+        .as_mut()
+        .expect("child")
+        .try_wait()
+        .expect("second status")
+        .is_none()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "second CLI did not exit after publication"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let second = second
+        .0
+        .take()
+        .expect("finished child")
+        .wait_with_output()
+        .expect("second output");
+    assert!(
+        early_exit.is_none(),
+        "planner escaped the held transaction: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let ledger = load_ledger(&paths.state_file()).expect("recovery ledger");
+    assert_eq!(
+        fs::read(&ledger.entries["cursor:user"].backup_path).expect("first backup"),
+        pristine
+    );
 }
 
 #[test]

@@ -50,7 +50,7 @@ pub enum ServerConfigurationErrorKind {
     InvalidSocketPath,
     /// A config path was empty or contained a NUL byte.
     InvalidConfigPath,
-    /// The requested color mode was neither 88 nor 256 colors.
+    /// The requested color override was not 256 colors.
     InvalidColorMode,
     /// The process working directory could not be captured.
     WorkingDirectoryUnavailable,
@@ -417,6 +417,14 @@ impl std::error::Error for IdParseError {}
 #[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A layout is unsafe to dispatch or cannot hold the planned panes.
+    #[non_exhaustive]
+    #[error("invalid tmux layout: {reason}")]
+    InvalidLayout {
+        /// A diagnosis without the caller's layout bytes.
+        reason: &'static str,
+    },
+
     /// tmux accepted an effectful step before a later part of the operation
     /// failed.
     ///
@@ -899,7 +907,7 @@ pub enum Error {
     /// This variant is for operations whose whole purpose is the effect, so a
     /// refusal is a failure rather than a result.
     #[non_exhaustive]
-    #[error("tmux rejected {command} (exit {exit_code:?}): {stderr}")]
+    #[error("tmux rejected {command} (exit {}): {stderr}", exit_code_text(*exit_code))]
     CommandFailed {
         /// The tmux command that was rejected.
         command: &'static str,
@@ -923,6 +931,12 @@ pub enum Error {
         /// Payload-free decoding metadata.
         detail: ListingDecodeError,
     },
+}
+
+/// Renders a rejected command's exit code for [`Error::CommandFailed`],
+/// plainly rather than through `Option`'s `Debug` (`Some(1)`).
+fn exit_code_text(code: Option<i32>) -> String {
+    code.map_or_else(|| "unknown".to_owned(), |code| format!("status {code}"))
 }
 
 /// The kind of tmux object a failure refers to.
@@ -1383,6 +1397,10 @@ impl fmt::Debug for Error {
             Self::InvalidVersionOutput { output_len } => formatter
                 .debug_struct("InvalidVersionOutput")
                 .field("output_len", output_len)
+                .finish(),
+            Self::InvalidLayout { reason } => formatter
+                .debug_struct("InvalidLayout")
+                .field("reason", reason)
                 .finish(),
             Self::UnsupportedTmuxVersion { found, minimum } => formatter
                 .debug_struct("UnsupportedTmuxVersion")

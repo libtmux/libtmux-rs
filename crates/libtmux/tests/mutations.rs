@@ -9,6 +9,142 @@ use libtmux::test::TestServer;
 use libtmux::{Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
+#[tokio::test]
+async fn layout_preflight_rejects_unsafe_saved_input_before_dispatch() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-keeper").await.unwrap();
+    let mut window = session.active_window().await.unwrap().unwrap();
+    let before = window.layout().to_owned();
+    let error = window.select_layout("not-a-layout").await.unwrap_err();
+    assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+    window.refresh().await.unwrap();
+    assert_eq!(window.layout(), &before);
+    assert_eq!(guard.server().sessions().await.unwrap().len(), 1);
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn layout_preflight_static_inputs_need_no_executable() {
+    use std::ffi::OsStr;
+    let server = libtmux::Server::builder()
+        .tmux_executable("/tmp/libtmux-rs-test/absent-layout-executable")
+        .build()
+        .unwrap();
+    server
+        .validate_layouts([(OsStr::new("t"), 1)])
+        .await
+        .unwrap();
+    let error = server
+        .validate_layouts([
+            (OsStr::new("main-horizontal-mirrored"), 1),
+            (OsStr::new("not-a-layout"), 1),
+        ])
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+    server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_tmux_compat_layout_preflight_uses_daemon_version() {
+    use std::ffi::OsStr;
+    let guard = TestServer::new().await.unwrap();
+    let keeper = guard.session("layout-version-keeper").await.unwrap();
+    let version = guard.server().format(None, "#{version}").await.unwrap();
+    let version = libtmux::TmuxVersion::parse_output(
+        format!("tmux {}\n", version.to_string_lossy()).as_bytes(),
+    )
+    .unwrap();
+    let executable = std::env::var_os("LIBTMUX_LAYOUT_CLIENT")
+        .unwrap_or_else(|| guard.server().tmux_executable().to_owned());
+    let selected = libtmux::Server::builder()
+        .socket_path(guard.socket_path())
+        .tmux_executable(executable)
+        .build()
+        .unwrap();
+    let client = selected.capabilities().await.unwrap().tmux_version();
+    eprintln!(
+        "layout version check: daemon={}, client={}",
+        version.raw(),
+        client.raw()
+    );
+    let abbreviated = selected.validate_layouts([(OsStr::new("main-h"), 1)]).await;
+    let mirrored = selected
+        .validate_layouts([(OsStr::new("main-horizontal-mirrored"), 1)])
+        .await;
+    if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+        assert_eq!(
+            abbreviated.unwrap_err().kind(),
+            libtmux::ErrorKind::InvalidInput
+        );
+        mirrored.unwrap();
+    } else {
+        abbreviated.unwrap();
+        assert_eq!(
+            mirrored.unwrap_err().kind(),
+            libtmux::ErrorKind::UnsupportedVersion
+        );
+    }
+    assert_eq!(selected.sessions().await.unwrap()[0].id(), keeper.id());
+    selected.shutdown().await.unwrap();
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_tmux_compat_layout_preflight_cold_and_empty_daemons() {
+    use std::ffi::OsStr;
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-empty").await.unwrap();
+    let observed = guard.server().format(None, "#{version}").await.unwrap();
+    let version = libtmux::TmuxVersion::parse_output(
+        format!("tmux {}\n", observed.to_string_lossy()).as_bytes(),
+    )
+    .unwrap();
+    let layout = if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+        "main-horizontal-m"
+    } else {
+        "main-h"
+    };
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let cold = libtmux::Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(guard.server().tmux_executable())
+        .build()
+        .unwrap();
+    cold.validate_layouts([(OsStr::new(layout), 1)])
+        .await
+        .unwrap();
+    assert!(!directory.path().join("s").exists());
+    cold.shutdown().await.unwrap();
+    guard
+        .server()
+        .cmd(
+            libtmux::Command::new("set-option")
+                .arg("-g")
+                .arg("exit-empty")
+                .arg("off"),
+        )
+        .await
+        .unwrap();
+    session.kill().await.unwrap();
+    guard
+        .server()
+        .validate_layouts([(OsStr::new(layout), 1)])
+        .await
+        .unwrap();
+    assert!(guard.server().sessions().await.unwrap().is_empty());
+    assert_eq!(
+        guard
+            .server()
+            .format(None, "#{pid}")
+            .await
+            .unwrap()
+            .to_string_lossy(),
+        guard.daemon_pid().to_string()
+    );
+    guard.shutdown().await.unwrap();
+}
+
 fn text(value: Option<&TmuxText>) -> Vec<u8> {
     value.expect("tmux reports the value").as_bytes().to_vec()
 }
@@ -313,6 +449,56 @@ async fn flag_shaped_commands_and_paths_stay_literal() {
     stayed_literal(
         "respawn-window",
         window.respawn(Some("-zzz-respawn"), true).await.err(),
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A raw `-t name` target prefix-matches: tmux answers `kill-session -t
+/// doom` for a session actually named `doomsday` by killing it, silently,
+/// exit zero, no warning. `Session::kill` never sends a name -- it targets
+/// `self.id()`, which a name never resolves to by accident -- and the
+/// lookup that hands out a `Session` in the first place ([`Server::session`])
+/// lists sessions and compares names as whole bytes rather than asking tmux
+/// to resolve a target, so neither step can find `doomsday` while looking
+/// for `doomed`.
+#[tokio::test]
+async fn killing_a_name_that_is_a_prefix_of_another_kills_neither() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    server
+        .new_session("doomed")
+        .await
+        .expect("session is created");
+    server
+        .new_session("doomsday")
+        .await
+        .expect("session is created");
+
+    assert!(
+        server
+            .session("doom")
+            .await
+            .expect("lookup succeeds")
+            .is_none(),
+        "a prefix of two real names must not resolve to either",
+    );
+
+    let doomed = server
+        .session("doomed")
+        .await
+        .expect("lookup succeeds")
+        .expect("the exact name is found");
+    doomed.kill().await.expect("kill succeeds");
+
+    assert!(!server.has_session("doomed").await.expect("lookup succeeds"));
+    assert!(
+        server
+            .has_session("doomsday")
+            .await
+            .expect("lookup succeeds"),
+        "killing doomed must not have reached doomsday",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -1172,19 +1358,20 @@ async fn a_failure_says_what_to_do_about_it() {
 }
 
 #[tokio::test]
-async fn a_name_tmux_cannot_address_is_rejected_before_it_is_created() {
+async fn a_name_with_ambiguous_separators_is_rejected_before_creation() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    // What the type prevents, demonstrated: tmux accepts the name, stores it,
-    // and then splits it on the separator when asked to find it again. The
-    // session exists and cannot be reached or killed by its own name.
+    // tmux splits a:b into session prefix a and window prefix b. An implicit
+    // window named bash would match, so choose a nonmatching window name.
     server
         .cmd(
             libtmux::Command::new("new-session")
                 .arg("-d")
                 .arg("-s")
-                .arg("a:b"),
+                .arg("a:b")
+                .arg("-n")
+                .arg("other-window"),
         )
         .await
         .expect("tmux accepts the name");
@@ -1195,7 +1382,7 @@ async fn a_name_tmux_cannot_address_is_rejected_before_it_is_created() {
         .expect("the command runs");
     assert!(
         !found.success(),
-        "tmux cannot find the session it just made"
+        "the separator makes lookup depend on the window name"
     );
     assert!(
         found.stderr_lossy().contains("can't find window"),
@@ -1203,11 +1390,8 @@ async fn a_name_tmux_cannot_address_is_rejected_before_it_is_created() {
         found.stderr_lossy(),
     );
 
-    // The session is nonetheless there, which is what makes this worth
-    // refusing rather than letting a caller discover later.
     assert_eq!(server.sessions().await.expect("sessions").len(), 1);
 
-    // So the type refuses those names, and keeps everything tmux can address.
     assert!(libtmux::SessionName::new("a:b").is_err());
     assert!(libtmux::SessionName::new("c.d").is_err());
     assert!(libtmux::SessionName::new("").is_err());

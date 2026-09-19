@@ -162,6 +162,16 @@ impl Workspace {
             .as_str()
             .ok_or_else(|| ConfigError::invalid("session_name must be a string"))?
             .to_owned();
+        // `:` and `.` are `-t`'s window and pane separators, so an ordinary
+        // target misreads a name that holds either. Some tmux releases
+        // rewrite the character out at session creation and one refuses the
+        // name outright; on releases that keep it, only a `name:`
+        // terminator reaches the session, which no plain target uses.
+        if let Some(separator) = session_name.chars().find(|c| matches!(c, ':' | '.')) {
+            return Err(ConfigError::invalid(format!(
+                "session_name must not contain {separator:?}; tmux reads it as a target separator and the session could not be addressed afterward"
+            )));
+        }
 
         let windows = match &document["windows"] {
             Yaml::BadValue | Yaml::Null => Vec::new(),
@@ -567,9 +577,9 @@ impl PaneConfig {
     fn write_yaml(&self, out: &mut String) {
         let mut entry = Entry::new("      - ", "        ");
 
-        if let [only] = self.shell_commands.as_slice() {
-            entry.key(out, &format!("shell_command: {}", quoted(only)));
-        } else if !self.shell_commands.is_empty() {
+        // Always a list, even for one command: a bare scalar round-trips
+        // to a union type instead of one shape.
+        if !self.shell_commands.is_empty() {
             entry.key(out, "shell_command:");
             write_list(out, None, &self.shell_commands, 10);
         }
@@ -649,4 +659,101 @@ fn quoted(value: &str) -> String {
     }
     escaped.push('"');
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{commands, optional_bool, optional_index, pairs, quoted};
+    use yaml_rust2::YamlLoader;
+
+    /// The value a single-document YAML fragment parses to, for feeding
+    /// these functions the same shapes tmuxp's parser hands them.
+    fn value(source: &str) -> yaml_rust2::Yaml {
+        YamlLoader::load_from_str(source).unwrap().remove(0)
+    }
+
+    #[test]
+    fn pairs_reads_scalars_of_every_kind_tmuxp_writes() {
+        let read = pairs(&value("EDITOR: vim\nRETRIES: 3\nDEBUG: true\nQUIET: false")).unwrap();
+        assert_eq!(
+            read,
+            vec![
+                ("EDITOR".into(), "vim".into()),
+                ("RETRIES".into(), "3".into()),
+                ("DEBUG".into(), "on".into()),
+                ("QUIET".into(), "off".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn pairs_is_empty_for_an_absent_mapping() {
+        assert_eq!(pairs(&value("~")).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn pairs_refuses_a_non_scalar_value() {
+        assert!(pairs(&value("KEY:\n  - nested")).is_err());
+    }
+
+    #[test]
+    fn commands_accepts_a_bare_string_or_a_list() {
+        assert_eq!(commands(&value("echo hi")).unwrap(), vec!["echo hi"]);
+        assert_eq!(
+            commands(&value("[echo one, echo two]")).unwrap(),
+            vec!["echo one", "echo two"]
+        );
+        assert_eq!(commands(&value("~")).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn commands_refuses_a_list_entry_that_is_not_a_string() {
+        assert!(commands(&value("[echo hi, 7]")).is_err());
+    }
+
+    #[test]
+    fn optional_index_accepts_an_integer_or_a_numeric_string() {
+        assert_eq!(optional_index(&value("2")).unwrap(), Some(2));
+        assert_eq!(optional_index(&value("\"3\"")).unwrap(), Some(3));
+        assert_eq!(optional_index(&value("~")).unwrap(), None);
+    }
+
+    #[test]
+    fn optional_index_refuses_a_non_numeric_string() {
+        assert!(optional_index(&value("\"first\"")).is_err());
+    }
+
+    #[test]
+    fn optional_bool_accepts_a_bool_and_tmuxps_string_spellings() {
+        for (source, expected) in [
+            ("true", true),
+            ("\"yes\"", true),
+            ("\"on\"", true),
+            ("false", false),
+            ("\"no\"", false),
+            ("\"off\"", false),
+        ] {
+            assert_eq!(
+                optional_bool(&value(source), "focus").unwrap(),
+                Some(expected),
+                "{source}"
+            );
+        }
+        assert_eq!(optional_bool(&value("~"), "focus").unwrap(), None);
+    }
+
+    /// `focus: "tru"` is a typo, not a workspace with focus false: this must
+    /// refuse rather than silently pick a boolean.
+    #[test]
+    fn optional_bool_refuses_a_string_that_is_not_one_of_the_spellings() {
+        assert!(optional_bool(&value("\"tru\""), "focus").is_err());
+    }
+
+    #[test]
+    fn quoted_escapes_the_characters_yaml_or_a_shell_would_read_specially() {
+        assert_eq!(quoted("plain"), "\"plain\"");
+        assert_eq!(quoted(r#"a "quote""#), r#""a \"quote\"""#);
+        assert_eq!(quoted(r"back\slash"), r#""back\\slash""#);
+        assert_eq!(quoted("tab\there"), "\"tab\\u0009here\"");
+    }
 }

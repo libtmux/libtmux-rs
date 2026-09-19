@@ -202,6 +202,191 @@ fn stop_daemon(socket: &Path) {
         .status();
 }
 
+fn layout_process(guard: &TestServer) -> Process {
+    let executable = guard
+        .server()
+        .resolved_tmux_executable()
+        .expect("fixture executable resolves");
+    let mut paths = vec![
+        executable
+            .parent()
+            .expect("executable directory")
+            .to_owned(),
+    ];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).expect("executable search path");
+    Process::start(
+        &[
+            "--socket",
+            guard.socket_path().to_str().expect("UTF-8 socket"),
+        ],
+        &[("PATH", path.to_str().expect("UTF-8 executable search path"))],
+    )
+}
+
+async fn layout_window() -> (TestServer, libtmux::Window) {
+    let guard = TestServer::new().await.expect("tmux starts");
+    let session = guard.session("keeper").await.expect("session starts");
+    let window = session.windows().await.expect("windows").remove(0);
+    window
+        .split(libtmux::SplitDirection::Below)
+        .await
+        .expect("split");
+    (guard, window)
+}
+
+#[test]
+fn mcp_layout_invalid_syntax_precedes_target_lookup() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard = runtime.block_on(async {
+        let guard = TestServer::new().await.expect("tmux starts");
+        guard.session("keeper").await.expect("session starts");
+        guard
+    });
+    let mut process = layout_process(&guard);
+    let response = process.request(
+        "tools/call",
+        &json!({
+            "name": "select_layout",
+            "arguments": {"window": "@999999", "layout": "32d2,80x24,0,0{}"},
+        }),
+    );
+    process.finish();
+    runtime.block_on(guard.shutdown()).expect("tmux stops");
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+    assert_eq!(
+        response["error"]["data"],
+        json!({"kind": "invalid_input", "retryable": false, "stale": false}),
+        "{response}",
+    );
+}
+
+#[test]
+fn mcp_layout_returns_the_applied_saved_layout() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (guard, mut window) = runtime.block_on(layout_window());
+    let mut process = layout_process(&guard);
+    let response = process.request(
+        "tools/call",
+        &json!({
+            "name": "select_layout",
+            "arguments": {"window": window.id().to_string(), "layout": "even-h"},
+        }),
+    );
+    process.finish();
+    runtime.block_on(window.refresh()).expect("window survives");
+    runtime.block_on(guard.shutdown()).expect("tmux stops");
+    assert_eq!(
+        response["result"]["structuredContent"],
+        json!({"window": window.id().to_string(), "layout": window.layout().to_string_lossy()}),
+        "{response}",
+    );
+}
+
+#[test]
+fn real_tmux_compat_mcp_layout_wire_preserves_keeper_and_native_errors() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (guard, mut window) = runtime.block_on(layout_window());
+    let version = runtime.block_on(async {
+        let version = guard
+            .server()
+            .format(None, "#{version}")
+            .await
+            .expect("version");
+        libtmux::TmuxVersion::parse_output(
+            format!("tmux {}\n", version.to_string_lossy()).as_bytes(),
+        )
+        .expect("native version")
+    });
+    eprintln!("MCP layout wire daemon: {}", version.raw());
+    let mirrored = version.meets(&libtmux::since::MIRRORED_LAYOUTS);
+    let cases = [
+        ("not-a-layout", Some("invalid_input")),
+        ("-E", Some("invalid_input")),
+        ("32d2,80x24,0,0{}", Some("invalid_input")),
+        (
+            "4a17,80x24,0,0{39x24,0,0,0,40x24,40,0[]}",
+            Some("invalid_input"),
+        ),
+        ("ffff,80x24,0,0,0", Some("invalid_input")),
+        ("even", Some("invalid_input")),
+        ("79f5,80x24,0,0{39x23,0,0,0,40x24,40,0,1}", Some("refused")),
+        ("main-h", mirrored.then_some("invalid_input")),
+        (
+            "main-horizontal-mirrored",
+            (!mirrored).then_some("unsupported_version"),
+        ),
+        ("main-horizontal", None),
+        ("even-h", None),
+        ("t", None),
+        ("8A08,1x1,0,0{39x24,0,0,0,40x24,40,0,1}", None),
+    ];
+    let mut process = layout_process(&guard);
+    let mut observed = Vec::new();
+    for (layout, error) in cases {
+        runtime.block_on(window.refresh()).expect("window remains");
+        let before = window.layout().to_owned();
+        let response = process.request(
+            "tools/call",
+            &json!({
+                "name": "select_layout",
+                "arguments": {"window": window.id().to_string(), "layout": layout},
+            }),
+        );
+        runtime
+            .block_on(window.refresh())
+            .expect("window survives layout");
+        observed.push((layout, error, response, before, window.layout().to_owned()));
+    }
+    let missing = process.request(
+        "tools/call",
+        &json!({
+            "name": "select_layout",
+            "arguments": {"window": "@999999", "layout": "tiled"},
+        }),
+    );
+    process.finish();
+    let (sessions, panes, pid) = runtime.block_on(async {
+        (
+            guard.server().sessions().await.expect("keeper sessions"),
+            window.panes().await.expect("keeper panes"),
+            guard
+                .server()
+                .format(None, "#{pid}")
+                .await
+                .expect("daemon PID"),
+        )
+    });
+    let expected_pid = guard.daemon_pid();
+    runtime.block_on(guard.shutdown()).expect("tmux stops");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id(), window.session_id());
+    assert_eq!(panes.len(), 2);
+    assert_eq!(pid.to_string_lossy(), expected_pid.to_string());
+    assert_eq!(missing["error"]["data"]["kind"], "object_gone", "{missing}");
+    for (layout, error, response, before, after) in observed {
+        if let Some(kind) = error {
+            assert_eq!(
+                response["error"]["data"]["kind"], kind,
+                "{layout}: {response}"
+            );
+            assert_eq!(response["error"]["data"]["retryable"], false, "{response}");
+            assert_eq!(response["error"]["data"]["stale"], false, "{response}");
+            assert_eq!(before, after, "{layout} changed a refused layout");
+        } else {
+            assert_eq!(
+                response["result"]["structuredContent"],
+                json!({
+                    "window": window.id().to_string(), "layout": after.to_string_lossy(),
+                }),
+                "{layout}: {response}"
+            );
+        }
+    }
+}
+
 #[test]
 fn explicit_existing_socket_defaults_without_teardown() {
     let runtime = tokio::runtime::Runtime::new().expect("runtime");

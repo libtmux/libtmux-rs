@@ -61,16 +61,34 @@ use crate::config::{PaneConfig, WindowConfig, Workspace};
 /// # }
 /// ```
 pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
+    // Omitted for the default shell: recording it would reload the shell
+    // as an explicit pane command, a shell inside a shell.
+    //
+    // `#{default-shell}`, not Session::get_option: that answers only a
+    // session's own override, and default-shell is rarely set there.
+    let default_shell_text = session.format("#{default-shell}").await?;
+    let default_shell = Some(default_shell_text.to_string_lossy())
+        .filter(|value| !value.is_empty())
+        .map(|value| basename(&value).to_owned());
+
     let mut windows = Vec::new();
 
     for window in session.windows().await? {
         let mut panes = Vec::new();
         for pane in window.panes().await? {
+            let command = pane
+                .current_command()
+                .map(|command| command.to_string_lossy().into_owned());
+            let is_default_shell = command.as_deref().is_some_and(|command| {
+                let command = basename(command);
+                ORDINARY_SHELLS.contains(&command) || default_shell.as_deref() == Some(command)
+            });
             panes.push(PaneConfig {
-                shell_commands: pane
-                    .current_command()
-                    .map(|command| vec![command.to_string_lossy().into_owned()])
-                    .unwrap_or_default(),
+                shell_commands: if is_default_shell {
+                    Vec::new()
+                } else {
+                    command.map_or_else(Vec::new, |command| vec![command])
+                },
                 environment: Vec::new(),
                 start_directory: pane
                     .current_path()
@@ -112,3 +130,16 @@ pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
         unsupported_keys: Vec::new(),
     })
 }
+
+/// The final path component, tmux's own convention for `#{pane_current_command}`
+/// and for the shell tail of a `default-shell` path.
+fn basename(text: &str) -> &str {
+    text.rsplit('/').next().unwrap_or(text)
+}
+
+/// Interactive shells common enough that a bare pane is almost certainly at
+/// its prompt, regardless of `default-shell`'s basename -- which disagrees
+/// on macOS, where `/bin/sh` is bash.
+const ORDINARY_SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ash", "ksh", "mksh", "fish", "csh", "tcsh",
+];
