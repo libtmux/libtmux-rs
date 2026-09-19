@@ -26,10 +26,11 @@ use serde_json::json;
 type Result<T> = std::result::Result<T, CliError>;
 
 /// The `code` on a terminal error record — a load, freeze, convert, import or
-/// search failure, reported once and never retried — is one of the ten every
-/// port agrees on (SPEC-5 D4/D4a), or `interrupted` for a mutation an actual
-/// `SIGINT`/`SIGTERM` cut off mid-flight (its own contract: `outcome_unknown`
-/// plus `retained_state`, not a refusal about what was asked):
+/// search failure, reported once and never retried — is drawn from a fixed
+/// vocabulary shared across every port of this tool, or `interrupted` for a
+/// mutation an actual `SIGINT`/`SIGTERM` cut off mid-flight (its own
+/// contract: `outcome_unknown` plus `retained_state`, not a refusal about
+/// what was asked):
 ///
 /// - `workspace_not_found` — the named file or session was not found.
 /// - `invalid_workspace` — the document, or something in it, is not valid.
@@ -47,7 +48,7 @@ type Result<T> = std::result::Result<T, CliError>;
 /// - `usage` — how the command was invoked is wrong, not what it names;
 ///   exit 2 rather than 1.
 ///
-/// D4a scopes that agreement to this one field on a terminal error record.
+/// That agreement is scoped to this one field on a terminal error record.
 /// Outside it, by design, and not required to collapse into the above:
 /// - Warning codes (`unsupported_builder_option`, `start_directory_absent`)
 ///   ride the `warning` event, never a failure; a load that only warns still
@@ -60,11 +61,11 @@ type Result<T> = std::result::Result<T, CliError>;
 /// - `io`, `encoding`, `log_file` are this tool's own plumbing: a file it
 ///   could not read or write, JSON it could not decode, or a log sink that
 ///   would not open. A signal is `interrupted`, exit 130, the only spelling
-///   D4c allows for it; this crate's one other use of a `cancelled` code was
-///   the confirm prompt below declining, and D4c retires that use rather
-///   than keeping a second spelling. Declining is not represented as a code
-///   at all now: it is a normal outcome the caller reports as itself, exit
-///   0, the same as answering no to load's "already running, attach?".
+///   this crate uses for it; a `cancelled` code once covered the confirm
+///   prompt below declining, and that second spelling is retired.
+///   Declining is not represented as a code at all now: it is a normal
+///   outcome the caller reports as itself, exit 0, the same as answering no
+///   to load's "already running, attach?".
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 struct CliError {
