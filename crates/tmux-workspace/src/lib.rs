@@ -39,7 +39,7 @@ pub use freeze::freeze;
 use std::path::Path;
 
 use libtmux::plan::{
-    KillWindow, NewSession, NewWindow, PaneSlot, Plan, Planner, SelectLayout, SelectPane,
+    KillWindow, NewSession, NewWindow, PaneSlot, Pause, Plan, Planner, SelectLayout, SelectPane,
     SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow,
 };
 use libtmux::{Server, Session, SessionId};
@@ -202,8 +202,11 @@ impl<'server> WorkspaceBuilder<'server> {
                     .unwrap_or(workspace.suppress_history);
 
                 // As in tmuxp, the `shell_command_before` commands lead the
-                // pane's own list, and a command's `enter` holds for the rest.
+                // pane's own list, and a command's `enter` and sleeps hold
+                // for the rest.
                 let mut enter = pane_config.enter;
+                let mut sleep_before = pane_config.sleep_before;
+                let mut sleep_after = pane_config.sleep_after;
                 let commands = workspace
                     .shell_command_before
                     .iter()
@@ -211,7 +214,15 @@ impl<'server> WorkspaceBuilder<'server> {
                     .chain(&pane_config.shell_commands);
                 for command in commands {
                     enter = command.enter.unwrap_or(enter);
+                    sleep_before = command.sleep_before.or(sleep_before);
+                    sleep_after = command.sleep_after.or(sleep_after);
+                    if let Some(duration) = sleep_before {
+                        plan.add(Pause::new(duration));
+                    }
                     plan.add(Self::typing(*pane, &command.cmd, suppress, enter));
+                    if let Some(duration) = sleep_after {
+                        plan.add(Pause::new(duration));
+                    }
                 }
                 if pane_config.focus {
                     focus_pane = Some(*pane);

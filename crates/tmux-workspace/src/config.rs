@@ -176,12 +176,8 @@ pub struct PaneConfig {
     /// the `shell_command_before` commands typed into this pane too.
     pub enter: bool,
     /// How long to wait before each command, until a command sets its own.
-    ///
-    /// Read and kept, not acted on: see [`ShellCommand::sleep_before`].
     pub sleep_before: Option<Duration>,
     /// How long to wait after each command, until a command sets its own.
-    ///
-    /// Read and kept, not acted on: see [`ShellCommand::sleep_before`].
     pub sleep_after: Option<Duration>,
     /// Whether this pane's commands stay out of the shell's history.
     ///
@@ -244,14 +240,13 @@ pub struct ShellCommand {
     pub cmd: String,
     /// Whether to press Enter after it. `None` keeps whatever is in force.
     pub enter: Option<bool>,
-    /// How long tmuxp waits before typing it.
+    /// How long to wait before typing it. `None` keeps whatever is in force.
     ///
-    /// Read and kept so the file round-trips, and not acted on: a
-    /// [`libtmux::plan::Plan`] runs start to finish with no way to pause
-    /// between steps. tmux buffers typed input until the pane reads it, so a
-    /// sleep that only waited for a shell to start is not needed.
+    /// The wait is a [`libtmux::plan::Pause`], so it happens in tmux and
+    /// holds the steps after it. tmux keeps typed input until the pane reads
+    /// it, so a sleep that only waited for a shell to start is not needed.
     pub sleep_before: Option<Duration>,
-    /// How long tmuxp waits after typing it. Read and kept, not acted on.
+    /// How long to wait after typing it. `None` keeps whatever is in force.
     pub sleep_after: Option<Duration>,
 }
 

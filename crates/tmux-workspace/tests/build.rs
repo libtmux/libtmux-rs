@@ -1368,3 +1368,70 @@ fn an_error_names_the_line_and_column_to_fix() {
         );
     }
 }
+
+/// tmuxp's sleeps become pauses around the commands they belong to, and hold
+/// for the later commands in the pane as `enter` does. The pause happens in
+/// tmux, so a folded build waits too.
+#[tokio::test]
+async fn sleeps_pause_the_build_between_commands() {
+    use std::time::{Duration, Instant};
+
+    use libtmux::plan::Op;
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: sleepy
+windows:
+  - panes:
+      - sleep_before: 0.1
+        shell_command:
+          - echo one
+          - cmd: echo two
+            sleep_after: 0.05
+          - echo three
+",
+    )
+    .expect("configuration parses");
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let builder = WorkspaceBuilder::new(guard.server());
+
+    let shape: Vec<String> = builder
+        .plan(&workspace)
+        .steps()
+        .iter()
+        .map(|op| match op {
+            Op::Pause(pause) => format!("pause {:?}", pause.duration()),
+            other => other.name().to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            "new-session",
+            "new-window",
+            "pause 100ms",
+            "send-keys",
+            "pause 100ms",
+            "send-keys",
+            "pause 50ms",
+            "pause 100ms",
+            "send-keys",
+            "pause 50ms",
+            "kill-window",
+        ],
+    );
+
+    let started = Instant::now();
+    builder
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(400),
+        "built in {elapsed:?}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}

@@ -138,6 +138,8 @@ where tmuxp's behaviour is surprising:
 - `enter: false` on a command holds for the commands after it in that pane,
   so the next one is typed onto the same line. A pane's `enter: false` covers
   its `shell_command_before` commands, which are typed first.
+- `sleep_before` and `sleep_after` hold the same way, and are waited for in
+  tmux: each is a `libtmux::plan::Pause` between the commands it separates.
 - `~` and `$NAME` or `${NAME}` expand from the loading process's environment
   in names, start directories, and `environment` and option values. An unset
   variable stays as written, and there is no escape: a frozen name holding
@@ -154,8 +156,6 @@ It differs where following tmuxp would be unsafe or impossible:
 - Commands are typed as written, for the pane's shell to expand. tmuxp
   expands variables in them first, which reads a variable's value as shell
   code.
-- `sleep_before` and `sleep_after` are read and kept, and not waited for: a
-  `libtmux` plan cannot pause. tmux holds typed input until the pane reads it.
 - `~name` in a start directory is refused, not looked up; elsewhere it stays
   as written.
 - A `.` path with nothing to inherit, and a null among commands, crash
