@@ -13,6 +13,7 @@ use libtmux::{CaptureOptions, ControlLimits, ControlModeErrorKind, Error, Pane};
 use regex::bytes::Regex;
 use serde::Serialize;
 
+use crate::echo::{EchoKey, PaneEchoes};
 use crate::retained::MAX_BYTES as OUTPUT_LIMIT;
 #[cfg(test)]
 use crate::retained::{COMPACT_AFTER, RetainedBytes};
@@ -23,6 +24,15 @@ use crate::text::readable_from;
 const MAX_PATTERNS: usize = 32;
 const MAX_PATTERN_BYTES: usize = 4_096;
 const MAX_TOTAL_PATTERN_BYTES: usize = 16_384;
+
+/// The shared echo record and this pane's key into it, bundled so threading
+/// both through `wait_for_text`'s internal calls does not itself run into
+/// clippy's argument-count limit.
+#[derive(Clone, Copy)]
+pub(crate) struct EchoContext<'a> {
+    pub(crate) echoes: &'a PaneEchoes,
+    pub(crate) key: Option<&'a EchoKey>,
+}
 
 mod run;
 
@@ -77,14 +87,17 @@ pub enum RunOutcome {
 #[serde(rename_all = "snake_case")]
 pub enum WaitOutcome {
     /// A wanted pattern was already in the pane's output before this began
-    /// watching, on a row above the one still being typed into.
+    /// watching, on a row above the one still being typed into, and is not
+    /// a line this server itself submitted moments earlier.
     ///
     /// A wait only sees what a pane writes after it starts, so this is never
     /// folded into [`Self::Matched`]: the same pattern printed moments
-    /// earlier -- an earlier command's own output, or the shell's echo of a
-    /// line that has already been submitted -- can already be sitting there,
-    /// and a caller that treated that as a fresh match would act on
-    /// something that happened before this call, not because of it.
+    /// earlier -- an earlier command's own output, say -- can already be
+    /// sitting there, and a caller that treated that as a fresh match would
+    /// act on something that happened before this call, not because of it.
+    /// A line this server typed and submitted with `send_keys` is discounted
+    /// rather than reported here or as [`Self::Matched`], for a short time
+    /// after it was submitted.
     PresentAtEntry,
     /// A wanted pattern's only occurrence is the row still being typed
     /// into: text this server (or a person sharing the pane) sent and has
@@ -93,7 +106,8 @@ pub enum WaitOutcome {
     /// Submit it, then wait again: the next wait sees the command's own
     /// output on a row above a new one still being typed into, which is
     /// [`Self::PresentAtEntry`] or [`Self::Matched`] depending on when it
-    /// arrived, never this.
+    /// arrived, never this -- and never the submitted line's own echo,
+    /// which stays discounted for a short time after.
     Pending,
     /// A pattern matched, in output that arrived after the wait attached.
     Matched,
@@ -240,6 +254,7 @@ pub(crate) async fn wait_for_text(
     stops: &Patterns,
     timeout: Duration,
     cancelled: &CancellationToken,
+    echo: EchoContext<'_>,
 ) -> Result<WaitView, Error> {
     wait_for_text_with_limits(
         pane,
@@ -248,6 +263,7 @@ pub(crate) async fn wait_for_text(
         timeout,
         cancelled,
         ControlLimits::default(),
+        echo,
     )
     .await
 }
@@ -270,6 +286,7 @@ pub(crate) async fn wait_for_text_with_limits(
     timeout: Duration,
     cancelled: &CancellationToken,
     limits: ControlLimits,
+    echo: EchoContext<'_>,
 ) -> Result<WaitView, Error> {
     // Attached first: a pattern that arrives while the screen is being read
     // must still be seen. Reading first would lose one that landed between
@@ -277,13 +294,13 @@ pub(crate) async fn wait_for_text_with_limits(
     // did arrive. One landing in that gap is reported as present at entry
     // instead, which is still true of the screen.
     let output = pane.stream_output_with_limits(limits).await?;
-    if let Some(view) = read_present_at_entry(pane, patterns).await? {
+    if let Some(view) = read_present_at_entry(pane, patterns, echo).await? {
         // The answer is already in hand; a failure closing a stream nothing
         // read does not change it.
         let _ = output.shutdown().await;
         return Ok(view);
     }
-    wait_on_output(pane, output, patterns, stops, timeout, cancelled).await
+    wait_on_output(pane, output, patterns, stops, timeout, cancelled, echo).await
 }
 
 /// One pane's screen, split at the row still being typed into.
@@ -354,6 +371,7 @@ impl Screen {
 async fn read_present_at_entry(
     pane: &Pane,
     patterns: &Patterns,
+    echo: EchoContext<'_>,
 ) -> Result<Option<WaitView>, Error> {
     // No patterns means "wait for anything at all", which nothing already on
     // screen can pre-empt: there is nothing yet to call present.
@@ -367,13 +385,34 @@ async fn read_present_at_entry(
         return Ok(None);
     };
 
+    // A line this server itself submitted moments ago -- before this wait
+    // even attached -- is not evidence of anything the pane did; discount it
+    // the same way a live match is discounted below. The row still being
+    // typed into is never masked: nothing not yet submitted is ever in
+    // `recent`.
+    let recent = echo
+        .key
+        .map(|key| echo.echoes.snapshot(key))
+        .unwrap_or_default();
+    let masked_above = crate::echo::mask(&screen.above, &recent);
+
+    // Nothing of this server's own is unsubmitted, so the row the cursor
+    // sits on is not mid-typing either -- reported the same as `above`
+    // rather than `pending`, since it is not this server's own question.
+    // This is what keeps a command whose output does not end in a newline
+    // (so the next prompt lands on the same row) from being hidden forever.
+    let pending_outcome = if echo.key.is_some_and(|key| echo.echoes.has_pending(key)) {
+        WaitOutcome::Pending
+    } else {
+        WaitOutcome::PresentAtEntry
+    };
     let outcome = patterns
-        .first_match(&screen.above)
+        .first_match(&masked_above)
         .map(|found| (WaitOutcome::PresentAtEntry, found))
         .or_else(|| {
             patterns
                 .first_match(&screen.pending)
-                .map(|found| (WaitOutcome::Pending, found))
+                .map(|found| (pending_outcome, found))
         });
     let Some((outcome, (index, source))) = outcome else {
         return Ok(None);
@@ -390,6 +429,41 @@ async fn read_present_at_entry(
     }))
 }
 
+/// Confirm a fresh match against `pane`'s completed rows, discounting every
+/// line `echoes` has recorded for it.
+///
+/// `sticky` accumulates every echo seen across the whole wait, not only this
+/// call's snapshot: `echoes` ages a record out on its own schedule (10
+/// seconds), and a wait may run longer than that. Losing the record mid-wait
+/// must not resurrect the very false match it existed to prevent, so once an
+/// echo is seen it stays discounted for the rest of this call.
+async fn confirmed_above(
+    pane: &Pane,
+    patterns: &Patterns,
+    echo: EchoContext<'_>,
+    sticky: &mut Vec<Vec<u8>>,
+) -> bool {
+    if let Some(key) = echo.key {
+        for line in echo.echoes.snapshot(key) {
+            if !sticky.contains(&line) {
+                sticky.push(line);
+            }
+        }
+    }
+    let Some(screen) = Screen::capture(pane).await else {
+        return false;
+    };
+    let mut haystack = crate::echo::mask(&screen.above, sticky);
+    // Nothing of this server's own is unsubmitted here, so whatever is on
+    // this row is not mid-typing -- most often a command's own output that
+    // did not end in a newline and left the next prompt on the same row,
+    // which the position rule alone would otherwise hide forever.
+    if !echo.key.is_some_and(|key| echo.echoes.has_pending(key)) {
+        haystack.extend_from_slice(&screen.pending);
+    }
+    patterns.first_match(&haystack).is_some()
+}
+
 /// The read loop [`wait_for_text_with_limits`] runs once attached.
 async fn wait_on_output(
     pane: &Pane,
@@ -398,6 +472,7 @@ async fn wait_on_output(
     stops: &Patterns,
     timeout: Duration,
     cancelled: &CancellationToken,
+    echo: EchoContext<'_>,
 ) -> Result<WaitView, Error> {
     let mut filter = TextFilter::new();
     let mut text: Vec<u8> = Vec::new();
@@ -405,6 +480,7 @@ async fn wait_on_output(
     let mut outcome = WaitOutcome::Deadline;
     let mut matched_index = None;
     let mut matched_pattern = None;
+    let mut sticky_echoes: Vec<Vec<u8>> = Vec::new();
     let deadline = tokio::time::Instant::now() + timeout;
 
     loop {
@@ -443,10 +519,9 @@ async fn wait_on_output(
                     // when it starts reading, both genuinely new output that
                     // can still be sitting on the row being typed into.
                     // Confirmed only once the *current* screen shows the
-                    // pattern above that row.
-                    let confirmed = Screen::capture(pane)
-                        .await
-                        .is_some_and(|screen| patterns.first_match(&screen.above).is_some());
+                    // pattern above that row, discounting a line this server
+                    // has itself recently submitted there.
+                    let confirmed = confirmed_above(pane, patterns, echo, &mut sticky_echoes).await;
                     if confirmed {
                         outcome = WaitOutcome::Matched;
                         matched_index = Some(index);
@@ -495,9 +570,7 @@ async fn wait_on_output(
     // not a genuine match. Confirmed the same way, against the row still
     // being typed into, or the promotion is undone.
     if matches!(outcome, WaitOutcome::Matched)
-        && Screen::capture(pane)
-            .await
-            .is_none_or(|screen| patterns.first_match(&screen.above).is_none())
+        && !confirmed_above(pane, patterns, echo, &mut sticky_echoes).await
     {
         outcome = WaitOutcome::Deadline;
         matched_index = None;

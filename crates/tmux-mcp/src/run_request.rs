@@ -25,12 +25,12 @@ struct RunKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct EndpointIdentity {
+pub(crate) struct EndpointIdentity {
     device: u64,
     inode: u64,
 }
 
-fn endpoint_identity(path: &Path) -> std::io::Result<EndpointIdentity> {
+pub(crate) fn endpoint_identity(path: &Path) -> std::io::Result<EndpointIdentity> {
     let metadata = std::fs::metadata(path)?;
     Ok(EndpointIdentity {
         device: metadata.dev(),

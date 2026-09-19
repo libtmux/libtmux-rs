@@ -156,20 +156,43 @@ impl TmuxTools {
                 "pane {pane} changed its configured input authority before send dispatch"
             )));
         }
+
+        // Computed before dispatch: a line this call submits is recorded as
+        // a fresh echo immediately, because the terminal's echo can reach a
+        // waiting `wait_for_text` client before this call returns. The
+        // pane's line itself is not published until dispatch is confirmed
+        // below, so a concurrent reader never sees it reported empty while
+        // tmux is still typing it for real.
+        let mut tracked_keys = keys.clone();
+        if enter {
+            tracked_keys.push("Enter".to_owned());
+        }
+        let echo_update = self.echoes.apply(
+            plan.generation,
+            &plan.endpoint,
+            &plan.configured,
+            text.as_deref(),
+            &tracked_keys,
+        );
+
         let dispatch = input_dispatch(plan.target.id().as_ref(), text, keys, enter)
             .ok_or_else(|| bad_input("send_keys needs text, keys, or enter".to_owned()))?;
         let mut boundary = EffectBoundary::new("send_keys");
         if dispatch.command_count() > 1 {
             boundary.mark();
         }
-        let result = self
-            .server
-            .chain(dispatch)
-            .await
-            .map_err(|error| boundary.error(error))?;
+        let result = match self.server.chain(dispatch).await {
+            Ok(result) => result,
+            Err(error) => {
+                self.echoes.abandon(echo_update);
+                return Err(boundary.error(error));
+            }
+        };
         if let Some(error) = result.refusal_for("send-keys") {
+            self.echoes.abandon(echo_update);
             return Err(boundary.error(error));
         }
+        self.echoes.commit(echo_update);
 
         Ok(Json(Sent {
             pane: plan.target.id().to_string(),
@@ -342,7 +365,10 @@ impl TmuxTools {
                        refuses the whole call, and so does an active run_shell_command, except \
                        for keys C-c or C-\\ sent alone, which interrupt it. Returned pane IDs \
                        describe configured membership, not confirmed delivery. The \
-                       observation can race with tmux processing the input.",
+                       observation can race with tmux processing the input. A submitted line is \
+                       remembered briefly so wait_for_text can discount its own echo; an \
+                       unrecognized key stops that for the pane's current line rather than mask \
+                       it inaccurately.",
         title = "Send Keys To Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],

@@ -1022,6 +1022,7 @@ async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() 
         Patterns::compile(&["AAAAAAAAAA".to_owned()], false, false).expect("pattern compiles");
     let stops = Patterns::compile(&[], false, false).expect("empty stop patterns compile");
     let cancelled = CancellationToken::new();
+    let echoes = PaneEchoes::new();
 
     let error = wait_on_output(
         &pane,
@@ -1030,12 +1031,132 @@ async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() 
         &stops,
         Duration::from_secs(5),
         &cancelled,
+        EchoContext {
+            echoes: &echoes,
+            key: None,
+        },
     )
     .await
     .expect_err("a too-small frame budget is a real shutdown error, not a tolerated Closed");
     assert!(
         matches!(error, Error::ControlModeFrameTooLarge { .. }),
         "the frame-budget error surfaces rather than being swallowed: {error:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// S2 (echo contract), attached-before-send variant: a wait that is already
+/// watching before a command is even typed must still match the command's
+/// real output, not the echo of the line it submitted.
+///
+/// Attaches before dispatching `send_keys`, rather than racing a concurrent
+/// wait against it: `tokio::spawn`ing the wait first proves nothing on a
+/// single-threaded test runtime, since the spawned task does not run a step
+/// until the spawning task yields, so `send_keys`'s own first await point
+/// could easily run before the wait's. `pane.stream_output` awaited to
+/// completion is the same seam
+/// `wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it`
+/// above uses for exactly this: attach, then, only once that is provably
+/// done, act.
+///
+/// Goes through the real `send_keys` tool method (not a raw `send-keys`
+/// dispatch) so the echo this test defends against is recorded exactly as
+/// production code records it.
+#[tokio::test]
+async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo() {
+    use rmcp::handler::server::wrapper::Parameters;
+
+    use crate::{SendKeysArgs, TmuxTools};
+
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("echo-contract-s2-before")
+        .await
+        .expect("session starts");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        server
+            .cmd(
+                libtmux::Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(pane.id().to_string())
+                    .arg("#{cursor_x},#{cursor_y}"),
+            )
+            .await
+            .ok()
+            .map(|result| result.stdout_lossy().trim().to_owned())
+            .is_some_and(|reading| !reading.is_empty() && reading != "0,0")
+    })
+    .await
+    .expect("the pane draws a prompt");
+
+    let tools = TmuxTools::builder(server.clone()).caller(None).build();
+
+    // Attached before anything is typed: proves this wait cannot be
+    // answered by a screen it only read after the command already ran.
+    let output = pane
+        .stream_output()
+        .await
+        .expect("attaching on a quiet pane succeeds");
+
+    tools
+        .send_keys(Parameters(SendKeysArgs {
+            pane: pane.id().to_string(),
+            text: Some("sleep 1; echo MARKER".to_owned()),
+            keys: None,
+            enter: true,
+        }))
+        .await
+        .expect("the command is sent");
+
+    let patterns =
+        Patterns::compile(&["MARKER".to_owned()], false, false).expect("pattern compiles");
+    let stops = Patterns::compile(&[], false, false).expect("empty stop patterns compile");
+    let cancelled = CancellationToken::new();
+    let generation = server.generation().await.expect("server generation");
+    let key = EchoKey::new(generation, server.socket_path(), pane.id().as_ref())
+        .expect("a key builds against a live socket");
+
+    let started = std::time::Instant::now();
+    let view = wait_on_output(
+        &pane,
+        output,
+        &patterns,
+        &stops,
+        Duration::from_secs(5),
+        &cancelled,
+        EchoContext {
+            echoes: &tools.echoes,
+            key: Some(&key),
+        },
+    )
+    .await
+    .expect("the wait completes");
+
+    assert_eq!(
+        view.outcome,
+        WaitOutcome::Matched,
+        "must not time out over the masked echo either: {view:?}"
+    );
+    // A match on the submitted line's own echo would land in a few
+    // milliseconds; the real `echo MARKER` output cannot exist before the
+    // pane's `sleep 1` returns.
+    assert!(
+        started.elapsed() >= Duration::from_millis(800),
+        "matched after only {:?}, too fast to be sleep 1's real output",
+        started.elapsed()
+    );
+    assert!(
+        view.text.lines().any(|line| line.trim() == "MARKER"),
+        "the bare output line must be in the reported text: {:?}",
+        view.text
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

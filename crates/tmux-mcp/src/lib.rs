@@ -39,6 +39,7 @@ pub mod cli;
 pub mod resources;
 
 mod caller;
+mod echo;
 mod exec;
 mod identity;
 mod manifest;
@@ -91,6 +92,9 @@ pub struct TmuxTools {
     socket: Arc<OnceLock<Option<PathBuf>>>,
     /// Live per-pane output, for `capture_since`.
     tails: Arc<Tails>,
+    /// What this process has typed into panes but not submitted, and what it
+    /// has recently submitted, for `wait_for_text` to discount its own echo.
+    echoes: Arc<echo::PaneEchoes>,
     /// The startup-resolved router used for both listing and dispatch.
     tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
     /// Aggregate-only child routes, retained without advertising direct calls.
