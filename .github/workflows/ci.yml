@@ -127,7 +127,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [control_line, filter_expr_json, workspace_yaml]
+        target:
+          - control_block
+          - control_line
+          - filter_expr_json
+          - format_rows
+          - text_filter
+          - workspace_yaml
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1
@@ -137,6 +143,15 @@ jobs:
         with:
           tool: cargo-fuzz
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The corpus is what this job grows. Cache entries are immutable, so each
+      # run saves under its own key and the next restores the newest by prefix.
+      # An entry unused for seven days is evicted: a late run restarts from seeds.
+      - name: Restore the ${{ matrix.target }} corpus
+        uses: actions/cache/restore@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
       - name: Fuzz ${{ matrix.target }}
         env:
           TARGET: ${{ matrix.target }}
@@ -146,8 +161,17 @@ jobs:
           # statically, which a sanitizer cannot instrument, so the target
           # has to be named here rather than left to how cargo-fuzz arrived.
           host=$(rustc +nightly -vV | sed -n 's/^host: //p')
-          cargo +nightly fuzz run --target "$host" "$TARGET" "fuzz/seeds/$TARGET" \
+          # libFuzzer writes new inputs to the first directory only.
+          mkdir -p "fuzz/corpus/$TARGET"
+          cargo +nightly fuzz run --target "$host" "$TARGET" \
+            "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" \
             -- -max_total_time=300 -rss_limit_mb=4096
+      - name: Save the ${{ matrix.target }} corpus
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
       - name: Keep any crash that was found
         if: failure()
         uses: actions/upload-artifact@v7
