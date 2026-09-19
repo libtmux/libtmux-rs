@@ -423,10 +423,7 @@ impl TestServerBuilder {
     /// or rollback cleanup cannot be completed safely.
     ///
     /// Startup creates a private explicit socket and owned empty config without
-    /// creating an initial session. Cancelling this future before ownership
-    /// transfers to the returned guard triggers synchronous forced best-effort
-    /// rollback, whose cleanup failures cannot be reported to the cancelled
-    /// caller.
+    /// creating an initial session.
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -438,6 +435,12 @@ impl TestServerBuilder {
     /// # })
     /// # }
     /// ```
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind, on a best-effort basis: a start dropped before
+    /// it returns the guard forces its daemon down and removes its files at
+    /// once, and a failure doing so goes unreported.
     pub async fn start(self) -> Result<TestServer, TestServerError> {
         self.start_with_leader_observer(leader_exited_unreaped, platform_fallback_grace_ceiling())
             .await
@@ -854,12 +857,6 @@ impl TestServer {
     /// terminates the retained foreground daemon. Escaped [`Server`] clones
     /// cannot issue later commands.
     ///
-    /// Cancelling this future before lifecycle ownership transfers leaves the
-    /// guard responsible for synchronous forced best-effort cleanup. Once this
-    /// future transfers ownership to its blocking waiter, that waiter completes
-    /// cleanup even if this future is cancelled; later cleanup failures are
-    /// unobservable to the cancelled caller.
-    ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -870,6 +867,12 @@ impl TestServer {
     /// # })
     /// # }
     /// ```
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind, on a best-effort basis: dropped early, the
+    /// guard's own forced cleanup runs; dropped once cleanup has started, a
+    /// blocking task finishes it. Either way a failure goes unreported.
     pub async fn shutdown(mut self) -> Result<(), TestServerError> {
         let executor_failed = self.server.shutdown().await.is_err();
         let Some(mut lifecycle) = self.lifecycle.take() else {

@@ -477,6 +477,11 @@ impl ControlMode {
     /// Returns an error when tmux cannot be started, does not give the crate
     /// the pipes it asked for, exits before attaching, or does not finish its
     /// opening block before the server deadline.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held: a dropped attach kills and reaps the tmux client
+    /// it started.
     pub async fn attach(server: &Server, session: &SessionId) -> Result<Self, Error> {
         Self::attach_with_limits(server, session, ControlLimits::default()).await
     }
@@ -492,6 +497,10 @@ impl ControlMode {
     /// Returns an error when the connection cannot be opened, as
     /// [`Self::attach`] does. [`Server::shutdown`] cancels an attach in
     /// progress and refuses later attempts.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held, as for [`Self::attach`].
     pub async fn attach_with_limits(
         server: &Server,
         session: &SessionId,
@@ -563,15 +572,23 @@ impl ControlMode {
     ///
     /// Returns an error when the command cannot be written as a control-mode
     /// line, the connection has closed, or its deadline elapses while queued,
-    /// being written, or awaiting a response. Cancellation has the same write
-    /// boundary as [`ControlSender::send`].
+    /// being written, or awaiting a response.
+    ///
+    /// # Cancel safety
+    ///
+    /// As for [`ControlSender::send`]: a command dropped while queued is never
+    /// written, and one already committed may run.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
         self.sender.send(command).await
     }
 
     /// Return the next notification or terminal error, then `None`.
     ///
-    /// See [`ControlEvents::next_event`] for termination and cancellation.
+    /// See [`ControlEvents::next_event`] for termination.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a dropped call consumes no event.
     pub async fn next_event(&mut self) -> Option<Result<Event, Error>> {
         self.events.next_event().await
     }
@@ -701,15 +718,17 @@ impl ControlSender {
     /// [`crate::Server::cmd`], where the wait costs one process rather than
     /// the connection everything else on it is sharing.
     ///
-    /// Dropping this future while it is queued prevents the command from being
-    /// written. Once the connection commits it for writing, tmux may execute
-    /// it; its reply position stays reserved so later replies remain aligned.
-    ///
     /// # Errors
     ///
     /// Returns an error when the command cannot be written as a control-mode
     /// line, the connection has closed, or its deadline elapses while queued,
     /// being written, or awaiting a response.
+    ///
+    /// # Cancel safety
+    ///
+    /// A command dropped while queued is never written. Once the connection has
+    /// committed it, tmux may run it, and its reply is still read and
+    /// discarded, so later replies stay aligned.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
         self.send_ordered(command, None).await
     }
@@ -1042,6 +1061,12 @@ impl ControlSender {
     /// Returns an error when the connection has closed, tmux would not list a
     /// pane, returned an unreadable pane ID, or a later mute fails. A failure
     /// after an accepted mute is [`Error::AfterEffect`].
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect can be partial: panes are muted one at a time, so a dropped
+    /// call can leave some muted and others not. Muting is idempotent, so
+    /// calling again finishes the job.
     pub async fn watch_only(&self, panes: &[PaneId]) -> Result<(), Error> {
         let listed = self
             .send(
@@ -1172,9 +1197,8 @@ impl ControlEvents {
 
     /// Return the next notification or terminal error, then `None`.
     ///
-    /// Cancelling a pending call consumes neither an event nor a terminal
-    /// diagnostic. Once `None` is returned, subsequent calls also return
-    /// `None`. See [`ControlEvents`] for the EOF and cleanup contract.
+    /// Once `None` is returned, subsequent calls also return `None`. See
+    /// [`ControlEvents`] for the EOF and cleanup contract.
     ///
     /// # Errors
     ///
@@ -1182,6 +1206,11 @@ impl ControlEvents {
     /// frame budget or command deadline being exceeded, executor shutdown,
     /// or failed connection cleanup. A panic in the connection task resumes
     /// here instead, since nothing else would report it.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a dropped call consumes neither an event nor the
+    /// terminal error.
     pub async fn next_event(&mut self) -> Option<Result<Event, Error>> {
         poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
@@ -1377,9 +1406,7 @@ impl PaneOutput {
     /// retain those chunks. It runs synchronously and should return promptly.
     ///
     /// Each chunk passed to `on_output` is consumed from this stream and is
-    /// not repeated by [`Self::next_chunk`]. That remains true when this
-    /// future is cancelled or returns an error: caller-owned storage keeps
-    /// the prefix it already accepted.
+    /// not repeated by [`Self::next_chunk`], even when this returns an error.
     ///
     /// The visible screen and preceding output may overlap: the screen is
     /// tmux's rendered grid, while the callback receives the raw terminal
@@ -1404,6 +1431,11 @@ impl PaneOutput {
     ///
     /// Returns an error when the connection closes, the command deadline
     /// elapses, or tmux refuses the capture, including when the pane vanished.
+    ///
+    /// # Cancel safety
+    ///
+    /// Partly happened: chunks already passed to `on_output` stay consumed, so
+    /// what the callback kept is the only copy. The stream stays usable.
     pub async fn snapshot(
         &mut self,
         mut on_output: impl FnMut(&[u8]),
@@ -1470,6 +1502,10 @@ impl PaneOutput {
     ///
     /// A chunk is what tmux chose to report at once, which is not a line and
     /// not a fixed size. Callers wanting lines should buffer.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a dropped call consumes no chunk.
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
         poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }

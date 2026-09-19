@@ -836,21 +836,22 @@ impl Window {
 
     /// Create a pane, run an operation with it, then kill it.
     ///
-    /// Once this future is polled, the scope owns creation and cleanup.
-    /// Cancellation or unwinding can let an in-flight creation finish, but a
-    /// pane whose creation yields a handle is killed while the Tokio runtime
-    /// remains active. Ordinary handle `Drop` remains non-destructive.
-    ///
     /// [`crate::ScopeError`] retains creation, operation and cleanup failures
     /// separately. If operation and cleanup both fail, both original errors
     /// are returned. Cleanup errors carry [`Error::AfterEffect`] because
-    /// creation succeeded. A canceled caller cannot receive a cleanup error;
-    /// the `tracing` feature records that failure while the runtime is active.
+    /// creation succeeded.
     ///
     /// # Errors
     ///
     /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
     /// fails. The operation's error needs no conversion into [`Error`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
+    /// of their own, so the pane is killed even if this future is dropped or
+    /// the operation panics, while the Tokio runtime is alive. A cleanup
+    /// failure then has no caller to reach; the `tracing` feature records it.
     pub async fn with_pane<T, E>(
         &self,
         options: impl Into<SplitOptions>,

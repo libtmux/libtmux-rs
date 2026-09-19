@@ -41,17 +41,18 @@ impl Server {
     /// locker that returns early, fails, or panics still releases the
     /// channel: a lock left held wedges every later locker on the server.
     ///
-    /// This does not cover the other way a channel wedges. Dropping a
-    /// *pending* lock while it is queued behind another locker leaves tmux
-    /// with a queue entry it will hand the lock to and nobody to take it;
-    /// that is a tmux defect (`cmd-wait-for.c`) and no scope can reach it.
-    /// See [`Self::lock_channel`].
-    ///
     /// # Errors
     ///
     /// [`crate::ScopeError::Creation`] when tmux refuses the lock,
     /// `Operation` when the body fails, and `Cleanup` when the unlock fails
     /// after the body succeeded.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held by a drop. The lock is taken and released in tasks
+    /// of their own, so a scope dropped while its lock is still queued unlocks
+    /// once tmux grants it. A lock still queued when the server's default
+    /// timeout elapses wedges the channel as [`Self::lock_channel`] describes.
     ///
     /// # Examples
     ///
@@ -108,16 +109,11 @@ impl Server {
     ///
     /// # Cancel safety
     ///
-    /// Not cancel safe: dropping this future can leave something held, and
-    /// no one can release it. While the call is queued behind another locker,
-    /// tmux holds a queue entry for it. If that locker's process ends without
-    /// calling [`Self::unlock_channel`], `cmd_wait_for_unlock` hands the
-    /// released lock to the next queued entry with no way to skip one whose
-    /// client has gone, and every later call here for the same channel blocks
-    /// forever. That is a tmux defect (`cmd-wait-for.c`), measured on 3.2a,
-    /// 3.7c and master, and no scope in this crate reaches it. The
-    /// non-locking [`Self::wait_for_channel`] is safe to drop: it is a latch
-    /// check, not a queue.
+    /// Something is left held, and no one can release it. Dropped, or timed
+    /// out, while queued behind another locker, this leaves tmux a queue
+    /// entry with no client behind it; `cmd_wait_for_unlock` hands the lock
+    /// to that entry, and every later lock on the channel blocks forever. A
+    /// tmux defect (`cmd-wait-for.c`), measured on 3.2a, 3.7c and master.
     pub async fn lock_channel(&self, channel: &str) -> Result<(), Error> {
         listing::mutate(
             &self.core,
@@ -184,6 +180,14 @@ impl Server {
     /// an error, so "nothing signalled it" stays distinct from "the command
     /// did not get through" -- the caller retries only one of those.
     ///
+    /// # Cancel safety
+    ///
+    /// Something is left held. A wait that is dropped, or that returns
+    /// [`ChannelWait::TimedOut`], leaves tmux a waiter with no client behind
+    /// it, and the channel's next signal releases that waiter instead of
+    /// latching, so a wait begun after the signal misses it. Measured on 3.7d;
+    /// see `cmd_wait_for_signal` in `cmd-wait-for.c`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -236,10 +240,8 @@ impl Server {
                 Ok(ChannelWait::TimedOut)
             }
             Ok(Err(error)) => Err(error),
-            // Dropping the dispatch kills the waiting tmux client; the
-            // channel stays usable, measured by killing a waiter and
-            // signalling it after. True only for this idempotent-latch
-            // form -- `Self::lock_channel`'s queue has no such guarantee.
+            // Dropping the dispatch kills the waiting client but leaves its
+            // entry in tmux's waiter list: see the cancel-safety section.
             Err(_elapsed) => Ok(ChannelWait::TimedOut),
         }
     }

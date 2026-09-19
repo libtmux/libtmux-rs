@@ -562,6 +562,9 @@ deadline, 30 seconds by default and configurable through
 for dispatch capacity.
 Dropping the command future, reaching its timeout, or shutting the server down
 signals the group and waits for the direct child while the runtime is alive.
+The signal reaches the tmux client, not the server: a command the server has
+already received still runs, so a dropped mutation may or may not have
+happened, and a retry can repeat it.
 
 A control-mode connection has its own isolated process group. Its attach
 handshake and each command response use the same default timeout; a response's
@@ -581,7 +584,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = guard.server();
 
     // Ends at 400ms rather than the server's 30-second default, and the
-    // command's process group is signalled and reaped on the way out.
+    // client's process group is signalled and reaped on the way out. The
+    // `sleep` runs under the tmux server, so it finishes regardless.
     let bounded = tokio::time::timeout(
         Duration::from_millis(400),
         server.run_shell("sleep 3"),

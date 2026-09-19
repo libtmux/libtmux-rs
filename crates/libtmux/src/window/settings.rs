@@ -200,10 +200,10 @@ impl Window {
     /// written remains; [`ReplaceMode::Merge`] leaves entries at indices the
     /// write does not name.
     ///
-    /// Sent as one tmux invocation rather than one per index. That costs one
-    /// process instead of several, but it is not atomic: tmux applies a
-    /// shared invocation in order and stops at the first refusal, so a
-    /// rejected entry leaves the ones before it written.
+    /// Sent as at most two tmux invocations rather than one per index: the
+    /// first command alone, then the rest together. That is not atomic: tmux
+    /// applies a shared invocation in order and stops at the first refusal,
+    /// so a rejected entry leaves the ones before it written.
     ///
     /// # Errors
     ///
@@ -211,6 +211,13 @@ impl Window {
     ///
     /// Returns [`crate::Error::OptionScopeMismatch`] when tmux keeps the
     /// option in another of its tables.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect can be partial: dropped between the two invocations, the
+    /// hook is left cleared under [`ReplaceMode::Replace`], or with only the
+    /// first of its new entries written under [`ReplaceMode::Merge`]. Calling
+    /// again with the same arguments finishes it.
     ///
     /// # Examples
     ///

@@ -296,6 +296,12 @@ impl Plan {
     /// not return valid IDs. Validation happens before the first command. A
     /// command tmux *refuses* is reported through the returned [`PlanResult`],
     /// not as an error, because a plan may expect one.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect can be partial: steps already dispatched stay done, and the
+    /// [`PlanResult`] naming them, with the ids of what they created, is lost
+    /// with the future. A retry runs the whole plan again.
     pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
@@ -727,6 +733,11 @@ impl Plan {
     /// `select-layout` guard: that check needs a version probe, and this
     /// connection carries no [`Server`] to run one against. A layout value
     /// this cannot parse still reaches tmux directly.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect can be partial, as for [`Self::run`]: steps already sent
+    /// stay done, and the result naming them is lost with the future.
     pub async fn run_over_control_mode(
         &self,
         sender: &crate::control::ControlSender,

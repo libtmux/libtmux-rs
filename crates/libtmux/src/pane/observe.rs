@@ -39,6 +39,11 @@ impl Pane {
     /// error when tmux could not be read, or an error when the control-mode
     /// connection cannot be opened.
     ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held: a dropped call closes the connection it opened,
+    /// and the mutes it set end with that connection.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -68,6 +73,10 @@ impl Pane {
     /// # Errors
     ///
     /// Returns the same errors as [`Self::stream_output`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held, as for [`Self::stream_output`].
     #[cfg(feature = "control-mode")]
     pub async fn stream_output_with_limits(
         &self,
@@ -261,6 +270,11 @@ impl Pane {
     /// Returns an error when tmux cannot be reached or refuses a capture.
     /// Running out of time is [`PaneWait::TimedOut`], not an error.
     ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened. A look only reads, so output a dropped wait missed
+    /// stays in the scrollback, up to `history-limit`, for the next wait.
+    ///
     /// # Examples
     ///
     /// ```
@@ -306,6 +320,11 @@ impl Pane {
     ///
     /// Returns an error when tmux cannot be reached or refuses a capture.
     /// Running out of time is [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a look only reads. A retry measures quiet afresh,
+    /// from its own first look.
     ///
     /// # Examples
     ///
