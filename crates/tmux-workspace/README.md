@@ -160,16 +160,42 @@ resolve, and this one could not have been published at all until `libtmux`
 shipped the `plan` feature it asks for — which is exactly the kind of thing
 that is invisible from inside the tree.
 
+## The library and the `tmux-workspace` command read different documents
+
+This package ships two things that both read tmuxp-style YAML, and they are
+not the same reader. `Workspace::from_yaml` and `WorkspaceBuilder` are the
+library; the `tmux-workspace` binary has its own parser and its own builder
+and does not call either. A file that loads through one is not guaranteed to
+mean the same thing through the other.
+
+The library is the smaller language, aimed at driving `libtmux` from a
+program. The command is a drop-in for tmuxp and reads everything a tmuxp file
+can hold. Where they disagree on the same file:
+
+| | Library | `tmux-workspace` command |
+| --- | --- | --- |
+| An unknown key | recorded in `unsupported_keys`, the file still loads | refused, unless it starts with `x-` |
+| `suppress_history` default | `false` | `true` |
+| No `windows`, or an empty list | keeps the window tmux made | refused |
+| A pane's `environment` | merged with the window's | replaces the window's |
+| `window_shell` | the window's creation command only | the default shell for every pane in the window |
+| `~` and `$VAR` in values | left alone | expanded |
+| YAML merge keys (`<<:`) | not resolved | resolved |
+| `sleep_before`, `sleep_after`, `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |
+
+Pick one. If you want what the command does, run the command.
+
 ## Compatibility with tmuxp
 
-Two window defaults are deliberate differences from tmuxp, kept because the
+One window default is a deliberate difference from tmuxp, kept because the
 result is more usable and because five or more panes still fit:
 
 - A window that names no `layout` is tiled (an even grid). tmuxp stacks it
   instead, halving each split from the last.
-- With no explicit `focus`, the first pane a window builds stays active.
-  tmuxp leaves the last one active. An explicit `focus: true`, on a window or
-  a pane, agrees with tmuxp either way.
+
+With no explicit `focus`, the last pane a window builds stays active, as
+tmuxp leaves it. An explicit `focus: true`, on a window or a pane, agrees
+with tmuxp either way.
 
 A key starting with `x-`, at any level of the document, is inert: accepted,
 ignored at load, and `convert` preserves it unchanged. Every other unknown
