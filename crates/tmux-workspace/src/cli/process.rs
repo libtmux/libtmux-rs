@@ -11,16 +11,7 @@ use super::{
     output::{Mode, Reporter},
 };
 
-#[cfg(not(any(
-    target_os = "cygwin",
-    target_os = "emscripten",
-    target_os = "fuchsia",
-    target_os = "horizon",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "redox",
-    target_os = "wasi"
-)))]
+#[cfg(unix_process_observer)]
 #[path = "process/captured.rs"]
 mod captured;
 #[cfg(any(
@@ -38,16 +29,7 @@ mod captured;
 
 pub(super) use captured::{require_support, run};
 
-#[cfg(not(any(
-    target_os = "cygwin",
-    target_os = "emscripten",
-    target_os = "fuchsia",
-    target_os = "horizon",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "redox",
-    target_os = "wasi"
-)))]
+#[cfg(unix_process_observer)]
 pub(super) const CAPTURE_LIMIT: usize = 1024 * 1024;
 
 pub(super) struct ChildOutput {

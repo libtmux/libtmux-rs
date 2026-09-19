@@ -128,16 +128,7 @@ impl Reporter {
         )
     }
 
-    #[cfg(not(any(
-        target_os = "cygwin",
-        target_os = "emscripten",
-        target_os = "fuchsia",
-        target_os = "horizon",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "redox",
-        target_os = "wasi"
-    )))]
+    #[cfg(unix_process_observer)]
     pub(super) fn log_chunk(&mut self, stream: &str, text: &str) {
         self.log.chunk(&self.command, stream, text);
     }
@@ -149,16 +140,7 @@ impl Reporter {
         Ok(())
     }
 
-    #[cfg(not(any(
-        target_os = "cygwin",
-        target_os = "emscripten",
-        target_os = "fuchsia",
-        target_os = "horizon",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "redox",
-        target_os = "wasi"
-    )))]
+    #[cfg(unix_process_observer)]
     pub(super) fn progress_output(&mut self, stream: &str, text: &str) -> Result<bool> {
         self.progress
             .as_mut()
