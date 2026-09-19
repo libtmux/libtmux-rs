@@ -177,3 +177,19 @@ fn borrowed(argument: Argument) -> OsString {
         Argument::Bytes(bytes) => OsString::from_vec(bytes),
     }
 }
+
+/// Serialize a duration as seconds, the unit tmuxp and `run-shell -d` use.
+pub(super) fn seconds<S: Serializer>(
+    value: &std::time::Duration,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(value.as_secs_f64())
+}
+
+/// Read seconds back, refusing a negative, infinite or oversized number.
+pub(super) fn parse_seconds<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<std::time::Duration, D::Error> {
+    let seconds = f64::deserialize(deserializer)?;
+    std::time::Duration::try_from_secs_f64(seconds).map_err(D::Error::custom)
+}

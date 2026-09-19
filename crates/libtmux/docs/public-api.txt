@@ -818,6 +818,8 @@ function libtmux::plan::OperationReport::kind: const fn(&self) -> libtmux::plan:
 function libtmux::plan::OperationReport::outcome: const fn(&self) -> libtmux::plan::Outcome
 function libtmux::plan::OperationReport::value: const fn(&self) -> Option<&libtmux::plan::OperationValue>
 function libtmux::plan::Outcome::is_complete: const fn(self) -> bool
+function libtmux::plan::Pause::duration: const fn(&self) -> Duration
+function libtmux::plan::Pause::new: const fn(duration: Duration) -> Self
 function libtmux::plan::Plan::add: fn<O: libtmux::plan::Operation>(&mut self, operation: O) -> <O as libtmux::plan::Operation>::Creates
 function libtmux::plan::Plan::chain: fn<O: libtmux::plan::Chainable>(&mut self, operation: O) -> <O as libtmux::plan::Operation>::Creates
 function libtmux::plan::Plan::is_empty: fn(&self) -> bool
@@ -1093,6 +1095,7 @@ impl Clone for libtmux::plan::OperationValue
 impl Clone for libtmux::plan::Outcome
 impl Clone for libtmux::plan::PaneSlot
 impl Clone for libtmux::plan::PaneTarget
+impl Clone for libtmux::plan::Pause
 impl Clone for libtmux::plan::Plan
 impl Clone for libtmux::plan::PlanResult
 impl Clone for libtmux::plan::PlanValidationError
@@ -1276,6 +1279,7 @@ impl Debug for libtmux::plan::OperationValue
 impl Debug for libtmux::plan::Outcome
 impl Debug for libtmux::plan::PaneSlot
 impl Debug for libtmux::plan::PaneTarget
+impl Debug for libtmux::plan::Pause
 impl Debug for libtmux::plan::Plan
 impl Debug for libtmux::plan::PlanResult
 impl Debug for libtmux::plan::PlanValidationError
@@ -1488,6 +1492,7 @@ impl From<libtmux::plan::KillPane> for libtmux::plan::Op
 impl From<libtmux::plan::KillWindow> for libtmux::plan::Op
 impl From<libtmux::plan::NewSession> for libtmux::plan::Op
 impl From<libtmux::plan::NewWindow> for libtmux::plan::Op
+impl From<libtmux::plan::Pause> for libtmux::plan::Op
 impl From<libtmux::plan::RenameWindow> for libtmux::plan::Op
 impl From<libtmux::plan::SelectLayout> for libtmux::plan::Op
 impl From<libtmux::plan::SelectPane> for libtmux::plan::Op
@@ -1547,6 +1552,7 @@ impl JsonSchema for libtmux::plan::NewSession
 impl JsonSchema for libtmux::plan::NewWindow
 impl JsonSchema for libtmux::plan::Op
 impl JsonSchema for libtmux::plan::PaneTarget
+impl JsonSchema for libtmux::plan::Pause
 impl JsonSchema for libtmux::plan::Plan
 impl JsonSchema for libtmux::plan::RenameWindow
 impl JsonSchema for libtmux::plan::Scope
@@ -1689,6 +1695,7 @@ impl Serialize for libtmux::plan::NewWindow
 impl Serialize for libtmux::plan::Op
 impl Serialize for libtmux::plan::PaneSlot
 impl Serialize for libtmux::plan::PaneTarget
+impl Serialize for libtmux::plan::Pause
 impl Serialize for libtmux::plan::Plan
 impl Serialize for libtmux::plan::RenameWindow
 impl Serialize for libtmux::plan::Safety
@@ -1708,6 +1715,7 @@ impl Stream for libtmux::control::ControlEvents
 impl Stream for libtmux::control::PaneOutput
 impl libtmux::plan::Chainable for libtmux::plan::KillPane
 impl libtmux::plan::Chainable for libtmux::plan::KillWindow
+impl libtmux::plan::Chainable for libtmux::plan::Pause
 impl libtmux::plan::Chainable for libtmux::plan::RenameWindow
 impl libtmux::plan::Chainable for libtmux::plan::SelectLayout
 impl libtmux::plan::Chainable for libtmux::plan::SelectPane
@@ -1721,6 +1729,7 @@ impl libtmux::plan::Operation for libtmux::plan::KillPane
 impl libtmux::plan::Operation for libtmux::plan::KillWindow
 impl libtmux::plan::Operation for libtmux::plan::NewSession
 impl libtmux::plan::Operation for libtmux::plan::NewWindow
+impl libtmux::plan::Operation for libtmux::plan::Pause
 impl libtmux::plan::Operation for libtmux::plan::RenameWindow
 impl libtmux::plan::Operation for libtmux::plan::SelectLayout
 impl libtmux::plan::Operation for libtmux::plan::SelectPane
@@ -1777,6 +1786,7 @@ impl<'de> Deserialize<'de> for libtmux::plan::NewWindow
 impl<'de> Deserialize<'de> for libtmux::plan::Op
 impl<'de> Deserialize<'de> for libtmux::plan::PaneSlot
 impl<'de> Deserialize<'de> for libtmux::plan::PaneTarget
+impl<'de> Deserialize<'de> for libtmux::plan::Pause
 impl<'de> Deserialize<'de> for libtmux::plan::Plan
 impl<'de> Deserialize<'de> for libtmux::plan::RenameWindow
 impl<'de> Deserialize<'de> for libtmux::plan::Safety
@@ -1922,6 +1932,7 @@ struct libtmux::plan::NewSession
 struct libtmux::plan::NewWindow
 struct libtmux::plan::OperationReport
 struct libtmux::plan::PaneSlot
+struct libtmux::plan::Pause
 struct libtmux::plan::Plan
 struct libtmux::plan::PlanResult
 struct libtmux::plan::PlanValidationError
@@ -2237,6 +2248,7 @@ struct_field libtmux::plan::Op::KillPane::0: libtmux::plan::KillPane
 struct_field libtmux::plan::Op::KillWindow::0: libtmux::plan::KillWindow
 struct_field libtmux::plan::Op::NewSession::0: libtmux::plan::NewSession
 struct_field libtmux::plan::Op::NewWindow::0: libtmux::plan::NewWindow
+struct_field libtmux::plan::Op::Pause::0: libtmux::plan::Pause
 struct_field libtmux::plan::Op::RenameWindow::0: libtmux::plan::RenameWindow
 struct_field libtmux::plan::Op::SelectLayout::0: libtmux::plan::SelectLayout
 struct_field libtmux::plan::Op::SelectPane::0: libtmux::plan::SelectPane
@@ -2472,6 +2484,7 @@ variant libtmux::plan::Op::KillPane
 variant libtmux::plan::Op::KillWindow
 variant libtmux::plan::Op::NewSession
 variant libtmux::plan::Op::NewWindow
+variant libtmux::plan::Op::Pause
 variant libtmux::plan::Op::RenameWindow
 variant libtmux::plan::Op::SelectLayout
 variant libtmux::plan::Op::SelectPane
@@ -2485,6 +2498,7 @@ variant libtmux::plan::OperationKind::KillPane
 variant libtmux::plan::OperationKind::KillWindow
 variant libtmux::plan::OperationKind::NewSession
 variant libtmux::plan::OperationKind::NewWindow
+variant libtmux::plan::OperationKind::Pause
 variant libtmux::plan::OperationKind::RenameWindow
 variant libtmux::plan::OperationKind::SelectLayout
 variant libtmux::plan::OperationKind::SelectPane

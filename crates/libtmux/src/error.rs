@@ -166,10 +166,10 @@ pub enum ControlModeErrorKind {
     /// The command would hold the connection's one command queue.
     ///
     /// A connection runs one command at a time, and tmux closes a blocking
-    /// `wait-for` the moment it queues it: routed, the call would report
-    /// success without waiting, and nothing else would be answered on that
-    /// connection until the channel released it. Run it from a handle that
-    /// starts its own clients.
+    /// `wait-for` -- or the delayed `run-shell` a plan's `Pause` renders --
+    /// the moment it queues it: routed, the call would report success without
+    /// waiting, and nothing else would be answered on that connection until
+    /// the wait ended. Run it from a handle that starts its own clients.
     BlockingCommand,
 }
 

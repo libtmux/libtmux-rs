@@ -1737,6 +1737,12 @@ impl Server {
             core: Arc::new(self.core.over_control_mode(sender.clone(), capabilities)),
         })
     }
+
+    /// Whether this handle came from [`Self::over_control_mode`].
+    #[cfg(all(feature = "control-mode", feature = "plan"))]
+    pub(crate) fn routes_over_control_mode(&self) -> bool {
+        self.core.routes_over_control_mode()
+    }
 }
 
 impl PartialEq for Server {

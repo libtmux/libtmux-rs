@@ -61,7 +61,7 @@ mod run;
 mod wire;
 
 pub use ops::{
-    CapturePane, KillPane, KillWindow, NewSession, NewWindow, RenameWindow, SelectLayout,
+    CapturePane, KillPane, KillWindow, NewSession, NewWindow, Pause, RenameWindow, SelectLayout,
     SelectPane, SelectWindow, SendKeys, SetEnvironment, SetOption, SplitWindow,
 };
 pub use planner::{Planner, Step, StepReason};
@@ -733,6 +733,8 @@ operation_set! {
     KillPane(KillPane) => "kill-pane",
     /// Destroy a window.
     KillWindow(KillWindow) => "kill-window",
+    /// Wait before the next operation runs.
+    Pause(Pause) => "run-shell",
 }
 
 impl Op {
@@ -787,7 +789,7 @@ impl Op {
     /// The targets this operation resolves before it can render.
     fn slots(&self) -> [Option<SlotUse>; 2] {
         match self {
-            Self::NewSession(_) => [None, None],
+            Self::NewSession(_) | Self::Pause(_) => [None, None],
             Self::NewWindow(op) => [op.target.slot(), None],
             Self::SplitWindow(op) => [op.target.slot(), None],
             Self::SendKeys(op) => [op.target.slot(), None],
@@ -806,7 +808,7 @@ impl Op {
     #[cfg(feature = "serde")]
     fn rebind_slots(&mut self, producers: &[Option<ProducerIdentity>]) {
         match self {
-            Self::NewSession(_) => {}
+            Self::NewSession(_) | Self::Pause(_) => {}
             Self::NewWindow(op) => op.target.rebind(producers),
             Self::SplitWindow(op) => op.target.rebind(producers),
             Self::SendKeys(op) => op.target.rebind(producers),
@@ -863,6 +865,7 @@ impl Op {
             Self::CapturePane(op) => op.render(resolve),
             Self::KillPane(op) => op.render(resolve),
             Self::KillWindow(op) => op.render(resolve),
+            Self::Pause(op) => Some(op.render()),
         }
     }
 }

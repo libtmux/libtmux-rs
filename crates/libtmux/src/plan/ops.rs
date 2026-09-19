@@ -64,9 +64,11 @@ macro_rules! operation {
 mod options;
 mod panes;
 mod sessions;
+mod timing;
 mod windows;
 
 pub use options::{SetEnvironment, SetOption};
 pub use panes::{CapturePane, KillPane, SelectPane, SendKeys, SplitWindow};
 pub use sessions::NewSession;
+pub use timing::Pause;
 pub use windows::{KillWindow, NewWindow, RenameWindow, SelectLayout, SelectWindow};
