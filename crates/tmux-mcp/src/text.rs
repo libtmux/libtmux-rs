@@ -10,6 +10,21 @@
 //! running into its predecessor. What it cannot do is resolve cursor
 //! addressing: a program that draws by moving the cursor produces text here in
 //! the order it was written, not in the order it appears on screen.
+//!
+//! Where a sequence ends is tmux's call: text swallowed here that tmux showed
+//! is output a caller never sees. So each state is one of the transition
+//! tables in tmux's `input.c`, named on the variant, merged only where the
+//! tables agree on what a reader sees. tmux also abandons a string after five
+//! seconds without a terminator (`input_start_ground_timer`); this has no
+//! clock, so a string nothing ends hides text until the next `ESC`.
+
+/// `ESC`, which starts a sequence from every state but device control data.
+const ESCAPE: u8 = 0x1b;
+/// CAN and SUB, which abandon a sequence wherever `ESC` would start one.
+const CANCEL: u8 = 0x18;
+const SUBSTITUTE: u8 = 0x1a;
+/// BEL, which ends an operating system command and no other string.
+const BELL: u8 = 0x07;
 
 /// Where the escape-sequence scanner is between chunks.
 ///
@@ -17,18 +32,30 @@
 /// the scanner's position outlives a single chunk.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum State {
-    /// Ordinary text.
+    /// `ground`: ordinary text.
     #[default]
     Text,
-    /// Just past `ESC`, waiting to learn which kind of sequence this is.
+    /// `esc_enter`: just past `ESC`.
     Escape,
-    /// Inside `ESC [ ... final`, which ends at a byte in `0x40..=0x7e`.
+    /// `esc_intermediate`: `ESC` then bytes in `0x20..=0x2f`, as in `ESC ( B`.
+    EscapeIntermediate,
+    /// `csi_enter`, `csi_parameter`, `csi_intermediate` and `csi_ignore`.
     ControlSequence,
-    /// Inside a string sequence (`OSC`, `APC`, `PM`, `DCS`), which ends at
-    /// `BEL` or at `ESC \`.
+    /// `dcs_enter`: just past `ESC P`.
+    DeviceControlEnter,
+    /// `dcs_parameter`.
+    DeviceControlParameter,
+    /// `dcs_intermediate`.
+    DeviceControlIntermediate,
+    /// `dcs_handler`: device control data, which only `ESC \` ends. The data
+    /// carries escapes of its own, as tmux's passthrough does.
+    DeviceControl,
+    /// `dcs_escape`: device control data just past an `ESC`.
+    DeviceControlEscape,
+    /// `osc_string`, which `BEL` also ends. C1 ST (`0x9c`) is data to tmux.
+    OperatingSystemCommand,
+    /// `apc_string`, `rename_string`, `consume_st` and `dcs_ignore`.
     String,
-    /// Inside a string sequence, just past an `ESC` that may terminate it.
-    StringEscape,
 }
 
 /// Strips escape sequences from a pane's output, across chunk boundaries.
@@ -67,42 +94,85 @@ impl TextFilter {
     }
 
     fn push_byte(&mut self, byte: u8, out: &mut Option<&mut Vec<u8>>) {
-        match self.state {
-            State::Text => self.push_text_byte(byte, out),
-            State::Escape => {
-                self.state = match byte {
-                    b'[' => State::ControlSequence,
-                    // OSC, APC, PM, DCS all run until a string terminator.
-                    b']' | b'_' | b'^' | b'P' => State::String,
-                    // Everything else is a two-byte sequence, already whole.
-                    _ => State::Text,
-                };
-            }
-            State::ControlSequence => {
-                if (0x40..=0x7e).contains(&byte) {
+        // `INPUT_STATE_ANYWHERE`, in every table but the two holding device
+        // control data.
+        if !matches!(
+            self.state,
+            State::DeviceControl | State::DeviceControlEscape
+        ) {
+            match byte {
+                CANCEL | SUBSTITUTE => {
                     self.state = State::Text;
+                    return;
                 }
-            }
-            State::String => match byte {
-                0x07 => self.state = State::Text,
-                0x1b => self.state = State::StringEscape,
+                ESCAPE => {
+                    self.state = State::Escape;
+                    return;
+                }
                 _ => {}
-            },
-            State::StringEscape => {
-                // `ESC \` ends the string; any other ESC-something restarts
-                // the wait for a terminator rather than ending it.
-                self.state = if byte == b'\\' {
-                    State::Text
-                } else {
-                    State::String
-                };
             }
         }
+
+        // A byte an arm does not name is collected or ignored in place.
+        self.state = match self.state {
+            State::Text => self.execute(byte, out, State::Text),
+            State::Escape => match byte {
+                0x00..=0x1f => self.execute(byte, out, State::Escape),
+                0x20..=0x2f => State::EscapeIntermediate,
+                b'P' => State::DeviceControlEnter,
+                b'[' => State::ControlSequence,
+                b']' => State::OperatingSystemCommand,
+                // SOS, PM, APC, and screen's `ESC k` title.
+                b'X' | b'^' | b'_' | b'k' => State::String,
+                // Any other final byte completes a two-byte sequence.
+                0x30..=0x7e => State::Text,
+                _ => State::Escape,
+            },
+            State::EscapeIntermediate => match byte {
+                0x00..=0x1f => self.execute(byte, out, State::EscapeIntermediate),
+                0x30..=0x7e => State::Text,
+                _ => State::EscapeIntermediate,
+            },
+            State::ControlSequence => match byte {
+                0x00..=0x1f => self.execute(byte, out, State::ControlSequence),
+                0x40..=0x7e => State::Text,
+                _ => State::ControlSequence,
+            },
+            State::DeviceControlEnter => match byte {
+                0x20..=0x2f => State::DeviceControlIntermediate,
+                0x3a => State::String,
+                0x30..=0x3f => State::DeviceControlParameter,
+                0x40..=0x7e => State::DeviceControl,
+                _ => State::DeviceControlEnter,
+            },
+            State::DeviceControlParameter => match byte {
+                0x20..=0x2f => State::DeviceControlIntermediate,
+                0x3a | 0x3c..=0x3f => State::String,
+                0x40..=0x7e => State::DeviceControl,
+                _ => State::DeviceControlParameter,
+            },
+            State::DeviceControlIntermediate => match byte {
+                0x30..=0x3f => State::String,
+                0x40..=0x7e => State::DeviceControl,
+                _ => State::DeviceControlIntermediate,
+            },
+            State::DeviceControl if byte == ESCAPE => State::DeviceControlEscape,
+            State::DeviceControlEscape if byte == b'\\' => State::Text,
+            State::DeviceControlEscape => State::DeviceControl,
+            State::OperatingSystemCommand if byte == BELL => State::Text,
+            state @ (State::DeviceControl | State::OperatingSystemCommand | State::String) => state,
+        };
+    }
+
+    /// Act on `byte` as text would, then stay in `state`: tmux runs a control
+    /// byte inside an escape or control sequence and carries on around it.
+    fn execute(&mut self, byte: u8, out: &mut Option<&mut Vec<u8>>, state: State) -> State {
+        self.push_text_byte(byte, out);
+        state
     }
 
     fn push_text_byte(&mut self, byte: u8, out: &mut Option<&mut Vec<u8>>) {
         match byte {
-            0x1b => self.state = State::Escape,
             b'\r' => {
                 // Held: `\r\n` is one line break, and a lone `\r` is a line
                 // rewritten in place, which reads better as another line than
@@ -199,14 +269,59 @@ mod tests {
         assert_eq!(filtered(&[b"a\x1b_marker\x1b\\b"]), "ab");
     }
 
+    /// `printf 'x\033]y'` in zsh, then `echo AFTER-$((2+2))`: the OSC never
+    /// ends, and the next prompt's colour is what makes tmux give up on it.
     #[test]
-    fn an_escape_inside_a_string_does_not_end_it_early() {
-        assert_eq!(filtered(&[b"a\x1b]0;ti\x1b(tle\x07b"]), "ab");
+    fn an_unterminated_osc_ends_at_the_next_escape() {
+        let text = filtered(&[
+            b"printf 'x\\033]y'\r\n",
+            b"x\x1b]y",
+            b"\x1b[0m$ ",
+            b"\x1b[32mecho\x1b[39m AFTER-$((2+2))\r\n",
+            b"AFTER-4\r\n",
+        ]);
+        assert_eq!(text, "printf 'x\\033]y'\nx$ echo AFTER-$((2+2))\nAFTER-4\n");
+    }
+
+    #[test]
+    fn an_escape_inside_an_osc_ends_it() {
+        assert_eq!(filtered(&[b"a\x1b]0;title\x1b(Bb"]), "ab");
+    }
+
+    #[test]
+    fn cancel_and_substitute_abandon_a_sequence() {
+        assert_eq!(filtered(&[b"a\x1b]0;title\x18b\x1b[1\x1ac"]), "abc");
+    }
+
+    #[test]
+    fn bel_ends_an_osc_but_not_an_application_program_command() {
+        assert_eq!(filtered(&[b"a\x1b_apc\x07still apc\x1b\\b"]), "ab");
+    }
+
+    #[test]
+    fn a_device_control_string_ends_only_at_string_terminator() {
+        assert_eq!(filtered(&[b"a\x1bPq\x1b(data\x18\x07more\x1b\\b"]), "ab");
+    }
+
+    #[test]
+    fn c1_string_terminator_is_string_data() {
+        assert_eq!(filtered(&[b"a\x1b]0;x\x9cstill title\x07b"]), "ab");
+    }
+
+    #[test]
+    fn an_escape_restarts_an_unfinished_control_sequence() {
+        assert_eq!(filtered(&[b"a\x1b[3\x1b[0mb"]), "ab");
     }
 
     #[test]
     fn a_two_byte_sequence_is_removed_whole() {
         assert_eq!(filtered(&[b"a\x1b=b\x1b>c"]), "abc");
+    }
+
+    /// `tput sgr0` writes `ESC ( B` before `ESC [ m`.
+    #[test]
+    fn a_sequence_with_an_intermediate_is_removed_whole() {
+        assert_eq!(filtered(&[b"a\x1b(Bb\x1b)0c"]), "abc");
     }
 
     #[test]
