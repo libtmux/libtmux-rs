@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use clap::ArgMatches;
-use fancy_regex::Regex;
+use regex::Regex;
 use serde_json::{Value, json};
 
 use super::{CliError, Result, document};
@@ -76,7 +76,7 @@ impl Query {
         })
     }
 
-    pub(super) fn run(&self, records: Vec<Value>) -> Result<Vec<Value>> {
+    pub(super) fn run(&self, records: Vec<Value>) -> Vec<Value> {
         let mut results = Vec::new();
         for record in records {
             if record.get("error").is_some() {
@@ -123,9 +123,7 @@ impl Query {
                         continue;
                     }
                     for value in values {
-                        if pattern.is_match(value).map_err(|e| {
-                            CliError::usage(format!("pattern evaluation failed: {e}"))
-                        })? {
+                        if pattern.is_match(value) {
                             found = true;
                             let values = matches.entry((*name).to_owned()).or_default();
                             if !values.contains(value) {
@@ -145,7 +143,7 @@ impl Query {
                 results.push(json!({"name":record["name"],"path":record["path"],"session_name":record["session_name"],"source":record["source"],"matched_fields":matches.keys().collect::<Vec<_>>(),"matches":matches}));
             }
         }
-        Ok(results)
+        results
     }
 }
 
