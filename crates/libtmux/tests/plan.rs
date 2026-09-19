@@ -854,6 +854,70 @@ async fn a_plan_refuses_a_layout_value_select_layout_cannot_parse() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("layout-control")
+        .await
+        .expect("session is created");
+    let (sender, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let mut invalid = vec![
+        ("-o", libtmux::ErrorKind::InvalidInput),
+        ("garbage", libtmux::ErrorKind::InvalidInput),
+        ("", libtmux::ErrorKind::InvalidInput),
+    ];
+    if !server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .has_behavior(&libtmux::since::JSON_LAYOUTS)
+    {
+        invalid.push((r#"{"V":2,"L":[]}"#, libtmux::ErrorKind::UnsupportedVersion));
+    }
+    for (value, expected) in invalid {
+        let mut plan = Plan::new();
+        let created = plan.add(NewSession::new("layout-effect"));
+        plan.add(SelectLayout::new(created.window(), value));
+
+        let result = plan.run_over_control_mode(&sender).await;
+        assert!(server.is_alive().await, "{value:?}: the server survives");
+        assert_eq!(
+            result.expect_err("invalid layout is refused").kind(),
+            expected,
+            "{value:?}",
+        );
+        assert_eq!(
+            server.sessions().await.expect("sessions").len(),
+            1,
+            "{value:?}: validation happens before creating a session",
+        );
+    }
+
+    let window = session.windows().await.expect("windows").remove(0);
+    for value in ["tiled", "tile"] {
+        let mut plan = Plan::new();
+        plan.add(SelectLayout::new(window.id().clone(), value));
+        let result = plan
+            .run_over_control_mode(&sender)
+            .await
+            .expect("valid layouts are accepted");
+        assert!(result.is_complete(), "{value:?}: {result:?}");
+    }
+
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// Text that happens to name a tmux key is typed, not pressed.
 ///
 /// `send-keys` resolves every argument against its key table before treating

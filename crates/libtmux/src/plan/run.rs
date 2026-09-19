@@ -466,7 +466,10 @@ impl Plan {
     async fn validate_layouts(&self, server: &Server) -> Result<(), Error> {
         for operation in self.steps() {
             if let Op::SelectLayout(select) = operation {
-                Window::validate_saved_layout(server, select.layout()).await?;
+                Window::validate_saved_layout(
+                    server.capabilities().await?.tmux_version(),
+                    select.layout(),
+                )?;
             }
         }
         Ok(())
@@ -733,6 +736,42 @@ impl Plan {
         Ok(())
     }
 
+    async fn validate_control_layouts(
+        &self,
+        sender: &crate::control::ControlSender,
+    ) -> Result<(), Error> {
+        if !self
+            .steps()
+            .iter()
+            .any(|op| matches!(op, Op::SelectLayout(_)))
+        {
+            return Ok(());
+        }
+        let block = sender
+            .send(
+                Command::new("display-message")
+                    .arg("-p")
+                    .arg("--")
+                    .arg("tmux #{version}"),
+            )
+            .await?;
+        if let Some(error) = block.refusal_for("display-message") {
+            return Err(error);
+        }
+        let mut output = Vec::new();
+        for line in block.output() {
+            output.extend_from_slice(line.as_bytes());
+            output.push(b'\n');
+        }
+        let version = crate::TmuxVersion::parse_output(&output)?;
+        for operation in self.steps() {
+            if let Op::SelectLayout(select) = operation {
+                Window::validate_saved_layout(&version, select.layout())?;
+            }
+        }
+        Ok(())
+    }
+
     /// Run this plan over an open control-mode connection.
     ///
     /// Control mode is the one transport that separates *how many commands*
@@ -752,10 +791,9 @@ impl Plan {
     /// return valid IDs. Validation happens before the first command. A command
     /// tmux refuses is reported in the [`PlanResult`].
     ///
-    /// A [`super::ops::SelectLayout`] here does not get [`Self::run`]'s
-    /// `select-layout` guard: that check needs a version probe, and this
-    /// connection carries no [`Server`] to run one against. A layout value
-    /// this cannot parse still reaches tmux directly.
+    /// Layouts are checked against the connected daemon's version before
+    /// any operation runs. Invalid or unsupported layouts return the same
+    /// errors as [`Window::select_layout`].
     ///
     /// A plan holding a [`super::ops::Pause`] fails with
     /// [`crate::ControlModeErrorKind::BlockingCommand`] before anything is
@@ -774,6 +812,7 @@ impl Plan {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.refuse_pause_over_control_mode()?;
+        self.validate_control_layouts(sender).await?;
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());

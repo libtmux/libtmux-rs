@@ -476,7 +476,7 @@ impl Window {
             }
             LayoutSpec::Saved(saved) => {
                 let server = crate::Server::from_core(Arc::clone(&self.core));
-                Self::validate_saved_layout(&server, saved).await?
+                Self::validate_saved_layout(server.capabilities().await?.tmux_version(), saved)?
             }
         };
 
@@ -517,20 +517,17 @@ impl Window {
     /// one preset available on the running release; and
     /// [`crate::ErrorKind::UnsupportedVersion`] for a preset or a JSON
     /// layout this release predates.
-    pub(crate) async fn validate_saved_layout(
-        server: &crate::Server,
+    pub(crate) fn validate_saved_layout(
+        version: &crate::TmuxVersion,
         saved: &OsStr,
     ) -> Result<OsString, Error> {
         // Checked here rather than left to tmux: 3.3 and 3.3a exit on a
         // value `select-layout` cannot parse, taking every session on the
         // socket with them, and `--` does not help -- it turns `-o` from
         // the undo flag into exactly such a value.
-        let version = server.capabilities().await?.tmux_version().clone();
-        match SavedLayout::classify(saved, &version) {
+        match SavedLayout::classify(saved, version) {
             SavedLayout::Preset(named) => {
-                server
-                    .require(named.as_str(), named.minimum_release())
-                    .await?;
+                version.require(named.as_str(), named.minimum_release())?;
                 // The resolved name, not whatever prefix the caller spelled:
                 // a caller who typed `tile` gets `tiled` sent, not a second
                 // round of tmux's own matching.
@@ -538,9 +535,7 @@ impl Window {
             }
             SavedLayout::Classic => Ok(saved.to_owned()),
             SavedLayout::Json => {
-                server
-                    .require("a JSON layout string", crate::version::since::JSON_LAYOUTS)
-                    .await?;
+                version.require("a JSON layout string", crate::version::since::JSON_LAYOUTS)?;
                 Ok(saved.to_owned())
             }
             SavedLayout::Ambiguous(candidates) => Err(Error::AmbiguousLayout {
