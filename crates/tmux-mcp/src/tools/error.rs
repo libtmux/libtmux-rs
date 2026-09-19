@@ -1,4 +1,4 @@
-use rmcp::model::{ContentBlock, ErrorData, IntoContents};
+use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData, IntoContents};
 
 /// A tool-execution failure, reported as `isError` tool content.
 ///
@@ -200,6 +200,63 @@ pub(super) fn bad_input(message: impl Into<String>) -> ToolError {
         })),
     )
     .into()
+}
+
+/// Give a failed result rmcp answered itself the body every tool failure has.
+///
+/// rmcp reports arguments that do not deserialize as a failed result whose
+/// only content is its own message. Every tool here fails through
+/// [`ToolError`], whose content is a JSON object carrying `data`, so a failed
+/// result without one is rmcp's, and it concerned the arguments.
+pub(crate) fn typed_result(mut result: CallToolResult) -> CallToolResult {
+    if result.is_error != Some(true) {
+        return result;
+    }
+    let [block] = result.content.as_slice() else {
+        return result;
+    };
+    let Some(text) = block.as_text() else {
+        return result;
+    };
+    let typed = serde_json::from_str::<serde_json::Value>(&text.text)
+        .is_ok_and(|body| body.get("data").is_some_and(serde_json::Value::is_object));
+    if !typed {
+        result.content = bad_input(text.text.clone()).into_contents();
+    }
+    result
+}
+
+/// Give a protocol error rmcp raised before any tool ran the three fields.
+pub(crate) fn typed_protocol_error(mut error: ErrorData) -> ErrorData {
+    if error.data.is_none() {
+        let kind = if error.code == ErrorCode::INVALID_PARAMS {
+            "invalid_input"
+        } else {
+            "internal"
+        };
+        error.data = Some(serde_json::json!({
+            "kind": kind,
+            "retryable": false,
+            "stale": false,
+        }));
+    }
+    error
+}
+
+/// Refuse a tool name this process does not serve.
+///
+/// The name is either a tool the startup selection left out or no tool at
+/// all, and the fix differs: only the operator can offer the first.
+pub(crate) fn unoffered_tool(tool: &str, exists: bool) -> ErrorData {
+    let message = if exists {
+        format!(
+            "tool {tool} is not offered: this server's startup selection left it out; the \
+             operator can add it with LIBTMUX_TOOLSETS or LIBTMUX_TOOLS"
+        )
+    } else {
+        format!("no tool {tool}")
+    };
+    bad_input(message).into_error_data()
 }
 
 #[cfg(test)]

@@ -564,6 +564,77 @@ fn default_daemon_loads_the_shipped_minimal_configuration() {
     std::fs::remove_dir_all(root).expect("fixture cleanup");
 }
 
+/// Errors rmcp raises before a tool runs carry the same `kind` as the rest,
+/// and a withheld tool says who can offer it.
+#[test]
+fn argument_and_routing_errors_are_typed() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let mut process = Process::start(&["--socket", socket], &[]);
+
+    let missing = process.request("tools/call", &json!({"name": "send_keys", "arguments": {}}));
+    let batched = process.request(
+        "tools/call",
+        &json!({
+            "name": "call_read_tools_batch",
+            "arguments": {"operations": [{"tool": "capture_pane", "arguments": {}}]}
+        }),
+    );
+    let withheld = process.request(
+        "tools/call",
+        &json!({"name": "kill_session", "arguments": {"session": "x"}}),
+    );
+    let unknown = process.request(
+        "tools/call",
+        &json!({"name": "no_such_tool", "arguments": {}}),
+    );
+    process.finish();
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+
+    let body: Value = serde_json::from_str(
+        missing["result"]["content"][0]["text"]
+            .as_str()
+            .expect("failed result text"),
+    )
+    .unwrap_or_else(|error| panic!("untyped argument error {missing}: {error}"));
+    assert_eq!(missing["result"]["isError"], true, "{missing}");
+    assert_eq!(body["data"]["kind"], "invalid_input", "{missing}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("pane")),
+        "{missing}"
+    );
+    let nested =
+        batched["result"]["structuredContent"]["results"][0]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("nested failed result text");
+    assert!(nested.contains("invalid_input"), "{batched}");
+
+    assert_eq!(
+        withheld["error"]["data"]["kind"], "invalid_input",
+        "{withheld}"
+    );
+    assert!(
+        withheld["error"]["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("LIBTMUX_TOOLSETS")),
+        "{withheld}"
+    );
+    assert_eq!(
+        unknown["error"]["data"]["kind"], "invalid_input",
+        "{unknown}"
+    );
+    assert!(
+        unknown["error"]["message"]
+            .as_str()
+            .is_some_and(|text| !text.contains("LIBTMUX_TOOLSETS")),
+        "{unknown}"
+    );
+}
+
 /// `TMUX= TMUX_PANE=` is how a shell un-nests tmux; it means detached. A
 /// context that is set and malformed says so once, at startup.
 #[test]
@@ -685,7 +756,17 @@ fn help_names_current_startup_controls_only() {
     let output = Command::new(BIN).arg("--help").output().expect("help runs");
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    for flag in ["--socket", "--socket-name"] {
+    for flag in [
+        "--socket",
+        "--socket-name",
+        "LIBTMUX_SOCKET_PATH",
+        "LIBTMUX_SOCKET ",
+        "LIBTMUX_TMUX_CONFIG",
+        "LIBTMUX_TOOLSETS",
+        "LIBTMUX_TOOLS ",
+        "LIBTMUX_EXCLUDE_TOOLS",
+        "LIBTMUX_ENVIRONMENT_VALUES",
+    ] {
         assert!(help.contains(flag), "{flag}");
     }
     for retired in ["--safety", "--confirm", "--no-confirm", "TMUX_MCP_CONFIRM"] {

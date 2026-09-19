@@ -129,6 +129,27 @@ const INSTRUCTIONS: &str = concat!(
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TmuxTools {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+        if !self.tool_router.has_route(&request.name) {
+            return Err(tools::error::unoffered_tool(
+                &request.name,
+                tools::router().has_route(&request.name),
+            ));
+        }
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        match self.tool_router.call(call).await {
+            Ok(rmcp::model::CallToolResponse::Complete(result)) => Ok(
+                rmcp::model::CallToolResponse::Complete(tools::error::typed_result(result)),
+            ),
+            Ok(other) => Ok(other),
+            Err(error) => Err(tools::error::typed_protocol_error(error)),
+        }
+    }
+
     async fn list_resources(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,

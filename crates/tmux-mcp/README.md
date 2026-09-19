@@ -426,7 +426,7 @@ $ tmux-mcp --socket-name work
 `-S` and `-L` work too. `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` provide the
 same startup choices. Set `LIBTMUX_TMUX_CONFIG` to use an explicit tmux
 configuration at an absolute path. Socket names and paths are mutually
-exclusive. `tmux-mcp --help` lists every flag.
+exclusive. `tmux-mcp --help` lists every flag and environment variable.
 
 ## Trust boundary
 
@@ -563,7 +563,9 @@ an agent reads fields rather than parsing text:
 ```
 
 Failures are typed too. Every error carries the same three fields, so an agent
-decides what to do next without reading prose:
+decides what to do next without reading prose. That includes arguments that
+do not match a tool's schema, and a call to a tool the startup selection left
+out, whose message names the settings that offer it:
 
 ```json
 {"kind": "object_gone", "retryable": false, "stale": true}

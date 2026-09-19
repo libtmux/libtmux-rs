@@ -1171,6 +1171,7 @@ impl TmuxTools {
                 .await
             {
                 Ok(rmcp::model::CallToolResponse::Complete(result)) => {
+                    let result = super::error::typed_result(result);
                     let failed = result.is_error == Some(true);
                     if !batch.push(BatchItem {
                         index,
@@ -1213,11 +1214,11 @@ impl TmuxTools {
                 Err(error) => {
                     if !batch.push(BatchItem {
                         index,
+                        error: Some(super::error::typed_protocol_error(error)),
                         tool,
                         success: false,
                         result: None,
                         result_truncated: false,
-                        error: Some(error),
                     }) {
                         break;
                     }
