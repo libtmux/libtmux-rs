@@ -310,11 +310,16 @@ async fn flag_shaped_commands_and_paths_stay_literal() {
     );
     stayed_literal(
         "respawn-pane",
-        pane.respawn(Some("-zzz-respawn"), true).await.err(),
+        pane.respawn(Some("-zzz-respawn"), libtmux::Respawn::Replacing)
+            .await
+            .err(),
     );
     stayed_literal(
         "respawn-window",
-        window.respawn(Some("-zzz-respawn"), true).await.err(),
+        window
+            .respawn(Some("-zzz-respawn"), libtmux::Respawn::Replacing)
+            .await
+            .err(),
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -1782,7 +1787,7 @@ async fn respawning_and_locking_reach_every_level_tmux_offers() {
     assert_eq!(window.panes().await.expect("panes").len(), 2);
 
     window
-        .respawn(Some("sh"), true)
+        .respawn(Some("sh"), libtmux::Respawn::Replacing)
         .await
         .expect("the window restarts");
     assert_eq!(
@@ -1832,7 +1837,7 @@ async fn a_dead_panes_pid_is_absent_rather_than_a_decode_failure() {
     pane.set_option("remain-on-exit", "on")
         .await
         .expect("the dead pane is kept rather than closed");
-    pane.respawn(Some("exit 0"), true)
+    pane.respawn(Some("exit 0"), libtmux::Respawn::Replacing)
         .await
         .expect("the command runs and exits");
 

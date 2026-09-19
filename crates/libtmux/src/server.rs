@@ -26,6 +26,7 @@ mod builder;
 mod channels;
 mod discovery;
 mod interactive;
+pub use interactive::MenuItem;
 mod settings;
 pub use builder::ServerBuilder;
 pub use discovery::{SessionTree, WindowTree};

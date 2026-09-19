@@ -557,12 +557,12 @@ impl Window {
     pub async fn respawn(
         &mut self,
         command: Option<impl Into<OsString>>,
-        kill: bool,
+        respawn_mode: Respawn,
     ) -> Result<&mut Self, Error> {
         let mut respawn = Command::new("respawn-window")
             .arg("-t")
             .arg(self.id().to_string());
-        if kill {
+        if respawn_mode.kills() {
             respawn = respawn.arg("-k");
         }
         if let Some(command) = command {
@@ -1408,6 +1408,25 @@ impl From<&TmuxText> for LayoutSpec {
         {
             Self::Saved(OsString::from(saved.to_string_lossy().into_owned()))
         }
+    }
+}
+
+/// What to do about a process still running where one is being respawned.
+///
+/// tmux refuses `respawn-pane` and `respawn-window` outright while the old
+/// command is alive unless `-k` says otherwise, so the choice is not a detail
+/// -- it decides whether a live process is killed.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Respawn {
+    /// Kill whatever is running first. tmux's `-k`.
+    Replacing,
+    /// Refuse unless the pane or window is already dead.
+    OnlyIfDead,
+}
+
+impl Respawn {
+    pub(crate) const fn kills(self) -> bool {
+        matches!(self, Self::Replacing)
     }
 }
 

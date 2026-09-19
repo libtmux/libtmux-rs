@@ -890,7 +890,12 @@ impl TmuxTools {
         Parameters(RespawnArgs { pane, kill_first }): Parameters<RespawnArgs>,
     ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
-        pane.respawn(None::<String>, kill_first)
+        let mode = if kill_first {
+            libtmux::Respawn::Replacing
+        } else {
+            libtmux::Respawn::OnlyIfDead
+        };
+        pane.respawn(None::<String>, mode)
             .await
             .map_err(|error| tmux_error(&error))?;
         let socket = self.socket();

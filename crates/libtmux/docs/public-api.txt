@@ -265,6 +265,7 @@ enum libtmux::Principal
 enum libtmux::PromptKind
 enum libtmux::ReplaceMode
 enum libtmux::ResizeDirection
+enum libtmux::Respawn
 enum libtmux::Rotation
 enum libtmux::ScopeError<T, E>
 enum libtmux::ServerConfigurationErrorKind
@@ -374,6 +375,10 @@ function libtmux::Layout::as_str: const fn(self) -> &'static str
 function libtmux::Layout::minimum_release: const fn(self) -> libtmux::ReleaseVersion
 function libtmux::ListingDecodeError::field_name: const fn(&self) -> Option<&'static str>
 function libtmux::ListingDecodeError::row: const fn(&self) -> Option<usize>
+function libtmux::MenuItem::command: fn(&self) -> &OsStr
+function libtmux::MenuItem::key: fn(&self) -> &OsStr
+function libtmux::MenuItem::label: fn(&self) -> &OsStr
+function libtmux::MenuItem::new: fn(label: impl Into<OsString>, key: impl Into<OsString>, command: impl Into<OsString>) -> Self
 function libtmux::NewSessionOptions::command: fn(self, command: impl Into<OsString>) -> Self
 function libtmux::NewSessionOptions::environment: fn(self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self
 function libtmux::NewSessionOptions::new: fn(name: impl Into<libtmux::TmuxArg>) -> Self
@@ -440,7 +445,7 @@ function libtmux::Pane::refresh: async fn(&mut self) -> Result<&mut Self, libtmu
 function libtmux::Pane::refreshed: async fn(&self) -> Result<Self, libtmux::Error>
 function libtmux::Pane::resize: async fn(&mut self, width: u32, height: u32) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::resize_by: async fn(&mut self, direction: libtmux::ResizeDirection, cells: u32) -> Result<&mut Self, libtmux::Error>
-function libtmux::Pane::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, kill: bool) -> Result<&mut Self, libtmux::Error>
+function libtmux::Pane::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, respawn_mode: libtmux::Respawn) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::select: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Pane::send_key_names: async fn<I, K>(&self, keys: I) -> Result<(), libtmux::Error> where I: IntoIterator<Item = K>, K: Into<OsString>
 function libtmux::Pane::send_keys: async fn(&self, keys: impl Into<OsString>) -> Result<(), libtmux::Error>
@@ -502,7 +507,7 @@ function libtmux::Server::command_prompt: async fn(&self, client: Option<&libtmu
 function libtmux::Server::config_file: fn(&self) -> Option<&Path>
 function libtmux::Server::default_timeout: fn(&self) -> Duration
 function libtmux::Server::delete_buffer: async fn(&self, name: &str) -> Result<(), libtmux::Error>
-function libtmux::Server::display_menu: async fn(&self, client: Option<&libtmux::Client>, title: &str, items: impl IntoIterator<Item = (String, String, String)>) -> Result<(), libtmux::Error>
+function libtmux::Server::display_menu: async fn(&self, client: Option<&libtmux::Client>, title: &str, items: impl IntoIterator<Item = libtmux::MenuItem>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_panes: async fn(&self, client: Option<&libtmux::Client>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_popup: async fn(&self, client: Option<&libtmux::Client>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::environment: async fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
@@ -704,7 +709,7 @@ function libtmux::Window::refreshed: async fn(&self) -> Result<Self, libtmux::Er
 function libtmux::Window::rename: async fn(&mut self, name: impl Into<libtmux::TmuxArg>) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::resize: async fn(&mut self, width: u32, height: u32) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::resize_by: async fn(&mut self, direction: libtmux::ResizeDirection, cells: u32) -> Result<&mut Self, libtmux::Error>
-function libtmux::Window::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, kill: bool) -> Result<&mut Self, libtmux::Error>
+function libtmux::Window::respawn: async fn(&mut self, command: Option<impl Into<OsString>>, respawn_mode: libtmux::Respawn) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::rotate: async fn(&self, rotation: libtmux::Rotation) -> Result<(), libtmux::Error>
 function libtmux::Window::search_panes: async fn<M: libtmux::query::Matcher<libtmux::Pane>>(&self, matcher: M) -> Result<Vec<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::select: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
@@ -999,6 +1004,7 @@ impl Clone for libtmux::JoinOptions
 impl Clone for libtmux::Layout
 impl Clone for libtmux::LayoutSpec
 impl Clone for libtmux::ListingDecodeError
+impl Clone for libtmux::MenuItem
 impl Clone for libtmux::NewSessionOptions
 impl Clone for libtmux::NewWindowOptions
 impl Clone for libtmux::ObjectKind
@@ -1021,6 +1027,7 @@ impl Clone for libtmux::ReleaseSuffix
 impl Clone for libtmux::ReleaseVersion
 impl Clone for libtmux::ReplaceMode
 impl Clone for libtmux::ResizeDirection
+impl Clone for libtmux::Respawn
 impl Clone for libtmux::Rotation
 impl Clone for libtmux::Server
 impl Clone for libtmux::ServerConfigurationErrorKind
@@ -1119,6 +1126,7 @@ impl Copy for libtmux::ReleaseSuffix
 impl Copy for libtmux::ReleaseVersion
 impl Copy for libtmux::ReplaceMode
 impl Copy for libtmux::ResizeDirection
+impl Copy for libtmux::Respawn
 impl Copy for libtmux::Rotation
 impl Copy for libtmux::ServerConfigurationErrorKind
 impl Copy for libtmux::ServerGeneration
@@ -1170,6 +1178,7 @@ impl Debug for libtmux::JoinOptions
 impl Debug for libtmux::Layout
 impl Debug for libtmux::LayoutSpec
 impl Debug for libtmux::ListingDecodeError
+impl Debug for libtmux::MenuItem
 impl Debug for libtmux::NewSessionOptions
 impl Debug for libtmux::NewWindowOptions
 impl Debug for libtmux::ObjectKind
@@ -1192,6 +1201,7 @@ impl Debug for libtmux::ReleaseSuffix
 impl Debug for libtmux::ReleaseVersion
 impl Debug for libtmux::ReplaceMode
 impl Debug for libtmux::ResizeDirection
+impl Debug for libtmux::Respawn
 impl Debug for libtmux::Rotation
 impl Debug for libtmux::Server
 impl Debug for libtmux::ServerBuilder
@@ -1328,6 +1338,7 @@ impl Eq for libtmux::JoinOptions
 impl Eq for libtmux::Layout
 impl Eq for libtmux::LayoutSpec
 impl Eq for libtmux::ListingDecodeError
+impl Eq for libtmux::MenuItem
 impl Eq for libtmux::ObjectKind
 impl Eq for libtmux::OptionErrorKind
 impl Eq for libtmux::OptionKind
@@ -1348,6 +1359,7 @@ impl Eq for libtmux::ReleaseSuffix
 impl Eq for libtmux::ReleaseVersion
 impl Eq for libtmux::ReplaceMode
 impl Eq for libtmux::ResizeDirection
+impl Eq for libtmux::Respawn
 impl Eq for libtmux::Rotation
 impl Eq for libtmux::Server
 impl Eq for libtmux::ServerConfigurationErrorKind
@@ -1459,6 +1471,7 @@ impl Hash for libtmux::Client
 impl Hash for libtmux::ErrorKind
 impl Hash for libtmux::IdParseError
 impl Hash for libtmux::Layout
+impl Hash for libtmux::MenuItem
 impl Hash for libtmux::Pane
 impl Hash for libtmux::PaneDirection
 impl Hash for libtmux::PaneId
@@ -1468,6 +1481,7 @@ impl Hash for libtmux::PaneWait
 impl Hash for libtmux::ReleaseSuffix
 impl Hash for libtmux::ReleaseVersion
 impl Hash for libtmux::ResizeDirection
+impl Hash for libtmux::Respawn
 impl Hash for libtmux::Rotation
 impl Hash for libtmux::Server
 impl Hash for libtmux::ServerGeneration
@@ -1534,6 +1548,7 @@ impl PartialEq for libtmux::JoinOptions
 impl PartialEq for libtmux::Layout
 impl PartialEq for libtmux::LayoutSpec
 impl PartialEq for libtmux::ListingDecodeError
+impl PartialEq for libtmux::MenuItem
 impl PartialEq for libtmux::ObjectKind
 impl PartialEq for libtmux::OptionErrorKind
 impl PartialEq for libtmux::OptionKind
@@ -1554,6 +1569,7 @@ impl PartialEq for libtmux::ReleaseSuffix
 impl PartialEq for libtmux::ReleaseVersion
 impl PartialEq for libtmux::ReplaceMode
 impl PartialEq for libtmux::ResizeDirection
+impl PartialEq for libtmux::Respawn
 impl PartialEq for libtmux::Rotation
 impl PartialEq for libtmux::Server
 impl PartialEq for libtmux::ServerConfigurationErrorKind
@@ -1787,6 +1803,7 @@ struct libtmux::EngineCapabilities
 struct libtmux::IdParseError
 struct libtmux::JoinOptions
 struct libtmux::ListingDecodeError
+struct libtmux::MenuItem
 struct libtmux::NewSessionOptions
 struct libtmux::NewWindowOptions
 struct libtmux::OptionSchema
@@ -2293,6 +2310,8 @@ variant libtmux::ResizeDirection::Down
 variant libtmux::ResizeDirection::Left
 variant libtmux::ResizeDirection::Right
 variant libtmux::ResizeDirection::Up
+variant libtmux::Respawn::OnlyIfDead
+variant libtmux::Respawn::Replacing
 variant libtmux::Rotation::Down
 variant libtmux::Rotation::Up
 variant libtmux::ScopeError::Cleanup

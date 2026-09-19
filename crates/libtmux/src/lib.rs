@@ -362,8 +362,8 @@ pub use options::{
 };
 pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
 pub use server::{
-    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, Principal, PromptKind, Server,
-    ServerBuilder, SessionTree, WindowTree,
+    AccessMode, AccessRule, ChannelWait, Chooser, MenuItem, NewSessionOptions, Principal,
+    PromptKind, Server, ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};
@@ -377,7 +377,7 @@ pub use target::{
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, since};
 pub use window::{
-    JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Rotation,
+    JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Respawn, Rotation,
     SplitDirection, SplitOptions, Window,
 };
 

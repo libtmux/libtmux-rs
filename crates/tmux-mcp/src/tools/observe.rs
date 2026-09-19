@@ -609,7 +609,7 @@ mod tests {
                 "exec sleep 30"
             };
             let pane_id = pane.id().clone();
-            pane.respawn(Some(command), true)
+            pane.respawn(Some(command), libtmux::Respawn::Replacing)
                 .await
                 .expect("pane begins its final transition");
             if transition == "dead" {

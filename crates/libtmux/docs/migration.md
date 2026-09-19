@@ -1,5 +1,21 @@
 # Migrating from 0.1.0-alpha.11
 
+## `respawn` and `display_menu` take types, not literals
+
+```no_run
+# async fn respawn(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
+// was: pane.respawn(Some("sh"), true)
+pane.respawn(Some("sh"), libtmux::Respawn::Replacing).await?;
+# Ok(())
+# }
+```
+
+`Respawn::OnlyIfDead` is the `false` case, and it is the one worth checking
+for: tmux refuses the respawn while the old command is alive.
+
+`Server::display_menu` takes `MenuItem::new(label, key, command)` in place of
+a `(String, String, String)` triple.
+
 ## The `_or_empty` listing twins are gone
 
 Replace `x_or_empty().await` with `x().await.unwrap_or_default()`:

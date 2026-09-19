@@ -621,7 +621,7 @@ async fn server_operations_reject_foreign_handles() {
         error_kind!(left.display_menu(
             Some(&foreign_client),
             "menu",
-            [("Item".into(), "i".into(), "display-message item".into())],
+            [libtmux::MenuItem::new("Item", "i", "display-message item")],
         )),
         error_kind!(left.command_prompt(
             Some(&foreign_client),
@@ -1464,7 +1464,7 @@ async fn interactive_commands_need_a_client() {
             .display_menu(
                 None,
                 "menu",
-                [("Item".into(), "i".into(), "kill-pane".into())]
+                [libtmux::MenuItem::new("Item", "i", "kill-pane")]
             )
             .await
             .is_err(),

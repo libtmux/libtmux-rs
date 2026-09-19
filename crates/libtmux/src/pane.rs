@@ -17,6 +17,7 @@ use crate::snapshot::PaneProjection;
 use crate::snapshot::{PaneFields, PaneInfo};
 use crate::target::{PaneId, ServerIdentity, SessionId, WindowId};
 use crate::version::TmuxVersion;
+use crate::window::Respawn;
 use crate::window::Window;
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
@@ -963,16 +964,17 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pane is still running and `kill` is not set.
+    /// Returns an error under [`Respawn::OnlyIfDead`] when the command is
+    /// still running.
     pub async fn respawn(
         &mut self,
         command: Option<impl Into<OsString>>,
-        kill: bool,
+        respawn_mode: Respawn,
     ) -> Result<&mut Self, Error> {
         let mut respawn = Command::new("respawn-pane")
             .arg("-t")
             .arg(self.id().to_string());
-        if kill {
+        if respawn_mode.kills() {
             respawn = respawn.arg("-k");
         }
         if let Some(command) = command {

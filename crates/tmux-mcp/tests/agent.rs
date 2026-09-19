@@ -885,7 +885,7 @@ async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
         .expect("fixture retains a dead pane");
     let mut peer_handle = peer_handle;
     peer_handle
-        .respawn(Some("exit 0"), true)
+        .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
         .await
         .expect("fixture command exits");
     libtmux::test::retry_until(Duration::from_secs(2), async || {
@@ -1332,7 +1332,7 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
         .await
         .expect("fixture retains a dead pane");
     source_handle
-        .respawn(Some("exit 0"), true)
+        .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
         .await
         .expect("fixture command exits");
     libtmux::test::retry_until(Duration::from_secs(2), async || {
@@ -1783,7 +1783,7 @@ async fn run_requires_a_known_posix_shell_before_watcher_setup() {
     let (guard, tools, pane) = typing_fixture("run-known-shell").await;
     let mut target = pane_handle(guard.server(), &pane).await;
     target
-        .respawn(Some("exec cat"), true)
+        .respawn(Some("exec cat"), libtmux::Respawn::Replacing)
         .await
         .expect("the pane enters an input-reading non-shell");
     libtmux::test::retry_until(Duration::from_secs(2), async || {
@@ -2563,7 +2563,10 @@ async fn run_frame_preserves_inherited_error_and_debug_traps() {
         let (guard, tools, pane) = typing_fixture(&format!("run-frame-traps-{shell_name}")).await;
         pane_handle(guard.server(), &pane)
             .await
-            .respawn(Some(&format!("exec {shell} {flags}")), true)
+            .respawn(
+                Some(&format!("exec {shell} {flags}")),
+                libtmux::Respawn::Replacing,
+            )
             .await
             .expect("fixture pane changes shell");
         libtmux::test::retry_until(Duration::from_secs(2), async || {
