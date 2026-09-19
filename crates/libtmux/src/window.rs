@@ -1416,6 +1416,18 @@ impl From<&TmuxText> for LayoutSpec {
 /// tmux refuses `respawn-pane` and `respawn-window` outright while the old
 /// command is alive unless `-k` says otherwise, so the choice is not a detail
 /// -- it decides whether a live process is killed.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn restart(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
+/// use libtmux::Respawn;
+///
+/// // Rerun the pane's own command, killing it first if it is still running.
+/// pane.respawn(None::<&str>, Respawn::Replacing).await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Respawn {
     /// Kill whatever is running first. tmux's `-k`.

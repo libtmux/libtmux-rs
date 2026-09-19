@@ -202,6 +202,26 @@ impl Server {
 ///
 /// The three parts were a `(String, String, String)` triple, which reads the
 /// same whichever order they are in and compiles whichever order they are in.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn menu(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// use libtmux::MenuItem;
+///
+/// server
+///     .display_menu(
+///         None,
+///         "session",
+///         [
+///             MenuItem::new("Detach", "d", "detach-client"),
+///             MenuItem::new("Kill", "k", "kill-session"),
+///         ],
+///     )
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct MenuItem {
     label: OsString,
