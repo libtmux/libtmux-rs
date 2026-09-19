@@ -845,7 +845,7 @@ impl ProcessStatus {
     /// synthesized so callers that read one see the shape tmux would have
     /// exited with, and it is stated here rather than invented at each call
     /// site.
-    #[cfg(any(feature = "control-mode", feature = "test-support"))]
+    #[cfg(feature = "control-mode")]
     pub(crate) const fn from_block_outcome(succeeded: bool) -> Self {
         Self {
             success: succeeded,

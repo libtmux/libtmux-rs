@@ -7,7 +7,7 @@
 //! optional. A caller who would still rather show nothing writes
 //! `.unwrap_or_default()`, where it reads as the choice it is.
 
-#![cfg(feature = "test-support")]
+#![cfg(all(feature = "test-support", feature = "query"))]
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use libtmux::test::TestServer;
