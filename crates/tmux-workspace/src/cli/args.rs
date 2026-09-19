@@ -298,10 +298,7 @@ fn build(declarations: &mut Declarations) -> Command {
         )
         .subcommand(
             Command::new("search")
-                .about("Search workspace fields; queries combine with AND unless --any"),
-        )
-        .mut_subcommand("search", |search| {
-            search
+                .about("Search workspace fields; queries combine with AND unless --any")
                 .arg(Arg::new("query_terms").num_args(0..))
                 .arg(
                     value(
@@ -328,8 +325,8 @@ fn build(declarations: &mut Declarations) -> Command {
                     Some('v'),
                     "Select nonmatching workspaces",
                 ))
-                .arg(flag("any", None, "Combine query terms with OR"))
-        })
+                .arg(flag("any", None, "Combine query terms with OR")),
+        )
         .subcommand(shell(declarations))
 }
 

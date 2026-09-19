@@ -230,7 +230,7 @@ async fn execute(
         }
         "search" => {
             let query = search::Query::new(options)?;
-            let records = query.run(discovery::records(true)?)?;
+            let records = query.run(discovery::records(true)?);
             report.records(&records, false, &[], false)
         }
         "convert" => convert(options, None, report),
