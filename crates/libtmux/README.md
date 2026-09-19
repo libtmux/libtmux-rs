@@ -579,6 +579,7 @@ for it. Dropping the future is what signals the group, so wrapping the call is
 a per-call deadline with the cleanup already attached:
 
 ```rust
+use libtmux::Command;
 use std::time::Duration;
 
 #[tokio::main]
@@ -591,7 +592,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `sleep` runs under the tmux server, so it finishes regardless.
     let bounded = tokio::time::timeout(
         Duration::from_millis(400),
-        server.run_shell("sleep 3"),
+        server.cmd(Command::new("run-shell").arg("sleep 3")),
     )
     .await;
     assert!(bounded.is_err());
