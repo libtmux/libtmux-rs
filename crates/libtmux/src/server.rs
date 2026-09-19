@@ -1,13 +1,14 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "control-mode")]
 use crate::SessionId;
-use crate::formats::TmuxText;
+use crate::formats::{TmuxText, TransportDialect, split_quoted_rows};
 use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "control-mode")]
@@ -16,8 +17,9 @@ use crate::internal::scoped;
 use crate::pane::Pane;
 use crate::session::Session;
 use crate::{
-    Command, CommandChain, CommandResult, EngineCapabilities, Error, ReleaseSuffix, ReleaseVersion,
-    ServerConfigurationErrorKind, ServerGeneration, ServerIdentity, TmuxArg,
+    Command, CommandChain, CommandResult, EngineCapabilities, Error, ListingDecodeError,
+    ReleaseSuffix, ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
+    TmuxArg,
 };
 
 mod builder;
@@ -794,7 +796,7 @@ impl Server {
     /// Returns an error when the value is absent, empty, or not shaped like
     /// tmux's triple, and when the socket path it names is unusable.
     pub fn from_env_value(value: Option<impl Into<OsString>>) -> Result<Self, Error> {
-        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+        use std::os::unix::ffi::OsStrExt as _;
 
         let value: OsString = value.map(Into::into).ok_or_else(|| {
             Error::invalid_server_configuration(ServerConfigurationErrorKind::NotInsideTmux)
@@ -991,17 +993,18 @@ impl Server {
     /// Read a paste buffer's exact bytes.
     ///
     /// Returns `None` when no buffer has that name. Buffer contents are
-    /// arbitrary bytes, so this is not a string.
+    /// arbitrary bytes, so this is not a string. The name is bytes too, so
+    /// one [`Self::buffer_names`] lists passes back as it is.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached.
-    pub async fn buffer(&self, name: &str) -> Result<Option<Vec<u8>>, Error> {
+    pub async fn buffer(&self, name: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, Error> {
         let result = self
             .cmd(
                 Command::new("show-buffer")
                     .arg("-b")
-                    .arg(OsString::from(name)),
+                    .arg(OsString::from_vec(name.as_ref().to_vec())),
             )
             .await?;
 
@@ -1016,17 +1019,23 @@ impl Server {
 
     /// List the paste buffer names.
     ///
-    /// A name containing a newline cannot be told apart from two names,
-    /// because tmux separates them with newlines and offers no framed form
-    /// for this listing. Names come from [`Server::set_buffer`], so a caller
-    /// that avoids newlines avoids the ambiguity.
+    /// A name is [`TmuxText`] because whoever made the buffer chose it: tmux
+    /// before 3.7 stores any bytes, a newline included. Each name is read
+    /// framed, so one holding a newline or `=` is one name, and
+    /// [`Self::buffer`] and [`Self::delete_buffer`] take it back unchanged.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the listing.
-    pub async fn buffer_names(&self) -> Result<Vec<String>, Error> {
+    /// Returns an error when tmux refuses the listing, and
+    /// [`Error::DecodeListing`] when its output does not decode.
+    pub async fn buffer_names(&self) -> Result<Vec<TmuxText>, Error> {
+        let dialect = TransportDialect::for_version(self.capabilities().await?.tmux_version());
         let result = self
-            .cmd(Command::new("list-buffers").arg("-F").arg("#{buffer_name}"))
+            .cmd(
+                Command::new("list-buffers")
+                    .arg("-F")
+                    .arg("#{q:buffer_name}="),
+            )
             .await?;
         if !result.success() {
             return Err(Error::CommandFailed {
@@ -1036,25 +1045,33 @@ impl Server {
             });
         }
 
-        Ok(result
-            .stdout_lossy()
-            .lines()
-            .map(ToOwned::to_owned)
+        let rows =
+            split_quoted_rows(result.stdout(), ["buffer_name"], dialect).map_err(|detail| {
+                Error::DecodeListing {
+                    list_command: "list-buffers",
+                    detail: ListingDecodeError::new(detail),
+                }
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|[name]| TmuxText::from(name))
             .collect())
     }
 
     /// Delete one paste buffer.
     ///
+    /// The name is bytes, as [`Self::buffer_names`] lists it.
+    ///
     /// # Errors
     ///
     /// Returns an error when no buffer has that name.
-    pub async fn delete_buffer(&self, name: &str) -> Result<(), Error> {
+    pub async fn delete_buffer(&self, name: impl AsRef<[u8]>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "delete-buffer",
             Command::new("delete-buffer")
                 .arg("-b")
-                .arg(OsString::from(name)),
+                .arg(OsString::from_vec(name.as_ref().to_vec())),
         )
         .await
     }

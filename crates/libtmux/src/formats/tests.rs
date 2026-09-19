@@ -9,7 +9,7 @@ use super::{
     PANE_INFO_SUPPLEMENTS, ParsedRow, ParsedSlot, PlanFieldState, PlanPurpose, PlanVersion,
     ProfileSet, QUOTE_SHELL_SPECIALS, RequiredContext, SESSION_ID, SESSION_INFO_DESCRIPTORS,
     SESSION_INFO_SUPPLEMENTS, SemanticOwner, TransportDialect, WINDOW_ID, WINDOW_INFO_DESCRIPTORS,
-    WINDOW_INFO_SUPPLEMENTS, encode_like_tmux, for_profile_selection_test,
+    WINDOW_INFO_SUPPLEMENTS, encode_like_tmux, for_profile_selection_test, split_quoted_rows,
 };
 #[cfg(feature = "test-support")]
 use crate::Command;
@@ -163,6 +163,27 @@ fn format_codec_recovers_adversarial_bytes_on_every_supported_dialect() {
             "{version} recovers exact bytes"
         );
     }
+}
+
+/// A listing outside the catalog, such as `list-buffers`, decodes as a plan
+/// does: a buffer name tmux before 3.7 stores unchecked can hold every byte
+/// in the adversarial value.
+#[test]
+fn quoted_rows_outside_the_catalog_decode_on_every_dialect() {
+    for (dialect, wire) in [
+        (TransportDialect::RawQ, RAW_Q_WIRE.as_slice()),
+        (TransportDialect::Vis, VIS_WIRE.as_slice()),
+    ] {
+        assert_eq!(
+            split_quoted_rows(wire, ["buffer_name"], dialect),
+            Ok(vec![[ADVERSARIAL_VALUE.to_vec()]]),
+            "{dialect:?}",
+        );
+    }
+    assert!(
+        split_quoted_rows(&VIS_WIRE, ["buffer_name"], TransportDialect::RawQ).is_err(),
+        "a raw reading refuses `vis` escapes rather than decoding them differently",
+    );
 }
 
 #[test]

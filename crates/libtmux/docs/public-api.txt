@@ -509,8 +509,8 @@ function libtmux::Server::append_array_option: async fn(&self, name: &str, index
 function libtmux::Server::array_option: async fn(&self, name: &str) -> Result<libtmux::SparseValues<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Server::attached_sessions: async fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
 function libtmux::Server::bind_key: async fn(&self, table: &str, key: &str, command: impl Into<OsString>) -> Result<(), libtmux::Error>
-function libtmux::Server::buffer: async fn(&self, name: &str) -> Result<Option<Vec<u8>>, libtmux::Error>
-function libtmux::Server::buffer_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
+function libtmux::Server::buffer: async fn(&self, name: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, libtmux::Error>
+function libtmux::Server::buffer_names: async fn(&self) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Server::builder: fn() -> libtmux::ServerBuilder
 function libtmux::Server::capabilities: async fn(&self) -> Result<&libtmux::EngineCapabilities, libtmux::Error>
 function libtmux::Server::chain: async fn(&self, chain: libtmux::CommandChain) -> Result<libtmux::CommandResult, libtmux::Error>
@@ -524,7 +524,7 @@ function libtmux::Server::colors: fn(&self) -> Option<u16>
 function libtmux::Server::command_prompt: async fn(&self, client: Option<&libtmux::Client>, prompt: Option<&str>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::config_file: fn(&self) -> Option<&Path>
 function libtmux::Server::default_timeout: fn(&self) -> Duration
-function libtmux::Server::delete_buffer: async fn(&self, name: &str) -> Result<(), libtmux::Error>
+function libtmux::Server::delete_buffer: async fn(&self, name: impl AsRef<[u8]>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_menu: async fn(&self, client: Option<&libtmux::Client>, title: &str, items: impl IntoIterator<Item = libtmux::MenuItem>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_panes: async fn(&self, client: Option<&libtmux::Client>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_popup: async fn(&self, client: Option<&libtmux::Client>, command: impl Into<OsString>) -> Result<(), libtmux::Error>

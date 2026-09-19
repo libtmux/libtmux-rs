@@ -35,6 +35,12 @@ impl Server {
     /// different quoting styles, so re-parsing them would be guesswork. Read
     /// each value with [`Self::typed_option`], which decodes the exact bytes.
     ///
+    /// Names are `String`, not [`TmuxText`](crate::TmuxText), because tmux's
+    /// own are ASCII and every option method takes one as `&str`; a user
+    /// option (`@name`) lists cut at any whitespace in its name, and with
+    /// U+FFFD for bytes that are not UTF-8, since `show-options` prints names
+    /// unframed.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the listing.

@@ -118,7 +118,16 @@ impl FormatPlan {
 
             if byte == b'\\' {
                 *cursor += 1;
-                Self::decode_escape(stdout, cursor, row, field, descriptor, dialect, bytes)?;
+                Self::decode_escape(stdout, cursor, dialect, bytes, |kind, offset| {
+                    FormatCodecError::framing(
+                        kind,
+                        FormatCodecPhase::Escape,
+                        row,
+                        field,
+                        descriptor,
+                        offset,
+                    )
+                })?;
             } else if byte == FIELD_SEPARATOR {
                 *cursor += 1;
                 return Ok(SlotMeta {
@@ -141,23 +150,10 @@ impl FormatPlan {
     fn decode_escape(
         stdout: &[u8],
         cursor: &mut usize,
-        row: usize,
-        field: usize,
-        descriptor: &'static FormatDescriptor,
         dialect: TransportDialect,
         bytes: &mut Vec<u8>,
+        framing: impl Fn(FormatCodecErrorKind, usize) -> FormatCodecError,
     ) -> Result<(), FormatCodecError> {
-        let framing = |kind, offset| {
-            FormatCodecError::framing(
-                kind,
-                FormatCodecPhase::Escape,
-                row,
-                field,
-                descriptor,
-                offset,
-            )
-        };
-
         let Some(escaped) = stdout.get(*cursor).copied() else {
             return Err(framing(FormatCodecErrorKind::DanglingEscape, stdout.len()));
         };
@@ -730,12 +726,12 @@ pub(crate) fn decode_text(slot: ParsedSlot<'_>) -> TmuxText {
 ///
 /// Each of `names` was rendered `#{q:name}` or bare, followed by
 /// [`FIELD_SEPARATOR`], and each row ends with LF, as in a plan's template.
-/// Only [`TransportDialect::RawQ`] escapes are accepted, so a caller needs a
-/// release outside the `vis` range. A row that does not frame fails the
-/// whole listing: nothing is skipped.
+/// Escapes decode as a plan's do in `dialect`. A row that does not frame
+/// fails the whole listing: nothing is skipped.
 pub(crate) fn split_quoted_rows<const N: usize>(
     stdout: &[u8],
     names: [&'static str; N],
+    dialect: TransportDialect,
 ) -> Result<Vec<[Vec<u8>; N]>, FormatCodecError> {
     let mut cursor = 0;
     let mut rows = Vec::new();
@@ -766,26 +762,13 @@ pub(crate) fn split_quoted_rows<const N: usize>(
                         ));
                     }
                     FIELD_SEPARATOR => break,
-                    b'\\' => match stdout.get(cursor).copied() {
-                        Some(escaped) if QUOTE_SHELL_SPECIALS.contains(&escaped) => {
-                            bytes.push(escaped);
-                            cursor += 1;
-                        }
-                        Some(_) => {
-                            return Err(error(
-                                FormatCodecErrorKind::InvalidEscape,
-                                FormatCodecPhase::Escape,
-                                cursor,
-                            ));
-                        }
-                        None => {
-                            return Err(error(
-                                FormatCodecErrorKind::DanglingEscape,
-                                FormatCodecPhase::Escape,
-                                cursor,
-                            ));
-                        }
-                    },
+                    b'\\' => FormatPlan::decode_escape(
+                        stdout,
+                        &mut cursor,
+                        dialect,
+                        bytes,
+                        |kind, offset| error(kind, FormatCodecPhase::Escape, offset),
+                    )?,
                     _ => bytes.push(byte),
                 }
             }

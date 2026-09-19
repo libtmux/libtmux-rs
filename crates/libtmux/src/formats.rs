@@ -10,9 +10,9 @@ mod text;
 
 #[cfg(feature = "unstable-fuzzing")]
 pub use fuzz::__fuzz_format_rows;
-pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose};
+pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose, TransportDialect};
 #[cfg(test)]
-use plan::{PlanVersion, TransportDialect, for_profile_selection_test};
+use plan::{PlanVersion, for_profile_selection_test};
 #[cfg(test)]
 pub(crate) use row::{FIELD_SEPARATOR, decode_ascii};
 pub(crate) use row::{FormatCodecError, FormatCodecErrorKind, ParsedRow, ParsedSlot, decode_text};

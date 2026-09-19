@@ -1,7 +1,9 @@
 //! Key bindings read as fields through `list-keys -F`.
 
 use super::Server;
-use crate::formats::{FormatCodecError, FormatCodecErrorKind, FormatCodecPhase, TmuxText};
+use crate::formats::{
+    FormatCodecError, FormatCodecErrorKind, FormatCodecPhase, TmuxText, TransportDialect,
+};
 use crate::version::since::LIST_KEYS_FORMAT;
 use crate::{Command, Error, ListingDecodeError};
 
@@ -101,7 +103,8 @@ impl KeyBinding {
 /// A row that does not frame, or whose repeat flag is neither `0` nor `1`,
 /// fails the whole listing rather than being skipped.
 fn parse(stdout: &[u8]) -> Result<Vec<KeyBinding>, FormatCodecError> {
-    crate::formats::split_quoted_rows(stdout, FIELDS)?
+    // `list-keys -F` arrived in 3.7, after the `vis` releases.
+    crate::formats::split_quoted_rows(stdout, FIELDS, TransportDialect::RawQ)?
         .into_iter()
         .enumerate()
         .map(|(row, [table, key, repeat, note, command])| {

@@ -24,6 +24,23 @@ let seconds = created.duration_since(UNIX_EPOCH)?.as_secs();
 The field handles are unchanged: `session.get(fields.session_created)` and a
 filter on it still see the `i64` tmux reports.
 
+## Buffer names are `TmuxText`
+
+`Server::buffer_names` returns `Vec<TmuxText>` in place of `Vec<String>`.
+`Server::buffer` and `Server::delete_buffer` take `impl AsRef<[u8]>`, so a
+listed name passes back as it is, and a `&str` needs no change:
+
+```no_run
+# async fn buffers(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+for name in server.buffer_names().await? {
+    // was: `name` was a `String`; `to_string_lossy` is the old reading.
+    println!("{}", name.to_string_lossy());
+    server.delete_buffer(&name).await?;
+}
+# Ok(())
+# }
+```
+
 ## `respawn` and `display_menu` take types, not literals
 
 ```no_run

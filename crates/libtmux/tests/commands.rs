@@ -9,6 +9,49 @@ use libtmux::test::{TestServer, retry_until};
 use libtmux::{ChannelWait, Command, NewWindowOptions, SplitDirection, SplitOptions};
 
 #[tokio::test]
+async fn a_listed_buffer_name_passes_back_unchanged() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    // `=` ends a field in the framed listing and a space is shell-quoted;
+    // neither may split or alter a name.
+    let mut expected = vec![libtmux::TmuxText::from("a=b c")];
+    server
+        .set_buffer(Some("a=b c"), "framed")
+        .await
+        .expect("buffer is stored");
+    // tmux before 3.7 stores a newline in a name; 3.7 refuses one.
+    let multiline = server
+        .cmd(
+            Command::new("set-buffer")
+                .arg("-b")
+                .arg("two\nlines")
+                .arg("--")
+                .arg("x"),
+        )
+        .await
+        .expect("tmux answers");
+    if multiline.success() {
+        expected.push(libtmux::TmuxText::from("two\nlines"));
+    }
+
+    let mut names = server.buffer_names().await.expect("names");
+    names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    assert_eq!(names, expected);
+
+    for name in &names {
+        assert!(
+            server.buffer(name).await.expect("read").is_some(),
+            "{name:?}"
+        );
+        server.delete_buffer(name).await.expect("buffer is deleted");
+    }
+    assert!(server.buffer_names().await.expect("names").is_empty());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn buffers_hold_exact_bytes_and_report_absence() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
