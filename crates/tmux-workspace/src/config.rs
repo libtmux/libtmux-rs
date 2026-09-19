@@ -2,8 +2,9 @@
 
 mod locate;
 
+use std::ffi::OsString;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use yaml_rust2::{Yaml, YamlLoader};
@@ -12,6 +13,15 @@ use yaml_rust2::{Yaml, YamlLoader};
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConfigError {
+    /// The workspace file could not be read.
+    #[error("cannot read workspace file {}", path.display())]
+    Read {
+        /// The file that was asked for.
+        path: PathBuf,
+        /// Why it could not be read.
+        source: std::io::Error,
+    },
+
     /// The document was not valid YAML.
     #[error("workspace configuration is not valid YAML at line {line}, column {column}: {reason}")]
     Yaml {
@@ -268,6 +278,14 @@ impl Workspace {
     /// deliberately not a full tmuxp implementation: unknown keys are ignored
     /// rather than rejected, so a richer tmuxp file still loads.
     ///
+    /// As tmuxp does, it expands `~` and `$NAME` or `${NAME}` from this
+    /// process's environment in names, start directories, and `environment`
+    /// and option values, leaving an unset variable as written; commands are
+    /// typed as written, for the pane's shell to expand. A start directory
+    /// that begins with `.` is relative to the one it inherits, or to the
+    /// current directory at the top: [`Self::from_file`] uses the file's
+    /// directory instead.
+    ///
     /// # Errors
     ///
     /// Returns an error when the document is not valid YAML, does not hold
@@ -296,34 +314,83 @@ impl Workspace {
     /// # Ok::<(), tmux_workspace::ConfigError>(())
     /// ```
     pub fn from_yaml(source: &str) -> Result<Self, ConfigError> {
+        Self::parse(source, None)
+    }
+
+    /// Read and parse one workspace file, as `tmuxp load` does.
+    ///
+    /// Everything [`Self::from_yaml`] says holds, except that a start
+    /// directory beginning with `.` and inheriting none is relative to the
+    /// file's directory. JSON is read too, as the YAML it is a subset of.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Read`] when the file cannot be read, and
+    /// otherwise what [`Self::from_yaml`] returns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tmux_workspace::Workspace;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let project = tempfile::tempdir()?;
+    /// let file = project.path().join(".tmuxp.yaml");
+    /// std::fs::write(&file, "session_name: project\nstart_directory: ./\n")?;
+    ///
+    /// let workspace = Workspace::from_file(&file)?;
+    /// assert_eq!(workspace.start_directory.as_deref(), Some(project.path()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        let path = path.as_ref();
+        let read = |source| ConfigError::Read {
+            path: path.to_owned(),
+            source,
+        };
+        let source = std::fs::read_to_string(path).map_err(read)?;
+        let directory = std::path::absolute(path)
+            .map_err(read)?
+            .parent()
+            .map(Path::to_path_buf);
+        Self::parse(&source, directory.as_deref())
+    }
+
+    fn parse(source: &str, base: Option<&Path>) -> Result<Self, ConfigError> {
         let documents = YamlLoader::load_from_str(source)?;
         let [document] = documents.as_slice() else {
             return Err(ConfigError::DocumentCount {
                 found: documents.len(),
             });
         };
-        Self::from_document(document).map_err(|problem| problem.locate(source))
+        Self::from_document(document, &Directories { base })
+            .map_err(|problem| problem.locate(source))
     }
 
-    fn from_document(document: &Yaml) -> Result<Self, Problem> {
+    fn from_document(document: &Yaml, directories: &Directories<'_>) -> Result<Self, Problem> {
         let session_name = document["session_name"]
             .as_str()
-            .ok_or_else(|| Problem::new("session_name", "must be a string"))?
-            .to_owned();
+            .ok_or_else(|| Problem::new("session_name", "must be a string"))?;
+        let session_name = expand(session_name, "session_name")?;
+        let start_directory =
+            directories.resolve(&document["start_directory"], "start_directory", None, false)?;
 
         let windows = match &document["windows"] {
             Yaml::BadValue | Yaml::Null => Vec::new(),
             Yaml::Array(entries) => entries
                 .iter()
                 .enumerate()
-                .map(|(index, window)| WindowConfig::from_yaml(window, index))
+                .map(|(index, window)| {
+                    WindowConfig::from_yaml(window, index, directories, start_directory.as_deref())
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(Problem::new("windows", "must be a list")),
         };
 
         Ok(Self {
             session_name,
-            start_directory: optional_path(&document["start_directory"], "start_directory")?,
+            start_directory,
             environment: pairs(&document["environment"], "environment")?,
             options: pairs(&document["options"], "options")?,
             global_options: pairs(&document["global_options"], "global_options")?,
@@ -341,32 +408,48 @@ impl Workspace {
 }
 
 impl WindowConfig {
-    fn from_yaml(value: &Yaml, index: usize) -> Result<Self, Problem> {
+    fn from_yaml(
+        value: &Yaml,
+        index: usize,
+        directories: &Directories<'_>,
+        session: Option<&Path>,
+    ) -> Result<Self, Problem> {
         let at = format!("windows[{index}]");
         if !matches!(value, Yaml::Hash(_)) {
             return Err(Problem::new(at, "must be a mapping"));
         }
+        // tmuxp joins a window's relative directory onto the session's.
+        let start_directory = directories.resolve(
+            &value["start_directory"],
+            &format!("{at}.start_directory"),
+            session,
+            true,
+        )?;
+        let inherited = start_directory.as_deref().or(session);
         let panes = match &value["panes"] {
             // A window with no panes still has the one tmux creates with it.
             Yaml::BadValue | Yaml::Null => vec![PaneConfig::default()],
             Yaml::Array(entries) => entries
                 .iter()
                 .enumerate()
-                .map(|(pane, entry)| PaneConfig::from_yaml(entry, &at, pane))
+                .map(|(pane, entry)| {
+                    PaneConfig::from_yaml(entry, &at, pane, directories, inherited)
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(Problem::new(format!("{at}.panes"), "must be a list")),
         };
+        let window_name = value["window_name"]
+            .as_str()
+            .map(|name| expand(name, &format!("{at}.window_name")))
+            .transpose()?;
 
         Ok(Self {
-            window_name: value["window_name"].as_str().map(ToOwned::to_owned),
+            window_name,
             window_index: optional_index(&value["window_index"], &format!("{at}.window_index"))?,
             window_shell: value["window_shell"].as_str().map(ToOwned::to_owned),
             environment: pairs(&value["environment"], &format!("{at}.environment"))?,
             layout: optional_text(&value["layout"], &format!("{at}.layout"))?,
-            start_directory: optional_path(
-                &value["start_directory"],
-                &format!("{at}.start_directory"),
-            )?,
+            start_directory,
             focus: is_true(&value["focus"], &format!("{at}.focus"))?,
             options: pairs(&value["options"], &format!("{at}.options"))?,
             shell_command_before: commands(
@@ -388,7 +471,13 @@ impl WindowConfig {
 }
 
 impl PaneConfig {
-    fn from_yaml(value: &Yaml, window: &str, index: usize) -> Result<Self, Problem> {
+    fn from_yaml(
+        value: &Yaml,
+        window: &str,
+        index: usize,
+        directories: &Directories<'_>,
+        inherited: Option<&Path>,
+    ) -> Result<Self, Problem> {
         let at = format!("{window}.panes[{index}]");
         match value {
             // tmuxp lets a pane be its commands alone, or nothing at all.
@@ -411,9 +500,13 @@ impl PaneConfig {
         Ok(Self {
             shell_commands: commands(&value["shell_command"], &format!("{at}.shell_command"))?,
             environment: pairs(&value["environment"], &format!("{at}.environment"))?,
-            start_directory: optional_path(
+            // tmuxp does not join a pane's relative directory onto the
+            // window's; only a `.` path starts from it.
+            start_directory: directories.resolve(
                 &value["start_directory"],
                 &format!("{at}.start_directory"),
+                inherited,
+                false,
             )?,
             focus: is_true(&value["focus"], &format!("{at}.focus"))?,
             // tmuxp presses Enter unless a file says otherwise.
@@ -492,25 +585,19 @@ fn pairs(value: &Yaml, path: &str) -> Result<Vec<(String, String)>, Problem> {
                 let key = key
                     .as_str()
                     .ok_or_else(|| Problem::new(path, "names must be strings"))?;
-                // tmuxp writes option values as strings, numbers, or bools.
-                let value = value.as_str().map(ToOwned::to_owned).or_else(|| {
-                    value.as_i64().map(|number| number.to_string()).or_else(|| {
-                        value.as_bool().map(|flag| {
-                            if flag {
-                                "on".to_owned()
-                            } else {
-                                "off".to_owned()
-                            }
-                        })
-                    })
-                });
-
-                value.map(|value| (key.to_owned(), value)).ok_or_else(|| {
-                    Problem::new(
-                        format!("{path}.{key}"),
-                        "must be a string, a number, or a boolean",
-                    )
-                })
+                let at = format!("{path}.{key}");
+                // tmuxp writes option values as strings, numbers, or bools,
+                // and expands only the strings.
+                let value = match value {
+                    Yaml::String(text) => expand(text, &at)?,
+                    Yaml::Integer(number) => number.to_string(),
+                    Yaml::Boolean(true) => "on".to_owned(),
+                    Yaml::Boolean(false) => "off".to_owned(),
+                    _ => {
+                        return Err(Problem::new(at, "must be a string, a number, or a boolean"));
+                    }
+                };
+                Ok((key.to_owned(), value))
             })
             .collect(),
         _ => Err(Problem::new(path, "must be a mapping of names to values")),
@@ -605,17 +692,129 @@ fn optional_index(value: &Yaml, path: &str) -> Result<Option<i32>, Problem> {
     }
 }
 
-/// Read an optional path, refusing a value that is present and not one.
-///
-/// Absence defaults; a wrong shape does not. `start_directory: 123` used to
-/// read as "no start directory", which builds a workspace that is valid and
-/// not the one the file describes.
-fn optional_path(value: &Yaml, path: &str) -> Result<Option<PathBuf>, Problem> {
-    match value {
-        Yaml::BadValue | Yaml::Null => Ok(None),
-        Yaml::String(text) => Ok(Some(PathBuf::from(text))),
-        _ => Err(Problem::new(path, "must be a string")),
+/// Where a workspace's relative start directories are resolved from.
+struct Directories<'a> {
+    /// The workspace file's directory, or `None` for the current directory.
+    base: Option<&'a Path>,
+}
+
+impl Directories<'_> {
+    /// Read a `start_directory` and resolve it the way tmuxp's loader does.
+    ///
+    /// `~` and variables expand first. An absolute result stands. A result
+    /// starting with `.` is relative to `parent`, else to the base. Any other
+    /// relative result joins `parent` when `join` is set, which tmuxp does for
+    /// a window under its session, and is otherwise relative to the current
+    /// directory, where tmux would resolve it.
+    ///
+    /// Absence defaults; a wrong shape does not. `start_directory: 123` used
+    /// to read as "no start directory", which builds a workspace that is valid
+    /// and not the one the file describes.
+    fn resolve(
+        &self,
+        value: &Yaml,
+        path: &str,
+        parent: Option<&Path>,
+        join: bool,
+    ) -> Result<Option<PathBuf>, Problem> {
+        let text = match value {
+            Yaml::BadValue | Yaml::Null => return Ok(None),
+            Yaml::String(text) => text,
+            _ => return Err(Problem::new(path, "must be a string")),
+        };
+        if text.starts_with('~') && !(text == "~" || text.starts_with("~/")) {
+            return Err(Problem::new(
+                path,
+                "starts with `~name`, which is not expanded here; write the directory out",
+            ));
+        }
+        let expanded = PathBuf::from(expand(text, path)?);
+        if expanded.is_absolute() {
+            return Ok(Some(tidy(&expanded)));
+        }
+        let anchor = if text.starts_with('.') {
+            parent.or(self.base)
+        } else if join {
+            parent
+        } else {
+            None
+        };
+        let anchor = match anchor {
+            Some(anchor) => anchor.to_owned(),
+            None => std::env::current_dir().map_err(|error| {
+                Problem::new(
+                    path,
+                    format!("is relative, and the current directory cannot be read: {error}"),
+                )
+            })?,
+        };
+        Ok(Some(tidy(&anchor.join(expanded))))
     }
+}
+
+/// Drop `.` components and doubled separators. `..` is kept for the kernel
+/// to resolve, since a lexical `..` is wrong across a symbolic link.
+fn tidy(path: &Path) -> PathBuf {
+    path.components().collect()
+}
+
+/// Expand `text` against this process's environment, as tmuxp's
+/// `expandshell` does.
+fn expand(text: &str, path: &str) -> Result<String, Problem> {
+    expand_with(text, |name| std::env::var_os(name)).map_err(|reason| Problem::new(path, reason))
+}
+
+/// Python's `os.path.expanduser` then `os.path.expandvars`, which is what
+/// tmuxp applies.
+///
+/// A leading `~` or `~/` becomes `$HOME`. `$NAME` (ASCII letters, digits and
+/// `_`) and `${NAME}` become the variable's value; an unset variable, `~name`
+/// and a lone `$` stay as written. There is no escape, in tmuxp or here.
+fn expand_with(text: &str, variable: impl Fn(&str) -> Option<OsString>) -> Result<String, String> {
+    let text_of = |name: &str, value: OsString| {
+        value
+            .into_string()
+            .map_err(|_| format!("names ${name}, whose value is not UTF-8"))
+    };
+    let mut expanded = String::with_capacity(text.len());
+    let mut rest = text;
+    if let Some(tail) = text.strip_prefix('~') {
+        if tail.is_empty() || tail.starts_with('/') {
+            let home = variable("HOME").ok_or("starts with `~`, and HOME is not set")?;
+            expanded.push_str(text_of("HOME", home)?.trim_end_matches('/'));
+            if expanded.is_empty() && tail.is_empty() {
+                expanded.push('/');
+            }
+            rest = tail;
+        }
+    }
+    while let Some(at) = rest.find('$') {
+        expanded.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let (name, length) = if let Some(braced) = after.strip_prefix('{') {
+            braced
+                .find('}')
+                .map_or(("", 0), |end| (&braced[..end], end + 2))
+        } else {
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            (&after[..end], end)
+        };
+        // A name no environment variable can have is never looked up.
+        let value = if name.is_empty() || name.contains(['=', '\0']) {
+            None
+        } else {
+            variable(name)
+        };
+        match value {
+            Some(value) => expanded.push_str(&text_of(name, value)?),
+            None => expanded.push_str(&rest[at..=at + length]),
+        }
+        rest = &after[length..];
+    }
+    expanded.push_str(rest);
+    Ok(expanded)
 }
 
 /// Read an optional string, refusing a value that is present and not one.
@@ -867,7 +1066,7 @@ fn command_yaml(command: &ShellCommand) -> String {
 }
 
 /// Quote a path the way a scalar is quoted.
-fn path(value: &std::path::Path) -> String {
+fn path(value: &Path) -> String {
     quoted(&value.display().to_string())
 }
 
@@ -892,4 +1091,42 @@ fn quoted(value: &str) -> String {
     }
     escaped.push('"');
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_with;
+
+    /// Each expected value is what Python's `os.path.expandvars(
+    /// os.path.expanduser(text))` returns with the same two variables set.
+    #[test]
+    fn expansion_is_pythons_expanduser_then_expandvars() {
+        let expand = |text| {
+            expand_with(text, |name| match name {
+                "HOME" => Some("/home/me/".into()),
+                "PROJECT" => Some("tmux".into()),
+                _ => None,
+            })
+        };
+        for (text, expected) in [
+            ("~", "/home/me"),
+            ("~/src", "/home/me/src"),
+            ("~nosuchuser/src", "~nosuchuser/src"),
+            ("a~", "a~"),
+            ("$PROJECT/x", "tmux/x"),
+            ("${PROJECT}x", "tmuxx"),
+            ("$PROJECTx", "$PROJECTx"),
+            ("$UNSET and ${UNSET}", "$UNSET and ${UNSET}"),
+            ("$ ${ ${} $-", "$ ${ ${} $-"),
+            ("~/$PROJECT", "/home/me/tmux"),
+            ("price: $5", "price: $5"),
+        ] {
+            assert_eq!(expand(text).as_deref(), Ok(expected), "{text}");
+        }
+
+        let root = |text| expand_with(text, |_| Some("/".into()));
+        assert_eq!(root("~").as_deref(), Ok("/"));
+        assert_eq!(root("~/x").as_deref(), Ok("/x"));
+        assert!(expand_with("~", |_| None).is_err(), "no HOME, no `~`");
+    }
 }

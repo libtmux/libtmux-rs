@@ -1115,6 +1115,183 @@ windows:
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// tmuxp expands `~` and variables in names, directories and values, joins a
+/// window's relative directory onto the session's, and starts a `.` path
+/// from the directory it inherits.
+#[test]
+fn start_directories_and_names_expand_as_tmuxp_does() {
+    let home = std::env::var("HOME").expect("tests run with HOME set");
+    let home_path = std::path::PathBuf::from(&home);
+    let current = std::env::current_dir().expect("a current directory");
+    let workspace = Workspace::from_yaml(
+        "
+session_name: dirs-${HOME}
+start_directory: ~/code
+environment:
+  WHERE: $HOME/x
+windows:
+  - window_name: w $TMUX_WORKSPACE_UNSET_VARIABLE
+    start_directory: ${HOME}
+  - start_directory: src
+    panes:
+      - start_directory: ./tests
+      - start_directory: tests
+      - echo $HOME
+",
+    )
+    .expect("configuration parses");
+
+    assert_eq!(workspace.session_name, format!("dirs-{home}"));
+    assert_eq!(workspace.start_directory, Some(home_path.join("code")));
+    assert_eq!(
+        workspace.environment,
+        [("WHERE".to_owned(), format!("{home}/x"))]
+    );
+    let windows = &workspace.windows;
+    assert_eq!(
+        windows[0].window_name.as_deref(),
+        Some("w $TMUX_WORKSPACE_UNSET_VARIABLE"),
+        "an unset variable stays as written",
+    );
+    assert_eq!(windows[0].start_directory, Some(home_path.clone()));
+    assert_eq!(
+        windows[1].start_directory,
+        Some(home_path.join("code/src")),
+        "a window's relative directory joins the session's",
+    );
+    let panes = &windows[1].panes;
+    assert_eq!(
+        panes[0].start_directory,
+        Some(home_path.join("code/src/tests")),
+        "a `.` path starts from the directory it inherits",
+    );
+    assert_eq!(
+        panes[1].start_directory,
+        Some(current.join("tests")),
+        "tmuxp leaves a pane's other relative path to tmux, which starts from here",
+    );
+    assert_eq!(
+        panes[2].shell_commands,
+        [ShellCommand::new("echo $HOME")],
+        "a command is the pane shell's to expand",
+    );
+
+    let top = Workspace::from_yaml("session_name: s\nstart_directory: ./\n")
+        .expect("configuration parses");
+    assert_eq!(top.start_directory, Some(current));
+
+    let message = Workspace::from_yaml("session_name: s\nstart_directory: ~root/x\n")
+        .expect_err("`~name` is refused")
+        .to_string();
+    assert!(
+        message.contains("start_directory starts with `~name`"),
+        "{message}"
+    );
+}
+
+/// The first pane of each window starts where the file says.
+async fn first_pane_directories(session: &libtmux::Session) -> Vec<String> {
+    let mut directories = Vec::new();
+    for window in session.windows().await.expect("windows list") {
+        let panes = window.panes().await.expect("panes list");
+        directories.push(text_optional(panes[0].current_path()));
+    }
+    directories
+}
+
+fn canonical(path: impl AsRef<std::path::Path>) -> String {
+    path.as_ref()
+        .canonicalize()
+        .expect("the directory exists")
+        .display()
+        .to_string()
+}
+
+#[tokio::test]
+async fn a_dot_start_directory_is_relative_to_the_file_it_is_in() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    std::fs::create_dir_all(root.path().join("nested/deeper")).expect("nested directories");
+    let file = root.path().join("workspace.yaml");
+    std::fs::write(
+        &file,
+        "
+session_name: relative
+start_directory: ./
+windows:
+  - window_name: file
+  - window_name: joined
+    start_directory: nested
+  - window_name: dotted
+    start_directory: ./nested
+    panes:
+      - start_directory: ./deeper
+",
+    )
+    .expect("the file is written");
+
+    // The tests run from the crate's directory, which has no `nested`, so a
+    // path resolved from there lands tmux in its fallback directory.
+    let workspace = Workspace::from_file(&file).expect("the file parses");
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("workspace builds");
+
+    assert_eq!(
+        first_pane_directories(&session).await,
+        [
+            canonical(root.path()),
+            canonical(root.path().join("nested")),
+            canonical(root.path().join("nested/deeper")),
+        ],
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// tmuxp's own start-directory example, which its window names describe.
+///
+/// The last window is named for the file's directory, and tmuxp's loader
+/// puts it in the session's: a `.` path starts from the directory it would
+/// otherwise inherit. This follows the loader.
+#[tokio::test]
+async fn tmuxp_start_directory_example_builds_where_tmuxp_does() {
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/tmuxp/start-directory.yaml");
+    let workspace = Workspace::from_file(&file).expect("tmuxp's example parses");
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("tmuxp's example builds");
+
+    let home = std::env::var("HOME").expect("tests run with HOME set");
+    assert_eq!(
+        first_pane_directories(&session).await,
+        [
+            canonical("/var"),
+            canonical("/var/log"),
+            canonical(home),
+            canonical("/bin"),
+            canonical("/var"),
+        ],
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[test]
+fn a_missing_file_is_named() {
+    let error = Workspace::from_file("/nonexistent/tmux-workspace.yaml")
+        .expect_err("there is no such file");
+    assert!(matches!(error, ConfigError::Read { .. }), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "cannot read workspace file /nonexistent/tmux-workspace.yaml",
+    );
+}
+
 /// A file is fixed in an editor, so an error names the line to go to.
 #[test]
 fn an_error_names_the_line_and_column_to_fix() {
