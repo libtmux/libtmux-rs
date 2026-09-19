@@ -490,6 +490,47 @@ fn only_the_process_whose_config_marker_loaded_claims_minimal_provenance() {
     assert_eq!(follower_report["toolCount"], 41);
 }
 
+/// Two clients on the default socket share one daemon, so the one that
+/// started it must not stop it while the other still answers from it.
+#[test]
+fn the_owner_leaves_a_shared_dedicated_daemon_running() {
+    let root = PathBuf::from("/tmp/libtmux-rs-test")
+        .join(format!("mcp-shared-owner-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("fixture root");
+    let socket = root.join(format!(
+        "tmux-{}/libtmux-mcp",
+        std::fs::metadata(&root).expect("fixture metadata").uid()
+    ));
+    let environment = [("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))];
+    let mut owner = Process::start(&[], &environment);
+    let created = owner.request(
+        "tools/call",
+        &json!({"name": "create_session", "arguments": {"name": "shared"}}),
+    );
+    let mut follower = Process::start(&[], &environment);
+
+    let owner_log = owner.finish();
+    let listed = follower.request(
+        "tools/call",
+        &json!({"name": "list_sessions", "arguments": {}}),
+    );
+    follower.finish();
+    let alive_after_both = daemon_is_alive(&socket);
+    stop_daemon(&socket);
+    std::fs::remove_dir_all(&root).expect("fixture cleanup");
+
+    assert_ne!(created["result"]["isError"], true, "{created}");
+    assert_eq!(
+        listed["result"]["structuredContent"]["sessions"][0]["name"], "shared",
+        "the follower lost its daemon when the owner exited: {listed}"
+    );
+    assert!(owner_log.contains("leaving"), "{owner_log}");
+    assert!(
+        alive_after_both,
+        "a follower stopped a daemon it did not start"
+    );
+}
+
 #[test]
 fn default_daemon_loads_the_shipped_minimal_configuration() {
     let root = PathBuf::from("/tmp/libtmux-rs-test")

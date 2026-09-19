@@ -2,7 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io::{self, Write as _};
-use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -196,6 +196,24 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
         .try_build()?;
     let environment_values = environment_values_from_env()?;
 
+    // Held before the liveness check, so an owner cannot stop the daemon
+    // between this process finding it and starting to use it.
+    let dedicated = Server::builder().socket_name(DEFAULT_SOCKET).build()?;
+    let lease = if server.socket_path() == dedicated.socket_path() {
+        Some(
+            SocketLease::share(server.socket_path())
+                .await
+                .map_err(|error| {
+                    format!(
+                        "cannot lease the dedicated tmux socket at {}: {error}",
+                        server.socket_path().display()
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
     let existing_before = match server.check_alive().await {
         Ok(()) => true,
         Err(libtmux::Error::ServerGone { .. }) => false,
@@ -287,16 +305,77 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             .map_err(Box::<dyn std::error::Error>::from),
         Err(error) => Err(Box::new(error)),
     };
-    if created_dedicated {
+    let alone = lease.as_ref().is_some_and(SocketLease::try_exclusive);
+    if created_dedicated && alone {
         let killed = server.kill().await;
         let shutdown = server.shutdown().await;
+        drop(lease);
         result?;
         killed?;
         shutdown?;
     } else {
+        if created_dedicated {
+            eprintln!(
+                "tmux-mcp: leaving the dedicated tmux daemon running, because another \
+                 tmux-mcp still uses it"
+            );
+        }
         result?;
     }
     Ok(())
+}
+
+/// A share in the dedicated socket, held for this process's whole life.
+///
+/// Every process on the dedicated socket holds a shared `flock` on a file
+/// beside it, and the process that started the daemon stops it only when an
+/// exclusive lock succeeds, which proves no other process holds a share. The
+/// kernel releases a dead process's share, so a crash leaves no stale lease.
+struct SocketLease(std::fs::File);
+
+impl SocketLease {
+    /// Take a share, waiting out an owner that is stopping the daemon.
+    async fn share(socket: &Path) -> io::Result<Self> {
+        let directory = socket
+            .parent()
+            .ok_or_else(|| io::Error::other("the socket path has no directory"))?
+            .to_path_buf();
+        let path = socket.with_file_name(format!("{DEFAULT_SOCKET}.lease"));
+        tokio::task::spawn_blocking(move || {
+            // tmux refuses a socket directory that others can read, and
+            // creates this one 0700 itself when it gets there first.
+            match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(&path)?;
+            rustix::fs::flock(&file, rustix::fs::FlockOperation::LockShared)?;
+            Ok(Self(file))
+        })
+        .await
+        .map_err(io::Error::other)?
+    }
+
+    /// Whether this process is the only one holding a share.
+    ///
+    /// On success the share becomes exclusive, so a process starting now
+    /// waits in [`Self::share`] until the daemon is gone and then starts its
+    /// own. On failure the share may be gone too, which matters to nothing:
+    /// the caller is exiting.
+    fn try_exclusive(&self) -> bool {
+        rustix::fs::flock(
+            &self.0,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .is_ok()
+    }
 }
 
 const fn provenance_label(provenance: SocketProvenance) -> &'static str {

@@ -400,10 +400,18 @@ refusal, not a consent signal.
 
 Without arguments the server selects the `libtmux-mcp` socket, starts it with
 the shipped minimal configuration, and authenticates that this launch created
-the daemon before enabling teardown by default. The owning process stops that
-daemon at shutdown. An already-running daemon keeps its configuration and gets
-conservative provenance. The server does not follow `$TMUX`. Select another
-socket by path or name:
+the daemon before enabling teardown by default. An already-running daemon
+keeps its configuration and gets conservative provenance. The server does not
+follow `$TMUX`.
+
+Several `tmux-mcp` processes without arguments share that one daemon. Each
+holds a shared lock on `libtmux-mcp.lease` beside the socket, and the process
+that started the daemon stops it at shutdown only when no other process holds
+one. No process stops a daemon it did not start, so when the owner exits
+first the daemon outlives every process using it, and the next launch finds
+it already running. Stop it with `tmux -L libtmux-mcp kill-server`.
+
+Select another socket by path or name:
 
 ```console
 $ tmux-mcp --socket /tmp/tmux-1000/work
