@@ -11,10 +11,10 @@ use super::{DecoderKind, FormatDescriptor, ListProfile};
 /// digit or one of the letters `vis` emits, so the two escaping layers below
 /// compose into one unambiguous grammar.
 ///
-/// `{`, `}` and `\n` joined the set on the unreleased tree reporting as
-/// `next-3.9`. No release through 3.7c escapes them, so accepting them here
-/// is a safe superset on every version -- no `since::` gate needed.
-pub(super) const QUOTE_SHELL_SPECIALS: &[u8] = b"|&;<>()$`\\\"'*?[# =%{}\n";
+/// `{`, `}`, `\n` and `\t` joined the set in 3.8-rc. No earlier release
+/// escapes them, so accepting them here is a safe superset on every version --
+/// no `since::` gate needed.
+pub(super) const QUOTE_SHELL_SPECIALS: &[u8] = b"|&;<>()$`\\\"'*?[# =%{}\n\t";
 
 /// The field separator a format plan's template renders between values.
 ///
