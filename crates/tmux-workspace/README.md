@@ -389,7 +389,7 @@ Save the opening YAML example as `dev.yaml`. From the repository root,
 install the workspace CLI:
 
 ```console
-$ cargo install --locked --path crates/tmux-workspace
+$ cargo install --locked --path crates/tmux-workspace --features cli
 ```
 
 Install the MCP executable:
