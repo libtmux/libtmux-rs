@@ -99,7 +99,7 @@ pub(super) async fn open(
     })
 }
 
-/// One command waiting for its result block.
+/// One line waiting for its result blocks.
 #[derive(Debug)]
 pub(super) struct Request {
     pub(super) line: String,
@@ -107,6 +107,8 @@ pub(super) struct Request {
     pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
     pub(super) commit: oneshot::Sender<()>,
     pub(super) boundary: Option<Boundary>,
+    /// Commands on the line: tmux answers each with its own block.
+    pub(super) blocks: usize,
 }
 
 /// A request whose caller can no longer prevent the first write.
@@ -116,6 +118,7 @@ pub(super) struct CommittedRequest {
     pub(super) deadline: Option<Instant>,
     pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
     pub(super) boundary: Option<Boundary>,
+    pub(super) blocks: usize,
 }
 
 impl Request {
@@ -126,6 +129,7 @@ impl Request {
             result,
             commit,
             boundary,
+            blocks,
         } = self;
         commit.send(()).ok()?;
         Some(CommittedRequest {
@@ -133,6 +137,7 @@ impl Request {
             deadline,
             result,
             boundary,
+            blocks,
         })
     }
 }
@@ -153,11 +158,16 @@ pub(super) enum ReplySlot {
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
+        /// Blocks still to come, one per command on the line.
+        owed: usize,
+        /// The chain's blocks so far, all of them successes.
+        received: Option<BlockResult>,
     },
-    /// Consume this block without giving it to a later caller.
+    /// Consume these blocks without giving them to a later caller.
     Tombstone {
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
+        owed: usize,
     },
 }
 
@@ -171,6 +181,39 @@ impl ReplySlot {
     const fn boundary(&self) -> Option<Boundary> {
         match self {
             Self::Live { boundary, .. } | Self::Tombstone { boundary, .. } => *boundary,
+        }
+    }
+
+    /// Whether `block` is the last this slot is owed. tmux runs nothing
+    /// after the first command in a chain that fails, so a failure ends it.
+    const fn is_last(&self, block: &BlockResult) -> bool {
+        let (Self::Live { owed, .. } | Self::Tombstone { owed, .. }) = self;
+        *owed <= 1 || !block.succeeded()
+    }
+
+    /// Take one block, returning the whole reply once the last one arrives.
+    fn take(&mut self, block: BlockResult) -> Option<BlockResult> {
+        let last = self.is_last(&block);
+        match self {
+            Self::Live { owed, received, .. } => {
+                let block = match received.take() {
+                    Some(earlier) => earlier.followed_by(block),
+                    None => block,
+                };
+                if last {
+                    return Some(block);
+                }
+                *owed -= 1;
+                *received = Some(block);
+                None
+            }
+            Self::Tombstone { owed, .. } => {
+                if last {
+                    return Some(block);
+                }
+                *owed -= 1;
+                None
+            }
         }
     }
 }
@@ -190,7 +233,16 @@ impl ReplySlots {
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
     ) {
-        self.push_ordered(result, deadline, None);
+        self.push_ordered(result, deadline, None, 1);
+    }
+
+    #[cfg(test)]
+    pub(super) fn push_chain(
+        &mut self,
+        result: oneshot::Sender<Result<BlockResult, Error>>,
+        blocks: usize,
+    ) {
+        self.push_ordered(result, None, None, blocks);
     }
 
     fn push_ordered(
@@ -198,23 +250,36 @@ impl ReplySlots {
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
+        blocks: usize,
     ) {
         self.earliest = earliest_deadline(self.earliest, deadline);
+        let owed = blocks.max(1);
         if result.is_closed() {
-            self.slots
-                .push_back(ReplySlot::Tombstone { deadline, boundary });
+            self.slots.push_back(ReplySlot::Tombstone {
+                deadline,
+                boundary,
+                owed,
+            });
         } else {
             self.slots.push_back(ReplySlot::Live {
                 result,
                 deadline,
                 boundary,
+                owed,
+                received: None,
             });
             self.live += 1;
         }
     }
 
-    fn front_boundary(&self) -> Option<Boundary> {
-        self.slots.front().and_then(ReplySlot::boundary)
+    /// The front slot's boundary, when `block` is the last it is owed.
+    fn boundary_closed_by(&self, block: &BlockResult) -> Option<Boundary> {
+        let front = self.slots.front()?;
+        if front.is_last(block) {
+            front.boundary()
+        } else {
+            None
+        }
     }
 
     pub(super) const fn has_live(&self) -> bool {
@@ -239,11 +304,23 @@ impl ReplySlots {
 
     pub(super) fn refuse_live(&mut self) {
         for slot in &mut self.slots {
-            let deadline = slot.deadline();
-            let boundary = slot.boundary();
-            let ReplySlot::Live { result, .. } =
-                std::mem::replace(slot, ReplySlot::Tombstone { deadline, boundary })
+            let ReplySlot::Live {
+                deadline,
+                boundary,
+                owed,
+                ..
+            } = *slot
             else {
+                continue;
+            };
+            let ReplySlot::Live { result, .. } = std::mem::replace(
+                slot,
+                ReplySlot::Tombstone {
+                    deadline,
+                    boundary,
+                    owed,
+                },
+            ) else {
                 continue;
             };
             let _ = result.send(Err(Error::control_mode_unread()));
@@ -252,6 +329,12 @@ impl ReplySlots {
     }
 
     pub(super) fn complete(&mut self, block: BlockResult) {
+        let Some(front) = self.slots.front_mut() else {
+            return;
+        };
+        let Some(block) = front.take(block) else {
+            return;
+        };
         let Some(slot) = self.slots.pop_front() else {
             return;
         };
@@ -484,8 +567,12 @@ impl Connection {
                         }
                         break;
                     }
-                    self.awaiting
-                        .push_ordered(request.result, request.deadline, request.boundary);
+                    self.awaiting.push_ordered(
+                        request.result,
+                        request.deadline,
+                        request.boundary,
+                        request.blocks,
+                    );
                 }
                 // The caller took one, so the next one can go.
                 Step::Deliver(true) => {
@@ -632,7 +719,7 @@ impl Connection {
                         // order. Put the private marker after `%end` and
                         // before reading another line so the receiver sees
                         // the same boundary without exposing protocol state.
-                        if let Some(boundary) = self.awaiting.front_boundary() {
+                        if let Some(boundary) = self.awaiting.boundary_closed_by(&block) {
                             self.report(Delivery::Boundary(boundary));
                         }
                         self.awaiting.complete(block);
@@ -723,6 +810,7 @@ impl Connection {
                         succeeded,
                         output,
                         sensitive_input: false,
+                        chained: 0,
                     }));
                 }
                 Some(Line::Text(text)) => {

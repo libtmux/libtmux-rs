@@ -30,41 +30,41 @@ impl Executor for ControlModeExecutor {
         let request_id = request.request_id();
         let summary = request.summary().clone();
         let sensitive_input = summary.sensitive_argument_count() > 0;
+        let commands = request.command_count();
         let line = request.into_control_line();
 
         DispatchFuture::new(async move {
             let Some(line) = line else {
                 return Err(crate::Error::control_mode_unrepresentable());
             };
-            let block = sender.send_line(line, sensitive_input).await?;
+            let block = sender.send_line(line, sensitive_input, commands).await?;
 
             // tmux prints a command's output inside the block, one line at a
             // time, with the trailing newline that separated them removed.
             // Putting it back is what makes the bytes identical to the
             // stdout a process would have written, which every parser above
             // this already reads.
-            let mut bytes = Vec::new();
-            for line in block.output() {
-                bytes.extend_from_slice(line.as_bytes());
-                bytes.push(b'\n');
-            }
+            let bytes = |lines: &[crate::TmuxText]| {
+                let mut bytes = Vec::new();
+                for line in lines {
+                    bytes.extend_from_slice(line.as_bytes());
+                    bytes.push(b'\n');
+                }
+                bytes
+            };
 
-            let succeeded = block.succeeded();
             // A refused command prints its reason where a process would have
             // put it: an `%error` block is stderr, not stdout, and error
-            // classification reads stderr.
-            let (stdout, stderr) = if succeeded {
-                (bytes, Vec::new())
-            } else {
-                (Vec::new(), bytes)
-            };
+            // classification reads stderr. What a chain printed before it is
+            // stdout, as it would be from a process.
+            let (stdout, stderr) = block.split_by_outcome();
 
             Ok(CommandResult::new(
                 request_id,
                 summary,
-                ProcessStatus::from_block_outcome(succeeded),
-                stdout,
-                stderr,
+                ProcessStatus::from_block_outcome(block.succeeded()),
+                bytes(stdout),
+                bytes(stderr),
             ))
         })
     }

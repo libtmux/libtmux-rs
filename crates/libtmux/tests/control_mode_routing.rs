@@ -116,7 +116,7 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         .new_window("second")
         .await
         .expect("the fixture can be changed through the connection's server");
-    routed
+    let chained = routed
         .chain(
             CommandChain::new(
                 Command::new("rename-window")
@@ -128,6 +128,30 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         )
         .await
         .expect("a chain routes as one line");
+    // tmux answers each command of a chain with its own block, so the last
+    // command's output is only here if every block was read.
+    assert!(
+        String::from_utf8_lossy(chained.stdout())
+            .lines()
+            .any(|name| name == "renamed"),
+        "the chain's last command answered: {:?}",
+        String::from_utf8_lossy(chained.stdout()),
+    );
+
+    // A chain stops at its first failure, and tmux sends no block for the
+    // commands it skipped, so the next caller's reply is still its own.
+    let stopped = routed
+        .chain(
+            CommandChain::new(Command::new("list-panes").arg("-t").arg("%4294967294"))
+                .then(Command::new("display-message").arg("-p").arg("skipped")),
+        )
+        .await
+        .expect("a refused chain still answers");
+    assert!(!stopped.success(), "the first command was refused");
+    assert!(
+        stopped.stdout().is_empty(),
+        "the skipped command printed nothing"
+    );
 
     // A refusal is a result, not a transport error, exactly as it is for a
     // process: tmux answers the block with `%error`.

@@ -356,6 +356,9 @@ pub struct BlockResult {
     succeeded: bool,
     output: Vec<TmuxText>,
     sensitive_input: bool,
+    /// Leading lines of `output` printed by earlier commands of the same
+    /// chain, each of which succeeded.
+    chained: usize,
 }
 
 impl BlockResult {
@@ -379,6 +382,32 @@ impl BlockResult {
     #[must_use]
     pub fn output(&self) -> &[TmuxText] {
         &self.output
+    }
+
+    /// Split the output into what succeeded and what the failing command
+    /// printed, the way a process separates stdout from stderr.
+    pub(crate) fn split_by_outcome(&self) -> (&[TmuxText], &[TmuxText]) {
+        if self.succeeded {
+            (&self.output, &[])
+        } else {
+            self.output.split_at(self.chained.min(self.output.len()))
+        }
+    }
+
+    /// Append the block tmux sent for the next command of the same chain.
+    ///
+    /// Only called while every block so far has succeeded: tmux runs nothing
+    /// after the first command in a chain that fails.
+    pub(super) fn followed_by(mut self, next: Self) -> Self {
+        let chained = self.output.len();
+        self.output.extend(next.output);
+        Self {
+            number: next.number,
+            succeeded: next.succeeded,
+            output: self.output,
+            sensitive_input: next.sensitive_input,
+            chained,
+        }
     }
 
     /// Classify an error block as a refusal for a named operation.
@@ -700,20 +729,24 @@ impl ControlSender {
         let line = command
             .control_mode_line()
             .ok_or_else(Error::control_mode_unrepresentable)?;
-        self.dispatch_line(line, sensitive_input, boundary).await
+        self.dispatch_line(line, sensitive_input, boundary, 1).await
     }
 
-    /// Send one already-rendered control-mode line.
+    /// Send one already-rendered control-mode line holding `commands`
+    /// commands.
     ///
     /// The typed API routes through here: a request built for dispatch carries
     /// its own rendering, so re-deriving one from the argv is neither needed
-    /// nor correct.
+    /// nor correct. tmux answers each command of a chain with its own block,
+    /// and they come back as one result.
     pub(crate) async fn send_line(
         &self,
         line: String,
         sensitive_input: bool,
+        commands: usize,
     ) -> Result<BlockResult, Error> {
-        self.dispatch_line(line, sensitive_input, None).await
+        self.dispatch_line(line, sensitive_input, None, commands)
+            .await
     }
 
     async fn dispatch_line(
@@ -721,6 +754,7 @@ impl ControlSender {
         line: String,
         sensitive_input: bool,
         boundary: Option<Boundary>,
+        commands: usize,
     ) -> Result<BlockResult, Error> {
         let deadline = Instant::now().checked_add(self.timeout);
         let (result, mut answer) = oneshot::channel();
@@ -749,6 +783,7 @@ impl ControlSender {
             result,
             commit,
             boundary,
+            blocks: commands.max(1),
         });
 
         tokio::select! {
