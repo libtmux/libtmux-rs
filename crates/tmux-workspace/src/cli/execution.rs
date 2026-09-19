@@ -445,7 +445,7 @@ async fn load_setup(
         None
     };
     server.validate_layouts(native_layouts(&workspaces)).await?;
-    warn_absent_directories(&workspaces, report)?;
+    warn_about_inputs(&workspaces, report)?;
     let python = if workspaces.iter().any(|(_, workspace)| workspace.bridge) {
         Some(process::python().await?)
     } else {
@@ -461,16 +461,18 @@ async fn load_setup(
     ))
 }
 
-/// tmux starts a pane in `$HOME` when the directory it was given is not
-/// there, and says nothing about it, so a typo in a workspace file otherwise
-/// shows up only as panes in the wrong place. Said once per directory,
-/// before anything is built.
-fn warn_absent_directories(
+/// What a load carries on past but a person should know: a setting written
+/// for another builder, and a directory that is not there, which tmux
+/// silently replaces with `$HOME`. Said once each, before anything is built.
+fn warn_about_inputs(
     workspaces: &[(PathBuf, normalize::Workspace)],
     report: &mut Reporter,
 ) -> Result<()> {
     let mut said = std::collections::BTreeSet::new();
     for (_, workspace) in workspaces {
+        for warning in &workspace.warnings {
+            report.warn("unsupported_builder_option", warning)?;
+        }
         let panes = workspace
             .windows
             .iter()
@@ -731,8 +733,11 @@ async fn build(
         session
     };
     effects.session = Some(session.clone());
-    let readiness =
-        configure_session(server, &session, workspace, report, effects, borrowed).await?;
+    // Every pane waits for its shell to be ready before the first command is
+    // typed, whatever shell that is: text sent to a terminal the line editor
+    // does not own yet is echoed and then redrawn, so the command reads twice.
+    let readiness = workspace.readiness.unwrap_or(true);
+    configure_session(server, &session, workspace, report, effects, borrowed).await?;
     let mut bootstrap = if append {
         None
     } else {
@@ -870,7 +875,7 @@ async fn configure_session(
     report: &mut Reporter,
     effects: &mut Effects,
     borrowed: Option<&AppendTarget>,
-) -> Result<bool> {
+) -> Result<()> {
     if let Some(script) = &workspace.before_script {
         effects.stage = "before-script";
         effects.changed = true;
@@ -955,20 +960,7 @@ async fn configure_session(
         // server table (`-s`) refuses most option names outright.
         server.set_global_option(name, value).await?;
     }
-    // `auto` waits for the prompt only when the default shell is zsh;
-    // every other shell behaves as though `never` had been written.
-    let readiness = match workspace.readiness {
-        Some(wait) => wait,
-        None => session
-            .get_option("default-shell")
-            .await?
-            .map_or_else(
-                || std::env::var("SHELL").unwrap_or_default(),
-                |value| value.to_string_lossy().into_owned(),
-            )
-            .contains("zsh"),
-    };
-    Ok(readiness)
+    Ok(())
 }
 
 async fn build_extension(

@@ -3204,55 +3204,47 @@ async fn unreadable_pane_state_is_reported_as_itself_rather_than_a_timeout() {
     assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
 }
 
+/// A builder setting this one has no equivalent for names the key and loads
+/// the document anyway: a workspace shared between tools stays loadable here.
 #[tokio::test]
-async fn unknown_readiness_field_refuses_all_inputs_before_mutation() {
+async fn a_builder_setting_this_tool_lacks_is_named_and_still_loads() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
-    let keeper = guard.session("readiness-keeper").await.unwrap();
-    let keeper_id = keeper.id().to_string();
-    let pane = current_pane(&keeper).await;
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
-    let marker = directory.path().join("before-script-ran");
-    let first = serde_json::json!({
-        "session_name":"first-readiness", "before_script":"touch before-script-ran",
-        "windows":[{"panes":["blank"]}]
-    });
-    let second = serde_json::json!({
-        "session_name":"second-readiness",
-        "workspace_builder_options":{"pane_readines":"never"},
-        "windows":[{"panes":["blank"]}]
-    });
-    std::fs::write(directory.path().join("first.json"), first.to_string()).unwrap();
-    std::fs::write(directory.path().join("second.json"), second.to_string()).unwrap();
-    let output = at_pane(
+    std::fs::write(
+        directory.path().join("other.json"),
+        serde_json::json!({
+            "session_name":"other-builder",
+            "workspace_builder_options":{"pane_readines":"never"},
+            "windows":[{"panes":["blank"]}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = at(
         &[
             "load",
             "-d",
-            "--json",
+            "--ndjson",
             "-S",
             guard.socket_path().to_str().unwrap(),
-            "first.json",
-            "second.json",
+            "other.json",
         ],
         directory.path(),
-        None,
     );
-    let script_ran = marker.exists();
-    let sessions = guard.server().sessions().await.unwrap();
-    let session_ids: Vec<_> = sessions
-        .iter()
-        .map(|session| session.id().to_string())
-        .collect();
-    let keeper_pane = current_pane(&keeper).await;
-    guard.shutdown().await.unwrap();
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.status.success(), "{output:?}");
+    let warned = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.contains("\"warning\"") && line.contains("pane_readines"));
+    assert!(warned, "{output:?}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("workspace_builder_options.pane_readines"),
-        "{output:?}"
+        guard
+            .server()
+            .session("other-builder")
+            .await
+            .unwrap()
+            .is_some()
     );
-    assert!(!script_ran, "later invalid input ran the earlier script");
-    assert_eq!(session_ids, [keeper_id]);
-    assert_eq!(keeper_pane, pane);
+    guard.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -4279,5 +4271,54 @@ async fn a_null_start_directory_is_absent_and_an_absent_one_is_reported() {
         "{stderr}"
     );
     assert!(stderr.contains("$HOME"), "{stderr}");
+    guard.shutdown().await.unwrap();
+}
+
+/// A pane's command waits for that pane's shell, whatever shell that is.
+/// Sent before the line editor owns the terminal, the text is echoed by the
+/// tty and redrawn by the editor, so the command reads twice. A shell that
+/// never reaches a prompt is how the wait itself is observed: it runs, and
+/// says so, under a shell that is not zsh.
+#[tokio::test]
+async fn a_pane_command_waits_for_any_shell_not_only_zsh() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let shell = directory.path().join("never-prompts");
+    std::fs::write(&shell, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o700)).unwrap();
+    guard
+        .server()
+        .set_global_option("default-shell", shell.to_str().unwrap())
+        .await
+        .unwrap();
+    std::fs::write(
+        directory.path().join("bash.yaml"),
+        "session_name: bashed\nwindows:\n  - panes: [echo READY-MARKER]\n",
+    )
+    .unwrap();
+    let output = command_at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "--ndjson",
+            "bash.yaml",
+        ],
+        directory.path(),
+    )
+    .env("SHELL", "/bin/bash")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let waited = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.contains("pane_readiness_timeout"));
+    assert!(
+        waited,
+        "the pane's command was sent without waiting for its shell: {output:?}"
+    );
     guard.shutdown().await.unwrap();
 }
