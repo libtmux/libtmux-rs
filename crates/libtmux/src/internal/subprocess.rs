@@ -209,15 +209,28 @@ impl SubprocessExecutor {
             request_id,
             command: request.summary().clone(),
             timeout: self.configuration.timeout,
-            deadline: Instant::now().checked_add(self.configuration.timeout),
+            deadline: if request.is_unbounded() {
+                None
+            } else {
+                Instant::now().checked_add(self.configuration.timeout)
+            },
         };
         trace_requested(&context);
 
-        let permit = match self.acquire_permit(&context).await {
-            Ok(permit) => permit,
-            Err(error) => {
-                trace_failed(&context, &error);
-                return Err(error);
+        // A request with no deadline is parked on a tmux channel rather than
+        // working, and holds its client until something signals or unlocks
+        // that channel -- which takes a dispatch of its own. Counting it
+        // against the ceiling would let enough parked clients block the very
+        // commands that release them.
+        let permit = if request.is_unbounded() {
+            None
+        } else {
+            match self.acquire_permit(&context).await {
+                Ok(permit) => Some(permit),
+                Err(error) => {
+                    trace_failed(&context, &error);
+                    return Err(error);
+                }
             }
         };
 
@@ -398,8 +411,9 @@ struct ChildOwnership {
     readers: ReaderTasks,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_drop: bool,
-    // Admission follows the process and readers into supervisor cleanup.
-    _permit: OwnedSemaphorePermit,
+    // Admission follows the process and readers into supervisor cleanup, and
+    // a parked client holds none.
+    _permit: Option<OwnedSemaphorePermit>,
     // This must remain last so registry removal follows child and reader cleanup.
     #[allow(
         dead_code,

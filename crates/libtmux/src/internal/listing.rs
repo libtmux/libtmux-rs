@@ -463,7 +463,7 @@ pub(crate) async fn mutate(
     Err(mutation_failure(command_name, &result, target.as_deref()))
 }
 
-fn mutation_failure(
+pub(crate) fn mutation_failure(
     command_name: &'static str,
     result: &crate::CommandResult,
     target: Option<&OsStr>,

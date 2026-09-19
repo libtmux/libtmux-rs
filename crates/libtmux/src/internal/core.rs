@@ -16,6 +16,7 @@ use crate::internal::process::LaunchContext;
 #[cfg(feature = "control-mode")]
 use crate::internal::process::{PersistentChild, PersistentClients};
 use crate::internal::subprocess::SubprocessExecutor;
+use crate::internal::wait_for::ChannelWaits;
 #[cfg(feature = "control-mode")]
 use crate::limits::ControlClientLimits;
 use crate::limits::{DispatchLimits, OutputLimits};
@@ -320,6 +321,11 @@ pub(crate) struct Core {
     executor: Arc<dyn Executor>,
     capabilities: OnceCell<EngineCapabilities>,
     next_request_id: AtomicU64,
+    /// The `wait-for` channels this handle has a client on, or a signal for.
+    ///
+    /// Shared by every clone of a [`crate::Server`], because the clients are
+    /// this process's and a channel is one name on the tmux server.
+    channel_waits: ChannelWaits,
     #[cfg(feature = "control-mode")]
     persistent_clients: PersistentClients,
     /// PIDs of control clients this process itself spawned with
@@ -357,6 +363,7 @@ impl Core {
             executor,
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
+            channel_waits: ChannelWaits::default(),
             #[cfg(feature = "control-mode")]
             persistent_clients: PersistentClients::new(control_client_limits),
             #[cfg(feature = "control-mode")]
@@ -382,6 +389,7 @@ impl Core {
             executor: Arc::new(executor),
             capabilities: OnceCell::new_with(Some(capabilities)),
             next_request_id: AtomicU64::new(1),
+            channel_waits: ChannelWaits::default(),
             persistent_clients: PersistentClients::new(self.configuration.control_client_limits),
             // Shared with the parent: a control client this process spawned is
             // the same process whichever handle dispatches through it.
@@ -431,6 +439,38 @@ impl Core {
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
         self.executor.execute(request).await
+    }
+
+    /// Start a dispatch with no deadline of its own, and name it.
+    ///
+    /// For `wait-for` only, where a client killed part-way stays in tmux's
+    /// waiter or locker list: this one ends when tmux answers or the executor
+    /// shuts down. The caller bounds its own wait and names this dispatch when
+    /// it gives up, so the id comes back with the future.
+    pub(crate) fn dispatch_without_deadline(
+        &self,
+        command: Command,
+    ) -> (RequestId, crate::internal::executor::DispatchFuture) {
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| command.control_mode_line());
+        let request = CommandRequest::with_global_argv(
+            self.next_request_id(),
+            &self.configuration.global_argv,
+            command,
+        )
+        .without_deadline();
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
+        let request_id = request.request_id();
+        (request_id, self.executor.execute(request))
+    }
+
+    /// The `wait-for` channels this handle has a client on, or a signal for.
+    pub(crate) const fn channel_waits(&self) -> &ChannelWaits {
+        &self.channel_waits
     }
 
     pub(crate) async fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {

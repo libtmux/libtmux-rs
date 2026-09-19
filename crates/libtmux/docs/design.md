@@ -1376,6 +1376,38 @@ The source of 3.7 and 3.7c has the condition and 3.8-rc does not. Measured:
 3.7c prints nothing for a one-binding table and 3.7d prints it.
 `real_tmux_compat_key_bindings_read_as_fields` binds two one-binding tables,
 and fails on 3.7c when `-T` is sent.
+### A `wait-for` client cannot be taken back out
+
+tmux queues a `wait-for` client on the channel and offers nothing to withdraw
+it. `cmd_wait_for_signal` releases every waiter it finds and keeps the signal
+only when it finds none; `cmd_wait_for_unlock` grants the lock to the first
+client queued for it. `server_client_lost` frees every other structure a lost
+client owns -- its files, its overlay, its prompt, `input_cancel_requests` --
+and never touches `wait_channels`. The client leaves the `clients` list, so
+`cmdq_next` never runs its queue again, and the queued item still holds the
+reference `cmdq_append` took, so nothing is freed and nothing dangles: one
+client struct and one queue item leak, and the channel's list keeps an entry
+that can never act. Identical from 3.2a through 3.8-rc; 3.8-rc's new
+`wait-for -l` lists the entry by name after the client is gone, which is the
+one-line proof.
+
+So a client killed for running out of time takes the channel's next signal, or
+its next lock, with it. `internal::wait_for` answers by never killing one: the
+dispatch runs without a deadline of its own (`CommandRequest::without_deadline`,
+the only request that does), and the caller's deadline ends the *wait* rather
+than the client. A lock granted after its caller gave up unlocks at once. A
+wait's client stays parked on the channel, at most one per channel per handle
+so that a second wait joins it rather than adding a second waiter, and the
+signal that releases it is kept in `ChannelWaits` when no caller is left --
+tmux keeps a signal nobody is waiting on, and cannot see that a parked client
+is nobody.
+
+Two things this does not reach. A process other than this one waiting on the
+channel afterwards does not see that signal: it was spent in tmux, and the
+only way to put it back is `wait-for -S`, which would release somebody else's
+wait. And `Server::shutdown` kills what is parked, because a shutdown that
+waits on tmux is not a shutdown, which leaves the tmux defect behind on a
+channel that was still parked.
 
 ### Two shapes that make a test flaky under load
 

@@ -1,9 +1,8 @@
-use std::ffi::OsString;
 use std::time::Duration;
 
 use super::{ChannelWait, Server};
-use crate::internal::listing;
-use crate::{Command, Error};
+use crate::Error;
+use crate::internal::wait_for;
 
 impl Server {
     /// Signal a `wait-for` channel, releasing anything waiting on it.
@@ -24,15 +23,7 @@ impl Server {
     ///
     /// Returns an error when tmux refuses the channel name.
     pub async fn signal_channel(&self, channel: &str) -> Result<(), Error> {
-        listing::mutate(
-            &self.core,
-            "wait-for",
-            Command::new("wait-for")
-                .arg("-S")
-                .arg("--")
-                .arg(OsString::from(channel)),
-        )
-        .await
+        wait_for::signal(&self.core, channel).await
     }
 
     /// Hold a `wait-for` channel for the length of an operation.
@@ -43,16 +34,15 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// [`crate::ScopeError::Creation`] when tmux refuses the lock,
-    /// `Operation` when the body fails, and `Cleanup` when the unlock fails
-    /// after the body succeeded.
+    /// [`crate::ScopeError::Creation`] when tmux refuses the lock or the lock
+    /// runs out of time, `Operation` when the body fails, and `Cleanup` when
+    /// the unlock fails after the body succeeded.
     ///
     /// # Cancel safety
     ///
     /// Nothing is left held by a drop. The lock is taken and released in tasks
     /// of their own, so a scope dropped while its lock is still queued unlocks
-    /// once tmux grants it. A lock still queued when the server's default
-    /// timeout elapses wedges the channel as [`Self::lock_channel`] describes.
+    /// once tmux grants it, as [`Self::lock_channel`] describes.
     ///
     /// # Examples
     ///
@@ -101,50 +91,43 @@ impl Server {
     /// Lock a `wait-for` channel, blocking later lock attempts on it.
     ///
     /// [`Self::with_channel_lock`] pairs this with the unlock, which is
-    /// usually what a caller wants.
+    /// usually what a caller wants. A lock another locker holds waits for its
+    /// turn, up to [`Server::default_timeout`].
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the channel name.
+    /// Returns an error when tmux refuses the channel name, and
+    /// [`crate::ErrorKind::Timeout`] when the channel is still held after
+    /// [`Server::default_timeout`].
     ///
     /// # Cancel safety
     ///
-    /// Something is left held, and no one can release it. Dropped, or timed
-    /// out, while queued behind another locker, this leaves tmux a queue
-    /// entry with no client behind it; `cmd_wait_for_unlock` hands the lock
-    /// to that entry, and every later lock on the channel blocks forever. A
-    /// tmux defect (`cmd-wait-for.c`), measured on 3.2a, 3.7c and master.
+    /// Nothing is left held. The lock is taken in a task of its own, so a lock
+    /// that is dropped -- or that runs out of time -- while queued behind
+    /// another locker is not withdrawn from tmux, which cannot withdraw one:
+    /// it is granted in turn and released at once. Between those two, later
+    /// lockers wait as they would for any other holder.
+    ///
+    /// Shutting the server down while such a lock is queued is the exception,
+    /// because it kills the client: tmux then grants the lock to a client that
+    /// is gone and every later lock on the channel blocks forever. A tmux
+    /// defect (`cmd_wait_for_unlock` in `cmd-wait-for.c`), measured on 3.2a,
+    /// 3.7d and 3.8-rc.
     pub async fn lock_channel(&self, channel: &str) -> Result<(), Error> {
-        listing::mutate(
-            &self.core,
-            "wait-for",
-            Command::new("wait-for")
-                .arg("-L")
-                .arg("--")
-                .arg(OsString::from(channel)),
-        )
-        .await
+        wait_for::lock(&self.core, channel, self.default_timeout()).await
     }
 
     /// Unlock a `wait-for` channel.
     ///
     /// Always call this from whatever locked with [`Self::lock_channel`],
     /// including on an error path: a locker that ends without unlocking can
-    /// wedge the channel for everyone else. See that method's hazard note.
+    /// wedge the channel for everyone else.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the channel name.
     pub async fn unlock_channel(&self, channel: &str) -> Result<(), Error> {
-        listing::mutate(
-            &self.core,
-            "wait-for",
-            Command::new("wait-for")
-                .arg("-U")
-                .arg("--")
-                .arg(OsString::from(channel)),
-        )
-        .await
+        wait_for::unlock(&self.core, channel).await
     }
 
     /// Wait for a `wait-for` channel to be signalled.
@@ -167,11 +150,20 @@ impl Server {
     /// between 3.5a and 3.7c, and the only changes since 3.2a are an argument
     /// table gaining a field, an accessor replacing a direct index, and a
     /// local being renamed -- none of them near the flag the latch is kept in.
-    /// Measured directly on 3.5a and 3.7c.
+    /// Measured directly on 3.2a, 3.5a, 3.7c and 3.7d.
     ///
-    /// `within` is capped at [`Server::default_timeout`], because a dispatch
-    /// is bounded and this is one: ask for longer by building the server with
-    /// a longer timeout.
+    /// A wait that runs out of time leaves its client on the channel, because
+    /// tmux cannot withdraw one and a killed client would eat the channel's
+    /// next signal. Another wait on the same channel joins that client rather
+    /// than opening a second, and a signal that releases it with nobody
+    /// waiting is kept for the next wait, which is where the latch above
+    /// survives a wait that gave up. The client is this process's, so it ends
+    /// with [`Server::shutdown`]; it does not count against
+    /// [`crate::DispatchLimits`], because signalling the channel is itself a
+    /// dispatch.
+    ///
+    /// `within` is capped at [`Server::default_timeout`]: ask for longer by
+    /// building the server with a longer timeout.
     ///
     /// # Errors
     ///
@@ -182,11 +174,16 @@ impl Server {
     ///
     /// # Cancel safety
     ///
-    /// Something is left held. A wait that is dropped, or that returns
-    /// [`ChannelWait::TimedOut`], leaves tmux a waiter with no client behind
-    /// it, and the channel's next signal releases that waiter instead of
-    /// latching, so a wait begun after the signal misses it. Measured on 3.7d;
-    /// see `cmd_wait_for_signal` in `cmd-wait-for.c`.
+    /// Nothing is lost by a drop, and nothing is left for the next caller to
+    /// find: the client stays on the channel exactly as it does after
+    /// [`ChannelWait::TimedOut`], and a signal that releases it is kept for
+    /// the next wait on this server handle or any clone of it.
+    ///
+    /// A process outside this one is the exception. The signal that releases
+    /// the parked client is spent in tmux, so a *different* process waiting on
+    /// the same channel afterwards does not see it; tmux offers no way to take
+    /// a waiter back out, and forging a replacement signal would release
+    /// somebody else's wait.
     ///
     /// # Examples
     ///
@@ -218,31 +215,6 @@ impl Server {
         channel: &str,
         within: Duration,
     ) -> Result<ChannelWait, Error> {
-        let budget = within.min(self.default_timeout());
-        let waited = tokio::time::timeout(
-            budget,
-            listing::mutate(
-                &self.core,
-                "wait-for",
-                Command::new("wait-for")
-                    .arg("--")
-                    .arg(OsString::from(channel)),
-            ),
-        )
-        .await;
-
-        match waited {
-            Ok(Ok(())) => Ok(ChannelWait::Signalled),
-            // The dispatch reaching its own bound first is the same event, so
-            // it is reported the same way rather than as two outcomes a
-            // caller would have to unify.
-            Ok(Err(error)) if error.kind() == crate::ErrorKind::Timeout => {
-                Ok(ChannelWait::TimedOut)
-            }
-            Ok(Err(error)) => Err(error),
-            // Dropping the dispatch kills the waiting client but leaves its
-            // entry in tmux's waiter list: see the cancel-safety section.
-            Err(_elapsed) => Ok(ChannelWait::TimedOut),
-        }
+        wait_for::wait(&self.core, channel, within.min(self.default_timeout())).await
     }
 }

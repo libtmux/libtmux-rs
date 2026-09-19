@@ -8,3 +8,4 @@ pub(crate) mod options;
 pub(crate) mod process;
 pub(crate) mod scoped;
 pub(crate) mod subprocess;
+pub(crate) mod wait_for;

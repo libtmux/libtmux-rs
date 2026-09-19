@@ -741,6 +741,15 @@ pub(crate) struct CommandRequest {
     /// it with when none fails.
     #[cfg(feature = "control-mode")]
     command_count: usize,
+    /// Whether this request runs without a deadline of its own.
+    ///
+    /// A dispatch is bounded so a caller cannot wait on tmux forever. The
+    /// exception is a `wait-for` client, which tmux holds until something
+    /// signals or unlocks the channel and cannot withdraw once it is queued:
+    /// killing it leaves tmux an entry with no client behind it, which eats
+    /// the channel's next signal or its next lock. Such a request ends when
+    /// tmux answers or the executor shuts down.
+    unbounded: bool,
 }
 
 impl CommandRequest {
@@ -773,6 +782,7 @@ impl CommandRequest {
             control_line: None,
             #[cfg(feature = "control-mode")]
             command_count: 1,
+            unbounded: false,
         }
     }
 
@@ -795,7 +805,19 @@ impl CommandRequest {
             control_line: None,
             #[cfg(feature = "control-mode")]
             command_count,
+            unbounded: false,
         }
+    }
+
+    /// Run this request without a deadline of its own.
+    pub(crate) const fn without_deadline(mut self) -> Self {
+        self.unbounded = true;
+        self
+    }
+
+    /// Whether this request runs without a deadline of its own.
+    pub(crate) const fn is_unbounded(&self) -> bool {
+        self.unbounded
     }
 
     /// Attach the control-mode rendering of the command this request carries.
