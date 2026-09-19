@@ -454,6 +454,56 @@ async fn flag_shaped_commands_and_paths_stay_literal() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A raw `-t name` target prefix-matches: tmux answers `kill-session -t
+/// doom` for a session actually named `doomsday` by killing it, silently,
+/// exit zero, no warning. `Session::kill` never sends a name -- it targets
+/// `self.id()`, which a name never resolves to by accident -- and the
+/// lookup that hands out a `Session` in the first place ([`Server::session`])
+/// lists sessions and compares names as whole bytes rather than asking tmux
+/// to resolve a target, so neither step can find `doomsday` while looking
+/// for `doomed`.
+#[tokio::test]
+async fn killing_a_name_that_is_a_prefix_of_another_kills_neither() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    server
+        .new_session("doomed")
+        .await
+        .expect("session is created");
+    server
+        .new_session("doomsday")
+        .await
+        .expect("session is created");
+
+    assert!(
+        server
+            .session("doom")
+            .await
+            .expect("lookup succeeds")
+            .is_none(),
+        "a prefix of two real names must not resolve to either",
+    );
+
+    let doomed = server
+        .session("doomed")
+        .await
+        .expect("lookup succeeds")
+        .expect("the exact name is found");
+    doomed.kill().await.expect("kill succeeds");
+
+    assert!(!server.has_session("doomed").await.expect("lookup succeeds"));
+    assert!(
+        server
+            .has_session("doomsday")
+            .await
+            .expect("lookup succeeds"),
+        "killing doomed must not have reached doomsday",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn killing_removes_the_object_and_strands_other_handles() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
