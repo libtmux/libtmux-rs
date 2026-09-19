@@ -162,6 +162,7 @@ impl Pane {
             .await?
             .tmux_version()
             .clone();
+        let needs_wrap_trim = options.needs_wrap_trim();
         let command = options.lower(self.id().as_ref(), &version)?;
         let target = command.target().map(OsStr::to_os_string);
         let result = self.core.execute(command).await?;
@@ -173,7 +174,12 @@ impl Pane {
             ));
         }
 
-        Ok(split_lines(result.stdout()))
+        let lines = split_lines(result.stdout());
+        Ok(if needs_wrap_trim {
+            lines.into_iter().map(trim_wrap_padding).collect()
+        } else {
+            lines
+        })
     }
 
     /// Capture with the per-line flags tmux records, marking shell prompts.
@@ -431,8 +437,17 @@ impl Pane {
         within: Duration,
         mut settled: impl FnMut(&[TmuxText]) -> bool,
     ) -> Result<PaneWait, Error> {
-        self.look_until(within, |text, _| settled(&split_lines(text)))
-            .await
+        // The loop's own capture is `history().join_wrapped()` with no
+        // `trailing_spaces`, so a joined line always needs this trim -- see
+        // `trim_wrap_padding`.
+        self.look_until(within, |text, _| {
+            let lines: Vec<TmuxText> = split_lines(text)
+                .into_iter()
+                .map(trim_wrap_padding)
+                .collect();
+            settled(&lines)
+        })
+        .await
     }
 
     /// The shared loop: look, decide, sleep, repeat until the deadline.
@@ -512,6 +527,30 @@ fn split_lines(stdout: &[u8]) -> Vec<TmuxText> {
         .split(|byte| *byte == b'\n')
         .map(|line| TmuxText::from(line.to_vec()))
         .collect()
+}
+
+/// Drop the blank-cell padding `-J` leaves on a wrapped line's last row.
+///
+/// `-J` joins a wrapped line back into one and is documented to preserve
+/// trailing spaces, which is right for what a program printed -- tmux
+/// already trims a row's genuinely unwritten cells everywhere else. tmux
+/// 3.2a's join carries those unwritten cells past the printed text too:
+/// printing 300 bytes into an 80-column pane and joining the wrap back
+/// returns 320 bytes there, the last 20 of them cells nothing wrote. Every
+/// later release already drops them unasked -- confirmed by building 3.3,
+/// 3.3a, 3.4, 3.5, and 3.5a and running this same join against each, well
+/// before `capture-pane -T` gives 3.4 and newer a flag for it. Trimming here
+/// matches what every one of those already returns, instead of adding a
+/// version gate for one release, so a caller comparing a joined line for
+/// equality is not reading a pane's width instead of what ran in it.
+fn trim_wrap_padding(line: TmuxText) -> TmuxText {
+    let bytes = line.as_bytes();
+    let content_len = bytes.len() - bytes.iter().rev().take_while(|&&byte| byte == b' ').count();
+    if content_len == bytes.len() {
+        line
+    } else {
+        TmuxText::from(bytes[..content_len].to_vec())
+    }
 }
 
 /// Split one look's output into the pane's dead flag and its capture.
