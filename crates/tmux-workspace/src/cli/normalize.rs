@@ -17,6 +17,7 @@ pub(super) struct Workspace {
     pub(super) script_directory: PathBuf,
     pub(super) bridge: bool,
     pub(super) readiness: Option<bool>,
+    pub(super) warnings: Vec<String>,
     pub(super) windows: Vec<Window>,
 }
 
@@ -249,13 +250,11 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
             }
         }
     }
-    if !bridge && !value["workspace_builder_options"].is_null() {
-        keys(
-            &value["workspace_builder_options"],
-            &["pane_readiness"],
-            "workspace_builder_options",
-        )?;
-    }
+    let warnings = if bridge || value["workspace_builder_options"].is_null() {
+        Vec::new()
+    } else {
+        unknown_builder_options(&value["workspace_builder_options"])?
+    };
     let readiness = readiness(&value["workspace_builder_options"])?;
     // With no start_directory, panes start in the invocation directory,
     // matching tmuxp; an explicit one resolves against the document's
@@ -306,8 +305,26 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         before_script: text(&value["before_script"], "before_script")?,
         bridge,
         readiness,
+        warnings,
         windows,
     })
+}
+
+/// A key under `workspace_builder_options` that this builder has no setting
+/// for names one another builder does. A document written for that builder is
+/// still a document this one can load, so the key is reported and passed
+/// over rather than refusing the file.
+fn unknown_builder_options(value: &Value) -> Result<Vec<String>> {
+    let mut unknown = Vec::new();
+    for key in document::object(value)?.keys() {
+        if key.starts_with("x-") || key == "pane_readiness" {
+            continue;
+        }
+        unknown.push(format!(
+            "workspace_builder_options.{key} is not a setting this builder has; it was ignored"
+        ));
+    }
+    Ok(unknown)
 }
 
 fn extension_bridge(value: &Value) -> Result<bool> {
@@ -540,15 +557,31 @@ mod tests {
 
     #[test]
     fn invalid_readiness_is_rejected_before_any_backend() {
+        for options in [json!({"pane_readiness":"sometimes"}), json!(["always"])] {
+            let source = json!({"session_name":"demo","workspace_builder_options":options,"windows":[{"panes":["blank"]}]});
+            assert!(workspace(&source, Path::new("/tmp/workspace.yaml")).is_err());
+        }
+    }
+
+    /// A setting another builder understands is reported and passed over: the
+    /// document still loads, and the setting this builder does have is still
+    /// read out of the same mapping.
+    #[test]
+    fn a_setting_for_another_builder_warns_rather_than_refusing() -> Result<()> {
         for options in [
-            json!({"pane_readiness":"sometimes"}),
-            json!(["always"]),
             json!({"pane_readines":"never"}),
             json!({"pane_readiness":"never", "timeout":1}),
         ] {
             let source = json!({"session_name":"demo","workspace_builder_options":options,"windows":[{"panes":["blank"]}]});
-            assert!(workspace(&source, Path::new("/tmp/workspace.yaml")).is_err());
+            let workspace = workspace(&source, Path::new("/tmp/workspace.yaml"))?;
+            assert_eq!(workspace.warnings.len(), 1, "{:?}", workspace.warnings);
+            assert!(
+                workspace.warnings[0].contains("workspace_builder_options."),
+                "{:?}",
+                workspace.warnings
+            );
         }
+        Ok(())
     }
 
     #[test]
