@@ -11,6 +11,11 @@ rust-version = "1.85"
 [package.metadata]
 cargo-fuzz = true
 
+# Its own workspace root. Cargo keeps searching upward past a workspace that
+# excludes a package, so a checkout nested in another workspace -- a git
+# worktree inside the main checkout -- would otherwise claim this one.
+[workspace]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = "1"
@@ -25,6 +30,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "environment_listing"
+path = "fuzz_targets/environment_listing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "filter_expr_json"
 path = "fuzz_targets/filter_expr_json.rs"
 test = false
@@ -32,8 +44,36 @@ doc = false
 bench = false
 
 [[bin]]
+name = "list_keys"
+path = "fuzz_targets/list_keys.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "workspace_yaml"
 path = "fuzz_targets/workspace_yaml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "format_rows"
+path = "fuzz_targets/format_rows.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_block"
+path = "fuzz_targets/control_block.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_filter"
+path = "fuzz_targets/text_filter.rs"
 test = false
 doc = false
 bench = false

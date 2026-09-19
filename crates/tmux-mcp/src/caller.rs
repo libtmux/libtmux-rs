@@ -39,7 +39,8 @@ pub enum Relation {
 ///
 /// `TMUX` carries `socket_path,server_pid,session_number`; `TMUX_PANE` carries
 /// the pane id. Either both variables form one complete identity or the
-/// context is malformed; only two absent variables mean detached operation.
+/// context is malformed; only two absent variables mean detached operation,
+/// and an empty variable counts as absent.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CallerIdentity {
     socket: Option<PathBuf>,
@@ -90,6 +91,8 @@ impl CallerIdentity {
     /// without a process-wide environment, which no test can hold alone.
     #[must_use]
     pub fn from_values(tmux: Option<OsString>, pane: Option<OsString>) -> Option<Self> {
+        let tmux = tmux.filter(|value| !value.is_empty());
+        let pane = pane.filter(|value| !value.is_empty());
         let detached = tmux.is_none() && pane.is_none();
         if detached {
             return None;
@@ -132,6 +135,15 @@ impl CallerIdentity {
                 malformed: true,
             },
         })
+    }
+
+    /// Whether the variables were set but do not describe one tmux pane.
+    ///
+    /// Pane-input and teardown tools refuse every call while this holds,
+    /// because they cannot rule out reaching the caller's own pane.
+    #[must_use]
+    pub const fn is_malformed(&self) -> bool {
+        self.malformed
     }
 
     /// The pane this process runs in, when tmux named one.
@@ -241,11 +253,11 @@ mod tests {
     use std::os::unix::ffi::OsStringExt as _;
 
     #[test]
-    fn any_present_caller_variable_is_not_detached() {
+    fn any_nonempty_caller_variable_is_not_detached() {
         for (tmux, pane) in [
-            (Some(OsString::new()), Some(OsString::new())),
             (Some(OsString::from("/tmp/socket,1,0")), None),
             (None, Some(OsString::from("%0"))),
+            (Some(OsString::new()), Some(OsString::from("%0"))),
             (
                 Some(OsString::from("/tmp/socket,not-a-pid,0")),
                 Some(OsString::from("%0")),
@@ -254,6 +266,20 @@ mod tests {
             let caller = CallerIdentity::from_values(tmux, pane)
                 .expect("only two absent variables represent a detached caller");
             assert!(caller.malformed);
+            assert!(caller.is_malformed());
+        }
+    }
+
+    /// `TMUX= TMUX_PANE=` is how a shell un-nests tmux, and means the same as
+    /// unsetting both.
+    #[test]
+    fn empty_caller_variables_are_detached() {
+        for (tmux, pane) in [
+            (Some(OsString::new()), Some(OsString::new())),
+            (Some(OsString::new()), None),
+            (None, Some(OsString::new())),
+        ] {
+            assert_eq!(CallerIdentity::from_values(tmux, pane), None);
         }
     }
 

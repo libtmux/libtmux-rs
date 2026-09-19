@@ -412,6 +412,27 @@ impl CommandChain {
         CommandSummary::from_parts(escape_diagnostic(&self.first.subcommand.value), arguments)
     }
 
+    /// Render the whole chain as one control-mode line.
+    ///
+    /// tmux parses a line, so the boundary between members is the bare `;`
+    /// its own parser reads. A member's literal `;` argument is quoted by
+    /// [`Command::control_mode_line`] and stays an argument.
+    ///
+    /// One line is one `%begin`/`%end` block, so a chain sent this way reports
+    /// one outcome for all of it -- the same trade a chained argv makes.
+    ///
+    /// Returns `None` when any token is not valid UTF-8.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn control_mode_line(&self) -> Option<String> {
+        let mut line = self.first.control_mode_line()?;
+        for command in &self.rest {
+            line.push_str(" ; ");
+            line.push_str(&command.control_mode_line()?);
+        }
+
+        Some(line)
+    }
+
     /// Render the whole chain as one argv, separators included.
     fn into_argv(self, global_argv: &[OsString]) -> (Vec<OsString>, usize) {
         let mut argv = Vec::with_capacity(global_argv.len() + 2 * self.command_count());
@@ -606,6 +627,12 @@ impl CommandSummary {
     pub const fn sensitive_argument_count(&self) -> usize {
         self.sensitive_argument_count
     }
+
+    /// The escaped subcommand, which is never a sensitive argument.
+    #[cfg(feature = "tracing")]
+    pub(crate) fn subcommand(&self) -> &str {
+        &self.subcommand
+    }
 }
 
 impl fmt::Display for CommandSummary {
@@ -695,6 +722,34 @@ pub(crate) struct CommandRequest {
     command: CommandSummary,
     argv: Vec<OsString>,
     logical_subcommand_index: usize,
+    /// The same logical command rendered for a control-mode connection.
+    ///
+    /// Carried beside the argv rather than derived from it: the argv holds
+    /// the server's global flags -- `-S <socket>`, `-f`, `-u` -- which an open
+    /// connection has already settled, and its tokens are lowered for
+    /// `execve`, where a trailing `;` is escaped as `\;`. Neither survives
+    /// re-rendering into a line tmux parses.
+    ///
+    /// `None` means either that no executor asked for a line or that a token
+    /// is not valid UTF-8, which a text protocol cannot carry. The one
+    /// executor that reads this field is only handed requests it asked to have
+    /// rendered, so for it the two cases are the same: absence is a command
+    /// control mode cannot express, and it says so rather than guessing.
+    #[cfg(feature = "control-mode")]
+    control_line: Option<String>,
+    /// Commands in the request, which is how many blocks a connection answers
+    /// it with when none fails.
+    #[cfg(feature = "control-mode")]
+    command_count: usize,
+    /// Whether this request runs without a deadline of its own.
+    ///
+    /// A dispatch is bounded so a caller cannot wait on tmux forever. The
+    /// exception is a `wait-for` client, which tmux holds until something
+    /// signals or unlocks the channel and cannot withdraw once it is queued:
+    /// killing it leaves tmux an entry with no client behind it, which eats
+    /// the channel's next signal or its next lock. Such a request ends when
+    /// tmux answers or the executor shuts down.
+    unbounded: bool,
 }
 
 impl CommandRequest {
@@ -723,6 +778,11 @@ impl CommandRequest {
             command: summary,
             argv,
             logical_subcommand_index,
+            #[cfg(feature = "control-mode")]
+            control_line: None,
+            #[cfg(feature = "control-mode")]
+            command_count: 1,
+            unbounded: false,
         }
     }
 
@@ -732,6 +792,8 @@ impl CommandRequest {
         chain: CommandChain,
     ) -> Self {
         let command = chain.summary();
+        #[cfg(feature = "control-mode")]
+        let command_count = chain.command_count();
         let (argv, logical_subcommand_index) = chain.into_argv(global_argv);
 
         Self {
@@ -739,7 +801,42 @@ impl CommandRequest {
             command,
             argv,
             logical_subcommand_index,
+            #[cfg(feature = "control-mode")]
+            control_line: None,
+            #[cfg(feature = "control-mode")]
+            command_count,
+            unbounded: false,
         }
+    }
+
+    /// Run this request without a deadline of its own.
+    pub(crate) const fn without_deadline(mut self) -> Self {
+        self.unbounded = true;
+        self
+    }
+
+    /// Whether this request runs without a deadline of its own.
+    pub(crate) const fn is_unbounded(&self) -> bool {
+        self.unbounded
+    }
+
+    /// Attach the control-mode rendering of the command this request carries.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn with_control_line(mut self, line: Option<String>) -> Self {
+        self.control_line = line;
+        self
+    }
+
+    /// Take the control-mode line, when one was rendered and representable.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn into_control_line(self) -> Option<String> {
+        self.control_line
+    }
+
+    /// How many commands the request carries.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn command_count(&self) -> usize {
+        self.command_count
     }
 
     pub(crate) const fn request_id(&self) -> RequestId {
@@ -782,6 +879,22 @@ impl ProcessStatus {
             success: status.success(),
             code: status.code(),
             signal: status.signal(),
+        }
+    }
+
+    /// Report an outcome a transport observed without running a process.
+    ///
+    /// Control mode closes a block with `%end` or `%error` and never with an
+    /// exit status, and a test double never had one either. The code is
+    /// synthesized so callers that read one see the shape tmux would have
+    /// exited with, and it is stated here rather than invented at each call
+    /// site.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn from_block_outcome(succeeded: bool) -> Self {
+        Self {
+            success: succeeded,
+            code: Some(if succeeded { 0 } else { 1 }),
+            signal: None,
         }
     }
 

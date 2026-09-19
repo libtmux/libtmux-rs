@@ -234,8 +234,9 @@ async fn searching_filters_a_listing_and_keeps_the_lenient_loud_pair() {
     // the listing itself fails, which is what the pair exists to distinguish.
     assert_eq!(
         session
-            .search_windows_or_empty(&fields.window_name.starts_with("build"))
+            .search_windows(&fields.window_name.starts_with("build"))
             .await
+            .unwrap_or_default()
             .len(),
         building.len(),
     );

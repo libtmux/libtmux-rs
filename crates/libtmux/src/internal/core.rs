@@ -16,6 +16,7 @@ use crate::internal::process::LaunchContext;
 #[cfg(feature = "control-mode")]
 use crate::internal::process::{PersistentChild, PersistentClients};
 use crate::internal::subprocess::SubprocessExecutor;
+use crate::internal::wait_for::ChannelWaits;
 #[cfg(feature = "control-mode")]
 use crate::limits::ControlClientLimits;
 use crate::limits::{DispatchLimits, OutputLimits};
@@ -78,6 +79,7 @@ impl BuildContext {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct CoreConfiguration {
     identity: ServerIdentity,
     socket_name: Option<OsString>,
@@ -319,8 +321,22 @@ pub(crate) struct Core {
     executor: Arc<dyn Executor>,
     capabilities: OnceCell<EngineCapabilities>,
     next_request_id: AtomicU64,
+    /// The `wait-for` channels this handle has a client on, or a signal for.
+    ///
+    /// Shared by every clone of a [`crate::Server`], because the clients are
+    /// this process's and a channel is one name on the tmux server.
+    channel_waits: ChannelWaits,
     #[cfg(feature = "control-mode")]
     persistent_clients: PersistentClients,
+    /// PIDs of control clients this process itself spawned with
+    /// [`Self::spawn_control`], for as long as each is still running.
+    ///
+    /// Shared with every [`PersistentChild`] this spawns, which removes its
+    /// own entry on drop -- so this reflects processes, not connection
+    /// handles, and stays correct across [`crate::control::ControlSender`]
+    /// and [`crate::control::ControlEvents`] being dropped independently.
+    #[cfg(feature = "control-mode")]
+    control_client_pids: Arc<std::sync::Mutex<std::collections::HashSet<u32>>>,
 }
 
 impl Core {
@@ -347,15 +363,46 @@ impl Core {
             executor,
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
+            channel_waits: ChannelWaits::default(),
             #[cfg(feature = "control-mode")]
             persistent_clients: PersistentClients::new(control_client_limits),
+            #[cfg(feature = "control-mode")]
+            control_client_pids: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        }
+    }
+
+    /// Build a core that dispatches over an already-attached connection.
+    ///
+    /// The capabilities are carried across rather than re-probed: the version
+    /// probe is `tmux -V`, a client flag and not a command, so it has no
+    /// control-mode spelling at all.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn over_control_mode(
+        &self,
+        sender: crate::control::ControlSender,
+        capabilities: EngineCapabilities,
+    ) -> Self {
+        let executor = crate::internal::control_executor::ControlModeExecutor::new(sender);
+
+        Self {
+            configuration: self.configuration.clone(),
+            executor: Arc::new(executor),
+            capabilities: OnceCell::new_with(Some(capabilities)),
+            next_request_id: AtomicU64::new(1),
+            channel_waits: ChannelWaits::default(),
+            persistent_clients: PersistentClients::new(self.configuration.control_client_limits),
+            // Shared with the parent: a control client this process spawned is
+            // the same process whichever handle dispatches through it.
+            control_client_pids: Arc::clone(&self.control_client_pids),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
         let configuration = CoreConfiguration {
-            identity: ServerIdentity::from_socket_path(PathBuf::from("/tmp/libtmux-test")),
+            identity: ServerIdentity::from_socket_path(PathBuf::from(
+                "/tmp/libtmux-rs-test/no-such-socket",
+            )),
             socket_name: None,
             config_file: None,
             colors: None,
@@ -377,20 +424,78 @@ impl Core {
     }
 
     pub(crate) async fn execute(&self, command: Command) -> Result<CommandResult, Error> {
+        // Rendered before the command is consumed, and only for the transport
+        // that reads a line. A subprocess dispatch pays nothing for it.
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| command.control_mode_line());
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
             &self.configuration.global_argv,
             command,
         );
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
         self.executor.execute(request).await
     }
 
+    /// Start a dispatch with no deadline of its own, and name it.
+    ///
+    /// For `wait-for` only, where a client killed part-way stays in tmux's
+    /// waiter or locker list: this one ends when tmux answers or the executor
+    /// shuts down. The caller bounds its own wait and names this dispatch when
+    /// it gives up, so the id comes back with the future.
+    pub(crate) fn dispatch_without_deadline(
+        &self,
+        command: Command,
+    ) -> (RequestId, crate::internal::executor::DispatchFuture) {
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| command.control_mode_line());
+        let request = CommandRequest::with_global_argv(
+            self.next_request_id(),
+            &self.configuration.global_argv,
+            command,
+        )
+        .without_deadline();
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
+        let request_id = request.request_id();
+        (request_id, self.executor.execute(request))
+    }
+
+    /// The `wait-for` channels this handle has a client on, or a signal for.
+    pub(crate) const fn channel_waits(&self) -> &ChannelWaits {
+        &self.channel_waits
+    }
+
+    /// Whether this handle dispatches over a connection someone else holds.
+    ///
+    /// A connection runs one command at a time, so a command that blocks in
+    /// tmux blocks the connection; the callers that would are the ones that
+    /// ask.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn routes_over_control_mode(&self) -> bool {
+        self.executor.renders_control_line()
+    }
+
     pub(crate) async fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| chain.control_mode_line());
         let request = CommandRequest::chain_with_global_argv(
             self.next_request_id(),
             &self.configuration.global_argv,
             chain,
         );
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
         self.executor.execute(request).await
     }
 
@@ -441,7 +546,26 @@ impl Core {
                 tokio::time::Instant::now().checked_add(self.configuration.timeout),
             )
             .await?;
-        PersistentChild::spawn(&self.configuration.launch, &request, reservation)
+        PersistentChild::spawn(
+            &self.configuration.launch,
+            &request,
+            reservation,
+            Arc::clone(&self.control_client_pids),
+        )
+    }
+
+    /// Report whether this process itself spawned the control client with
+    /// this pid, and it is still running.
+    ///
+    /// For a caller telling a human's attached client apart from a control
+    /// connection this same process opened to watch or wait on the server:
+    /// [`Self::spawn_control`] is the only thing that adds an entry.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn owns_control_client(&self, pid: u32) -> bool {
+        self.control_client_pids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&pid)
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {

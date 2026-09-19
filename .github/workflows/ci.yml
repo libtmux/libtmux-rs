@@ -54,7 +54,7 @@ jobs:
         with:
           tool: just,cargo-hack,cargo-deny,uv
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: just check
 
@@ -81,7 +81,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # `--no-fail-fast` because this lane runs only on master and bills at ten
       # times a Linux runner. Stopping at the first failing test binary hides
@@ -107,7 +107,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: just api-check
       # Same toolchain and the same rustdoc JSON, so it rides along here
       # rather than paying for a second nightly build.
@@ -127,7 +127,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [control_line, filter_expr_json, workspace_yaml]
+        target:
+          - control_block
+          - control_line
+          - environment_listing
+          - filter_expr_json
+          - format_rows
+          - text_filter
+          - list_keys
+          - workspace_yaml
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1
@@ -136,7 +144,16 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The corpus is what this job grows. Cache entries are immutable, so each
+      # run saves under its own key and the next restores the newest by prefix.
+      # An entry unused for seven days is evicted: a late run restarts from seeds.
+      - name: Restore the ${{ matrix.target }} corpus
+        uses: actions/cache/restore@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
       - name: Fuzz ${{ matrix.target }}
         env:
           TARGET: ${{ matrix.target }}
@@ -146,8 +163,17 @@ jobs:
           # statically, which a sanitizer cannot instrument, so the target
           # has to be named here rather than left to how cargo-fuzz arrived.
           host=$(rustc +nightly -vV | sed -n 's/^host: //p')
-          cargo +nightly fuzz run --target "$host" "$TARGET" "fuzz/seeds/$TARGET" \
+          # libFuzzer writes new inputs to the first directory only.
+          mkdir -p "fuzz/corpus/$TARGET"
+          cargo +nightly fuzz run --target "$host" "$TARGET" \
+            "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" \
             -- -max_total_time=300 -rss_limit_mb=4096
+      - name: Save the ${{ matrix.target }} corpus
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
       - name: Keep any crash that was found
         if: failure()
         uses: actions/upload-artifact@v7
@@ -180,6 +206,6 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: just compat

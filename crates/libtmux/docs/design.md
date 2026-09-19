@@ -63,6 +63,16 @@ object APIs.
 - Reproducing Python's `QueryList` type, its equality and lookup-suffix
   defects, stale fields, or cross-server identity defects.
 - A process-global engine or operation registry.
+- Runtime independence. `tokio` is a required dependency, not an optional one:
+  the crate spawns and supervises child processes, bounds every dispatch with a
+  timer, and multiplexes a control connection, so it needs a runtime's process
+  reaping and timers rather than only its executor. `async-std` and `smol`
+  offer no compatible child supervision, and abstracting over the parts that
+  differ would mean either a lowest-common-denominator transport or a second
+  one to keep in step. `blocking::Runtime` is how code that is not async calls
+  in; it is a `tokio` current-thread runtime, so entering it from inside
+  another runtime is a panic rather than a nested executor -- use
+  `blocking::Runtime::try_run` where that is possible.
 
 ## Compatibility contract
 
@@ -151,8 +161,8 @@ tmux. Its source is not copied into the crate.
   another clone, avoiding locks and hidden shared state.
 - A real-tmux guard created unique short socket paths, exposed the exact path,
   and removed the daemon and socket on drop.
-- Loud list access and explicit `*_or_empty` access can coexist without making
-  raw command execution swallow failures.
+- List access keeps the reason a listing failed without making raw command
+    execution swallow failures.
 - A failed command at the start of a tmux semicolon chain prevents later
   commands from executing. A control-mode implementation that predicts one
   result block per separator can wait forever for blocks tmux will never send.
@@ -342,11 +352,12 @@ permanently attached to stale parents.
 
 ### Private snapshots and future refresh
 
-The current `SessionInfo`, `WindowInfo`, `PaneInfo`, `ClientInfo`,
-`Availability<T>`, projections, format plans, and built-in fields are
-crate-private. No public hierarchy handle or listing can return them yet. The
-discovery slice will promote only the values needed by a public consumer and
-define handle refresh around complete owned snapshots.
+The `SessionInfo`, `WindowInfo`, `PaneInfo`, and `ClientInfo` structs,
+projections, format plans, and built-in fields are crate-private. Each field
+is readable through the handle that filters it: `Pane::get(fields.cursor_x)`
+returns `Availability<u32>`, so one name serves filtering and reading and no
+per-field method commits the crate to a field's storage shape. Hand-written
+getters remain for the common fields.
 
 Inside that private kernel, known IDs, indices, flags, sizes, timestamps, and
 enums use typed fields. `TmuxText` retains stored bytes exactly and exposes
@@ -438,16 +449,17 @@ let first = pending.clone().next();
 let collected = pending.collect::<Vec<_>>();
 ```
 
-`QueryIteratorExt` is implemented only for iterators whose item is `&T`.
-`matching()` is lazy and preserves order; `vec.iter().matching(expr)` works,
-while `vec.into_iter().matching(expr)` intentionally does not. `Matcher<T>`
-has a blanket implementation for `Fn(&T) -> bool`, but inline closures use
-native `.filter()` because the blanket bound cannot infer an untyped closure
-parameter on the MSRV.
+`QueryIteratorExt` is implemented for all iterators. `matching()` filters
+borrowed items, while `matching_owned()` borrows each item for the predicate
+and yields the original owned item without requiring `Clone`. Both methods
+are lazy and preserve order. `Matcher<T>` has a blanket implementation for
+`Fn(&T) -> bool`, but inline closures use native `.filter()` because the
+blanket bound cannot infer an untyped closure parameter on the MSRV.
 
 `exactly_one()` inspects at most two items and returns `ExactlyOneError` with
 distinct zero and multiple variants. `one_or_none()` returns `None`, one
-borrowed item, or `MultipleItemsError`. Neither method counts, collects, or
+item, or `MultipleItemsError`. Both methods return the iterator's item type,
+whether borrowed or owned. Neither method counts, collects, or
 exhausts a potentially infinite iterator. Importing both this extension trait
 and `itertools::Itertools` makes the shared `exactly_one` method name
 ambiguous; callers in that uncommon case use trait-qualified syntax.
@@ -473,7 +485,7 @@ data through the current public API:
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 
 #[derive(libtmux::Filterable)]
-#[filterable(target = "task", crate = "::libtmux")]
+#[filterable(target = "task")]
 struct Task {
     name: String,
     done: bool,
@@ -683,6 +695,12 @@ arms cleanup before handing the object to the caller, and keeps cleanup running
 after cancellation. Cleanup needs the Tokio runtime to remain active; ordinary
 cloneable handles remain non-destructive.
 
+`ScopeError<T, E>` separates creation, operation and cleanup failures.
+Combined failures retain both the caller's generic error and the cleanup
+`Error`; a cleanup failure alone retains the operation's own successful
+result instead of discarding it. Cleanup errors carry `AfterEffect` because
+creation already succeeded.
+
 If tmux creates an object but the command fails before yielding a decodable
 handle, the scope has no identity to target and cannot compensate for it.
 
@@ -708,9 +726,9 @@ contract:
 
 ```no_run
 # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-let lenient = server.sessions_or_empty().await;
 let loud = server.sessions().await?;
-# let _ = (lenient, loud);
+let quiet = server.sessions().await.unwrap_or_default();
+# let _ = (loud, quiet);
 # Ok(())
 # }
 ```
@@ -754,7 +772,10 @@ protocol evidence supports that attribution.
 
 The `control-mode` feature opens one tmux connection and keeps it. A task owns
 the pipes; callers hold a `ControlSender` and a `ControlEvents`, which is a
-`Stream`.
+`Stream<Item = Result<Event, Error>>`. Buffered notifications precede one
+terminal error. A clean `%exit` is an event; EOF without it is a connection
+error. Exhaustion waits for cleanup. Explicit `shutdown` closes early and
+returns any terminal error that iteration has not already delivered.
 
 That task is an actor, and this document previously argued against one on the
 grounds that a caller-driven connection buffers and drops nothing out of sight.
@@ -1072,10 +1093,8 @@ unrecognized form classifies as `LinkGone` -- the reading that does not license
 discarding a live handle -- so the cost of being wrong is a distinction rather
 than a destroyed handle.
 
-Listing accessors come in pairs, and the split is load-bearing here. The
-`*_or_empty` form returns an empty `Vec` for any failure, which suits a status
-line. The short form propagates, which is the whole reason it exists -- a
-short form that quietly returned no rows for an unreachable daemon would make
+A listing propagates, which is the whole reason it reads this way -- one
+that quietly returned no rows for an unreachable daemon would make
 the pair meaningless.
 
 ## Cost of gathering the hierarchy
@@ -1269,7 +1288,12 @@ because that is the only place the rules are visible.
 a `Scope` that is either `-g` or `-t <target>`. The part worth sharing is not
 the flag but the reading: a value containing a newline occupies more than one
 line of `show-environment`, and a continuation line holding an `=` cannot be
-told from the next variable, so every name is read back on its own.
+told from the next variable. `show-environment -s` prints each entry as a
+shell statement with every `"`, `\`, `$` and backtick in the value escaped, so
+the first unescaped `"` ends a value on every supported release and the whole
+environment is one command. Only that escaping is undone: tmux 3.4 and later
+also escape bytes for display, `$` among them, in both listings alike, so a
+value read whole matches the same value read by name.
 
 ### `run-shell` output goes nowhere on tmux 3.3 through 3.4
 
@@ -1333,6 +1357,68 @@ a server that died the same way it reports a command it refused, so the
 assertion blamed the arguments. `TestServer::daemon_state` exists because of
 that: a test driving tmux cannot tell the two apart from the reply, and the
 fixture is the daemon's parent, so it is the only thing that can.
+
+### A one-binding key listing goes to the message log on tmux 3.7 through 3.7c
+
+`list-keys` gained `-F` in 3.7, and in the same release its print loop reads
+`if ((single && tc != NULL) || n == 1) status_message_set(...)`: a listing of
+exactly one binding becomes a status message instead of a line of output. With
+no attached client the message goes to the server's message log. The command
+still exits zero, so `list-keys -T <table>` on a table holding one binding
+answers with nothing, in the `bind-key` form and the `-F` form alike.
+
+`Server::typed_key_bindings` therefore never passes `-T`. It lists every table
+and narrows the rows itself, and across every table a listing is one binding
+only on a server with a single binding left. `Server::key_bindings` still
+sends `-T`, since its lines are tmux's own, and says so.
+
+The source of 3.7 and 3.7c has the condition and 3.8-rc does not. Measured:
+3.7c prints nothing for a one-binding table and 3.7d prints it.
+`real_tmux_compat_key_bindings_read_as_fields` binds two one-binding tables,
+and fails on 3.7c when `-T` is sent.
+### A `wait-for` client cannot be taken back out
+
+tmux queues a `wait-for` client on the channel and offers nothing to withdraw
+it. `cmd_wait_for_signal` releases every waiter it finds and keeps the signal
+only when it finds none; `cmd_wait_for_unlock` grants the lock to the first
+client queued for it. `server_client_lost` frees every other structure a lost
+client owns -- its files, its overlay, its prompt, `input_cancel_requests` --
+and never touches `wait_channels`. The client leaves the `clients` list, so
+`cmdq_next` never runs its queue again, and the queued item still holds the
+reference `cmdq_append` took, so nothing is freed and nothing dangles: one
+client struct and one queue item leak, and the channel's list keeps an entry
+that can never act. Identical from 3.2a through 3.8-rc; 3.8-rc's new
+`wait-for -l` lists the entry by name after the client is gone, which is the
+one-line proof.
+
+So a client killed for running out of time takes the channel's next signal, or
+its next lock, with it. `internal::wait_for` answers by never killing one: the
+dispatch runs without a deadline of its own (`CommandRequest::without_deadline`,
+the only request that does), and the caller's deadline ends the *wait* rather
+than the client. A lock granted after its caller gave up unlocks at once. A
+wait's client stays parked on the channel, at most one per channel per handle
+so that a second wait joins it rather than adding a second waiter, and the
+signal that releases it is kept in `ChannelWaits` when no caller is left --
+tmux keeps a signal nobody is waiting on, and cannot see that a parked client
+is nobody.
+
+Two things this does not reach. A process other than this one waiting on the
+channel afterwards does not see that signal: it was spent in tmux, and the
+only way to put it back is `wait-for -S`, which would release somebody else's
+wait. And `Server::shutdown` kills what is parked, because a shutdown that
+waits on tmux is not a shutdown, which leaves the tmux defect behind on a
+channel that was still parked.
+
+Routing a blocking `wait-for` is refused for a different reason.
+`cmdq_fire_command` writes the block's `end` guard as soon as `entry->exec`
+returns, and `cmd_wait_for_wait` returns `CMD_RETURN_WAIT` with its item still
+on the queue, so a control client is told the command finished and then runs
+nothing else until the channel releases it. Measured through the crate on 3.7d: a
+routed `wait_for_channel` on a channel nobody signalled returned `Signalled`
+in 190us, and the next routed call answered nothing within two seconds. So
+`wait_for_channel` and `lock_channel` refuse a routed handle with
+`ControlModeErrorKind::BlockingCommand`; `signal_channel` and
+`unlock_channel` do not block and still route.
 
 ### Two shapes that make a test flaky under load
 
@@ -1757,20 +1843,35 @@ a cleanup pass, a workspace builder -- "no sessions" read from an outage is an
 instruction to delete everything.
 
 So the names swapped. `sessions()` returns `Result`, and a caller who wants
-the old behaviour writes `sessions_or_empty()`, which says what it does. The
+the old behaviour writes `sessions().await.unwrap_or_default()`, which says what
+it does at the call site rather than in the method name. An `_or_empty` twin of
+each listing did exist for a while; neither consumer crate ever called one, and
+eleven methods whose whole purpose is to discard a reason are eleven ways to
+discard one by accident, so they went. The
 breaking change is cheap now and would not be later, which is the argument for
 doing it during an alpha rather than after one.
 
 ### Fuzzing the parsers that read from outside
 
-Three surfaces take bytes this crate did not write, and each is fuzzed:
+Every surface that takes bytes this workspace did not write is fuzzed:
 
-- the control-mode line parser, which reads from a tmux that keeps running, so
-  a malformed line is not a command that failed but bytes it has to survive;
-- the versioned filter-expression wire format, which can arrive from a config
-  file, a CLI argument, or an MCP tool call;
-- the tmuxp-style workspace loader, which walks a hand-written nested document
-  deciding what each value means.
+- the control-mode line parser (`control_line`), which reads from a tmux that
+  keeps running, so a malformed line is not a command that failed but bytes it
+  has to survive;
+- control-mode block framing (`control_block`): a stream read inside and
+  outside `%begin` blocks, each closed block handed to the slots that assemble
+  a chain's reply, checked that no line escapes its block and no reply holds
+  blocks another command owns;
+- the format-row codec every listing decodes through (`format_rows`), whose
+  names, paths and titles users and programs write, checked by writing values
+  the way each dialect of tmux prints them and decoding them back;
+- the versioned filter-expression wire format (`filter_expr_json`), which can
+  arrive from a config file, a CLI argument, or an MCP tool call, checked that
+  what it accepts writes out and reads back as the same expression;
+- the tmuxp-style workspace loader (`workspace_yaml`), which walks a
+  hand-written nested document deciding what each value means;
+- tmux-mcp's escape filter (`text_filter`), which reads pane output, checked
+  that text written after a sequence tmux would have ended is never swallowed.
 
 `fuzz/` is not a workspace member. It needs nightly and a sanitizer, and
 `just check` has to stay runnable on stable, so it is excluded and reached
@@ -1784,13 +1885,16 @@ command. `fuzz/seeds/` carries those shapes -- including a line that is not
 UTF-8, because pane output is not required to be. What the fuzzer discovers
 from them is not checked in; the seeds are.
 
-`__fuzz_parse_control_line` exists because the parser is private and should
-stay private. It is behind `unstable-fuzzing`, which is not in `full` and
-which nothing but `fuzz/` turns on.
+The `__fuzz_*` functions exist because the parsers are private and should stay
+private. They are behind `unstable-fuzzing`, which is not in `full` and which
+nothing but `fuzz/` turns on. tmux-mcp's filter needs only `std`, so the
+target compiles its source file instead of adding a feature to a published
+binary crate.
 
 CI runs them weekly rather than per-push. This kind of testing finds things by
 running for a long time, so a schedule is worth more than a gate nobody can
-wait for, and a crash is uploaded as an artifact rather than left in a log.
+wait for. Each target's corpus is cached between runs, since the corpus is
+what grows, and a crash is uploaded as an artifact rather than left in a log.
 
 ### The public surface is recorded, because nothing else reports drift
 
@@ -1934,6 +2038,16 @@ So the doorbell stays unbuilt, and what settles it is the feature argument
 below rather than the clock. The clock now says it would be worth having --
 under three milliseconds on a marker, six times on a moderate flood, nothing
 once the flood is large enough -- and a default build still cannot reach it.
+
+`Pane::wait_until` runs the same loop with a predicate over the captured lines,
+for what a literal needle cannot say. It polls on a handle from
+`Server::over_control_mode` as well, where `control-mode` is on and the feature
+argument does not apply. The reason there is ownership: a connection's
+`%output` goes to whoever holds its events, and the handle holds only the
+sender, so waking on output would attach a second client for every wait -- the
+cost the `streamed` lane leaves out of its number. Over a connection a look is
+a line rather than a process, so the round trip a doorbell would save shrinks
+as well.
 
 What follows is why, and it is kept because the constraints it records are the
 ones the implementation had to meet.

@@ -4,6 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
@@ -11,13 +12,13 @@ use crate::internal::listing;
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
+use crate::query::{FilterSchema, Filterable, ReadField};
 use crate::session::Session;
-use crate::snapshot::WindowProjection;
 #[cfg(feature = "query")]
-use crate::snapshot::{WindowFields, WindowInfo};
+use crate::snapshot::{Availability, FieldRef, WindowFields, WindowInfo};
+use crate::snapshot::{WindowProjection, stored_time};
 use crate::target::{ServerIdentity, SessionId, WindowId};
-use crate::{Command, CommandResult, Error, ObjectKind};
+use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
 mod navigation;
 mod settings;
@@ -256,13 +257,16 @@ impl Window {
         self.projection.link().has_bell()
     }
 
-    /// Return when the window last produced output, in seconds since the
-    /// Unix epoch.
+    /// Return when the window last produced output.
     ///
     /// tmux stamps this on every byte a pane in the window writes, whatever
     /// the window options say. That is what separates it from
     /// [`Self::has_activity`], which is an alert and stays false unless
     /// `monitor-activity` was turned on -- and it is off by default.
+    ///
+    /// tmux keeps whole seconds. `WindowFields::window_activity` filters and
+    /// reads the same field as the `i64` of Unix seconds tmux reports, because
+    /// the query grammar compares integers.
     ///
     /// # Examples
     ///
@@ -270,12 +274,15 @@ impl Window {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
+    /// use std::time::{Duration, SystemTime};
+    ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let session = guard.server().new_session("busy").await?;
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// // A window that has just been made has already produced output.
-    /// assert!(window.last_activity() > 0);
+    /// let idle = SystemTime::now().duration_since(window.last_activity())?;
+    /// assert!(idle < Duration::from_secs(3600));
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -284,8 +291,8 @@ impl Window {
     /// # }
     /// ```
     #[must_use]
-    pub fn last_activity(&self) -> i64 {
-        *self.projection.window().window_activity()
+    pub fn last_activity(&self) -> SystemTime {
+        stored_time(*self.projection.window().window_activity())
     }
 
     /// Report whether one of the window's panes is zoomed to fill it.
@@ -374,7 +381,7 @@ impl Window {
     /// tmux expands the name as a format before it checks it, so `#(command)`
     /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
     /// before passing text a caller supplied.
-    pub async fn rename(&mut self, name: impl Into<OsString>) -> Result<&mut Self, Error> {
+    pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "rename-window",
@@ -382,7 +389,7 @@ impl Window {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("--")
-                .arg(name.into()),
+                .arg(name.into().into_os_string()),
         )
         .await?;
 
@@ -467,7 +474,10 @@ impl Window {
                     .await?;
                 OsString::from(named.as_str())
             }
-            LayoutSpec::Saved(saved) => saved.clone(),
+            LayoutSpec::Saved(saved) => {
+                let server = crate::Server::from_core(Arc::clone(&self.core));
+                Self::validate_saved_layout(&server, saved).await?
+            }
         };
 
         listing::mutate(
@@ -487,6 +497,60 @@ impl Window {
         Ok(self)
     }
 
+    /// Validate a saved layout string before it reaches tmux, and return the
+    /// argument to send.
+    ///
+    /// The guard [`Self::select_layout`] applies to a [`LayoutSpec::Saved`]
+    /// value, factored out so every caller that dispatches `select-layout`
+    /// with a caller-supplied string goes through the same refusal rather
+    /// than reimplementing it: [`crate::plan::ops::SelectLayout`] validates
+    /// each recorded operation this way before a plan's first command, and
+    /// an MCP or other integration should call this (or [`Self::select_layout`]
+    /// directly, when it already holds a [`Window`]) rather than building the
+    /// `select-layout` command itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnrecognizedLayout`] for a value that is not a
+    /// preset name, a unique preset prefix, a classic layout string, or
+    /// JSON; [`Error::AmbiguousLayout`] for a prefix that names more than
+    /// one preset available on the running release; and
+    /// [`crate::ErrorKind::UnsupportedVersion`] for a preset or a JSON
+    /// layout this release predates.
+    pub(crate) async fn validate_saved_layout(
+        server: &crate::Server,
+        saved: &OsStr,
+    ) -> Result<OsString, Error> {
+        // Checked here rather than left to tmux: 3.3 and 3.3a exit on a
+        // value `select-layout` cannot parse, taking every session on the
+        // socket with them, and `--` does not help -- it turns `-o` from
+        // the undo flag into exactly such a value.
+        let version = server.capabilities().await?.tmux_version().clone();
+        match SavedLayout::classify(saved, &version) {
+            SavedLayout::Preset(named) => {
+                server
+                    .require(named.as_str(), named.minimum_release())
+                    .await?;
+                // The resolved name, not whatever prefix the caller spelled:
+                // a caller who typed `tile` gets `tiled` sent, not a second
+                // round of tmux's own matching.
+                Ok(OsString::from(named.as_str()))
+            }
+            SavedLayout::Classic => Ok(saved.to_owned()),
+            SavedLayout::Json => {
+                server
+                    .require("a JSON layout string", crate::version::since::JSON_LAYOUTS)
+                    .await?;
+                Ok(saved.to_owned())
+            }
+            SavedLayout::Ambiguous(candidates) => Err(Error::AmbiguousLayout {
+                input: saved.to_string_lossy().into_owned(),
+                candidates,
+            }),
+            SavedLayout::Unrecognized => Err(Error::UnrecognizedLayout),
+        }
+    }
+
     /// Restart the window's command in place.
     ///
     /// Passing `None` reruns whatever the window started with. Every pane in
@@ -500,12 +564,12 @@ impl Window {
     pub async fn respawn(
         &mut self,
         command: Option<impl Into<OsString>>,
-        kill: bool,
+        respawn_mode: Respawn,
     ) -> Result<&mut Self, Error> {
         let mut respawn = Command::new("respawn-window")
             .arg("-t")
             .arg(self.id().to_string());
-        if kill {
+        if respawn_mode.kills() {
             respawn = respawn.arg("-k");
         }
         if let Some(command) = command {
@@ -779,33 +843,27 @@ impl Window {
 
     /// Create a pane, run an operation with it, then kill it.
     ///
-    /// Once this future is polled, the scope owns creation and cleanup.
-    /// Cancellation or unwinding can let an in-flight creation finish, but a
-    /// pane whose creation yields a handle is killed while the Tokio runtime
-    /// remains active. Ordinary handle `Drop` remains non-destructive.
-    ///
-    /// Setup and teardown failures convert into the operation's own error
-    /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and cleanup fail, the cleanup error is returned as
-    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
-    /// creation; the operation error is discarded. When the operation fails
-    /// and cleanup succeeds, its generic error is returned unchanged: the
-    /// scope cannot certify replay safety for arbitrary callback work.
-    /// A canceled caller cannot receive a cleanup error, so tracing is its
-    /// only report.
+    /// [`crate::ScopeError`] retains creation, operation and cleanup failures
+    /// separately. If operation and cleanup both fail, both original errors
+    /// are returned. Cleanup errors carry [`Error::AfterEffect`] because
+    /// creation succeeded.
     ///
     /// # Errors
     ///
-    /// Returns the operation's error, or a converted [`Error`] when the
-    /// pane could not be created or could not be killed after creation.
+    /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
+    /// fails. The operation's error needs no conversion into [`Error`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
+    /// of their own, so the pane is killed even if this future is dropped or
+    /// the operation panics, while the Tokio runtime is alive. A cleanup
+    /// failure then has no caller to reach; the `tracing` feature records it.
     pub async fn with_pane<T, E>(
         &self,
         options: impl Into<SplitOptions>,
         operation: impl AsyncFnOnce(&Pane) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<Error>,
-    {
+    ) -> Result<T, crate::ScopeError<T, E>> {
         let window = self.clone();
         let options = options.into();
         scoped::run(
@@ -1087,6 +1145,54 @@ impl fmt::Debug for Window {
     }
 }
 
+#[cfg(feature = "query")]
+impl Window {
+    /// Read one field of this window's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field in [`WindowFields`] reads this way, including those with no
+    /// getter of their own. Nothing is sent to tmux, so the value is as old as
+    /// the snapshot. The result says why a field holds no value: see
+    /// [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::query::Filterable as _;
+    /// use libtmux::{Availability, Window};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("read").await?;
+    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let fields = Window::filter_fields();
+    ///
+    /// // The layout as shown, which only differs from the layout while zoomed.
+    /// assert_eq!(
+    ///     window.get(fields.window_visible_layout),
+    ///     Availability::Available(window.layout()),
+    /// );
+    /// assert_eq!(window.get(fields.window_id), Availability::Available(window.id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.projection.window().stored(name)
+    }
+}
+
 /// Filtering a window uses the same handles as the snapshot beneath it.
 ///
 /// Matching and validation delegate to that snapshot, so an expression can
@@ -1232,6 +1338,15 @@ impl Layout {
         }
     }
 
+    /// Whether this release's tree carries the preset.
+    ///
+    /// `has_behavior`, not `meets`: a development identifier carries what its
+    /// release number implies, and clamping one to the crate's floor hides a
+    /// preset the running tmux has.
+    pub(crate) fn is_in(self, version: &crate::TmuxVersion) -> bool {
+        version.has_behavior(&self.minimum_release())
+    }
+
     /// The first tmux release that arranges panes this way.
     ///
     /// The mirrored pair arrived in 3.5; the rest predate everything this
@@ -1257,8 +1372,18 @@ impl fmt::Display for Layout {
 ///
 /// A [`Layout`] names an arrangement tmux computes. A saved string is one
 /// tmux already computed: [`Window::layout`] reports one, and handing it back
-/// restores that exact arrangement including the pane sizes, which a named
-/// layout cannot express.
+/// restores the pane sizes, which a named layout cannot express.
+///
+/// From [`crate::since::JSON_LAYOUTS`] (3.8) a saved string carries each
+/// pane's id, so the restored arrangement is byte-exact, process for process.
+/// Below that release the classic checksum-prefixed string carries only
+/// sizes and positions: the shape returns, but which pane lands in which cell
+/// depends on whether the live pane list happens to already be in the saved
+/// cell order, which a mirrored or otherwise asymmetric layout can defeat. A
+/// saved string from 3.8+ is refused below it with
+/// [`crate::ErrorKind::UnsupportedVersion`], and a value that is none of a
+/// preset name, a classic string, or JSON with
+/// [`crate::ErrorKind::InvalidInput`], both before dispatch.
 ///
 /// # Examples
 ///
@@ -1339,6 +1464,115 @@ impl From<&TmuxText> for LayoutSpec {
         {
             Self::Saved(OsString::from(saved.to_string_lossy().into_owned()))
         }
+    }
+}
+
+/// What to do about a process still running where one is being respawned.
+///
+/// tmux refuses `respawn-pane` and `respawn-window` outright while the old
+/// command is alive unless `-k` says otherwise, so the choice is not a detail
+/// -- it decides whether a live process is killed.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn restart(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
+/// use libtmux::Respawn;
+///
+/// // Rerun the pane's own command, killing it first if it is still running.
+/// pane.respawn(None::<&str>, Respawn::Replacing).await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Respawn {
+    /// Kill whatever is running first. tmux's `-k`.
+    Replacing,
+    /// Refuse unless the pane or window is already dead.
+    OnlyIfDead,
+}
+
+impl Respawn {
+    pub(crate) const fn kills(self) -> bool {
+        matches!(self, Self::Replacing)
+    }
+}
+
+/// The shape of a saved layout value, read before it reaches tmux.
+#[cfg_attr(test, derive(Debug, PartialEq))]
+enum SavedLayout {
+    /// A preset name, or a prefix of exactly one, passed as text rather than
+    /// as a [`Layout`].
+    Preset(Layout),
+    /// tmux's checksum-prefixed string: four hex digits and a comma.
+    Classic,
+    /// The JSON form tmux reports from [`crate::since::JSON_LAYOUTS`].
+    Json,
+    /// A prefix that names more than one preset available on the running
+    /// release.
+    Ambiguous(Vec<&'static str>),
+    /// Nothing tmux ever reported, and nothing `select-layout` can parse.
+    Unrecognized,
+}
+
+impl SavedLayout {
+    /// Every preset [`select_layout`](Window::select_layout) knows, in the
+    /// order tmux itself declares them.
+    const PRESETS: [Layout; 7] = [
+        Layout::EvenHorizontal,
+        Layout::EvenVertical,
+        Layout::MainHorizontal,
+        Layout::MainHorizontalMirrored,
+        Layout::MainVertical,
+        Layout::MainVerticalMirrored,
+        Layout::Tiled,
+    ];
+
+    fn classify(saved: &OsStr, version: &crate::TmuxVersion) -> Self {
+        let Some(text) = saved.to_str() else {
+            return Self::Unrecognized;
+        };
+        if let Some(named) = Self::PRESETS
+            .into_iter()
+            .filter(|named| named.is_in(version))
+            .find(|named| named.as_str() == text)
+        {
+            return Self::Preset(named);
+        }
+        // tmux's own `layout_set_lookup` is a prefix match, so `tile` and
+        // `even-h` both apply on every release; matched only against the
+        // presets the running release actually has, so `main-h` is unique
+        // on 3.2a (five presets) even though it is ambiguous from 3.5,
+        // where the mirrored pair exists. An empty string matches every
+        // preset's prefix and must stay unrecognized rather than reading as
+        // ambiguous among all seven.
+        if !text.is_empty() {
+            let candidates: Vec<Layout> = Self::PRESETS
+                .into_iter()
+                .filter(|named| named.is_in(version))
+                .filter(|named| named.as_str().starts_with(text))
+                .collect();
+            match candidates.as_slice() {
+                [only] => return Self::Preset(*only),
+                [_, ..] => {
+                    return Self::Ambiguous(
+                        candidates.iter().map(|named| named.as_str()).collect(),
+                    );
+                }
+                [] => {}
+            }
+        }
+        // `layout_parse` reads `%hx,` and insists it consumed exactly five
+        // bytes; tmux itself always writes the checksum as four lowercase
+        // digits.
+        let bytes = text.as_bytes();
+        if bytes.len() > 5 && bytes[..4].iter().all(u8::is_ascii_hexdigit) && bytes[4] == b',' {
+            return Self::Classic;
+        }
+        if text.starts_with('{') {
+            return Self::Json;
+        }
+        Self::Unrecognized
     }
 }
 
@@ -1611,7 +1845,7 @@ impl ResizeDirection {
 #[derive(Clone)]
 pub struct SplitOptions {
     direction: SplitDirection,
-    start_directory: Option<std::path::PathBuf>,
+    start_directory: Option<TmuxArg>,
     command: Option<OsString>,
     size: Option<PaneSize>,
     environment: Vec<(OsString, OsString)>,
@@ -1653,9 +1887,9 @@ impl SplitOptions {
 
     /// Set the new pane's working directory.
     ///
-    /// tmux expands this as a format, so [`crate::escape_format`] belongs
-    /// around text a program did not write.
-    pub fn start_directory(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+    /// The directory is sent literally. [`TmuxArg::format`] opts into
+    /// expansion, which is how `#{pane_current_path}` is asked for.
+    pub fn start_directory(mut self, directory: impl Into<TmuxArg>) -> Self {
         self.start_directory = Some(directory.into());
         self
     }
@@ -1842,5 +2076,53 @@ mod split_option_tests {
         let summary = options.into_command("@1", "#{pane_id}").summary();
         assert_eq!(summary.sensitive_argument_count(), 2);
         assert!(!summary.to_string().contains(secret));
+    }
+}
+
+#[cfg(test)]
+mod layout_version_tests {
+    use std::ffi::OsStr;
+
+    use super::{Layout, SavedLayout};
+    use crate::TmuxVersion;
+
+    fn classify(text: &str, raw: &[u8]) -> SavedLayout {
+        let version = TmuxVersion::parse_output(raw).expect("a parsable version");
+        SavedLayout::classify(OsStr::new(text), &version)
+    }
+
+    /// A development tree carries every preset its release number implies, so
+    /// resolving one must ask the behaviour question rather than the
+    /// conservative one: clamping a development identifier to the crate's
+    /// floor hides the mirrored pair on a tmux that has it, and silently
+    /// turns an ambiguous prefix back into a unique one.
+    #[test]
+    fn a_development_release_resolves_the_presets_it_has() {
+        for raw in [b"tmux next-3.9\n".as_slice(), b"tmux master\n".as_slice()] {
+            assert_eq!(
+                classify("main-vertical-mirrored", raw),
+                SavedLayout::Preset(Layout::MainVerticalMirrored),
+                "{} names a preset this tree has",
+                String::from_utf8_lossy(raw).trim(),
+            );
+            assert!(
+                matches!(classify("main-h", raw), SavedLayout::Ambiguous(_)),
+                "{}: `main-h` is a prefix of two presets once the mirrored pair exists",
+                String::from_utf8_lossy(raw).trim(),
+            );
+        }
+    }
+
+    /// The floor still has five presets, so the same prefix is unique there.
+    #[test]
+    fn the_minimum_release_resolves_its_own_presets() {
+        assert_eq!(
+            classify("main-h", b"tmux 3.2a\n"),
+            SavedLayout::Preset(Layout::MainHorizontal),
+        );
+        assert_eq!(
+            classify("main-vertical-mirrored", b"tmux 3.2a\n"),
+            SavedLayout::Unrecognized,
+        );
     }
 }

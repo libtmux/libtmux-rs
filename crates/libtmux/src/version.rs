@@ -430,6 +430,14 @@ impl TmuxVersion {
     ///
     /// Development identifiers meet only requirements at or below the crate's
     /// minimum supported release; they are not promoted to an invented release.
+    /// A `next-X.Y` identifier's own release number is not read here even
+    /// when `required` is that same `X.Y` or earlier -- this is a floor
+    /// check, not a capability check. Asking "does this tree already contain
+    /// a capability that shipped at version V" is [`Self::has_behavior`]'s
+    /// question, not this one; a call site gating a specific capability
+    /// behind a release above [`Self::MIN_SUPPORTED`] almost always wants
+    /// that instead, or it refuses a development build that already has the
+    /// capability it is checking for.
     ///
     /// # Examples
     ///
@@ -440,6 +448,23 @@ impl TmuxVersion {
     /// assert!(version.meets(&TmuxVersion::MIN_SUPPORTED));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
+    ///
+    /// The English verb suggests this answers "is a capability available",
+    /// but on a development build it can refuse one that is already there:
+    ///
+    /// ```
+    /// use libtmux::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+    ///
+    /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
+    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    ///
+    /// // `next-3.9`'s tree already has 3.7's behavior, but this clamps every
+    /// // development identifier to the crate's floor, so it says no anyway.
+    /// // `TmuxVersion::has_behavior` is the question that says yes.
+    /// assert!(!next.meets(&capture_line_flags));
+    /// assert!(next.has_behavior(&capture_line_flags));
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
     #[must_use]
     pub fn meets(&self, required: &ReleaseVersion) -> bool {
         match self.release {
@@ -448,6 +473,54 @@ impl TmuxVersion {
             None if self.raw.as_ref() == "master" => true,
             None => parse_next_release(&self.raw).is_some_and(|release| release >= *required),
         }
+    }
+
+    /// Report whether this version's tree carries a capability's behavior.
+    ///
+    /// The shared rule behind `Self::require`: a development identifier
+    /// asks its `behavior_release`, never clamped to the crate's minimum
+    /// supported release. Both this and `require` call it, so they cannot
+    /// drift apart the way two independently written rules could.
+    fn behavior_satisfies(&self, needs: ReleaseVersion) -> bool {
+        self.behavior_release()
+            .is_none_or(|release| release >= needs)
+    }
+
+    /// Report whether this version's tree carries a capability's behavior.
+    ///
+    /// This is `Self::require`'s refusal rule in boolean form, so a caller
+    /// gating a specific capability -- or a test predicting which branch
+    /// `require` takes -- uses the same rule `require` does, rather than an
+    /// independently derived one that can drift from it. [`Self::meets`] is
+    /// a different, deliberately non-identical rule: it clamps *every*
+    /// development identifier -- `next-X.Y` included, not only a bare
+    /// `master` -- to "no more than the crate's minimum supported release",
+    /// so it refuses any requirement above that floor regardless of what the
+    /// build's own next-release number is. This reads `next-X.Y` as the real
+    /// release `X.Y` instead, so the two disagree for any development build
+    /// checked against a requirement above the floor: [`crate::since`] holds
+    /// several, and this crate's own tmux-matrix probe self-reports
+    /// `next-3.9`. Checking a capability with `meets` instead of this
+    /// refuses that capability on a development build that already has it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+    ///
+    /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
+    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    ///
+    /// // `next-3.9` already contains 3.7's behavior, so this reports it --
+    /// // unlike `meets`, which clamps every development identifier to the
+    /// // floor and would refuse it.
+    /// assert!(next.has_behavior(&capture_line_flags));
+    /// assert!(!next.meets(&capture_line_flags));
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
+    #[must_use]
+    pub fn has_behavior(&self, needs: &ReleaseVersion) -> bool {
+        self.behavior_satisfies(*needs)
     }
 
     /// Refuse a capability this release is too old for.
@@ -466,10 +539,7 @@ impl TmuxVersion {
         capability: &'static str,
         needs: ReleaseVersion,
     ) -> Result<(), Error> {
-        if self
-            .behavior_release()
-            .is_some_and(|release| release < needs)
-        {
+        if !self.behavior_satisfies(needs) {
             return Err(Error::UnsupportedCapability {
                 capability,
                 needs,
@@ -658,6 +728,12 @@ pub mod since {
     /// `capture-pane -F`, and so [`crate::Pane::capture_lines`].
     pub const CAPTURE_LINE_FLAGS: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 
+    /// `list-keys -F`, and so [`crate::Server::typed_key_bindings`].
+    ///
+    /// Below this release `list-keys` prints only its own `bind-key` lines,
+    /// which quote a key and leave a table name bare, and carry no note.
+    pub const LIST_KEYS_FORMAT: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
     /// Taking a pane out of a control client's stream without crashing the
     /// server, and so [`crate::control::ControlSender::mute_pane`] using `off`.
     ///
@@ -700,4 +776,16 @@ pub mod since {
     /// Below this release `layout_set_lookup` does not carry those names, and
     /// tmux refuses one as it would a typo.
     pub const MIRRORED_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
+
+    /// `window_layout` and `select-layout` using a JSON subset instead of the
+    /// classic checksum-prefixed string, and so [`crate::LayoutSpec::Saved`]
+    /// accepting one.
+    ///
+    /// tmux's own `CHANGES FROM 3.7c TO 3.8` names the release: "Layout
+    /// strings now use a JSON subset format ... The old format is still
+    /// accepted; control mode clients receive old layouts unless they set the
+    /// new-layouts flag." Below this release a JSON string is refused as an
+    /// unrecognised layout, with no hint that the value is simply from a
+    /// newer tmux.
+    pub const JSON_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 8, ReleaseSuffix::FINAL);
 }

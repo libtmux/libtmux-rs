@@ -9,7 +9,7 @@ use super::{
     PANE_INFO_SUPPLEMENTS, ParsedRow, ParsedSlot, PlanFieldState, PlanPurpose, PlanVersion,
     ProfileSet, QUOTE_SHELL_SPECIALS, RequiredContext, SESSION_ID, SESSION_INFO_DESCRIPTORS,
     SESSION_INFO_SUPPLEMENTS, SemanticOwner, TransportDialect, WINDOW_ID, WINDOW_INFO_DESCRIPTORS,
-    WINDOW_INFO_SUPPLEMENTS, for_profile_selection_test,
+    WINDOW_INFO_SUPPLEMENTS, encode_like_tmux, for_profile_selection_test, split_quoted_rows,
 };
 #[cfg(feature = "test-support")]
 use crate::Command;
@@ -39,6 +39,8 @@ const Q_SHELL_ESCAPED: [u8; 19] = [
     0x7c, 0x26, 0x3b, 0x3c, 0x3e, 0x28, 0x29, 0x24, 0x60, 0x5c, 0x22, 0x27, 0x2a, 0x3f, 0x5b, 0x23,
     0x20, 0x3d, 0x25,
 ];
+/// `{`, `}`, newline and tab: what 3.8-rc added to the set above.
+const Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS: [u8; 4] = *b"{}\n\t";
 const SHORT_SENTINEL: &str = "zot-private";
 const LONG_SENTINEL: &str = "quartz-private-payload-with-a-distinct-and-deliberately-long-shape";
 const CONTROL_SENTINEL: [u8; 3] = [0x02, 0x03, 0x04];
@@ -163,6 +165,27 @@ fn format_codec_recovers_adversarial_bytes_on_every_supported_dialect() {
     }
 }
 
+/// A listing outside the catalog, such as `list-buffers`, decodes as a plan
+/// does: a buffer name tmux before 3.7 stores unchecked can hold every byte
+/// in the adversarial value.
+#[test]
+fn quoted_rows_outside_the_catalog_decode_on_every_dialect() {
+    for (dialect, wire) in [
+        (TransportDialect::RawQ, RAW_Q_WIRE.as_slice()),
+        (TransportDialect::Vis, VIS_WIRE.as_slice()),
+    ] {
+        assert_eq!(
+            split_quoted_rows(wire, ["buffer_name"], dialect),
+            Ok(vec![[ADVERSARIAL_VALUE.to_vec()]]),
+            "{dialect:?}",
+        );
+    }
+    assert!(
+        split_quoted_rows(&VIS_WIRE, ["buffer_name"], TransportDialect::RawQ).is_err(),
+        "a raw reading refuses `vis` escapes rather than decoding them differently",
+    );
+}
+
 #[test]
 fn format_codec_rejects_vis_output_when_the_daemon_predates_the_probe() {
     // The version probe reads the client executable, but the daemon that
@@ -211,7 +234,7 @@ fn format_codec_round_trips_every_byte_through_the_vis_dialect() {
 
     for byte in 1..=u8::MAX {
         let mut wire = Vec::new();
-        encode_like_tmux_vis(byte, &mut wire);
+        encode_like_tmux(&[byte], &Q_SHELL_ESCAPED, TransportDialect::Vis, &mut wire);
         wire.push(b'=');
         wire.push(b'\n');
 
@@ -223,39 +246,6 @@ fn format_codec_round_trips_every_byte_through_the_vis_dialect() {
 
         assert_eq!(slots, [[byte].as_slice()], "byte {byte:#04x} round-trips");
     }
-}
-
-/// Reproduce tmux's `#{q:}` then `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH` output
-/// for one single-byte value.
-fn encode_like_tmux_vis(byte: u8, wire: &mut Vec<u8>) {
-    if QUOTE_SHELL_SPECIALS.contains(&byte) {
-        wire.push(b'\\');
-        wire.push(byte);
-        return;
-    }
-    // `isvisible` keeps printable ASCII, space, tab, and newline literal.
-    if byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t' | b'\n') {
-        wire.push(byte);
-        return;
-    }
-    if let Some(letter) = [
-        (0x07, b'a'),
-        (0x08, b'b'),
-        (0x0b, b'v'),
-        (0x0c, b'f'),
-        (0x0d, b'r'),
-    ]
-    .into_iter()
-    .find_map(|(control, letter)| (byte == control).then_some(letter))
-    {
-        wire.push(b'\\');
-        wire.push(letter);
-        return;
-    }
-    wire.push(b'\\');
-    wire.push(b'0' + (byte >> 6));
-    wire.push(b'0' + ((byte >> 3) & 0o7));
-    wire.push(b'0' + (byte & 0o7));
 }
 
 fn rows(plan: &FormatPlan, stdout: &[u8]) -> Vec<ParsedRow> {
@@ -431,7 +421,7 @@ fn format_codec_normal_profiles_store_exact_identity_and_version_evidence() {
             SemanticOwner::Pane,
             RequiredContext::Pane,
             DecoderKind::PaneId,
-            57,
+            58,
         ),
         (
             ListProfile::Clients,
@@ -679,7 +669,12 @@ fn format_codec_rejects_escapes_tmux_never_emits() {
 
 #[test]
 fn production_q_escape_set_matches_the_documented_tmux_set() {
-    assert_eq!(QUOTE_SHELL_SPECIALS, Q_SHELL_ESCAPED);
+    let documented: Vec<u8> = Q_SHELL_ESCAPED
+        .iter()
+        .chain(Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS.iter())
+        .copied()
+        .collect();
+    assert_eq!(QUOTE_SHELL_SPECIALS, documented);
 }
 
 #[test]
@@ -702,6 +697,24 @@ fn format_codec_tmux_3_2a_q_escape_set_round_trips_exactly() {
     let parsed = rows(&plan, &stdout);
     let slot = parsed[0].slots().next().expect("one slot exists");
     assert_eq!(slot.as_bytes(), Q_SHELL_ESCAPED);
+}
+
+#[test]
+fn format_codec_next_3_9_q_escape_additions_round_trip_exactly() {
+    // Without these bytes in QUOTE_SHELL_SPECIALS this fails with
+    // InvalidEscape at the first backslash -- the failure real 3.8-rc output
+    // produces for any value holding a brace, a newline or a tab, such as
+    // `#{q:window_layout}` or a `#{q:pane_current_path}` with a tab in it.
+    let mut stdout = Vec::with_capacity(Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS.len() * 2 + 2);
+    for byte in Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS {
+        stdout.extend_from_slice(&[b'\\', byte]);
+    }
+    stdout.extend_from_slice(b"=\n");
+
+    let plan = plan(vec![&FIRST]);
+    let parsed = rows(&plan, &stdout);
+    let slot = parsed[0].slots().next().expect("one slot exists");
+    assert_eq!(slot.as_bytes(), Q_SHELL_ESCAPED_NEXT_3_9_ADDITIONS);
 }
 
 #[test]
@@ -1291,18 +1304,18 @@ fn format_catalog_checked_parity_partitions_are_exact() {
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.profiles)),
-        std::collections::BTreeMap::from([("all", 135), ("clients", 27), ("none", 17)])
+        std::collections::BTreeMap::from([("all", 136), ("clients", 27), ("none", 16)])
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.empty)),
-        std::collections::BTreeMap::from([("absent", 30), ("available", 28), ("required", 121),])
+        std::collections::BTreeMap::from([("absent", 32), ("available", 28), ("required", 119),])
     );
     assert_eq!(
         count_tokens(rows.iter().map(|row| row.placement)),
         std::collections::BTreeMap::from([
-            ("catalog-only", 68),
+            ("catalog-only", 67),
             ("client-info", 22),
-            ("pane-info", 69),
+            ("pane-info", 70),
             ("session-info", 9),
             ("window-info", 11),
         ])
@@ -1331,11 +1344,11 @@ fn format_catalog_checked_parity_partitions_are_exact() {
             ("client", 27),
             ("command", 3),
             ("config", 1),
-            ("copy-mode", 10),
+            ("copy-mode", 9),
             ("format-type", 3),
             ("list-row", 1),
             ("none", 9),
-            ("pane", 70),
+            ("pane", 71),
             ("session", 22),
             ("window", 11),
             ("window-link", 19),
@@ -1457,13 +1470,13 @@ fn format_catalog_info_orders_and_supplements_are_exact() {
 #[test]
 fn format_catalog_profile_plans_are_baseline_first_and_exact_once() {
     let versions = [
-        (b"tmux 3.2a\n".as_slice(), [9, 11, 54, 20]),
-        (b"tmux 3.3\n".as_slice(), [9, 11, 57, 22]),
-        (b"tmux 3.6\n".as_slice(), [9, 11, 58, 22]),
-        (b"tmux 3.7\n".as_slice(), [9, 11, 69, 22]),
-        (b"tmux 3.8\n".as_slice(), [9, 11, 69, 22]),
-        (b"tmux master\n".as_slice(), [9, 11, 54, 20]),
-        (b"tmux next-3.8\n".as_slice(), [9, 11, 54, 20]),
+        (b"tmux 3.2a\n".as_slice(), [9, 11, 55, 20]),
+        (b"tmux 3.3\n".as_slice(), [9, 11, 58, 22]),
+        (b"tmux 3.6\n".as_slice(), [9, 11, 59, 22]),
+        (b"tmux 3.7\n".as_slice(), [9, 11, 70, 22]),
+        (b"tmux 3.8\n".as_slice(), [9, 11, 70, 22]),
+        (b"tmux master\n".as_slice(), [9, 11, 55, 20]),
+        (b"tmux next-3.8\n".as_slice(), [9, 11, 55, 20]),
     ];
     let profiles = [
         (ListProfile::Sessions, SESSION_INFO_DESCRIPTORS),
@@ -1846,22 +1859,30 @@ async fn real_tmux_compat_format_q_matches_versioned_adversarial_option_transpor
         .await
         .expect("tmux capabilities are detected")
         .tmux_version();
+    // A numbered release's wire is frozen forever, so its exact bytes are
+    // worth pinning; a development identifier's is not -- its escape set
+    // can still widen, so only the decode claim below is asserted for it.
+    let frozen = version.release().is_some();
     match TransportDialect::for_version(version) {
         TransportDialect::Vis => {
-            assert_eq!(result.stdout(), EXPECTED_VIS_STDOUT);
+            if frozen {
+                assert_eq!(result.stdout(), EXPECTED_VIS_STDOUT);
+            }
             // The visual encoding makes the transport valid UTF-8 even
             // though the underlying value is not.
             assert!(result.stdout_utf8().is_ok());
         }
         TransportDialect::RawQ => {
-            assert_eq!(result.stdout(), EXPECTED_RAW_STDOUT);
+            if frozen {
+                assert_eq!(result.stdout(), EXPECTED_RAW_STDOUT);
+            }
             assert!(result.stdout_utf8().is_err());
         }
     }
 
-    // The decoded value is the same on every dialect. This is the claim
-    // the crate makes to callers, so it is asserted on the live transport
-    // rather than only on the raw-q lane.
+    // The decoded value is the same on every dialect and every release,
+    // frozen or not. This is the claim the crate makes to callers, so it is
+    // the one assertion this test never conditions away.
     let versioned = FormatPlan::for_codec_test_at(vec![&RAW_FORMAT_BYTES], version)
         .ok()
         .expect("a plan exists for the detected version");

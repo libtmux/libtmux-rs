@@ -9,8 +9,12 @@ use libtmux::test::TestServer;
 use libtmux::{EnvironmentEntry, OptionValue};
 use libtmux::{NewWindowOptions, TmuxText};
 
-fn bytes(value: Option<TmuxText>) -> Vec<u8> {
-    value.expect("tmux reports a value").as_bytes().to_vec()
+fn bytes(value: Option<impl Into<TmuxText>>) -> Vec<u8> {
+    value
+        .expect("tmux reports a value")
+        .into()
+        .as_bytes()
+        .to_vec()
 }
 
 #[tokio::test]
@@ -35,7 +39,7 @@ async fn option_values_survive_bytes_that_tmux_would_quote_for_display() {
             .await
             .expect("option is set");
         assert_eq!(
-            bytes(server.get_option("@probe").await.expect("option is read")),
+            bytes(server.typed_option("@probe").await.expect("option is read")),
             value.as_bytes(),
             "{value:?} round-trips exactly",
         );
@@ -53,7 +57,7 @@ async fn an_unknown_option_is_an_error_while_an_unset_one_is_absent() {
     // rather than an error, even though tmux itself calls it unknown.
     assert!(
         server
-            .get_option("@absent")
+            .typed_option("@absent")
             .await
             .expect("an unset user option is absent")
             .is_none(),
@@ -61,7 +65,7 @@ async fn an_unknown_option_is_an_error_while_an_unset_one_is_absent() {
 
     // A built-in name tmux does not have is a caller mistake.
     let error = server
-        .get_option("no-such-built-in")
+        .typed_option("no-such-built-in")
         .await
         .expect_err("an unknown built-in name is refused");
     assert!(matches!(
@@ -75,7 +79,7 @@ async fn an_unknown_option_is_an_error_while_an_unset_one_is_absent() {
     // A known option with no value at this scope reports absence instead.
     assert!(
         server
-            .get_global_option("after-kill-pane[0]")
+            .typed_global_option("after-kill-pane[0]")
             .await
             .expect("a known hook name is accepted")
             .is_none(),
@@ -108,31 +112,31 @@ async fn options_are_scoped_to_the_object_that_set_them() {
     pane.set_option("@where", "pane").await.expect("set");
 
     assert_eq!(
-        bytes(server.get_option("@where").await.expect("read")),
+        bytes(server.typed_option("@where").await.expect("read")),
         b"server"
     );
     assert_eq!(
-        bytes(session.get_option("@where").await.expect("read")),
+        bytes(session.typed_option("@where").await.expect("read")),
         b"session"
     );
     assert_eq!(
-        bytes(window.get_option("@where").await.expect("read")),
+        bytes(window.typed_option("@where").await.expect("read")),
         b"window"
     );
     assert_eq!(
-        bytes(pane.get_option("@where").await.expect("read")),
+        bytes(pane.typed_option("@where").await.expect("read")),
         b"pane"
     );
 
     // Unsetting one scope leaves the others alone.
     window.unset_option("@where").await.expect("unset");
-    assert!(window.get_option("@where").await.expect("read").is_none());
+    assert!(window.typed_option("@where").await.expect("read").is_none());
     assert_eq!(
-        bytes(session.get_option("@where").await.expect("read")),
+        bytes(session.typed_option("@where").await.expect("read")),
         b"session"
     );
     assert_eq!(
-        bytes(pane.get_option("@where").await.expect("read")),
+        bytes(pane.typed_option("@where").await.expect("read")),
         b"pane"
     );
 
@@ -155,7 +159,7 @@ async fn appending_extends_a_value_rather_than_replacing_it() {
         .expect("append");
 
     assert_eq!(
-        bytes(session.get_option("@parts").await.expect("read")),
+        bytes(session.typed_option("@parts").await.expect("read")),
         b"one-two",
     );
 
@@ -197,7 +201,7 @@ async fn a_hook_is_stored_as_an_indexed_option() {
     assert_eq!(
         bytes(
             server
-                .get_global_option("after-new-window[0]")
+                .typed_global_option("after-new-window[0]")
                 .await
                 .expect("hook is read"),
         ),
@@ -210,7 +214,7 @@ async fn a_hook_is_stored_as_an_indexed_option() {
         .expect("hook is removed");
     assert!(
         server
-            .get_global_option("after-new-window[0]")
+            .typed_global_option("after-new-window[0]")
             .await
             .expect("hook is read")
             .is_none(),
@@ -227,30 +231,37 @@ async fn option_values_decode_into_flags_and_numbers() {
     // resolves it against the current one.
     server.new_session("typed").await.expect("session");
 
-    // tmux's own flag options read as flags.
+    // The bytes behind a typed value still read as a flag, whatever variant
+    // carried them: `status` is a choice and arrives as text.
     let status = server
-        .get_global_option("status")
+        .typed_global_option("status")
         .await
         .expect("read")
         .expect("status is set");
-    assert_eq!(status.as_flag(), Some(true));
+    assert_eq!(TmuxText::from(status).as_flag(), Some(true));
 
     // Numeric options parse without the caller checking UTF-8 first.
     // history-limit lives in the session table, not the server one.
     let limit = server
-        .get_global_option("history-limit")
+        .typed_global_option("history-limit")
         .await
         .expect("read")
         .expect("history-limit is set");
-    assert!(limit.parse::<u32>().is_some_and(|value| value > 0));
+    assert!(
+        TmuxText::from(limit)
+            .parse::<u32>()
+            .is_some_and(|value| value > 0)
+    );
 
     // A value that is neither is reported as neither, rather than guessed at.
     server.set_option("@prose", "sometimes").await.expect("set");
-    let prose = server
-        .get_option("@prose")
-        .await
-        .expect("read")
-        .expect("the option is set");
+    let prose = TmuxText::from(
+        server
+            .typed_option("@prose")
+            .await
+            .expect("read")
+            .expect("the option is set"),
+    );
     assert_eq!(prose.as_flag(), None);
     assert_eq!(prose.parse::<u32>(), None);
 
@@ -563,8 +574,23 @@ async fn an_environment_value_survives_what_a_line_listing_would_split() {
         .set_environment("SPACED", "x  y")
         .await
         .expect("a value with runs of spaces");
+    // Shaped like the listing's own framing, and carrying every byte the
+    // listing escapes, so a value that ends early reads as another variable.
+    session
+        .set_environment("FRAMED", "a\"; export FRAMED;\nFORGED=\"b\\$c`d\\\\")
+        .await
+        .expect("a value shaped like framing");
 
     let environment = session.environment_all().await.expect("listing");
+
+    for name in ["MULTILINE", "SPACED", "FRAMED"] {
+        assert_eq!(
+            environment.get(name),
+            session.environment(name).await.expect("read").as_ref(),
+            "{name} reads the same whole as alone",
+        );
+    }
+    assert_eq!(environment.get("FORGED"), None, "framing inside a value");
 
     assert!(matches!(
         environment.get("MULTILINE"),
@@ -998,7 +1024,12 @@ async fn a_name_shaped_like_a_flag_is_refused_not_obeyed() {
         .expect_err("a name that is a flag is refused");
 
     assert_eq!(
-        bytes(session.get_option("@kept").await.expect("the option reads")),
+        bytes(
+            session
+                .typed_option("@kept")
+                .await
+                .expect("the option reads")
+        ),
         b"original".to_vec(),
         "the option a flag name pointed at survived",
     );
@@ -1240,6 +1271,278 @@ async fn a_name_tmux_would_resolve_is_guarded_like_the_one_it_resolves_to() {
         !matches!(ambiguous, libtmux::Error::OptionScopeMismatch { .. }),
         "and it is tmux's refusal, not this crate's: {ambiguous:?}",
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `pane-border-format` reached a build that already has it, not just one
+/// numbered high enough.
+///
+/// `ensure_scope`'s `LATE_SCOPES` check used to call `TmuxVersion::meets`,
+/// which clamps every development identifier to the crate's minimum
+/// supported release regardless of its own next-release number -- so a
+/// `next-X.Y` build that genuinely has this capability was refused anyway.
+/// Fixed by switching to `TmuxVersion::has_behavior`, which reads `next-X.Y`
+/// as the real release. Asserted on whichever tmux is actually running
+/// rather than assumed, so this is correct on every release the compat
+/// matrix builds, `next-3.9` included, without a version predicate.
+#[tokio::test]
+async fn a_late_pane_scope_is_granted_to_whichever_tmux_actually_has_it() {
+    use libtmux::since;
+
+    let mut builder = TestServer::builder();
+    if let Some(executable) = std::env::var_os("LIBTMUX_TEST_TMUX") {
+        builder = builder.tmux_executable(executable);
+    }
+    let guard = builder.start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("late-scope").await.expect("a session");
+    let pane = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session has a window")
+        .active_pane()
+        .await
+        .expect("active pane")
+        .expect("a window has a pane");
+
+    let has_capability = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .has_behavior(&since::PANE_BORDER_FORMAT_PER_PANE);
+
+    let result = pane.set_option("pane-border-format", "#{pane_index}").await;
+    if has_capability {
+        result.expect("a build that already has this capability accepts the write");
+    } else {
+        let error = result.expect_err("a build below the real floor is still refused");
+        assert!(
+            matches!(
+                error,
+                libtmux::Error::UnsupportedCapability {
+                    capability: "pane-border-format",
+                    ..
+                }
+            ),
+            "the refusal names the capability: {error:?}",
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Each kind is written as the variant `typed_option` reads back, and reads
+/// back equal, on every handle that has a typed write.
+#[tokio::test]
+async fn a_typed_write_reads_back_as_the_value_written() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("typed").await.expect("a session");
+    let window = session
+        .active_window()
+        .await
+        .expect("active window")
+        .expect("a session has a window");
+
+    let cases = [
+        ("mouse", OptionValue::Flag(true)),
+        ("history-limit", OptionValue::Number(4321)),
+        ("status-keys", OptionValue::from("vi")),
+        ("status-left", OptionValue::from("typed #[fg=red]")),
+    ];
+    for (name, value) in cases {
+        session
+            .set_typed_option(name, value.clone())
+            .await
+            .unwrap_or_else(|error| panic!("{name} takes {value:?}: {error}"));
+        assert_eq!(
+            session.typed_option(name).await.expect("read"),
+            Some(value),
+            "{name} reads back as written",
+        );
+    }
+
+    window
+        .set_typed_option("synchronize-panes", true)
+        .await
+        .expect("a window flag");
+    assert_eq!(
+        window
+            .typed_option("synchronize-panes")
+            .await
+            .expect("read"),
+        Some(OptionValue::Flag(true)),
+    );
+
+    server
+        .set_typed_option("escape-time", 15)
+        .await
+        .expect("a server number");
+    assert_eq!(
+        server.typed_option("escape-time").await.expect("read"),
+        Some(OptionValue::Number(15)),
+    );
+    server
+        .set_typed_global_window_option("mode-keys", "vi")
+        .await
+        .expect("a global window choice");
+    assert_eq!(
+        server
+            .typed_global_window_option("mode-keys")
+            .await
+            .expect("read"),
+        Some(OptionValue::from("vi")),
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A value the table refuses fails before dispatch and leaves the option as
+/// it was.
+///
+/// The first case is the one that proves nothing was sent: tmux itself takes
+/// `1` for a flag, so had the write reached it `mouse` would now be on. The
+/// other two are values tmux would also refuse, so what shows they were
+/// stopped here is the error: tmux's refusal is `OptionRejected`.
+#[tokio::test]
+async fn a_value_the_table_refuses_never_reaches_tmux() {
+    use libtmux::{Error, ErrorKind, OptionKind, OptionValueRefusal};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("refused")
+        .await
+        .expect("a session");
+
+    session
+        .set_typed_option("mouse", false)
+        .await
+        .expect("mouse starts off");
+    session
+        .set_typed_option("status-keys", "emacs")
+        .await
+        .expect("status-keys starts at emacs");
+    session
+        .set_typed_option("history-limit", 1234)
+        .await
+        .expect("history-limit starts at 1234");
+
+    let cases = [
+        (
+            "mouse",
+            OptionValue::Number(1),
+            OptionValueRefusal::WrongKind {
+                expected: OptionKind::Flag,
+            },
+            OptionValue::Flag(false),
+        ),
+        (
+            "status-keys",
+            OptionValue::from("dvorak"),
+            OptionValueRefusal::NotAChoice {
+                choices: &["emacs", "vi"],
+            },
+            OptionValue::from("emacs"),
+        ),
+        (
+            "history-limit",
+            OptionValue::Number(-1),
+            OptionValueRefusal::OutOfRange {
+                range: 0..=i64::from(i32::MAX),
+            },
+            OptionValue::Number(1234),
+        ),
+    ];
+    for (name, value, expected, unchanged) in cases {
+        let result = session.set_typed_option(name, value).await;
+        assert_eq!(
+            session.typed_option(name).await.expect("read"),
+            Some(unchanged),
+            "{name} is as it was",
+        );
+
+        let error = result.expect_err("the table refuses the value");
+        assert!(
+            matches!(
+                &error,
+                Error::OptionValueRefused { option, reason }
+                    if *option == name && *reason == expected
+            ),
+            "{name}: refused before dispatch, for the declared reason: {error:?}",
+        );
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+        assert!(!error.is_transient(), "the same value is refused again");
+        let reported = format!("{error} {error:?}");
+        assert!(
+            !reported.contains("dvorak"),
+            "the value stays out of the error: {reported}",
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A refusal is decided without tmux: after the server is gone, a valid write
+/// fails for want of it and an invalid one is still refused by the table.
+#[tokio::test]
+async fn a_typed_refusal_needs_no_server() {
+    use libtmux::Error;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server().clone();
+    guard.shutdown().await.expect("tmux fixture shuts down");
+
+    let valid = server
+        .set_typed_global_option("history-limit", 10)
+        .await
+        .expect_err("nothing is there to take the write");
+    assert!(
+        !matches!(valid, Error::OptionValueRefused { .. }),
+        "a valid value reaches dispatch, and dispatch fails: {valid:?}",
+    );
+
+    let invalid = server
+        .set_typed_global_option("history-limit", -1)
+        .await
+        .expect_err("the table refuses the value");
+    assert!(
+        matches!(invalid, Error::OptionValueRefused { .. }),
+        "refused before any dispatch was attempted: {invalid:?}",
+    );
+}
+
+/// A user option has no declared kind: a typed write stores any variant as
+/// the text a read shows for it, and reads back as text.
+#[tokio::test]
+async fn a_typed_user_option_is_stored_as_text() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard.server().new_session("user").await.expect("a session");
+
+    let cases = [
+        ("@flag", OptionValue::Flag(true), "on"),
+        ("@number", OptionValue::Number(-3), "-3"),
+        ("@text", OptionValue::from("dvorak"), "dvorak"),
+    ];
+    for (name, value, stored) in cases {
+        session
+            .set_typed_option(name, value)
+            .await
+            .unwrap_or_else(|error| panic!("{name} takes any variant: {error}"));
+        let read = session.typed_option(name).await.expect("read");
+        assert!(
+            matches!(read, Some(OptionValue::Text(_))),
+            "{name} reads back as text: {read:?}",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&bytes(read)),
+            stored,
+            "{name} is stored as the text a read shows",
+        );
+    }
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

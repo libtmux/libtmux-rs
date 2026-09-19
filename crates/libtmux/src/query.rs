@@ -1,4 +1,4 @@
-//! Predicates and cardinality helpers for borrowed iterators.
+//! Predicates and cardinality helpers for native iterators.
 //!
 //! Start with a replayable collection, borrow it with `.iter()`, and keep
 //! inline closures on native [`Iterator::filter`]. Use
@@ -25,7 +25,9 @@
 //!
 //! [`QueryIteratorExt::exactly_one`] distinguishes zero from multiple items;
 //! [`QueryIteratorExt::one_or_none`] permits zero but rejects multiple items.
-//! Both return borrowed values and pull at most two items.
+//! Both preserve the iterator's item type and pull at most two items.
+//! To take ownership, use `.into_iter()` with
+//! [`QueryIteratorExt::matching_owned`]; selected values need not be `Clone`.
 //!
 //! Portable expressions are owned, inert local values. With `derive`, typed
 //! handles can be generated for downstream data without exposing the hidden
@@ -38,7 +40,6 @@
 //!
 //! #[derive(libtmux::Filterable)]
 //! #[filterable(target = "task")]
-//! # #[filterable(crate = "libtmux")]
 //! struct Task {
 //!     name: String,
 //!     done: bool,
@@ -389,6 +390,8 @@ use matching::{
 mod schema;
 pub use schema::FilterSchema;
 
+pub use crate::snapshot::ReadField;
+
 /// A predicate that evaluates a borrowed candidate.
 ///
 /// Functions and closures with the same signature implement this trait.
@@ -483,7 +486,11 @@ impl fmt::Display for MultipleItemsError {
 
 impl std::error::Error for MultipleItemsError {}
 
-/// Cardinality and named-predicate operations for borrowed iterators.
+/// Cardinality and named-predicate operations for native iterators.
+///
+/// [`Self::matching`] borrows candidates from a borrowed iterator;
+/// [`Self::matching_owned`] moves each selected item from its iterator.
+/// Cardinality methods preserve the iterator's item type in either case.
 ///
 /// # Examples
 ///
@@ -494,7 +501,7 @@ impl std::error::Error for MultipleItemsError {}
 /// assert_eq!(values.iter().exactly_one(), Err(libtmux::query::ExactlyOneError::MultipleItems));
 /// ```
 #[allow(clippy::module_name_repetitions)]
-pub trait QueryIteratorExt<'a, T: 'a>: Iterator<Item = &'a T> + Sized {
+pub trait QueryIteratorExt: Iterator + Sized {
     /// Lazily yield candidates accepted by `matcher`.
     ///
     /// # Examples
@@ -514,8 +521,38 @@ pub trait QueryIteratorExt<'a, T: 'a>: Iterator<Item = &'a T> + Sized {
     /// let selected = values.iter().matching(IsEven).copied().collect::<Vec<_>>();
     /// assert_eq!(selected, [2, 4]);
     /// ```
-    fn matching<M: Matcher<T>>(self, matcher: M) -> impl Iterator<Item = &'a T> {
+    fn matching<'a, T: 'a, M: Matcher<T>>(self, matcher: M) -> impl Iterator<Item = &'a T>
+    where
+        Self: Iterator<Item = &'a T>,
+    {
         self.filter(move |candidate| matcher.matches(*candidate))
+    }
+
+    /// Lazily move items accepted by `matcher`, without cloning them.
+    ///
+    /// The matcher borrows each item for the comparison. Use
+    /// [`Self::matching`] with `iter()` to retain a borrow of each item.
+    /// Ordinary [`Iterator::filter`] also accepts closures and infers their
+    /// argument types; closures passed here need an explicit argument type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::query::QueryIteratorExt;
+    ///
+    /// let names = vec![String::from("build"), String::from("test")];
+    /// let selected = names
+    ///     .into_iter()
+    ///     .matching_owned(|name: &String| name.starts_with('b'))
+    ///     .exactly_one()?;
+    /// assert_eq!(selected, "build");
+    /// # Ok::<(), libtmux::query::ExactlyOneError>(())
+    /// ```
+    fn matching_owned<M: Matcher<Self::Item>>(
+        self,
+        matcher: M,
+    ) -> impl Iterator<Item = Self::Item> {
+        self.filter(move |candidate| matcher.matches(candidate))
     }
 
     /// Return the only item, or an error for zero or multiple items.
@@ -535,7 +572,7 @@ pub trait QueryIteratorExt<'a, T: 'a>: Iterator<Item = &'a T> + Sized {
     /// let values = [7];
     /// assert_eq!(values.iter().exactly_one(), Ok(&values[0]));
     /// ```
-    fn exactly_one(mut self) -> Result<&'a T, ExactlyOneError> {
+    fn exactly_one(mut self) -> Result<Self::Item, ExactlyOneError> {
         let Some(item) = self.next() else {
             return Err(ExactlyOneError::NoItems);
         };
@@ -566,7 +603,7 @@ pub trait QueryIteratorExt<'a, T: 'a>: Iterator<Item = &'a T> + Sized {
     /// let values = [7];
     /// assert_eq!(values.iter().one_or_none(), Ok(Some(&values[0])));
     /// ```
-    fn one_or_none(mut self) -> Result<Option<&'a T>, MultipleItemsError> {
+    fn one_or_none(mut self) -> Result<Option<Self::Item>, MultipleItemsError> {
         let item = self.next();
         if item.is_some() && self.next().is_some() {
             Err(MultipleItemsError)
@@ -576,7 +613,7 @@ pub trait QueryIteratorExt<'a, T: 'a>: Iterator<Item = &'a T> + Sized {
     }
 }
 
-impl<'a, T: 'a, I> QueryIteratorExt<'a, T> for I where I: Iterator<Item = &'a T> + Sized {}
+impl<I: Iterator> QueryIteratorExt for I {}
 
 /// The category of an invalid portable filter expression.
 ///
@@ -1262,6 +1299,26 @@ mod tests {
 
     fn predicate(data: PredicateData) -> __private::Predicate {
         __private::Predicate::new(TEST_FIELD, data)
+    }
+
+    /// The derive expanding inside the library itself, with no `crate`
+    /// override: `proc-macro-crate` reports `Itself` here too.
+    #[cfg(feature = "derive")]
+    #[test]
+    fn the_derive_resolves_the_crate_inside_the_library() {
+        use super::{Filterable as _, QueryIteratorExt as _};
+
+        #[derive(crate::Filterable)]
+        #[filterable(target = "inside")]
+        struct Inside {
+            name: String,
+        }
+
+        let values = [Inside {
+            name: "kept".into(),
+        }];
+        let fields = Inside::filter_fields();
+        assert_eq!(values.iter().matching(&fields.name.eq("kept")).count(), 1);
     }
 
     #[cfg(feature = "serde")]

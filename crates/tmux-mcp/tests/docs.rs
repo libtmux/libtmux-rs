@@ -101,10 +101,12 @@ fn append_tools(output: &mut String) -> TestResult {
             "- May return untrusted content: `{}`",
             row["mayReturnUntrustedContent"].as_bool().unwrap()
         )?;
+        let mut hints = serde_json::to_value(tool.annotations.as_ref().expect("annotations"))?;
+        hints.as_object_mut().expect("hint object").remove("title");
         writeln!(
             output,
             "- Whole-call annotations: `{}`",
-            serde_json::to_string(&row["annotations"])?
+            serde_json::to_string(&hints)?
         )?;
         writeln!(
             output,

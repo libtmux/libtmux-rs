@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use libtmux::{Command, CommandChain, Error, NewSessionOptions};
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::{
@@ -12,12 +11,19 @@ use crate::{
     SendKeysArgs, Sent, SessionArgs, SessionView, Size, TmuxTools, WindowArgs, Windows,
 };
 
-use super::error::{EffectBoundary, bad_input, tmux_error, vanished};
+use super::error::{EffectBoundary, ToolError, bad_input, tmux_error, vanished};
 use super::lossy;
 use super::pane_input::{MissingSource, PaneInputReach, active_run_error};
 
 /// Numbers temporary paste buffers so concurrent calls cannot share one.
 static PASTE_BUFFER_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Keys that pass an active run's reservation when sent alone.
+///
+/// Compared exactly: any other spelling is ordinary input and waits for the
+/// run. The run frame survives both, so the command's completion is still
+/// proved and the reservation released.
+const INTERRUPT_KEYS: [&str; 2] = ["C-c", "C-\\"];
 
 fn literal_input(pane: &str, text: String) -> Command {
     Command::new("send-keys")
@@ -64,15 +70,15 @@ async fn delete_private_paste_buffer(server: &libtmux::Server, name: &str) -> Re
     server.delete_buffer(name).await
 }
 
-fn cleanup_after_refusal(primary: ErrorData, cleanup: Result<(), Error>) -> ErrorData {
+fn cleanup_after_refusal(primary: ToolError, cleanup: Result<(), Error>) -> ToolError {
     match cleanup {
         Ok(()) => primary,
         Err(cleanup) => {
+            let message = primary.into_error_data().message;
             let mut boundary = EffectBoundary::new("paste_text");
             boundary.mark();
             boundary.local(format!(
-                "{}; temporary paste buffer cleanup failed: {cleanup}",
-                primary.message
+                "{message}; temporary paste buffer cleanup failed: {cleanup}"
             ))
         }
     }
@@ -83,7 +89,7 @@ impl TmuxTools {
     pub(super) async fn protect_window_caller(
         &self,
         window: &libtmux::Window,
-    ) -> Result<(), ErrorData> {
+    ) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
@@ -95,7 +101,7 @@ impl TmuxTools {
     }
 
     /// Refuse to destroy a session that currently contains the caller pane.
-    async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ErrorData> {
+    async fn protect_session_caller(&self, session: &libtmux::Session) -> Result<(), ToolError> {
         let Some(own) = self.protected_pane().await? else {
             return Ok(());
         };
@@ -114,49 +120,79 @@ impl TmuxTools {
             keys,
             enter,
         }: SendKeysArgs,
-    ) -> Result<Json<Sent>, ErrorData> {
+    ) -> Result<Json<Sent>, ToolError> {
         let keys = keys.unwrap_or_default();
         if text.is_none() && keys.is_empty() && !enter {
             return Err(bad_input("send_keys needs text, keys, or enter".to_owned()));
         }
+        let interrupt = text.is_none()
+            && !enter
+            && keys
+                .iter()
+                .all(|key| INTERRUPT_KEYS.contains(&key.as_str()));
 
-        let initial = self
-            .preflight_pane_input(
-                &pane,
-                PaneInputReach::Synchronized,
-                MissingSource::CallerInput,
-            )
-            .await?;
-        let reservation = initial
-            .reserve()
-            .ok_or_else(|| active_run_error(initial.target.id().as_ref()))?;
-        let plan = self
-            .preflight_reserved_pane_input(
-                &pane,
-                PaneInputReach::Synchronized,
-                MissingSource::CallerInput,
-                &reservation,
-            )
-            .await?;
-        if !initial.same_authority(&plan) || !plan.owns(&reservation) {
+        let reach = PaneInputReach::Synchronized;
+        let missing = MissingSource::CallerInput;
+        let (initial, reservation, plan) = if interrupt {
+            let initial = self.preflight_interrupt(&pane, reach, missing).await?;
+            let plan = self.preflight_interrupt(&pane, reach, missing).await?;
+            (initial, None, plan)
+        } else {
+            let initial = self.preflight_pane_input(&pane, reach, missing).await?;
+            let reservation = initial
+                .reserve()
+                .ok_or_else(|| active_run_error(initial.target.id().as_ref()))?;
+            let plan = self
+                .preflight_reserved_pane_input(&pane, reach, missing, &reservation)
+                .await?;
+            (initial, Some(reservation), plan)
+        };
+        if !initial.same_authority(&plan)
+            || reservation
+                .as_ref()
+                .is_some_and(|reservation| !plan.owns(reservation))
+        {
             return Err(bad_input(format!(
                 "pane {pane} changed its configured input authority before send dispatch"
             )));
         }
+
+        // Computed before dispatch: a line this call submits is recorded as
+        // a fresh echo immediately, because the terminal's echo can reach a
+        // waiting `wait_for_text` client before this call returns. The
+        // pane's line itself is not published until dispatch is confirmed
+        // below, so a concurrent reader never sees it reported empty while
+        // tmux is still typing it for real.
+        let mut tracked_keys = keys.clone();
+        if enter {
+            tracked_keys.push("Enter".to_owned());
+        }
+        let echo_update = self.echoes.apply(
+            plan.generation,
+            &plan.endpoint,
+            &plan.configured,
+            text.as_deref(),
+            &tracked_keys,
+        );
+
         let dispatch = input_dispatch(plan.target.id().as_ref(), text, keys, enter)
             .ok_or_else(|| bad_input("send_keys needs text, keys, or enter".to_owned()))?;
         let mut boundary = EffectBoundary::new("send_keys");
         if dispatch.command_count() > 1 {
             boundary.mark();
         }
-        let result = self
-            .server
-            .chain(dispatch)
-            .await
-            .map_err(|error| boundary.error(error))?;
+        let result = match self.server.chain(dispatch).await {
+            Ok(result) => result,
+            Err(error) => {
+                self.echoes.abandon(echo_update);
+                return Err(boundary.error(error));
+            }
+        };
         if let Some(error) = result.refusal_for("send-keys") {
+            self.echoes.abandon(echo_update);
             return Err(boundary.error(error));
         }
+        self.echoes.commit(echo_update);
 
         Ok(Json(Sent {
             pane: plan.target.id().to_string(),
@@ -169,16 +205,16 @@ impl TmuxTools {
 impl TmuxTools {
     /// Kill one window.
     #[tool(
-        description = "Kill a window, closing it in every session that links it",
+        description = "Kill a window, closing it in every session that links it.",
         title = "Kill Window",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn kill_window(
         &self,
         Parameters(WindowArgs { window }): Parameters<WindowArgs>,
-    ) -> Result<Json<Killed>, ErrorData> {
+    ) -> Result<Json<Killed>, ToolError> {
         let window = self.find_window(&window).await?;
         let id = window.id().to_string();
         self.protect_window_caller(&window).await?;
@@ -189,16 +225,16 @@ impl TmuxTools {
 
     /// Kill one pane.
     #[tool(
-        description = "Kill a pane. Killing a window's last pane closes the window",
+        description = "Kill a pane. Killing a window's last pane closes the window.",
         title = "Kill Pane",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn kill_pane(
         &self,
         Parameters(PaneArgs { pane }): Parameters<PaneArgs>,
-    ) -> Result<Json<Killed>, ErrorData> {
+    ) -> Result<Json<Killed>, ToolError> {
         let pane = self.find_pane(&pane).await?;
         let id = pane.id().to_string();
         if self.protected_pane().await? == Some(id.as_str()) {
@@ -211,7 +247,7 @@ impl TmuxTools {
 
     /// Create a detached session.
     #[tool(
-        description = "Create a new detached tmux session",
+        description = "Create a new detached tmux session.",
         title = "Create Session",
         meta = crate::capability_meta!(
             Execute, ConfiguredProcess,
@@ -235,10 +271,10 @@ impl TmuxTools {
             name,
             start_directory,
         }): Parameters<CreateSessionArgs>,
-    ) -> Result<Json<SessionView>, ErrorData> {
-        let mut options = NewSessionOptions::new(libtmux::escape_format(name));
+    ) -> Result<Json<SessionView>, ToolError> {
+        let mut options = NewSessionOptions::new(name);
         if let Some(directory) = start_directory {
-            options = options.start_directory(libtmux::escape_format(directory));
+            options = options.start_directory(directory);
         }
 
         let session = self
@@ -246,27 +282,31 @@ impl TmuxTools {
             .new_session(options)
             .await
             .map_err(|e| tmux_error(&e))?;
+        let foreign_attached = self.foreign_attached_sessions().await;
 
         Ok(Json(SessionView {
             id: session.id().to_string(),
             name: lossy(session.name()),
             windows: session.window_count(),
-            attached: session.is_attached(),
+            attached: foreign_attached.as_ref().map_or_else(
+                || session.is_attached(),
+                |set| set.contains(&session.id().to_string()),
+            ),
         }))
     }
 
     /// Kill a session and everything in it.
     #[tool(
-        description = "Kill a tmux session and everything in it",
+        description = "Kill a tmux session and everything in it.",
         title = "Kill Session",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn kill_session(
         &self,
         Parameters(SessionArgs { session }): Parameters<SessionArgs>,
-    ) -> Result<Json<Killed>, ErrorData> {
+    ) -> Result<Json<Killed>, ToolError> {
         let target = self.find_session(&session).await?;
         let id = target.id().to_string();
         self.protect_session_caller(&target).await?;
@@ -277,7 +317,7 @@ impl TmuxTools {
 
     /// Move one edge of a pane.
     #[tool(
-        description = "Move one edge of a pane by a number of rows or columns",
+        description = "Move one edge of a pane by a number of rows or columns.",
         title = "Resize Pane",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],
@@ -292,7 +332,7 @@ impl TmuxTools {
             direction,
             cells,
         }): Parameters<ResizePaneArgs>,
-    ) -> Result<Json<Size>, ErrorData> {
+    ) -> Result<Json<Size>, ToolError> {
         let direction = crate::schema::resize_direction(&direction).ok_or_else(|| {
             bad_input(format!(
                 "direction must be {}, not {direction}",
@@ -322,9 +362,13 @@ impl TmuxTools {
                        dispatch. Before input, the configured synchronized-pane cohort is \
                        observed; a dead, \
                        input-disabled, mode-owned, terminal-attended, or inherited-caller member \
-                       refuses the whole call. Returned pane IDs describe configured membership, \
-                       not confirmed delivery. The \
-                       observation can race with tmux processing the input.",
+                       refuses the whole call, and so does an active run_shell_command, except \
+                       for keys C-c or C-\\ sent alone, which interrupt it. Returned pane IDs \
+                       describe configured membership, not confirmed delivery. The \
+                       observation can race with tmux processing the input. A submitted line is \
+                       remembered briefly so wait_for_text can discount its own echo; an \
+                       unrecognized key stops that for the pane's current line rather than mask \
+                       it inaccurately.",
         title = "Send Keys To Pane",
         meta = crate::capability_meta!(Execute, PaneInput, [Change], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup],
@@ -336,7 +380,7 @@ impl TmuxTools {
     pub async fn send_keys(
         &self,
         Parameters(args): Parameters<SendKeysArgs>,
-    ) -> Result<Json<Sent>, ErrorData> {
+    ) -> Result<Json<Sent>, ToolError> {
         self.send_keys_one(args).await
     }
 
@@ -355,7 +399,7 @@ impl TmuxTools {
     pub async fn select_pane(
         &self,
         Parameters(SelectPaneArgs { pane, direction }): Parameters<SelectPaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let target = self.find_pane(&pane).await?;
 
         // `next` and `previous` are resolved here rather than with a tmux
@@ -442,7 +486,7 @@ impl TmuxTools {
     pub async fn select_window(
         &self,
         Parameters(SelectWindowArgs { window, direction }): Parameters<SelectWindowArgs>,
-    ) -> Result<Json<Windows>, ErrorData> {
+    ) -> Result<Json<Windows>, ToolError> {
         let mut target = self.find_window(&window).await?;
         let mut boundary = EffectBoundary::new("select_window");
 
@@ -512,31 +556,22 @@ impl TmuxTools {
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup],
             "layout" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn select_layout(
         &self,
         Parameters(SelectLayoutArgs { window, layout }): Parameters<SelectLayoutArgs>,
-    ) -> Result<Json<Layout>, ErrorData> {
-        let target = self.find_window(&window).await?;
-        let result = self
-            .server
-            .cmd(
-                Command::new("select-layout")
-                    .arg("-t")
-                    .arg(target.id().to_string())
-                    // `select-layout` has flags of its own, and a layout is
-                    // the caller's text. Without the separator, asking for
-                    // `-E` spread the panes evenly and reported `-E` back as
-                    // the layout that had been applied.
-                    .arg("--")
-                    .arg(layout.clone()),
-            )
+    ) -> Result<Json<Layout>, ToolError> {
+        let mut target = self.find_window(&window).await?;
+        // Through `Window::select_layout` rather than a raw `select-layout`
+        // dispatch: that is where the pre-dispatch refusal lives (3.3 and
+        // 3.3a exit on a layout value `select-layout` cannot parse, taking
+        // every session on the socket with them), and a second, unguarded
+        // path here bypassed it.
+        target
+            .select_layout(layout.clone())
             .await
             .map_err(|e| tmux_error(&e))?;
-        if let Some(error) = result.refusal_for("select-layout") {
-            return Err(tmux_error(&error));
-        }
 
         Ok(Json(Layout {
             window: target.id().to_string(),
@@ -554,12 +589,12 @@ impl TmuxTools {
         title = "Clear Pane History",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn clear_pane(
         &self,
         Parameters(PaneArgs { pane }): Parameters<PaneArgs>,
-    ) -> Result<Json<PaneChanged>, ErrorData> {
+    ) -> Result<Json<PaneChanged>, ToolError> {
         let target = self.find_pane(&pane).await?;
         target.clear_history().await.map_err(|e| tmux_error(&e))?;
 
@@ -590,7 +625,7 @@ impl TmuxTools {
     pub async fn paste_text(
         &self,
         Parameters(PasteTextArgs { pane, text, enter }): Parameters<PasteTextArgs>,
-    ) -> Result<Json<Pasted>, ErrorData> {
+    ) -> Result<Json<Pasted>, ToolError> {
         let initial = self
             .preflight_pane_input(
                 &pane,
@@ -681,7 +716,7 @@ impl TmuxTools {
     pub async fn signal_channel(
         &self,
         Parameters(ChannelArgs { channel, .. }): Parameters<ChannelArgs>,
-    ) -> Result<Json<ChannelSignal>, ErrorData> {
+    ) -> Result<Json<ChannelSignal>, ToolError> {
         self.server
             .signal_channel(&channel)
             .await
@@ -806,6 +841,7 @@ mod tests {
         let Err(error) = result else {
             panic!("Enter reached tmux but its held reply did not fail");
         };
+        let error = error.into_error_data();
         assert_eq!(error.code, ErrorCode::INTERNAL_ERROR);
         let detail = error.data.expect("the error carries detail");
         assert_eq!(detail["kind"], "partial_effect", "{detail}");

@@ -395,6 +395,29 @@ impl Drop for PersistentRegistration {
     }
 }
 
+/// Removes this control client's pid from the shared owned set on drop.
+///
+/// Lives on [`PersistentChild`] rather than on either half a caller splits
+/// it into ([`crate::control::ControlSender`], [`crate::control::ControlEvents`]):
+/// either can be dropped while the other keeps the connection, and the
+/// underlying `Child` -- what this pid actually names -- lives exactly as
+/// long as `PersistentChild` does.
+#[cfg(feature = "control-mode")]
+struct ControlClientPidGuard {
+    pids: Arc<Mutex<std::collections::HashSet<u32>>>,
+    pid: u32,
+}
+
+#[cfg(feature = "control-mode")]
+impl Drop for ControlClientPidGuard {
+    fn drop(&mut self) {
+        self.pids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.pid);
+    }
+}
+
 #[cfg(feature = "control-mode")]
 pub(crate) struct PersistentChild {
     // The group guard must drop while the unreaped leader still anchors its PGID.
@@ -405,6 +428,10 @@ pub(crate) struct PersistentChild {
     command: CommandSummary,
     // Admission remains active until process cleanup has finished.
     _registration: PersistentRegistration,
+    // Removes this pid from the owned set once dropped; its ordering
+    // relative to the other fields does not matter, since nothing here reads
+    // it back.
+    _pid_guard: Option<ControlClientPidGuard>,
 }
 
 #[cfg(feature = "control-mode")]
@@ -413,6 +440,7 @@ impl PersistentChild {
         launch: &LaunchContext,
         request: &CommandRequest,
         reservation: PersistentReservation,
+        control_client_pids: Arc<Mutex<std::collections::HashSet<u32>>>,
     ) -> Result<Self, Error> {
         validate_request(launch, request)?;
         let mut command = launch.command(request.argv());
@@ -420,8 +448,37 @@ impl PersistentChild {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let child = command.spawn().map_err(Error::control_mode)?;
+        let child = command.spawn().map_err(|source| {
+            // The same test the subprocess path applies, so a missing tmux is
+            // `ExecutableNotFound` whichever path meets it first. Anything else
+            // stays a control-mode failure.
+            let executable_not_found = (source.kind() == io::ErrorKind::NotFound
+                && launch.current_dir().is_none_or(Path::is_dir))
+                || launch.executable_missing_from_path();
+            if executable_not_found {
+                Error::spawn(
+                    request.request_id().get(),
+                    request.summary().clone(),
+                    source,
+                    true,
+                )
+            } else {
+                Error::control_mode(source)
+            }
+        })?;
         let process_group = ProcessGroupGuard::new(child.id());
+        // `child.id()` is `None` only once the child has already been
+        // reaped, which cannot be true immediately after `spawn` returns.
+        let pid_guard = child.id().map(|pid| {
+            control_client_pids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(pid);
+            ControlClientPidGuard {
+                pids: control_client_pids,
+                pid,
+            }
+        });
 
         Ok(Self {
             process_group,
@@ -430,6 +487,7 @@ impl PersistentChild {
             request_id: request.request_id(),
             command: request.summary().clone(),
             _registration: reservation.registration,
+            _pid_guard: pid_guard,
         })
     }
 

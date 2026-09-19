@@ -334,11 +334,12 @@ not in its generated output, and survive rerecording. A `missing` row is a
 field a listing could carry and does not; adding one is ordinary work, leaving
 it unrecorded is not.
 
-**Parsers that read from outside are fuzzed.** The control-mode line parser,
-the filter-expression wire format, and the workspace YAML loader each have a
-target under `fuzz/`. Add one when adding a parser that reads bytes this crate
-did not write, and seed it — an unseeded target proves only that arbitrary
-input is not valid input.
+**Parsers that read from outside are fuzzed.** `just fuzz-list` names a target
+for each; `design.md` says what each checks. Add one when adding a parser that
+reads bytes this workspace did not write, seed it from real output, and give it
+an oracle where one exists — an unseeded target proves only that arbitrary
+input is not valid input, and one without an oracle proves only that it does
+not panic.
 
 **Packaging is a gate.** `just package` builds the published crates and
 verifies what the tarballs contain. A packaged crate ships its README, so a
@@ -371,6 +372,11 @@ The floor is stated in several places, and they have to agree:
 then the `tmux-mcp` tests on 1.88.0. `rust-toolchain.toml` pins a much newer
 toolchain for day-to-day work; it is not the floor and does not prove one.
 
+The derive's compile-fail cases pin rustc's diagnostics, which change between
+releases, so they run on the pinned toolchain only; the MSRV run checks the
+passing cases. After a toolchain bump, `just macros-ui-bless` rewrites their
+`.stderr` files; review the diff before committing it.
+
 ## Dependencies
 
 - A declared version is the **minimum supported**, not the newest published,
@@ -400,11 +406,12 @@ follows is the rule.
   invalid UTF-8, so they cross the API as `TmuxText`. Reading a tmux stream
   with anything that requires UTF-8 fails the whole operation the first time a
   pane prints a high byte.
-- **Listings come in pairs, and the short name is the loud one.** `sessions()`
-  returns `Result`; `sessions_or_empty()` collapses failure into no rows. Both
-  halves are load-bearing, and which one gets the short name is the point: a
-  caller who writes the obvious thing gets the error, and a caller who wants
-  an empty list on failure has to say so. Add both when adding a listing.
+- **A listing propagates; nothing collapses a failure into empty rows for
+  it.** `sessions()` returns `Result`, and a caller who wants an empty list on
+  failure writes `sessions().await.unwrap_or_default()` at the call site. An
+  `_or_empty` twin of each listing existed once; nothing called one, and a
+  method whose whole purpose is to discard a reason is a way to discard one by
+  accident, so they are gone.
 - **A failure says what to do about it.** `Error::kind` reduces the variants
   to a decision, and `is_object_gone` is the branch most callers write. tmux
   reports a missing target and a bad argument with the same exit status, so

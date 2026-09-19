@@ -1,0 +1,5 @@
+V_BS="a\\b"; export V_BS;
+V_DOLLAR="a\\$b"; export V_DOLLAR;
+V_DQ="a\"b"; export V_DQ;
+V_ESC="a\033b"; export V_ESC;
+V_TAB="a	b"; export V_TAB;

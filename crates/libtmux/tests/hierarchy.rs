@@ -7,7 +7,7 @@
 
 use libtmux::test::TestServer;
 use libtmux::{Client, Command, ErrorKind, NewSessionOptions, NewWindowOptions, Pane, Server};
-use libtmux::{ServerGoneKind, Session};
+use libtmux::{ServerGoneKind, Session, TmuxArg};
 use libtmux::{SplitDirection, SplitOptions, Window};
 use static_assertions::assert_impl_all;
 
@@ -47,9 +47,9 @@ async fn empty_server_lists_nothing_across_the_hierarchy() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    assert!(server.sessions_or_empty().await.is_empty());
-    assert!(server.windows_or_empty().await.is_empty());
-    assert!(server.panes_or_empty().await.is_empty());
+    assert!(server.sessions().await.unwrap_or_default().is_empty());
+    assert!(server.windows().await.unwrap_or_default().is_empty());
+    assert!(server.panes().await.unwrap_or_default().is_empty());
 
     // An empty listing is an ordinary result, not a decoding failure.
     assert!(
@@ -97,7 +97,7 @@ async fn listings_preserve_tmux_order_and_report_snapshot_values() {
             "a detached session reports no clients"
         );
         assert_eq!(session.attached_client_count(), 0);
-        assert!(session.created() > 0);
+        assert!(session.created() > std::time::UNIX_EPOCH);
         assert_eq!(
             session.last_attached(),
             None,
@@ -213,7 +213,7 @@ async fn panes_report_their_window_and_process_details() {
     for pane in &panes {
         assert_eq!(pane.window_id(), windows[0].id());
         assert_eq!(pane.window_index(), windows[0].index());
-        assert!(pane.pid() > 0);
+        assert!(pane.pid().expect("a running pane reports a pid") > 0);
         assert!(pane.width() > 0);
         assert!(pane.height() > 0);
         assert!(!pane.is_dead(), "a running pane is not dead");
@@ -226,6 +226,60 @@ async fn panes_report_their_window_and_process_details() {
         "exactly one pane is active",
     );
     assert_ne!(panes[0], panes[1]);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `Pane::left`/`Pane::top` must agree with tmux's own `#{pane_left}` and
+/// `#{pane_top}`, and actually separate two panes a horizontal split placed
+/// side by side.
+#[tokio::test]
+async fn pane_position_matches_the_raw_format_fields() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    new_session(server, "positions").await;
+    run(
+        server,
+        Command::new("split-window")
+            .arg("-t")
+            .arg("positions")
+            .arg("-h")
+            .arg("-d")
+            .arg("sleep 300"),
+    )
+    .await;
+
+    let panes = server.panes().await.expect("panes list");
+    assert_eq!(panes.len(), 2, "the split produced a second pane");
+
+    for pane in &panes {
+        let left = pane
+            .format("#{pane_left}")
+            .await
+            .expect("pane_left reads")
+            .as_str()
+            .expect("pane_left is ASCII")
+            .parse::<i32>()
+            .expect("pane_left is an integer");
+        let top = pane
+            .format("#{pane_top}")
+            .await
+            .expect("pane_top reads")
+            .as_str()
+            .expect("pane_top is ASCII")
+            .parse::<i32>()
+            .expect("pane_top is an integer");
+        assert_eq!(pane.left(), left, "Pane::left must match #{{pane_left}}");
+        assert_eq!(pane.top(), top, "Pane::top must match #{{pane_top}}");
+    }
+
+    // A horizontal split places one pane's left edge at 0 and the other's
+    // strictly to its right, both at the same top.
+    let lefts: Vec<i32> = panes.iter().map(Pane::left).collect();
+    assert_eq!(lefts.iter().min().copied(), Some(0));
+    assert_ne!(lefts[0], lefts[1], "a horizontal split separates the panes");
+    assert_eq!(panes[0].top(), panes[1].top());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -513,9 +567,9 @@ async fn a_dead_server_yields_empty_leniently_and_an_error_loudly() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 
     // The lenient contract hides the cause behind an empty listing.
-    assert!(server.sessions_or_empty().await.is_empty());
-    assert!(server.windows_or_empty().await.is_empty());
-    assert!(server.panes_or_empty().await.is_empty());
+    assert!(server.sessions().await.unwrap_or_default().is_empty());
+    assert!(server.windows().await.unwrap_or_default().is_empty());
+    assert!(server.panes().await.unwrap_or_default().is_empty());
 
     // The loud form keeps it. This is the whole reason both forms exist: the
     // executor is gone, which is a caller mistake rather than an empty server.
@@ -546,7 +600,7 @@ async fn an_absent_daemon_is_empty_to_one_form_and_a_reason_to_the_other() {
         .expect("an inert server handle is built");
 
     assert!(
-        server.sessions_or_empty().await.is_empty(),
+        server.sessions().await.unwrap_or_default().is_empty(),
         "the lenient form suits a status line, which has nothing to say",
     );
 
@@ -639,7 +693,13 @@ async fn attached_sessions_selects_only_sessions_with_clients() {
             .expect("attached sessions")
             .is_empty(),
     );
-    assert!(server.attached_sessions_or_empty().await.is_empty());
+    assert!(
+        server
+            .attached_sessions()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -800,30 +860,44 @@ async fn real_tmux_compat_an_empty_field_does_not_fail_the_listing() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A name reaches tmux as a format rather than as text.
+/// A name reaches tmux as text, and as a format only when asked.
 ///
 /// tmux expands `-s` through `format_single` before it validates the result
 /// (`cmd-new-session.c`), which is what makes `#(command)` in a name run a
 /// shell command: `clean_name` neutralises `#(` only for a name arriving from
 /// a pane's own output, never for one a command supplied. That is coherent for
 /// tmux, whose caller is a person who could run the command anyway, and it is
-/// a trust boundary this crate's callers have to be told about, because their
-/// names come from arguments and request fields.
+/// the reason this crate escapes on the way in: its callers' names come from
+/// arguments and request fields.
 ///
-/// The expansion is what this asserts, because it is what can be observed
-/// without a race. A `#()` job runs asynchronously and nothing bounds how long
-/// it takes, so waiting for the file one writes is a guess with a number on
-/// it: this test failed exactly that way at load average 21. The execution
-/// follows from the expansion and is documented rather than gated.
+/// Both directions are asserted here because each is evidence for the other:
+/// that tmux still expands is what makes the escaping load-bearing rather than
+/// decorative. Expansion is observed through the stored value, never through a
+/// `#()` job's side effect -- that job is asynchronous and unbounded, and
+/// waiting on the file it writes failed exactly that way at load average 21.
 #[tokio::test]
-async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
+async fn real_tmux_compat_a_name_reaches_tmux_as_text() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
+
+    // The ordinary path: what the caller passed is what tmux stored.
+    let literal = server
+        .new_session("#{version}")
+        .await
+        .expect("tmux accepts the escaped name");
+    assert_eq!(
+        literal.name().as_bytes(),
+        b"#{version}",
+        "a name is escaped on the way out, so tmux stores the text it was given",
+    );
 
     // `#{version}` rather than anything about the session: tmux expands the
     // name before the session it would describe exists, which is why a
     // templated name so often expands to nothing.
-    let Ok(expanded) = server.new_session("#{version}").await else {
+    let Ok(expanded) = server
+        .new_session(NewSessionOptions::new(TmuxArg::format("#{version}")))
+        .await
+    else {
         // A release that refuses the name is protecting the caller from all
         // of this, and there is nothing left to observe.
         guard.shutdown().await.expect("tmux fixture shuts down");
@@ -832,23 +906,11 @@ async fn real_tmux_compat_a_name_reaches_tmux_as_a_format() {
     assert_ne!(
         expanded.name().as_bytes(),
         b"#{version}",
-        "tmux expanded the format rather than storing the text it was given",
+        "an opted-in format is expanded by tmux rather than stored as text",
     );
     assert!(
         !expanded.name().as_bytes().is_empty(),
         "the expansion had a value to put there",
-    );
-
-    // The escaped form is the same text with the expansion turned off, so the
-    // pair is what proves the first one was expanded rather than mangled.
-    let literal = server
-        .new_session("##{version}")
-        .await
-        .expect("tmux accepts the escaped name");
-    assert_eq!(
-        literal.name().as_bytes(),
-        b"#{version}",
-        "an escaped `##` reaches tmux as a literal `#`",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");

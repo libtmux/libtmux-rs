@@ -5,6 +5,8 @@ use std::fmt;
 ///
 /// `TmuxText` preserves bytes exactly. Callers choose whether to inspect the
 /// raw bytes, require UTF-8, or decode lossily.
+/// [`AsRef<[u8]>`] borrows those bytes, including invalid UTF-8, so accessor
+/// results can be passed directly to name lookups such as [`crate::Server::session`].
 ///
 /// # Examples
 ///
@@ -136,6 +138,12 @@ impl TmuxText {
 impl From<&str> for TmuxText {
     fn from(value: &str) -> Self {
         Self::from_bytes(value.as_bytes())
+    }
+}
+
+impl AsRef<[u8]> for TmuxText {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 

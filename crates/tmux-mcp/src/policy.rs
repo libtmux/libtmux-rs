@@ -28,6 +28,46 @@ pub const EXCLUDE_TOOLS_ENV: &str = "LIBTMUX_EXCLUDE_TOOLS";
 /// The retired ordered-safety setting, rejected rather than ignored.
 pub const RETIRED_SAFETY_ENV: &str = "LIBTMUX_SAFETY";
 
+/// The tmux environment variables whose values tools may return.
+pub const ENVIRONMENT_VALUES_ENV: &str = "LIBTMUX_ENVIRONMENT_VALUES";
+
+/// The most names [`ENVIRONMENT_VALUES_ENV`] may allow.
+const MAX_ENVIRONMENT_VALUES: usize = 32;
+
+/// Parse the operator's allowed environment names.
+///
+/// Absent or empty allows none. A name is compared exactly, so `PATH` does
+/// not allow `path`.
+///
+/// # Errors
+///
+/// Returns an error for an empty element, a name containing `=` or NUL, or
+/// more than 32 names.
+pub fn parse_environment_values(value: Option<&str>) -> Result<BTreeSet<String>, SurfaceError> {
+    let names = parse_optional_names(value, ENVIRONMENT_VALUES_ENV)?;
+    if let Some(name) = names.iter().find(|name| name.contains(['=', '\0'])) {
+        return Err(SurfaceError::new(format!(
+            "{ENVIRONMENT_VALUES_ENV} names {name:?}, which is not a variable name"
+        )));
+    }
+    if names.len() > MAX_ENVIRONMENT_VALUES {
+        return Err(SurfaceError::new(format!(
+            "{ENVIRONMENT_VALUES_ENV} allows at most {MAX_ENVIRONMENT_VALUES} names"
+        )));
+    }
+    Ok(names)
+}
+
+/// Read [`ENVIRONMENT_VALUES_ENV`] before serving MCP.
+///
+/// # Errors
+///
+/// Returns an error for invalid UTF-8 or any error
+/// [`parse_environment_values`] reports.
+pub fn environment_values_from_env() -> Result<BTreeSet<String>, SurfaceError> {
+    parse_environment_values(unicode_env(ENVIRONMENT_VALUES_ENV)?.as_deref())
+}
+
 /// One mechanical group in the advertised MCP tool inventory.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -311,9 +351,22 @@ pub struct Builder {
     caller: Option<CallerIdentity>,
     selection: Selection,
     socket_provenance: SocketProvenance,
+    environment_values: BTreeSet<String>,
 }
 
 impl Builder {
+    /// Allow tools to return the values of these tmux environment variables.
+    ///
+    /// None are allowed by default: `show_environment` reports names and
+    /// state, and `get_tmux_variables` refuses a name the environment holds.
+    /// A tmux server inherits the environment of the shell that started it,
+    /// so its values are the user's tokens and keys.
+    #[must_use]
+    pub fn environment_values(mut self, names: BTreeSet<String>) -> Self {
+        self.environment_values = names;
+        self
+    }
+
     /// Say where this process is running, rather than reading the environment.
     #[must_use]
     pub fn caller(mut self, caller: Option<CallerIdentity>) -> Self {
@@ -375,8 +428,10 @@ impl Builder {
             capability_report: Arc::new(resolved.report),
             socket: Arc::new(OnceLock::new()),
             tails: Arc::new(Tails::new(identity)),
+            echoes: Arc::new(crate::echo::PaneEchoes::new()),
             tool_router: router,
             nested_tool_router: resolved.nested_router,
+            environment_values: Arc::new(self.environment_values),
         })
     }
 }
@@ -505,6 +560,7 @@ impl TmuxTools {
                 exclude: BTreeSet::new(),
             },
             socket_provenance: SocketProvenance::Unknown,
+            environment_values: BTreeSet::new(),
         }
     }
 }
@@ -512,7 +568,7 @@ impl TmuxTools {
 #[cfg(test)]
 mod tests {
     use super::{Selection, Toolset};
-    use crate::manifest::OutputClass;
+    use crate::manifest::{OutputClass, ProcessReach, TmuxEffect};
     use std::collections::BTreeSet;
 
     #[test]
@@ -547,10 +603,125 @@ mod tests {
         assert_eq!(names, reported);
         assert!(listed.iter().all(|tool| {
             let description = tool.description.as_deref().expect("description");
-            resolved.report.tools.iter().any(|row| {
-                row.name == tool.name && description.starts_with(row.controlled_opener())
-            })
+            resolved
+                .report
+                .tools
+                .iter()
+                .any(|row| row.name == tool.name && description.ends_with(row.controlled_opener()))
         }));
+    }
+
+    /// A caller that reads only up to a tool's first sentence -- a common
+    /// truncation or summary strategy -- must still be able to tell tools
+    /// apart.
+    ///
+    /// `finish_route` used to prepend the coarse, capability-keyed safety
+    /// sentence before a tool's own description; several tools sharing a
+    /// `(toolset, process_reach, output_classes)` bucket then shared the
+    /// byte-identical opener.
+    #[test]
+    fn every_tools_first_sentence_is_distinct() {
+        let selection =
+            Selection::parse_for_socket(None, None, None, true).expect("dedicated minimal surface");
+        let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
+            .expect("complete manifest");
+
+        let mut by_first_sentence: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for tool in &resolved.report.tools {
+            let first_sentence = tool
+                .description
+                .split(". ")
+                .next()
+                .unwrap_or(&tool.description);
+            by_first_sentence
+                .entry(first_sentence)
+                .or_default()
+                .push(tool.name.as_str());
+        }
+        let collisions: Vec<_> = by_first_sentence
+            .into_iter()
+            .filter(|(_, names)| names.len() > 1)
+            .collect();
+        assert!(
+            collisions.is_empty(),
+            "tools sharing a first sentence, indistinguishable by a caller that reads only that \
+             far: {collisions:?}",
+        );
+    }
+
+    /// The generated safety sentence follows a tool's own text, so a summary
+    /// with no closing period ran into it: "List every tmux session on the
+    /// server Inspect tmux metadata; ...".
+    #[test]
+    fn every_tools_own_description_ends_its_sentence() {
+        let unfinished: Vec<_> = crate::tools::router()
+            .list_all()
+            .into_iter()
+            .filter(|tool| {
+                !tool
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim_end()
+                    .ends_with(['.', '!', '?'])
+            })
+            .map(|tool| tool.name.into_owned())
+            .collect();
+
+        assert!(unfinished.is_empty(), "no closing period: {unfinished:?}");
+    }
+
+    /// Clients auto-approve or prompt from these hints, so a tool that
+    /// changes tmux must never claim to be read-only.
+    #[test]
+    fn annotations_follow_each_tools_capability_row() {
+        let selection = Selection::parse(Some("inspect,manage,execute,teardown"), None, None)
+            .expect("selection");
+        let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
+            .expect("complete manifest");
+        let mut distinct = BTreeSet::new();
+        let mut destructive_tools = BTreeSet::new();
+
+        for tool in resolved.router.list_all() {
+            let row = &resolved
+                .report
+                .tools
+                .iter()
+                .find(|row| row.name == tool.name)
+                .expect("report row")
+                .capability;
+            let hints = tool.annotations.as_ref().expect("annotations");
+            let read_only = hints.read_only_hint.expect("readOnlyHint");
+            let destructive = hints.destructive_hint.expect("destructiveHint");
+            let changes_tmux = row.toolset != Toolset::Inspect
+                || row.process_reach != ProcessReach::None
+                || row
+                    .tmux_effects
+                    .iter()
+                    .any(|effect| *effect != TmuxEffect::Observe);
+            let can_destroy = row.tmux_effects.contains(&TmuxEffect::Delete)
+                || matches!(
+                    row.process_reach,
+                    ProcessReach::PaneInput | ProcessReach::PaneCommand
+                );
+
+            assert_eq!(read_only, !changes_tmux, "{} readOnlyHint", tool.name);
+            assert_eq!(destructive, can_destroy, "{} destructiveHint", tool.name);
+            if destructive {
+                destructive_tools.insert(tool.name.to_string());
+            }
+            distinct.insert((
+                read_only,
+                destructive,
+                hints.idempotent_hint.expect("idempotentHint"),
+                hints.open_world_hint.expect("openWorldHint"),
+            ));
+        }
+        assert!(distinct.len() > 3, "hints barely vary: {distinct:?}");
+        // tmux 3.7 applies a lowered history limit to existing panes,
+        // discarding their scrollback.
+        assert!(destructive_tools.contains("set_history_limit"));
     }
 
     #[test]

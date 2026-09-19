@@ -16,6 +16,10 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "test-support")]
+use libtmux::ChannelWait;
+#[cfg(feature = "test-support")]
+use libtmux::test::scaled;
 use libtmux::{
     Command, CommandResult, EngineCapabilities, Error, Server, ServerBuilder,
     ServerConfigurationErrorKind, ServerIdentity,
@@ -348,6 +352,45 @@ async fn public_capability_raw_command_and_shutdown_boundary_is_usable() {
 
     server.shutdown().await.expect("shutdown succeeds");
     server.shutdown().await.expect("shutdown is idempotent");
+}
+
+/// tmux creates the parent directory of `-L`/the default socket itself, but
+/// never one a `-S` path names, and it answers three different ways:
+/// 3.2a exits **0** saying nothing at all, 3.3a through 3.7c exit **0** after
+/// printing `error creating <path> (No such file or directory)` on stderr, and
+/// next-3.9 prints that and exits **1**. Nothing is created in any of them, so
+/// none may read as a partial effect, and tmux's own reason -- when it gave one
+/// -- must not be replaced by a generic message or a `Debug`-formatted exit
+/// code.
+#[tokio::test]
+async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let server = Server::builder()
+        .socket_path(directory.path().join("missing-parent").join("sock"))
+        .build()
+        .expect("a socket under a missing directory is valid setup");
+
+    let error = server
+        .new_session("wont-exist")
+        .await
+        .expect_err("tmux creates nothing under a missing parent directory");
+
+    assert_ne!(
+        error.kind(),
+        libtmux::ErrorKind::PartialEffect,
+        "nothing was created, so this is not a partial effect: {error:?}",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("error creating") || message.contains("gave no reason"),
+        "tmux's own reason survives, or the message says there was none: {message}",
+    );
+    assert!(
+        !message.contains("Some(0)"),
+        "a Debug-formatted exit code does not leak into the message: {message}",
+    );
+
+    server.shutdown().await.expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -1139,4 +1182,521 @@ fn an_absent_tmux_variable_is_told_apart_from_a_malformed_one() {
     // And a well-formed value still resolves.
     Server::from_env_value(Some("/tmp/libtmux-rs-dev/from-env.sock,7,$0"))
         .expect("a triple names a socket");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_channel_lock_is_released_when_the_body_fails() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+
+    let outcome: Result<(), _> = server
+        .with_channel_lock("deploy", async |_| Err::<(), _>("the body failed"))
+        .await;
+    assert!(matches!(
+        outcome,
+        Err(libtmux::ScopeError::Operation("the body failed"))
+    ));
+
+    // A wedged channel would block this forever, so the fixture deadline is
+    // what would report it; taking the lock is the assertion.
+    server
+        .lock_channel("deploy")
+        .await
+        .expect("the channel was released");
+    server
+        .unlock_channel("deploy")
+        .await
+        .expect("the channel unlocks");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A handle that gives up sooner than the fixture's, on the same socket.
+#[cfg(feature = "test-support")]
+fn impatient_handle(guard: &libtmux::test::TestServer, within: Duration) -> Server {
+    Server::builder()
+        .socket_path(guard.socket_path())
+        .default_timeout(within)
+        .build()
+        .expect("a second handle on the fixture's socket")
+}
+
+/// Every process on this machine whose command line names `channel`.
+#[cfg(feature = "test-support")]
+fn processes_naming(channel: &str) -> Vec<String> {
+    let listing = process::Command::new("ps")
+        .arg("-eo")
+        .arg("args=")
+        .output()
+        .expect("ps lists processes");
+    // `ps` itself is never a match: its own arguments do not name the channel.
+    String::from_utf8_lossy(&listing.stdout)
+        .lines()
+        .filter(|line| line.contains(channel))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// tmux releases a signal to whatever is waiting and keeps it only when
+/// nothing is, so a wait that gave up must not be counted as waiting.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_signal_after_a_wait_ran_out_of_time_reaches_the_next_wait() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let channel = libtmux::test::unique_name("timed-out");
+
+    assert_eq!(
+        server
+            .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
+            .await
+            .expect("the wait runs"),
+        ChannelWait::TimedOut,
+        "nothing signalled the channel",
+    );
+
+    server
+        .signal_channel(&channel)
+        .await
+        .expect("the channel is signalled");
+
+    assert_eq!(
+        server
+            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .await
+            .expect("the wait runs"),
+        ChannelWait::Signalled,
+        "the signal arrived before this wait started, so the wait returns at once",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A dropped wait is a wait that gave up, and gives up the same way.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_signal_after_a_dropped_wait_reaches_the_next_wait() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let channel = libtmux::test::unique_name("dropped");
+
+    let dropped = server.wait_for_channel(&channel, scaled(Duration::from_secs(30)));
+    assert!(
+        tokio::time::timeout(scaled(Duration::from_millis(200)), dropped)
+            .await
+            .is_err(),
+        "nothing signalled the channel",
+    );
+
+    server
+        .signal_channel(&channel)
+        .await
+        .expect("the channel is signalled");
+
+    assert_eq!(
+        server
+            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .await
+            .expect("the wait runs"),
+        ChannelWait::Signalled,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// One signal releases every waiter, so one client can carry every wait this
+/// process has on the channel -- and must, or the second would keep a signal
+/// the first already answered.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn waits_on_one_channel_share_one_client() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let channel = libtmux::test::unique_name("shared");
+
+    for _ in 0..2 {
+        assert_eq!(
+            server
+                .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
+                .await
+                .expect("the wait runs"),
+            ChannelWait::TimedOut,
+        );
+        let clients = processes_naming(&channel);
+        assert_eq!(clients.len(), 1, "clients on the channel: {clients:?}");
+    }
+
+    server
+        .signal_channel(&channel)
+        .await
+        .expect("the channel is signalled");
+    assert_eq!(
+        server
+            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .await
+            .expect("the wait runs"),
+        ChannelWait::Signalled,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Signalling a channel is what releases the client parked on it, so a parked
+/// client must not be able to hold the dispatch that would do the releasing.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
+    let guard = libtmux::test::TestServer::builder()
+        .dispatch_limits(
+            libtmux::DispatchLimits::default()
+                .max_in_flight(1)
+                .acquire_timeout(Some(scaled(Duration::from_secs(2)))),
+        )
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let channel = libtmux::test::unique_name("crowded");
+
+    assert_eq!(
+        server
+            .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
+            .await
+            .expect("the wait runs"),
+        ChannelWait::TimedOut,
+    );
+
+    // The only slot is free, so the signal gets through and the wait it
+    // releases reads it.
+    server
+        .signal_channel(&channel)
+        .await
+        .expect("the channel is signalled");
+    assert_eq!(
+        server
+            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .await
+            .expect("the wait runs"),
+        ChannelWait::Signalled,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The wait's client is this process's to account for: after shutdown none of
+/// it is left running.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_wait_that_ran_out_of_time_leaves_no_client_behind_after_shutdown() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let channel = libtmux::test::unique_name("parked");
+
+    assert_eq!(
+        guard
+            .server()
+            .wait_for_channel(&channel, scaled(Duration::from_millis(200)))
+            .await
+            .expect("the wait runs"),
+        ChannelWait::TimedOut,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+
+    let left = processes_naming(&channel);
+    assert!(left.is_empty(), "processes left running: {left:?}");
+}
+
+/// tmux hands a released lock to the first queued locker, dead or alive, so a
+/// locker that gave up must not still be queued.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_lock_that_ran_out_of_time_while_queued_leaves_the_channel_lockable() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let impatient = impatient_handle(&guard, scaled(Duration::from_millis(400)));
+    let channel = libtmux::test::unique_name("queued");
+
+    server
+        .lock_channel(&channel)
+        .await
+        .expect("the channel locks");
+
+    let queued = impatient
+        .lock_channel(&channel)
+        .await
+        .expect_err("the second lock runs out of time while queued");
+    assert_eq!(queued.kind(), libtmux::ErrorKind::Timeout);
+
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the holder releases the channel");
+
+    tokio::time::timeout(
+        scaled(Duration::from_secs(5)),
+        server.lock_channel(&channel),
+    )
+    .await
+    .expect("the channel is not wedged")
+    .expect("the channel locks again");
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the channel unlocks");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `with_channel_lock` takes the same lock, so it inherits the same hazard.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_lock_scope_that_ran_out_of_time_while_queued_leaves_the_channel_lockable() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let impatient = impatient_handle(&guard, scaled(Duration::from_millis(400)));
+    let channel = libtmux::test::unique_name("queued-scope");
+
+    server
+        .lock_channel(&channel)
+        .await
+        .expect("the channel locks");
+
+    let outcome: Result<(), _> = impatient
+        .with_channel_lock(&channel, async |_| Ok::<(), Error>(()))
+        .await;
+    assert!(
+        matches!(
+            &outcome,
+            Err(libtmux::ScopeError::Creation(error)) if error.kind() == libtmux::ErrorKind::Timeout
+        ),
+        "the scope never starts: {outcome:?}",
+    );
+
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the holder releases the channel");
+
+    tokio::time::timeout(
+        scaled(Duration::from_secs(5)),
+        server.lock_channel(&channel),
+    )
+    .await
+    .expect("the channel is not wedged")
+    .expect("the channel locks again");
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the channel unlocks");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A lock dropped while still queued is granted in turn and released, rather
+/// than held by a caller that is no longer there.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_lock_dropped_while_queued_leaves_the_channel_lockable() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let channel = libtmux::test::unique_name("dropped-lock");
+
+    server
+        .lock_channel(&channel)
+        .await
+        .expect("the channel locks");
+
+    assert!(
+        tokio::time::timeout(
+            scaled(Duration::from_millis(400)),
+            server.lock_channel(&channel),
+        )
+        .await
+        .is_err(),
+        "the second lock is still queued behind the holder",
+    );
+
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the holder releases the channel");
+
+    tokio::time::timeout(
+        scaled(Duration::from_secs(5)),
+        server.lock_channel(&channel),
+    )
+    .await
+    .expect("the channel is not wedged")
+    .expect("the channel locks again");
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the channel unlocks");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A lock scope dropped while its lock is still queued: the lock runs in a
+/// task of its own, so the drop cannot strand it.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_lock_scope_dropped_while_queued_leaves_the_channel_lockable() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let channel = libtmux::test::unique_name("dropped-scope");
+
+    server
+        .lock_channel(&channel)
+        .await
+        .expect("the channel locks");
+
+    let scope = server.with_channel_lock(&channel, async |_| Ok::<(), Error>(()));
+    assert!(
+        tokio::time::timeout(scaled(Duration::from_millis(400)), scope)
+            .await
+            .is_err(),
+        "the scope is still queued behind the holder",
+    );
+
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the holder releases the channel");
+
+    tokio::time::timeout(
+        scaled(Duration::from_secs(5)),
+        server.lock_channel(&channel),
+    )
+    .await
+    .expect("the channel is not wedged")
+    .expect("the channel locks again");
+    server
+        .unlock_channel(&channel)
+        .await
+        .expect("the channel unlocks");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_buffer_larger_than_an_argument_round_trips_through_files() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let source = scratch.path().join("in");
+    let written = scratch.path().join("out");
+
+    // Past `MAX_ARG_STRLEN`, so `set_buffer` cannot carry it: the kernel
+    // refuses the argument before tmux sees it.
+    let payload = vec![b'x'; 200_000];
+    fs::write(&source, &payload).expect("the source is written");
+
+    assert!(
+        server
+            .set_buffer(Some("big"), os_string_from_bytes(&payload))
+            .await
+            .is_err(),
+        "a 200 KiB argument does not fit on a command line",
+    );
+
+    server
+        .load_buffer(Some("big"), &source)
+        .await
+        .expect("tmux reads the file");
+    // Compared by shape rather than by value: a failed `assert_eq!` on the
+    // whole payload prints 200 KB of `120,` and buries the reason.
+    let loaded = server.buffer("big").await.expect("the buffer reads");
+    assert_eq!(loaded.as_ref().map(Vec::len), Some(payload.len()));
+    assert_eq!(
+        loaded.as_deref(),
+        Some(payload.as_slice()),
+        "the bytes differ"
+    );
+
+    server
+        .save_buffer(Some("big"), &written)
+        .await
+        .expect("tmux writes the file");
+    let read_back = fs::read(&written).expect("the output is readable");
+    assert_eq!(read_back.len(), payload.len());
+    assert!(read_back == payload, "the bytes differ");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "test-support")]
+fn os_string_from_bytes(bytes: &[u8]) -> OsString {
+    use std::os::unix::ffi::OsStringExt as _;
+    OsString::from_vec(bytes.to_vec())
+}
+
+/// A caller who wants a deadline shorter than the server's default does not
+/// need an API for it: dropping the command future signals the process group
+/// and reaps it, so `tokio::time::timeout` is a per-call deadline with the
+/// cleanup already attached.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn a_caller_can_bound_one_command_with_tokio_timeout() {
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+
+    // `run-shell` blocks in tmux for as long as the command does, and the
+    // server's own default timeout is 30 seconds, so reaching this deadline
+    // is the caller's bound rather than the crate's. Dispatched with `cmd`
+    // rather than `Server::run_shell`, which refuses outright on 3.3 through
+    // 3.4 -- a version gate on captured output this test does not read.
+    let started = Instant::now();
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(400),
+        server.cmd(Command::new("run-shell").arg("sleep 3")),
+    )
+    .await;
+
+    assert!(outcome.is_err(), "the caller's deadline ended the wait");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "it ended at the caller's deadline, not the server's: {:?}",
+        started.elapsed(),
+    );
+
+    // The server is still usable afterwards: a bounded call is not a broken
+    // connection.
+    server.sessions().await.expect("the server still answers");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }

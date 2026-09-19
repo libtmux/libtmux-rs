@@ -112,13 +112,6 @@ pub(crate) struct Annotations {
 }
 
 impl Annotations {
-    pub(crate) const CONSERVATIVE: Self = Self {
-        read_only_hint: false,
-        destructive_hint: true,
-        idempotent_hint: false,
-        open_world_hint: true,
-    };
-
     fn render(self, title: Option<String>) -> ToolAnnotations {
         ToolAnnotations::from_raw(
             title,
@@ -143,7 +136,11 @@ pub(crate) struct Capability {
     pub(crate) output_classes: BTreeSet<OutputClass>,
     pub(crate) may_expose_secrets: bool,
     pub(crate) may_return_untrusted_content: bool,
-    pub(crate) annotations: Annotations,
+    /// Whether repeating a call with the same arguments changes nothing more.
+    ///
+    /// Declared only for a tool that changes tmux: a read-only tool is
+    /// idempotent by derivation.
+    pub(crate) idempotent: bool,
     pub(crate) input_sinks: BTreeMap<String, BTreeSet<InputSink>>,
     pub(crate) input_literalization: BTreeMap<String, InputLiteralization>,
     pub(crate) nested_authority: BTreeSet<String>,
@@ -163,7 +160,6 @@ pub(crate) struct PublishedCapability {
     pub(crate) output_classes: BTreeSet<OutputClass>,
     pub(crate) may_expose_secrets: bool,
     pub(crate) may_return_untrusted_content: bool,
-    pub(crate) annotations: Annotations,
     pub(crate) input_literalization: BTreeMap<String, InputLiteralization>,
     pub(crate) nested_authority: BTreeSet<String>,
     pub(crate) amplifies_future_input: bool,
@@ -178,7 +174,6 @@ impl From<&Capability> for PublishedCapability {
             output_classes: definition.output_classes.clone(),
             may_expose_secrets: definition.may_expose_secrets,
             may_return_untrusted_content: definition.may_return_untrusted_content,
-            annotations: definition.annotations,
             input_literalization: definition.input_literalization.clone(),
             nested_authority: definition.nested_authority.clone(),
             amplifies_future_input: definition.amplifies_future_input,
@@ -189,6 +184,30 @@ impl From<&Capability> for PublishedCapability {
 impl Capability {
     pub(crate) fn controlled_opener(&self) -> &'static str {
         controlled_opener(self.toolset, self.process_reach, &self.output_classes)
+    }
+
+    /// The four MCP hints, derived from this row so they cannot drift from it.
+    ///
+    /// Pane input is destructive because the receiving shell runs whatever
+    /// arrives. The open-world hint follows process reach and terminal
+    /// content, not `may_return_untrusted_content`, which every row sets.
+    pub(crate) fn annotations(&self) -> Annotations {
+        let read_only = self.process_reach == ProcessReach::None
+            && self
+                .tmux_effects
+                .iter()
+                .all(|effect| *effect == TmuxEffect::Observe);
+        let drives_a_shell = matches!(
+            self.process_reach,
+            ProcessReach::PaneInput | ProcessReach::PaneCommand
+        );
+        Annotations {
+            read_only_hint: read_only,
+            destructive_hint: self.tmux_effects.contains(&TmuxEffect::Delete) || drives_a_shell,
+            idempotent_hint: read_only || self.idempotent,
+            open_world_hint: self.process_reach != ProcessReach::None
+                || self.output_classes.contains(&OutputClass::TerminalContent),
+        }
     }
 }
 
@@ -214,7 +233,7 @@ fn controlled_opener(
                 "Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted."
             }
             Toolset::Inspect if output_classes.contains(&OutputClass::ProcessEnvironment) => {
-                "Read the tmux environment; accepts no client-supplied executable input. Returned values may contain secrets."
+                "Read the tmux environment; accepts no client-supplied executable input. Values are withheld unless the operator allowed the name."
             }
             Toolset::Inspect if output_classes.contains(&OutputClass::ConfiguredCommand) => {
                 "Read configured tmux commands; accepts no client-supplied executable input. Returned values may contain executable configuration."
@@ -263,6 +282,8 @@ pub(crate) struct ReportTool {
     pub(crate) name: String,
     pub(crate) title: String,
     pub(crate) description: String,
+    pub(crate) annotations: Annotations,
+    /// The only part a tool's `_meta` carries: the rest is on the tool.
     #[serde(flatten)]
     pub(crate) capability: PublishedCapability,
     pub(crate) input_schema: serde_json::Value,
@@ -460,17 +481,21 @@ fn finish_route(
 ) -> Result<ReportTool, SurfaceError> {
     let opener = row.controlled_opener();
     let remainder = route.attr.description.as_deref().unwrap_or("").trim();
+    // The tool's own text goes first, so a caller that truncates to the
+    // first sentence can still tell tools apart: the safety sentence,
+    // shared by every tool in the same (toolset, process_reach,
+    // output_classes) bucket, trails it instead.
     route.attr.description = Some(
-        if remainder.starts_with(opener) {
+        if remainder.ends_with(opener) {
             remainder.to_owned()
         } else if remainder.is_empty() {
             opener.to_owned()
         } else {
-            format!("{opener} {remainder}")
+            format!("{remainder} {opener}")
         }
         .into(),
     );
-    route.attr.annotations = Some(row.annotations.render(route.attr.title.clone()));
+    route.attr.annotations = Some(row.annotations().render(route.attr.title.clone()));
     if row
         .input_sinks
         .values()
@@ -504,6 +529,7 @@ fn finish_route(
         name,
         title,
         description,
+        annotations: row.annotations(),
         capability,
         input_schema: serde_json::Value::Object((*route.attr.input_schema).clone()),
         output_schema: serde_json::Value::Object((**output_schema).clone()),
@@ -543,7 +569,7 @@ fn refresh_metadata(
     row: &ReportTool,
 ) -> Result<(), SurfaceError> {
     let meta = meta.ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no metadata")))?;
-    let value = serde_json::to_value(row).map_err(|error| {
+    let value = serde_json::to_value(&row.capability).map_err(|error| {
         SurfaceError::new(format!(
             "tool {name:?} capability cannot serialize: {error}"
         ))
@@ -579,9 +605,12 @@ fn set_nested_operation_schemas(
                 let route = nested.map.get(nested_name.as_str()).ok_or_else(|| {
                     SurfaceError::new(format!("unknown nested tool {nested_name:?}"))
                 })?;
-                let input = inline_local_references(serde_json::Value::Object(
+                let mut input = inline_local_references(serde_json::Value::Object(
                     (*route.attr.input_schema).clone(),
                 ))?;
+                if let Some(input) = input.as_object_mut() {
+                    input.insert("description".to_owned(), "That tool's arguments.".into());
+                }
                 Ok(serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -775,6 +804,29 @@ fn validate_authority(
 /// Attach one typed capability row to an SDK-native tool route.
 #[macro_export]
 macro_rules! capability_meta {
+    (@idempotent) => { false };
+    (@idempotent $idempotent:expr) => { $idempotent };
+    (
+        $toolset:ident, $reach:ident, [$($effect:ident),+ $(,)?],
+        [$($output:ident),* $(,)?], $secrets:expr, $untrusted:expr,
+        {$($input:literal => [$($sink:ident),+ $(,)?]),* $(,)?};
+        idempotent
+    ) => {
+        $crate::capability_meta!(
+            $toolset, $reach,
+            effects = [$($effect),+],
+            outputs = [$($output),*],
+            secrets = $secrets,
+            untrusted = $untrusted,
+            sinks = {$($input => [$($sink),+]),*},
+            literalized = [],
+            format_validated = [],
+            nested = [],
+            idempotent = true,
+            self_bounded = false,
+            always_load = false,
+        )
+    };
     (
         $toolset:ident, $reach:ident, [$($effect:ident),+ $(,)?],
         [$($output:ident),* $(,)?], $secrets:expr, $untrusted:expr,
@@ -824,6 +876,7 @@ macro_rules! capability_meta {
         literalized = [$($literalized:literal),* $(,)?],
         $(format_validated = [$($validated:literal),* $(,)?],)?
         nested = [$($nested:literal),* $(,)?],
+        $(idempotent = $idempotent:expr,)?
         self_bounded = $self_bounded:expr,
         always_load = $always_load:expr $(,)?
     ) => {
@@ -838,6 +891,7 @@ macro_rules! capability_meta {
             format_validated = [$($($validated),*)?],
             nested = [$($nested),*],
             amplifies_future_input = false,
+            $(idempotent = $idempotent,)?
             self_bounded = $self_bounded,
             always_load = $always_load,
         )
@@ -853,6 +907,7 @@ macro_rules! capability_meta {
         $(format_validated = [$($validated:literal),* $(,)?],)?
         nested = [$($nested:literal),* $(,)?],
         amplifies_future_input = $amplifies:expr,
+        $(idempotent = $idempotent:expr,)?
         self_bounded = $self_bounded:expr,
         always_load = $always_load:expr $(,)?
     ) => {{
@@ -868,7 +923,7 @@ macro_rules! capability_meta {
                     .collect(),
                 may_expose_secrets: $secrets,
                 may_return_untrusted_content: $untrusted,
-                annotations: $crate::manifest::Annotations::CONSERVATIVE,
+                idempotent: $crate::capability_meta!(@idempotent $($idempotent)?),
                 input_sinks: [$(
                     (
                         $input.to_owned(),

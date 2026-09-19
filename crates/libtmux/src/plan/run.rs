@@ -17,7 +17,8 @@ use super::{Op, OperationKind, Part, Plan, Scope, Step};
 use crate::error::ListingDecodeError;
 use crate::formats::FormatCodecError;
 use crate::{
-    Command, CommandChain, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId,
+    Command, CommandChain, Error, IdParseError, PaneId, Server, SessionId, TmuxText, Window,
+    WindowId,
 };
 
 /// How an operation ended.
@@ -295,10 +296,26 @@ impl Plan {
     /// not return valid IDs. Validation happens before the first command. A
     /// command tmux *refuses* is reported through the returned [`PlanResult`],
     /// not as an error, because a plan may expect one.
+    ///
+    /// On a handle from `Server::over_control_mode`, a plan holding a
+    /// [`super::ops::Pause`] fails with
+    /// [`crate::ControlModeErrorKind::BlockingCommand`] before anything is
+    /// sent, as [`Self::run_over_control_mode`] does.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect can be partial: steps already dispatched stay done, and the
+    /// [`PlanResult`] naming them, with the ids of what they created, is lost
+    /// with the future. A retry runs the whole plan again.
     pub async fn run(&self, server: &Server, planner: Planner) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
+        #[cfg(feature = "control-mode")]
+        if server.routes_over_control_mode() {
+            self.refuse_pause_over_control_mode()?;
+        }
         self.validate_option_scopes()?;
+        self.validate_layouts(server).await?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -433,6 +450,25 @@ impl Plan {
             }
         }
 
+        Ok(())
+    }
+
+    /// Refuse a `select-layout` value that `select-layout` itself cannot
+    /// parse.
+    ///
+    /// A plan renders its own commands, so a recorded
+    /// [`super::ops::SelectLayout`] reaches tmux without passing
+    /// [`Window::select_layout`]'s guard: 3.3 and 3.3a exit on a layout
+    /// value they cannot parse, taking every session on the socket with
+    /// them. Checked here, alongside `validate_option_scopes`, rather than
+    /// in `render`, which has no server to check a preset's version floor
+    /// against. Before the first command either way.
+    async fn validate_layouts(&self, server: &Server) -> Result<(), Error> {
+        for operation in self.steps() {
+            if let Op::SelectLayout(select) = operation {
+                Window::validate_saved_layout(server, select.layout()).await?;
+            }
+        }
         Ok(())
     }
 
@@ -683,6 +719,20 @@ fn bound_id<T: std::str::FromStr>(
 
 #[cfg(feature = "control-mode")]
 impl Plan {
+    /// Refuse a plan holding a pause on a control-mode connection.
+    ///
+    /// tmux ends a delayed `run-shell` block the moment it queues the delay
+    /// (`cmdq_fire_command` writes the guard when `exec` returns
+    /// `CMD_RETURN_WAIT`), then holds the connection's next command until the
+    /// delay is over: the pause would report done before it was, and a pause
+    /// at the end would not be waited for at all.
+    fn refuse_pause_over_control_mode(&self) -> Result<(), Error> {
+        if self.steps().iter().any(|op| matches!(op, Op::Pause(_))) {
+            return Err(Error::control_mode_blocking());
+        }
+        Ok(())
+    }
+
     /// Run this plan over an open control-mode connection.
     ///
     /// Control mode is the one transport that separates *how many commands*
@@ -701,12 +751,29 @@ impl Plan {
     /// written, a slot dependency is invalid, or a creating operation does not
     /// return valid IDs. Validation happens before the first command. A command
     /// tmux refuses is reported in the [`PlanResult`].
+    ///
+    /// A [`super::ops::SelectLayout`] here does not get [`Self::run`]'s
+    /// `select-layout` guard: that check needs a version probe, and this
+    /// connection carries no [`Server`] to run one against. A layout value
+    /// this cannot parse still reaches tmux directly.
+    ///
+    /// A plan holding a [`super::ops::Pause`] fails with
+    /// [`crate::ControlModeErrorKind::BlockingCommand`] before anything is
+    /// sent: tmux answers a delayed `run-shell` on a connection at once and
+    /// holds the next command instead, so the pause would report done before
+    /// it was.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect can be partial, as for [`Self::run`]: steps already sent
+    /// stay done, and the result naming them is lost with the future.
     pub async fn run_over_control_mode(
         &self,
         sender: &crate::control::ControlSender,
     ) -> Result<PlanResult, Error> {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
+        self.refuse_pause_over_control_mode()?;
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());

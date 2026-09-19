@@ -10,7 +10,11 @@ use super::{DecoderKind, FormatDescriptor, ListProfile};
 /// This is tmux's `format_quote_shell` set. None of these bytes is an octal
 /// digit or one of the letters `vis` emits, so the two escaping layers below
 /// compose into one unambiguous grammar.
-pub(super) const QUOTE_SHELL_SPECIALS: &[u8] = b"|&;<>()$`\\\"'*?[# =%";
+///
+/// `{`, `}`, `\n` and `\t` joined the set in 3.8-rc. No earlier release
+/// escapes them, so accepting them here is a safe superset on every version --
+/// no `since::` gate needed.
+pub(super) const QUOTE_SHELL_SPECIALS: &[u8] = b"|&;<>()$`\\\"'*?[# =%{}\n\t";
 
 /// The field separator a format plan's template renders between values.
 ///
@@ -114,7 +118,16 @@ impl FormatPlan {
 
             if byte == b'\\' {
                 *cursor += 1;
-                Self::decode_escape(stdout, cursor, row, field, descriptor, dialect, bytes)?;
+                Self::decode_escape(stdout, cursor, dialect, bytes, |kind, offset| {
+                    FormatCodecError::framing(
+                        kind,
+                        FormatCodecPhase::Escape,
+                        row,
+                        field,
+                        descriptor,
+                        offset,
+                    )
+                })?;
             } else if byte == FIELD_SEPARATOR {
                 *cursor += 1;
                 return Ok(SlotMeta {
@@ -137,23 +150,10 @@ impl FormatPlan {
     fn decode_escape(
         stdout: &[u8],
         cursor: &mut usize,
-        row: usize,
-        field: usize,
-        descriptor: &'static FormatDescriptor,
         dialect: TransportDialect,
         bytes: &mut Vec<u8>,
+        framing: impl Fn(FormatCodecErrorKind, usize) -> FormatCodecError,
     ) -> Result<(), FormatCodecError> {
-        let framing = |kind, offset| {
-            FormatCodecError::framing(
-                kind,
-                FormatCodecPhase::Escape,
-                row,
-                field,
-                descriptor,
-                offset,
-            )
-        };
-
         let Some(escaped) = stdout.get(*cursor).copied() else {
             return Err(framing(FormatCodecErrorKind::DanglingEscape, stdout.len()));
         };
@@ -256,6 +256,50 @@ const fn vis_cstyle_byte(letter: u8) -> Option<u8> {
         b'f' => Some(0x0c),
         b'r' => Some(0x0d),
         _ => None,
+    }
+}
+
+/// Write `value` as tmux prints `#{q:value}`: a backslash before each byte of
+/// `escaped`, then, for [`TransportDialect::Vis`], `VIS_OCTAL|VIS_CSTYLE|
+/// VIS_NOSLASH` over the result.
+///
+/// Written from tmux's side rather than from the decoder's constants, so a
+/// round trip through it checks the decoder against tmux.
+#[cfg(any(test, feature = "unstable-fuzzing"))]
+pub(crate) fn encode_like_tmux(
+    value: &[u8],
+    escaped: &[u8],
+    dialect: TransportDialect,
+    wire: &mut Vec<u8>,
+) {
+    for &byte in value {
+        if escaped.contains(&byte) {
+            wire.extend_from_slice(&[b'\\', byte]);
+        } else if dialect == TransportDialect::RawQ
+            // `isvisible` keeps printable ASCII, space, tab, and newline.
+            || byte.is_ascii_graphic()
+            || matches!(byte, b' ' | b'\t' | b'\n')
+        {
+            wire.push(byte);
+        } else if let Some(letter) = [
+            (0x07, b'a'),
+            (0x08, b'b'),
+            (0x0b, b'v'),
+            (0x0c, b'f'),
+            (0x0d, b'r'),
+        ]
+        .into_iter()
+        .find_map(|(control, letter)| (byte == control).then_some(letter))
+        {
+            wire.extend_from_slice(&[b'\\', letter]);
+        } else {
+            wire.extend_from_slice(&[
+                b'\\',
+                b'0' + (byte >> 6),
+                b'0' + ((byte >> 3) & 0o7),
+                b'0' + (byte & 0o7),
+            ]);
+        }
     }
 }
 
@@ -398,6 +442,27 @@ impl FormatCodecError {
             field_name: Some(descriptor.name),
             expected: None,
             offset: Some(offset),
+            profile: None,
+        }
+    }
+
+    /// Construct a failure in a field named outside the catalog.
+    pub(crate) const fn uncatalogued(
+        kind: FormatCodecErrorKind,
+        phase: FormatCodecPhase,
+        row: usize,
+        field: usize,
+        field_name: &'static str,
+        offset: Option<usize>,
+    ) -> Self {
+        Self {
+            kind,
+            phase,
+            row: Some(row),
+            field: Some(field),
+            field_name: Some(field_name),
+            expected: None,
+            offset,
             profile: None,
         }
     }
@@ -655,4 +720,78 @@ pub(crate) fn decode_ascii(slot: ParsedSlot<'_>) -> Result<&str, FormatCodecErro
 /// Copy a text slot into an exact byte-preserving public value.
 pub(crate) fn decode_text(slot: ParsedSlot<'_>) -> TmuxText {
     TmuxText::from_bytes(slot.as_bytes())
+}
+
+/// Split output of a template naming formats the catalog does not carry.
+///
+/// Each of `names` was rendered `#{q:name}` or bare, followed by
+/// [`FIELD_SEPARATOR`], and each row ends with LF, as in a plan's template.
+/// Escapes decode as a plan's do in `dialect`. A row that does not frame
+/// fails the whole listing: nothing is skipped.
+pub(crate) fn split_quoted_rows<const N: usize>(
+    stdout: &[u8],
+    names: [&'static str; N],
+    dialect: TransportDialect,
+) -> Result<Vec<[Vec<u8>; N]>, FormatCodecError> {
+    let mut cursor = 0;
+    let mut rows = Vec::new();
+
+    while cursor < stdout.len() {
+        let row = rows.len();
+        let mut fields: [Vec<u8>; N] = std::array::from_fn(|_| Vec::new());
+        for (field, (bytes, name)) in fields.iter_mut().zip(names).enumerate() {
+            let error = |kind, phase, offset| {
+                FormatCodecError::uncatalogued(kind, phase, row, field, name, Some(offset))
+            };
+            loop {
+                let offset = cursor;
+                let Some(byte) = stdout.get(cursor).copied() else {
+                    return Err(error(
+                        FormatCodecErrorKind::MissingFieldTerminator,
+                        FormatCodecPhase::Field,
+                        offset,
+                    ));
+                };
+                cursor += 1;
+                match byte {
+                    0 => {
+                        return Err(error(
+                            FormatCodecErrorKind::EmbeddedNul,
+                            FormatCodecPhase::Field,
+                            offset,
+                        ));
+                    }
+                    FIELD_SEPARATOR => break,
+                    b'\\' => FormatPlan::decode_escape(
+                        stdout,
+                        &mut cursor,
+                        dialect,
+                        bytes,
+                        |kind, offset| error(kind, FormatCodecPhase::Escape, offset),
+                    )?,
+                    _ => bytes.push(byte),
+                }
+            }
+        }
+
+        let last = N.saturating_sub(1);
+        let terminator = |kind| {
+            FormatCodecError::uncatalogued(
+                kind,
+                FormatCodecPhase::RowTerminator,
+                row,
+                last,
+                names.get(last).copied().unwrap_or_default(),
+                Some(cursor),
+            )
+        };
+        match stdout.get(cursor) {
+            Some(b'\n') => cursor += 1,
+            Some(_) => return Err(terminator(FormatCodecErrorKind::UnexpectedRowTerminator)),
+            None => return Err(terminator(FormatCodecErrorKind::MissingRowLf)),
+        }
+        rows.push(fields);
+    }
+
+    Ok(rows)
 }

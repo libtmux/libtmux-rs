@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use libtmux::{Pane, ServerGeneration};
-use rmcp::model::ErrorData;
 use tokio_util::sync::CancellationToken;
 
+use crate::ToolError;
 use crate::exec::{self, RunOutcome, RunView};
 use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
@@ -25,12 +25,12 @@ struct RunKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct EndpointIdentity {
+pub(crate) struct EndpointIdentity {
     device: u64,
     inode: u64,
 }
 
-fn endpoint_identity(path: &Path) -> std::io::Result<EndpointIdentity> {
+pub(crate) fn endpoint_identity(path: &Path) -> std::io::Result<EndpointIdentity> {
     let metadata = std::fs::metadata(path)?;
     Ok(EndpointIdentity {
         device: metadata.dev(),
@@ -200,7 +200,7 @@ pub(crate) enum RunError {
     /// Pane input may have reached tmux, but delivery was not acknowledged.
     DispatchUnknown(Box<libtmux::Error>),
     /// Pane state changed after watcher setup and before dispatch.
-    Guard(ErrorData),
+    Guard(ToolError),
     /// Completion framing failed before the pane watcher was attached.
     Frame,
 }
@@ -294,7 +294,7 @@ pub(crate) async fn run(
     suppress_history: bool,
     cancelled: &CancellationToken,
     transport: RunTransport<'_>,
-    final_check: impl Future<Output = Result<(), ErrorData>>,
+    final_check: impl Future<Output = Result<(), ToolError>>,
 ) -> Result<RunView, RunError> {
     let RunTransport {
         server,
@@ -414,7 +414,7 @@ mod tests {
             .server()
             .resolved_tmux_executable()
             .expect("fixture tmux resolves");
-        let refusal = ErrorData::invalid_params("refused".to_owned(), None);
+        let refusal: ToolError = ErrorData::invalid_params("refused".to_owned(), None).into();
         let generation = guard
             .server()
             .generation()

@@ -24,14 +24,14 @@ impl FilterEnum for WorkflowState {
 }
 
 #[derive(Filterable)]
-#[filterable(target = "child", crate = "libtmux")]
+#[filterable(target = "child")]
 struct Child {
     label: String,
     active: bool,
 }
 
 #[derive(Filterable)]
-#[filterable(target = "collision_target", crate = "libtmux")]
+#[filterable(target = "collision_target")]
 struct InherentTargetCollision {
     label: String,
 }
@@ -41,7 +41,7 @@ impl InherentTargetCollision {
 }
 
 #[derive(Filterable)]
-#[filterable(target = "work_item", fields = "TaskHandles", crate = "libtmux")]
+#[filterable(target = "work_item", fields = "TaskHandles")]
 struct Task {
     #[filterable(rename = "name")]
     summary: String,
@@ -58,19 +58,19 @@ struct Task {
 }
 
 #[derive(Filterable)]
-#[filterable(target = "duplicate", crate = "libtmux")]
+#[filterable(target = "duplicate")]
 struct FirstDuplicate {
     first: bool,
 }
 
 #[derive(Filterable)]
-#[filterable(target = "duplicate", crate = "libtmux")]
+#[filterable(target = "duplicate")]
 struct SecondDuplicate {
     second: bool,
 }
 
 #[derive(Filterable)]
-#[filterable(target = "duplicate_root", crate = "libtmux")]
+#[filterable(target = "duplicate_root")]
 struct DuplicateRoot {
     #[filterable(many)]
     first: Vec<FirstDuplicate>,

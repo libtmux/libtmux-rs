@@ -1,5 +1,9 @@
 //! Integration tests for tmux version parsing and ordering.
 
+// Helpers outside a test function are not covered by clippy.toml's in-test
+// exemptions, and this file has one.
+#![allow(clippy::expect_used)]
+
 use std::error::Error as StdError;
 
 use libtmux::{Error, ReleaseSuffix, ReleaseVersion, TmuxVersion};
@@ -226,6 +230,55 @@ fn enforces_the_minimum_without_promoting_development_versions() {
     assert!(minimum.ensure_supported().is_ok());
 }
 
+/// `meets` and `has_behavior` are two different, deliberately non-identical
+/// rules -- documented at each -- so a test predicting a capability gate must
+/// call `has_behavior`, the one [`TmuxVersion::require`] actually refuses
+/// with.
+///
+/// `meets`'s own doc comment says a development identifier "meets only
+/// requirements at or below the crate's minimum supported release; they are
+/// not promoted to an invented release" -- and that clamp fires for *every*
+/// development identifier, `next-X.Y` included, not only a bare `master`.
+/// `has_behavior` instead reads `next-X.Y` as the real release `X.Y`, and a
+/// bare `master` (no release parses from it at all) as "not yet known to
+/// lack this". So `next-3.9` -- the version string this workspace's own
+/// tmux-matrix probe binary reports -- disagrees with `meets` for exactly
+/// the capabilities this crate gates above the floor: `meets` refuses every
+/// one of them, `has_behavior` grants whichever `next-3.9` numerically
+/// contains. This is the rule the `commands.rs` tests that predicted a
+/// `require`-gated branch with `meets` were reproducing, unnoticed, always
+/// taking the "unsupported" branch against that probe.
+#[test]
+fn has_behavior_and_meets_disagree_above_the_supported_floor() {
+    let master = TmuxVersion::parse_output(b"tmux master\n").unwrap();
+    let next_3_9 = TmuxVersion::parse_output(b"tmux next-3.9\n").unwrap();
+    let next_3_2 = TmuxVersion::parse_output(b"tmux next-3.2\n").unwrap();
+    let numbered = TmuxVersion::parse_output(b"tmux 3.7b\n").unwrap();
+    let prompt_history = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+
+    // `meets` clamps every development identifier to "no more than the
+    // floor", so it refuses a capability above 3.2a regardless of what the
+    // build's own next-release number is.
+    assert!(!master.meets(&prompt_history));
+    assert!(!next_3_9.meets(&prompt_history));
+    assert!(!next_3_2.meets(&prompt_history));
+
+    // `has_behavior` computes the real answer instead: `next-3.9` already
+    // contains 3.3's behavior, `next-3.2` does not yet, and a bare `master`
+    // is taken at its word rather than assumed to lack it.
+    assert!(master.has_behavior(&prompt_history));
+    assert!(next_3_9.has_behavior(&prompt_history));
+    assert!(!next_3_2.has_behavior(&prompt_history));
+
+    // A numbered release is the one shape where the two rules cannot
+    // disagree: both reduce to the same `release >= required` comparison.
+    assert_eq!(
+        numbered.meets(&prompt_history),
+        numbered.has_behavior(&prompt_history)
+    );
+    assert!(numbered.has_behavior(&prompt_history));
+}
+
 #[test]
 fn release_value_getters_preserve_components() {
     let suffix = ReleaseSuffix::patch('c').expect("c is a lowercase patch suffix");
@@ -259,4 +312,55 @@ fn error_is_a_thread_safe_static_standard_error() {
     fn assert_error<T: StdError + Send + Sync + 'static>() {}
 
     assert_error::<Error>();
+}
+
+/// `meets` answers the floor question and clamps a development identifier to
+/// it, so gating a capability on it refuses a tmux that already has the
+/// capability. Its own rustdoc has warned about that from the start, and
+/// `SavedLayout::classify` gated the mirrored layout presets on it anyway:
+/// on `next-3.9` both presets vanished and an ambiguous prefix read as
+/// unique. Prose did not prevent that, so this does. A capability question
+/// belongs to `has_behavior` or `require`.
+#[test]
+fn meets_is_only_ever_asked_about_the_floor() {
+    let mut offenders = Vec::new();
+
+    for entry in walk(std::path::Path::new("src")) {
+        let source = std::fs::read_to_string(&entry).expect("a readable source file");
+        for (number, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            // Doc examples show the trap on purpose.
+            if code.starts_with("///") || code.starts_with("//!") || code.starts_with("//") {
+                continue;
+            }
+            if code.contains(".meets(") && !code.contains("MIN_SUPPORTED") {
+                offenders.push(format!(
+                    "{}:{}: {}",
+                    entry.display(),
+                    number + 1,
+                    code.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "`meets` gates a capability here; use `has_behavior` or `require`:\n{}",
+        offenders.join("\n"),
+    );
+}
+
+fn walk(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let entries = std::fs::read_dir(directory).expect("a readable directory");
+    for entry in entries {
+        let path = entry.expect("a readable entry").path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            found.push(path);
+        }
+    }
+    found
 }

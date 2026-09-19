@@ -52,7 +52,8 @@ async fn unknown_targets_are_structured_invalid_input() {
         .capture_pane(args(serde_json::json!({"pane": "%999999"})))
         .await
         .map(|_| ())
-        .expect_err("missing pane fails");
+        .expect_err("missing pane fails")
+        .into_error_data();
 
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     let data = error.data.expect("classification");
@@ -79,7 +80,8 @@ async fn a_malformed_id_is_bad_input_and_a_padded_one_still_resolves() {
         .capture_pane(args(serde_json::json!({"pane": "not-a-pane"})))
         .await
         .map(|_| ())
-        .expect_err("a malformed id fails");
+        .expect_err("a malformed id fails")
+        .into_error_data();
 
     assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     let data = error.data.expect("classification");
@@ -150,6 +152,12 @@ async fn capture_can_include_scrollback() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A layout value shaped like a flag is refused, not obeyed.
+///
+/// `select_layout` now goes through `Window::select_layout`'s guard,
+/// which refuses `-E` client-side as a value that is not a
+/// recognized layout -- it never reaches tmux at all, so it cannot be
+/// misread there as the flag that spreads panes evenly either.
 #[tokio::test]
 async fn layout_input_shaped_like_a_flag_is_not_obeyed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -180,13 +188,61 @@ async fn layout_input_shaped_like_a_flag_is_not_obeyed() {
         })))
         .await
         .map(|_| ())
-        .expect_err("flag-shaped layout is data");
-    assert!(error.message.contains("-E"), "{}", error.message);
+        .expect_err("flag-shaped layout is refused before it reaches tmux")
+        .into_error_data();
+    assert_eq!(error.data.expect("classification")["kind"], "invalid_input");
     let after: Vec<Value> = json(tools.list_panes().await.expect("panes"))["panes"]
         .as_array()
         .unwrap()
         .clone();
     assert_eq!(before.len(), after.len());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A layout value `select-layout` cannot parse is refused, and does not
+/// take tmux down with it.
+///
+/// `select_layout` used to build its own `select-layout` command directly,
+/// bypassing `Window::select_layout`'s guard: 3.3 and 3.3a exit on a value
+/// they cannot parse, taking every session on the socket with them, and
+/// `--` alone does not help, because it turns `-o` from the undo flag into
+/// exactly such a value.
+#[tokio::test]
+async fn select_layout_refuses_an_unparseable_value_and_the_server_survives() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let tools = bare_tools(guard.server());
+    tools
+        .create_session(args(serde_json::json!({"name": "layout-guard"})))
+        .await
+        .expect("session starts");
+    let window = json(tools.list_windows().await.expect("windows"))["windows"][0]["id"]
+        .as_str()
+        .expect("a window id")
+        .to_owned();
+
+    for value in ["-o", "garbage", ""] {
+        let error = tools
+            .select_layout(args(serde_json::json!({"window": window, "layout": value})))
+            .await
+            .map(|_| ())
+            .expect_err("select-layout cannot parse this value")
+            .into_error_data();
+        assert_eq!(
+            error.code,
+            ErrorCode::INVALID_PARAMS,
+            "{value:?}: {error:?}"
+        );
+    }
+
+    // The daemon and its session are unharmed, not merely this process:
+    // every refused value above would have killed tmux 3.3a outright.
+    assert!(
+        guard.server().is_alive().await,
+        "the server survives every refused value",
+    );
+    let sessions = json(tools.list_sessions().await.expect("sessions"));
+    assert_eq!(sessions["sessions"][0]["name"], "layout-guard");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

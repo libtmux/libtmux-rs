@@ -34,6 +34,8 @@ getrandom = "0.4"
 libtmux = { workspace = true, features = ["control-mode", "query", "serde"] }
 regex = "1.13"
 rmcp = { version = "3.0", features = ["server", "macros", "transport-io"] }
+# `std::fs::File::lock` needs 1.89, above this crate's floor.
+rustix = { version = "1.1.4", features = ["fs"] }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

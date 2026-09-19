@@ -1,0 +1,11 @@
+error: filterable `many` is a bare flag and does not accept a value
+ --> tests/ui/fail/relation_flag_value.rs:8:18
+  |
+8 |     #[filterable(many = Child)]
+  |                  ^^^^
+
+error: filterable `one` is a bare flag and does not accept a value
+  --> tests/ui/fail/relation_flag_value.rs:10:18
+   |
+10 |     #[filterable(one = "owner")]
+   |                  ^^^

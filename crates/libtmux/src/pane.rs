@@ -10,14 +10,16 @@ use crate::formats::TmuxText;
 use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
+use crate::query::{FilterSchema, Filterable, ReadField};
+use crate::session::Session;
 use crate::snapshot::PaneProjection;
 #[cfg(feature = "query")]
-use crate::snapshot::{PaneFields, PaneInfo};
+use crate::snapshot::{Availability, FieldRef, PaneFields, PaneInfo};
 use crate::target::{PaneId, ServerIdentity, SessionId, WindowId};
 use crate::version::TmuxVersion;
+use crate::window::Respawn;
 use crate::window::Window;
-use crate::{Command, CommandResult, Error, ObjectKind};
+use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
 mod observe;
 mod settings;
@@ -175,6 +177,11 @@ impl Pane {
     }
 
     /// Return the pane's working directory.
+    ///
+    /// `None` when tmux reported none, which a pane straight from
+    /// [`Self::split`] can do until its process has started; [`Self::refresh`]
+    /// asks again. Reading `pane_current_path` through [`Self::get`] says
+    /// which kind of missing it is.
     #[must_use]
     pub fn current_path(&self) -> Option<&TmuxText> {
         self.projection.pane().pane_current_path().available()
@@ -193,9 +200,17 @@ impl Pane {
     }
 
     /// Return the process id of the pane's foreground process.
+    ///
+    /// `None` for a pane with no process: tmux 3.8 reports `#{pane_pid}` as
+    /// an empty string once the pane's process has exited (`remain-on-exit`
+    /// keeps such a pane instead of closing it). A value is not evidence the
+    /// process is still alive, on any release: every release before 3.8
+    /// keeps reporting the exited process's own pid rather than clearing the
+    /// field, and a pid can be reused once its process is gone. Check
+    /// [`Self::is_dead`] for liveness; do not infer it from this.
     #[must_use]
-    pub fn pid(&self) -> u32 {
-        *self.projection.pane().pane_pid()
+    pub fn pid(&self) -> Option<u32> {
+        self.projection.pane().pane_pid().available().copied()
     }
 
     /// Return the pane width in cells.
@@ -208,6 +223,18 @@ impl Pane {
     #[must_use]
     pub fn height(&self) -> u32 {
         *self.projection.pane().pane_height()
+    }
+
+    /// Return the pane's left edge, in cells from its window's own left edge.
+    #[must_use]
+    pub fn left(&self) -> i32 {
+        *self.projection.pane().pane_left()
+    }
+
+    /// Return the pane's top edge, in cells from its window's own top edge.
+    #[must_use]
+    pub fn top(&self) -> i32 {
+        *self.projection.pane().pane_top()
     }
 
     /// Report whether this pane is the active one in its window.
@@ -409,6 +436,39 @@ impl Pane {
             .map(|projection| Window::new(Arc::clone(&self.core), projection)))
     }
 
+    /// Return the session this pane was reached through.
+    ///
+    /// This re-reads tmux rather than the snapshot, so a session renamed or
+    /// removed since discovery is reported as it is now. `Ok(None)` means the
+    /// session no longer exists.
+    ///
+    /// A window can be linked into several sessions, so this is the session
+    /// this handle was reached through rather than the pane's only one; the
+    /// pane itself belongs to exactly one window.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session listing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
+    /// if let Some(session) = pane.session().await? {
+    ///     println!("{}", session.name().to_string_lossy());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn session(&self) -> Result<Option<Session>, Error> {
+        let infos = listing::sessions(&self.core, None).await?;
+
+        Ok(infos
+            .into_iter()
+            .find(|info| info.session_id() == self.session_id())
+            .map(|info| Session::new(Arc::clone(&self.core), info)))
+    }
+
     /// Split this pane, putting a new one beside it.
     ///
     /// [`Window::split`] divides whichever pane is active; this divides the
@@ -595,13 +655,17 @@ impl Pane {
 
     /// Send literal text followed by Enter as one dispatch.
     ///
-    /// The text and Enter are submitted together, so cancelling this future
-    /// cannot leave a completed text send without its Enter. The text is
-    /// sensitive and stays out of diagnostics.
+    /// The text is sensitive and stays out of diagnostics.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the line.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect may or may not have happened, but never half of it: the text
+    /// and its Enter travel as one `send-keys`, so a dropped future cannot leave
+    /// a line typed and not submitted. A retry can type the line twice.
     pub async fn send_line(&self, text: impl Into<OsString>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
@@ -826,7 +890,7 @@ impl Pane {
     /// # Errors
     ///
     /// Returns an error when tmux refuses the title.
-    pub async fn set_title(&mut self, title: impl Into<OsString>) -> Result<&mut Self, Error> {
+    pub async fn set_title(&mut self, title: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "select-pane",
@@ -834,7 +898,7 @@ impl Pane {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("-T")
-                .sensitive_arg(title.into()),
+                .sensitive_arg(title.into().into_os_string()),
         )
         .await?;
 
@@ -909,16 +973,17 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns an error when the pane is still running and `kill` is not set.
+    /// Returns an error under [`Respawn::OnlyIfDead`] when the command is
+    /// still running.
     pub async fn respawn(
         &mut self,
         command: Option<impl Into<OsString>>,
-        kill: bool,
+        respawn_mode: Respawn,
     ) -> Result<&mut Self, Error> {
         let mut respawn = Command::new("respawn-pane")
             .arg("-t")
             .arg(self.id().to_string());
-        if kill {
+        if respawn_mode.kills() {
             respawn = respawn.arg("-k");
         }
         if let Some(command) = command {
@@ -1192,6 +1257,59 @@ impl fmt::Debug for Pane {
     }
 }
 
+#[cfg(feature = "query")]
+impl Pane {
+    /// Read one field of this pane's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field a pane listing fetches reads this way, including those
+    /// with no getter of their own. Nothing is sent to tmux, so the value is
+    /// as old as the snapshot; [`Self::refresh`] renews it. The result says
+    /// why a field holds no value: see [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::query::Filterable as _;
+    /// use libtmux::{Availability, Pane, TmuxText};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("read").await?;
+    /// let mut pane = session.panes().await?.remove(0);
+    /// let fields = Pane::filter_fields();
+    ///
+    /// // Outside copy mode tmux reports no scroll position at all.
+    /// assert_eq!(pane.get(fields.scroll_position), Availability::Absent);
+    ///
+    /// pane.copy_mode().await?;
+    /// pane.refresh().await?;
+    /// assert_eq!(pane.get(fields.scroll_position), Availability::Available(0));
+    /// assert_eq!(
+    ///     pane.get(fields.pane_mode),
+    ///     Availability::Available(&TmuxText::from("copy-mode")),
+    /// );
+    /// assert_eq!(pane.get(fields.pane_id), Availability::Available(pane.id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.projection.pane().stored(name)
+    }
+}
+
 /// Filtering a pane uses the same handles as the snapshot beneath it.
 ///
 /// Matching and validation delegate to that snapshot, so an expression can
@@ -1454,6 +1572,19 @@ impl CaptureOptions {
         self
     }
 
+    /// Whether a joined line still needs its blank-cell padding trimmed.
+    ///
+    /// tmux 3.2a's `-J` carries the unwritten cells past a wrapped line's
+    /// last printed row into the join; every later release, `-T` (3.4) or
+    /// not, already drops them. This crate trims the same padding itself
+    /// rather than adding a version gate for one release. Skipped when the
+    /// caller asked to keep exactly what a program printed with
+    /// [`Self::trailing_spaces`], and moot without [`Self::join_wrapped`],
+    /// where every row is tmux's own and already trimmed.
+    pub(crate) const fn needs_wrap_trim(&self) -> bool {
+        self.join_wrapped && !self.trailing_spaces
+    }
+
     /// Lower these options into a `capture-pane` command for one pane.
     ///
     /// Takes the release so a flag cannot reach tmux without the check that
@@ -1536,7 +1667,7 @@ enum CaptureBound {
 /// let session = server.new_session("marked").await?;
 /// let pane = session.panes().await?.remove(0);
 ///
-/// if server.capabilities().await?.tmux_version().meets(&libtmux::since::CAPTURE_LINE_FLAGS) {
+/// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
 ///     let lines: Vec<CapturedLine> = pane.capture_lines(CaptureOptions::visible()).await?;
 ///     assert!(lines.iter().all(|line| !line.starts_output || !line.starts_prompt));
 /// }

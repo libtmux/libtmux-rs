@@ -1,0 +1,10 @@
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[1;32muser[0m:/tmp/libtmux-rs-dev/a55-dir% [K[?2004hpprintf 'x\033]y'[?2004l
+x]y[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[1;32muser[0m:/tmp/libtmux-rs-dev/a55-dir% [K[?2004heecho AFTER-$((2+2))[?2004l
+AFTER-4
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[1;32muser[0m:/tmp/libtmux-rs-dev/a55-dir% [K[?2004hpprintf '\033]0;a title\007'; tput sgr0; tput bold; echo bold; tput [K  sgr0[?2004l
+]0;a title[m[1mbold
+[m[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[1;32muser[0m:/tmp/libtmux-rs-dev/a55-dir% [K[?2004hpprintf '\033Ptmux;\033\033]0;passthrough\007\033\\'; printf '\033_ [Kaapc\033\\'; printf 'can\030 sub\032\n'[?2004l
+Ptmux;]0;passthrough\_apc\can sub
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[1;32muser[0m:/tmp/libtmux-rs-dev/a55-dir% [K[?2004hlls --color=always[?2004l
+[0m[01;32mfile[0m  [01;34msub[0m
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[1;32muser[0m:/tmp/libtmux-rs-dev/a55-dir% [K[?2004h
