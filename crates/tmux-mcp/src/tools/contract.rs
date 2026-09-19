@@ -671,7 +671,7 @@ impl TmuxTools {
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {"session" => [TmuxLookup], "name" => [TmuxState, TmuxFormat]},
-            literalized = ["name"], nested = [], self_bounded = false,
+            literalized = ["name"], nested = [], idempotent = true, self_bounded = false,
             always_load = false,
         )
     )]
@@ -703,7 +703,7 @@ impl TmuxTools {
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {"window" => [TmuxLookup], "name" => [TmuxState, TmuxFormat]},
-            literalized = ["name"], nested = [], self_bounded = false,
+            literalized = ["name"], nested = [], idempotent = true, self_bounded = false,
             always_load = false,
         )
     )]
@@ -724,7 +724,7 @@ impl TmuxTools {
         title = "Resize Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup], "width" => [TmuxState], "height" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn resize_window(
         &self,
@@ -799,7 +799,7 @@ impl TmuxTools {
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {"pane" => [TmuxLookup], "title" => [TmuxState, TmuxFormat]},
-            literalized = ["title"], nested = [], self_bounded = false,
+            literalized = ["title"], nested = [], idempotent = true, self_bounded = false,
             always_load = false,
         )
     )]
@@ -820,7 +820,7 @@ impl TmuxTools {
         title = "Set Mouse Enabled",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup], "enabled" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn set_mouse_enabled(
         &self,
@@ -851,7 +851,7 @@ impl TmuxTools {
         title = "Set History Limit",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup], "limit" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn set_history_limit(
         &self,
@@ -1006,6 +1006,7 @@ impl TmuxTools {
             sinks = {"window" => [TmuxLookup], "enabled" => [TmuxState]},
             literalized = [], nested = [],
             amplifies_future_input = true,
+            idempotent = true,
             self_bounded = false, always_load = false,
         )
     )]

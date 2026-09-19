@@ -384,6 +384,14 @@ Clients can use each tool's four MCP annotations to decide whether to ask a
 person before a whole call. Tool selection shapes the advertised interface; it
 does not reduce the tmux user's authority.
 
+The annotations derive from each tool's capability row. A tool that only
+observes tmux is `readOnlyHint: true`. Deleting tmux state or sending pane
+input is `destructiveHint: true`, because the receiving shell runs whatever
+arrives. Reads, teardown, and changes that set a named value, such as a
+rename, are `idempotentHint: true`. Starting or driving a process, or
+returning terminal text, is `openWorldHint: true`. `wait_for_text` is not
+read-only: it attaches a client while it waits.
+
 When launched from tmux, the process inherits a pane ID, session number, server
 PID, and socket. Pane listings mark that pane `caller: "self"` only when the
 socket matches the selected server. Pane-input and teardown tools additionally

@@ -567,7 +567,7 @@ impl TmuxTools {
 #[cfg(test)]
 mod tests {
     use super::{Selection, Toolset};
-    use crate::manifest::OutputClass;
+    use crate::manifest::{OutputClass, ProcessReach, TmuxEffect};
     use std::collections::BTreeSet;
 
     #[test]
@@ -647,6 +647,51 @@ mod tests {
             "tools sharing a first sentence, indistinguishable by a caller that reads only that \
              far: {collisions:?}",
         );
+    }
+
+    /// Clients auto-approve or prompt from these hints, so a tool that
+    /// changes tmux must never claim to be read-only.
+    #[test]
+    fn annotations_follow_each_tools_capability_row() {
+        let selection = Selection::parse(Some("inspect,manage,execute,teardown"), None, None)
+            .expect("selection");
+        let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
+            .expect("complete manifest");
+        let mut distinct = BTreeSet::new();
+
+        for tool in resolved.router.list_all() {
+            let row = &resolved
+                .report
+                .tools
+                .iter()
+                .find(|row| row.name == tool.name)
+                .expect("report row")
+                .capability;
+            let hints = tool.annotations.as_ref().expect("annotations");
+            let read_only = hints.read_only_hint.expect("readOnlyHint");
+            let destructive = hints.destructive_hint.expect("destructiveHint");
+            let changes_tmux = row.toolset != Toolset::Inspect
+                || row.process_reach != ProcessReach::None
+                || row
+                    .tmux_effects
+                    .iter()
+                    .any(|effect| *effect != TmuxEffect::Observe);
+            let can_destroy = row.tmux_effects.contains(&TmuxEffect::Delete)
+                || matches!(
+                    row.process_reach,
+                    ProcessReach::PaneInput | ProcessReach::PaneCommand
+                );
+
+            assert_eq!(read_only, !changes_tmux, "{} readOnlyHint", tool.name);
+            assert_eq!(destructive, can_destroy, "{} destructiveHint", tool.name);
+            distinct.insert((
+                read_only,
+                destructive,
+                hints.idempotent_hint.expect("idempotentHint"),
+                hints.open_world_hint.expect("openWorldHint"),
+            ));
+        }
+        assert!(distinct.len() > 3, "hints barely vary: {distinct:?}");
     }
 
     #[test]

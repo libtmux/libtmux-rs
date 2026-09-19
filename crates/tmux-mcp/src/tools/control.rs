@@ -186,7 +186,7 @@ impl TmuxTools {
         title = "Kill Window",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn kill_window(
         &self,
@@ -206,7 +206,7 @@ impl TmuxTools {
         title = "Kill Pane",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn kill_pane(
         &self,
@@ -278,7 +278,7 @@ impl TmuxTools {
         title = "Kill Session",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn kill_session(
         &self,
@@ -530,7 +530,7 @@ impl TmuxTools {
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup],
             "layout" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn select_layout(
         &self,
@@ -563,7 +563,7 @@ impl TmuxTools {
         title = "Clear Pane History",
         meta = crate::capability_meta!(Teardown, None, [Delete], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup]
-        })
+        }; idempotent)
     )]
     pub async fn clear_pane(
         &self,

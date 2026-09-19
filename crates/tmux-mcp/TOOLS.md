@@ -59,7 +59,7 @@ Call a serial batch of at most sixteen enabled inspect tools. One approval for t
 - Output classes: `["tmux-metadata","terminal-content","process-environment","configured-command"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":true,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `["capture_pane","capture_since","find_pane_by_position","get_pane_info","get_server_info","get_session_info","get_tmux_variables","get_window_info","list_panes","list_sessions","list_windows","search_panes","show_environment","show_hooks","show_option","snapshot_pane"]`
 - Amplifies future input: `false`
@@ -74,7 +74,7 @@ Read a pane's contents. Reads the visible screen by default; set history to reac
 - Output classes: `["tmux-metadata","terminal-content"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":true,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -89,7 +89,7 @@ Read what a pane wrote since the previous call. The first call, with no cursor, 
 - Output classes: `["tmux-metadata","terminal-content"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":true,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -104,7 +104,7 @@ Discard a pane's scrollback, so the next capture_pane returns only what happens 
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -119,7 +119,7 @@ Create a new detached tmux session Start a pane's configured process; accepts no
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
 - Input literalization: `{"name":"double-hash-once","start_directory":"double-hash-once"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -134,7 +134,7 @@ Create a window running its configured process Start a pane's configured process
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
 - Input literalization: `{"name":"double-hash-once","start_directory":"double-hash-once"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -149,7 +149,7 @@ Find the pane touching a named window corner Inspect tmux metadata; accepts no c
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -164,7 +164,7 @@ Return metadata for one pane Inspect tmux metadata; accepts no client-supplied e
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -179,7 +179,7 @@ Report every session with its windows and panes, in one call. Prefer this over c
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -194,7 +194,7 @@ Return metadata for one session Inspect tmux metadata; accepts no client-supplie
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -209,7 +209,7 @@ Read a bounded set of tmux variables against one pane. tmux reads a name it does
 - Output classes: `["tmux-metadata","configured-command"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{"names":"validated-variable-name"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -224,7 +224,7 @@ Return metadata for one window Inspect tmux metadata; accepts no client-supplied
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -239,7 +239,7 @@ Kill a pane. Killing a window's last pane closes the window Delete tmux state; a
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -254,7 +254,7 @@ Kill a tmux session and everything in it Delete tmux state; accepts no command p
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -269,7 +269,7 @@ Kill a window, closing it in every session that links it Delete tmux state; acce
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -284,7 +284,7 @@ List every pane on the server Inspect tmux metadata; accepts no client-supplied 
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -299,7 +299,7 @@ List every tmux session on the server Inspect tmux metadata; accepts no client-s
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -314,7 +314,7 @@ List every window on the server. A window linked into several sessions appears o
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -329,7 +329,7 @@ Move one window to a session and index Change tmux state; no client-supplied exe
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -359,7 +359,7 @@ Rename one session Change tmux state; no client-supplied executable input.
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{"name":"double-hash-once"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -374,7 +374,7 @@ Rename one window Change tmux state; no client-supplied executable input.
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{"name":"double-hash-once"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -389,7 +389,7 @@ Move one edge of a pane by a number of rows or columns Change tmux state; no cli
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -404,7 +404,7 @@ Resize one window to exact cell dimensions Change tmux state; no client-supplied
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -449,7 +449,7 @@ Search what panes are displaying with Rust's linear-time regex engine. Accept at
 - Output classes: `["tmux-metadata","terminal-content"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":true,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -464,7 +464,7 @@ Rearrange a window's panes into a named layout, or into a layout string tmux gav
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -479,7 +479,7 @@ Select a pane, making it its window's active pane. Give a direction to move rela
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -494,7 +494,7 @@ Select a window, making it its session's active window. Give a direction to move
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -539,7 +539,7 @@ Set the scrollback history limit for a session or its global default Change tmux
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -554,7 +554,7 @@ Set mouse handling for a session or the global session default Change tmux state
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -569,7 +569,7 @@ Set one pane's title Change tmux state; no client-supplied executable input.
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{"title":"double-hash-once"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -584,7 +584,7 @@ Set the window default for synchronized pane input. Individual pane overrides st
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `true`
@@ -599,7 +599,7 @@ List the variables tmux hands to processes it starts, for the server or for one 
 - Output classes: `["process-environment"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -614,7 +614,7 @@ List the hooks tmux runs when something happens on the server, such as a pane ex
 - Output classes: `["configured-command"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -629,7 +629,7 @@ Read a tmux option, such as history-limit or a user option like @theme. Name the
 - Output classes: `["tmux-metadata","configured-command"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true}`
 - Input literalization: `{"name":"double-hash-once"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -644,7 +644,7 @@ Signal a tmux wait-for channel, releasing every current waiter. With no waiter, 
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -659,7 +659,7 @@ Read pane content with cursor position, mode state, and scroll position in one r
 - Output classes: `["tmux-metadata","terminal-content"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":true,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -674,7 +674,7 @@ Split a window and start the configured process with no command payload Start a 
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
 - Input literalization: `{"start_directory":"double-hash-once"}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -689,7 +689,7 @@ Swap the positions of two panes Change tmux state; no client-supplied executable
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -704,7 +704,7 @@ Block until something signals a tmux wait-for channel. A pending signal is consu
 - Output classes: `["tmux-metadata"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":false,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
@@ -719,7 +719,7 @@ Wait until a pane writes matching text. Reads the pane's live output stream, so 
 - Output classes: `["tmux-metadata","terminal-content"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":true,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`
