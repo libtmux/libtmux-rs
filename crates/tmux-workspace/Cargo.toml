@@ -19,6 +19,7 @@ include = [
     "/README.md",
     "/libtmux-macros-README.md",
     "/src/**/*.rs",
+    "/src/cli/bridge.py",
     "/tests/**/*.rs",
     "/tests/fixtures/layout-preflight.json",
     "/tests/fixtures/terminal_lifecycle.py",
