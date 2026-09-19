@@ -21,11 +21,22 @@ use super::{
 /// and is taken as it stands.
 const REUSED: &str = "reused";
 
-/// Per-load constants that stay the same across every input file, kept
-/// together so passing them to `build` costs one parameter, not two.
-struct Invocation<'a> {
-    python: Option<&'a std::ffi::OsStr>,
+/// What one load settled before its first input, and every input then sees
+/// unchanged: where it is aimed, what it may borrow, and how it ends.
+struct LoadContext {
+    server: Server,
+    /// The checked Python runtime, present only when an input needs one.
+    python: Option<std::ffi::OsString>,
     dimensions: Option<(u32, u32)>,
+    borrowed: Option<AppendTarget>,
+    /// Whether to ask before building: a terminal, no `--yes`, and a load
+    /// that would attach.
+    interactive: bool,
+    /// Whether the load is inside tmux on the server it targets. `None` when
+    /// `-d` or `--append` mean it never attaches.
+    inside_tmux: Option<bool>,
+    /// Whether the load attaches at the end before any prompt says otherwise.
+    attach: bool,
 }
 
 #[derive(Default)]
@@ -257,17 +268,9 @@ pub(super) async fn load(
     if report.machine() && !flag(args, "detached") && !flag(args, "append") {
         return Err(CliError::usage("machine load requires -d or --append"));
     }
-    let (workspaces, server, borrowed, python, dimensions, inside_tmux) =
-        load_setup(args, report).await?;
-    let invocation = Invocation {
-        python: python.as_deref(),
-        dimensions,
-    };
-    let base_attach = !flag(args, "detached") && !flag(args, "append");
-    let interactive =
-        !report.machine() && !flag(args, "yes") && base_attach && std::io::stdin().is_terminal();
+    let (workspaces, context) = load_setup(args, report).await?;
     let mut last_session = None;
-    let mut attach_at_end = base_attach;
+    let mut attach_at_end = context.attach;
     let mut appended = Vec::new();
     report.event("started", json!({"inputs":workspaces.len()}))?;
     for (index, (path, workspace)) in workspaces.iter().enumerate() {
@@ -277,18 +280,11 @@ pub(super) async fn load(
             ..Effects::default()
         });
         let outcome = load_one(
-            &server,
+            &context,
             workspace,
             args,
             report,
             effects,
-            &invocation,
-            borrowed.as_ref(),
-            interactive,
-            inside_tmux.unwrap_or(false),
-            base_attach,
-            index,
-            path,
             &mut state.results,
         )
         .await;
@@ -319,7 +315,12 @@ pub(super) async fn load(
             report.log_warning();
             if attach_at_end {
                 if let Some(session) = last_session {
-                    attach(&server, &session, inside_tmux.unwrap_or(false)).await?;
+                    attach(
+                        &context.server,
+                        &session,
+                        context.inside_tmux.unwrap_or(false),
+                    )
+                    .await?;
                 }
             }
         }
@@ -402,21 +403,10 @@ fn ask(question: &str, choices: &str, default: char) -> Result<char> {
         .unwrap_or(default))
 }
 
-#[allow(
-    clippy::type_complexity,
-    reason = "one-shot preflight tuple, not a public API"
-)]
 async fn load_setup(
     args: &ArgMatches,
     report: &mut Reporter,
-) -> Result<(
-    Vec<(PathBuf, normalize::Workspace)>,
-    Server,
-    Option<AppendTarget>,
-    Option<std::ffi::OsString>,
-    Option<(u32, u32)>,
-    Option<bool>,
-)> {
+) -> Result<(Vec<(PathBuf, normalize::Workspace)>, LoadContext)> {
     let workspaces = load_inputs(args)?;
     let server = server(args)?;
     // Whether this load is inside tmux on the server it targets, and
@@ -451,13 +441,21 @@ async fn load_setup(
     } else {
         None
     };
+    let attach = !flag(args, "detached") && !flag(args, "append");
     Ok((
         workspaces,
-        server,
-        borrowed,
-        python,
-        dimensions,
-        inside_tmux,
+        LoadContext {
+            server,
+            python,
+            dimensions,
+            borrowed,
+            interactive: !report.machine()
+                && !flag(args, "yes")
+                && attach
+                && std::io::stdin().is_terminal(),
+            inside_tmux,
+            attach,
+        },
     ))
 }
 
@@ -501,50 +499,44 @@ fn warn_about_inputs(
 /// The result record is pushed to `results` before the `workspace-completed`
 /// event that carries it is sent: a consumer that closes its read end right
 /// after seeing that event must still find the record it just saw.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one call site; splitting would need a struct with no other use"
-)]
 async fn load_one(
-    server: &Server,
+    context: &LoadContext,
     workspace: &normalize::Workspace,
     args: &ArgMatches,
     report: &mut Reporter,
     effects: &mut Effects,
-    invocation: &Invocation<'_>,
-    borrowed: Option<&AppendTarget>,
-    interactive: bool,
-    inside_tmux: bool,
-    base_attach: bool,
-    index: usize,
-    path: &std::path::Path,
     results: &mut Vec<Value>,
 ) -> Result<(Session, bool, bool)> {
-    let disposition = if interactive {
-        Some(prompt_disposition(server, workspace, inside_tmux).await?)
+    let inherited = context.borrowed.as_ref();
+    let disposition = if context.interactive {
+        Some(
+            prompt_disposition(
+                &context.server,
+                workspace,
+                context.inside_tmux.unwrap_or(false),
+            )
+            .await?,
+        )
     } else {
         None
     };
     let (borrowed_for_input, attach_this_input) = match &disposition {
-        None => (borrowed, base_attach),
-        Some(Disposition::Switch) => (borrowed, true),
-        Some(Disposition::Detached | Disposition::Decline) => (borrowed, false),
+        None => (inherited, context.attach),
+        Some(Disposition::Switch) => (inherited, true),
+        Some(Disposition::Detached | Disposition::Decline) => (inherited, false),
         Some(Disposition::Append(target)) => (Some(target), false),
     };
     if let Some(progress) = &mut report.progress {
         progress.start(workspace)?;
     }
-    report.event(
-        "workspace-started",
-        json!({"input_index":index,"input":discovery::masked(path)}),
-    )?;
+    let input = json!({"input_index":effects.input,"input":effects.path});
+    report.event("workspace-started", input.clone())?;
     let built = build(
-        server,
+        context,
         workspace,
         args,
         report,
         effects,
-        invocation,
         borrowed_for_input,
     )
     .await;
@@ -572,7 +564,7 @@ async fn load_one(
         }
     }
     let mut result = effects.value();
-    result["input"] = json!(discovery::masked(path));
+    result["input"] = input["input"].clone();
     result["reused"] = json!(reused);
     let appended = borrowed_for_input.is_some();
     results.push(result.clone());
@@ -676,32 +668,21 @@ async fn append_target(server: &Server) -> Result<AppendTarget> {
 }
 
 async fn build(
-    server: &Server,
+    context: &LoadContext,
     workspace: &normalize::Workspace,
     args: &ArgMatches,
     report: &mut Reporter,
     effects: &mut Effects,
-    invocation: &Invocation<'_>,
     borrowed: Option<&AppendTarget>,
 ) -> Result<(Session, bool)> {
+    let server = &context.server;
     if let Some(target) = borrowed {
         effects.session = Some(target.session.clone());
         effects.stage = "append-validation";
         target.recheck(server).await?;
     }
     if workspace.bridge {
-        return build_extension(
-            server,
-            workspace,
-            args,
-            report,
-            effects,
-            invocation.python.ok_or_else(|| {
-                CliError::new("python_runtime", "checked Python runtime is missing")
-            })?,
-            borrowed,
-        )
-        .await;
+        return build_extension(context, workspace, args, report, effects, borrowed).await;
     }
     let input = effects.input;
     let append = borrowed.is_some();
@@ -721,7 +702,7 @@ async fn build(
             .start_directory(escape_format(&workspace.directory));
         // No `-x`/`-y` at all with detection disabled: tmux then sizes the
         // session from the largest attached client, or `default-size`.
-        if let Some((columns, rows)) = invocation.dimensions {
+        if let Some((columns, rows)) = context.dimensions {
             options = options.size(columns, rows);
         }
         let session = server.new_session(options).await?;
@@ -964,14 +945,18 @@ async fn configure_session(
 }
 
 async fn build_extension(
-    server: &Server,
+    context: &LoadContext,
     workspace: &normalize::Workspace,
     args: &ArgMatches,
     report: &mut Reporter,
     effects: &mut Effects,
-    python: &std::ffi::OsStr,
     borrowed: Option<&AppendTarget>,
 ) -> Result<(Session, bool)> {
+    let server = &context.server;
+    let python = context
+        .python
+        .as_deref()
+        .ok_or_else(|| CliError::new("script_failed", "checked Python runtime is missing"))?;
     let append = borrowed.is_some();
     let prior = if let Some(target) = borrowed {
         Some(target.session.clone())
