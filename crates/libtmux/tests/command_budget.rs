@@ -306,3 +306,48 @@ async fn reading_a_listed_pane_field_costs_no_command() {
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// A replacing hook write is one invocation, so no drop can land between the
+/// clear and the entries and leave the hook empty.
+#[tokio::test]
+async fn replacing_hooks_clears_and_writes_in_one_command() {
+    use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
+
+    let counter = CommandCounter::default();
+    let subscriber = tracing_subscriber::registry().with(counter.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("hooks")
+        .await
+        .expect("the session is created");
+    let mut entries = std::collections::BTreeMap::new();
+    entries.insert(0, TmuxText::from(b"display-message one".to_vec()));
+    entries.insert(1, TmuxText::from(b"display-message two".to_vec()));
+    let written = IndexedHooks::from(entries);
+    // The scope check reads before writing; count only the write.
+    session
+        .set_hooks("alert-bell", &written, ReplaceMode::Replace)
+        .await
+        .expect("the hooks are written");
+
+    counter.reset();
+    session
+        .set_hooks("alert-bell", &written, ReplaceMode::Replace)
+        .await
+        .expect("the hooks are written");
+
+    assert_eq!(
+        counter.commands(),
+        1,
+        "the clear and both entries travel together",
+    );
+    let read = session
+        .hook("alert-bell")
+        .await
+        .expect("the hook reads")
+        .expect("the hook is set");
+    assert_eq!(read.len(), 2);
+}

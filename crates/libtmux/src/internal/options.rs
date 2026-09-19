@@ -607,18 +607,25 @@ pub(crate) async fn set_hooks(
         return run(core, "set-hook", None, first).await;
     };
 
-    run(core, "set-hook", None, first).await?;
-    let result = match commands.next() {
-        None => core.execute(second).await,
-        Some(third) => {
-            let mut chain = CommandChain::new(second).then(third);
-            for command in commands {
-                chain = chain.then(command);
-            }
-            core.execute_chain(chain).await
-        }
+    // Under `Replace` the clear travels with the entries rather than ahead of
+    // them: sent on its own, a caller who dropped this future between the two
+    // left the hook cleared and unwritten, the one state nobody asked for.
+    // The cost is attribution, so `Merge`, whose first command is an entry
+    // rather than a clear, still sends it alone and can name it when tmux
+    // refuses it.
+    let mut chain = if replace == ReplaceMode::Replace {
+        CommandChain::new(first).then(second)
+    } else {
+        run(core, "set-hook", None, first).await?;
+        CommandChain::new(second)
     };
-    let result = result.map_err(|error| error.after_effect("set-hooks"))?;
+    for command in commands {
+        chain = chain.then(command);
+    }
+    let result = core
+        .execute_chain(chain)
+        .await
+        .map_err(|error| error.after_effect("set-hooks"))?;
     if result.success() {
         return Ok(());
     }

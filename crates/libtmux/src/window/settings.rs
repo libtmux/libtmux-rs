@@ -214,10 +214,12 @@ impl Window {
     ///
     /// # Cancel safety
     ///
-    /// The effect can be partial: dropped between the two invocations, the
-    /// hook is left cleared under [`ReplaceMode::Replace`], or with only the
-    /// first of its new entries written under [`ReplaceMode::Merge`]. Calling
-    /// again with the same arguments finishes it.
+    /// Under [`ReplaceMode::Replace`] the clear and the entries are one
+    /// invocation, so a drop leaves the hook as it was or fully written,
+    /// never cleared and unwritten; tmux reports one status for that group,
+    /// so a refusal there cannot name which command drew it. Under
+    /// [`ReplaceMode::Merge`] the first entry is sent on its own, so a drop
+    /// after it leaves that entry written and the rest not.
     ///
     /// # Examples
     ///
