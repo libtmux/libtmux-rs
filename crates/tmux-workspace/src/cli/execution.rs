@@ -562,6 +562,10 @@ async fn load_one(
     let mut result = effects.value();
     result["input"] = input["input"].clone();
     result["reused"] = json!(reused);
+    // A declined attach compared nothing and changed nothing: `reused` is
+    // still true because the session was found, but the report must not
+    // call that a reuse, which is what "declined" says instead.
+    result["declined"] = json!(declined);
     let appended = borrowed_for_input.is_some();
     results.push(result.clone());
     if let Some(progress) = &mut report.progress {

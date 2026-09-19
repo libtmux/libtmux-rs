@@ -290,7 +290,12 @@ impl Reporter {
     pub(super) fn loaded(&self, results: &Value, appended: &[bool]) -> Result<()> {
         for (index, result) in results.as_array().into_iter().flatten().enumerate() {
             let name = result["session_name"].as_str().unwrap_or("");
-            if appended.get(index).copied().unwrap_or(false) {
+            if result["declined"] == true {
+                // The session was found, not reused: nothing was compared
+                // and nothing changed, so this names what was not done
+                // rather than claiming a reuse that never happened.
+                self.line("warning", "Not attached", name)?;
+            } else if appended.get(index).copied().unwrap_or(false) {
                 self.write_line(&mut io::stdout().lock(), "success", "Appended", name, " ")?;
             } else {
                 let subject = if result["reused"] == true {
