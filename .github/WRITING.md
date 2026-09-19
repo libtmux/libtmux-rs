@@ -122,6 +122,15 @@ channel inside a type is not documentation.
   restating that it can fail.
 - `# Panics` where a caller could trip one. Where nothing can, "Never panics"
   is worth writing: it is a promise, and inference is not.
+- `# Cancel safety` on an `async fn` whose future, dropped partway, leaves
+  something a caller has to know about. Say which of three it is: nothing
+  happened; the effect may or may not have happened, so a retry can repeat it;
+  or something is left held -- a lock, a queue position, a half-sent input.
+  The crate-wide model is in the README's "Cancellation and shutdown": dropping
+  a dispatch signals its process group and reaps it. A method that adds nothing
+  to that model needs no section; one that does needs one, because a caller
+  racing it against a timeout or a `select!` cannot read the answer off the
+  signature.
 - No `# Safety`. `unsafe_code` is `forbid` at the workspace level, so there is
   no unsafe code here to document. If that ever changes, the section states
   the proof obligation the caller must uphold, and the reason it holds.

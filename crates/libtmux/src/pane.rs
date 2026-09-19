@@ -650,13 +650,17 @@ impl Pane {
 
     /// Send literal text followed by Enter as one dispatch.
     ///
-    /// The text and Enter are submitted together, so cancelling this future
-    /// cannot leave a completed text send without its Enter. The text is
-    /// sensitive and stays out of diagnostics.
+    /// The text is sensitive and stays out of diagnostics.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the line.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect may or may not have happened, but never half of it: the text
+    /// and its Enter travel as one `send-keys`, so a dropped future cannot leave
+    /// a line typed and not submitted. A retry can type the line twice.
     pub async fn send_line(&self, text: impl Into<OsString>) -> Result<(), Error> {
         listing::mutate(
             &self.core,

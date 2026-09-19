@@ -99,20 +99,25 @@ impl Server {
 
     /// Lock a `wait-for` channel, blocking later lock attempts on it.
     ///
-    /// Dropping this future while it is still queued behind another locker
-    /// leaves the channel permanently locked if that locker's process ends
-    /// without calling [`Self::unlock_channel`], and every future call here
-    /// for the same channel blocks forever: `cmd_wait_for_unlock` hands a
-    /// released lock to the next queued locker with no mechanism to skip one
-    /// whose client already disconnected. This is a tmux defect
-    /// (`cmd-wait-for.c`), not something this crate can protect against, and
-    /// the non-locking [`Self::wait_for_channel`]'s claim that dropping it is
-    /// safe does not carry over to this call: that form is an idempotent
-    /// latch check, not a queue. Measured directly on 3.2a, 3.7c, and master.
+    /// [`Self::with_channel_lock`] pairs this with the unlock, which is
+    /// usually what a caller wants.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux refuses the channel name.
+    ///
+    /// # Cancel safety
+    ///
+    /// Not cancel safe: dropping this future can leave something held, and
+    /// no one can release it. While the call is queued behind another locker,
+    /// tmux holds a queue entry for it. If that locker's process ends without
+    /// calling [`Self::unlock_channel`], `cmd_wait_for_unlock` hands the
+    /// released lock to the next queued entry with no way to skip one whose
+    /// client has gone, and every later call here for the same channel blocks
+    /// forever. That is a tmux defect (`cmd-wait-for.c`), measured on 3.2a,
+    /// 3.7c and master, and no scope in this crate reaches it. The
+    /// non-locking [`Self::wait_for_channel`] is safe to drop: it is a latch
+    /// check, not a queue.
     pub async fn lock_channel(&self, channel: &str) -> Result<(), Error> {
         listing::mutate(
             &self.core,
