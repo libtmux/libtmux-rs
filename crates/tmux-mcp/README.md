@@ -225,9 +225,10 @@ determine the effective configured recipient cohort. `send_keys` observes that
 cohort immediately before input and refuses the whole call if any configured
 pane is dead, input-disabled, in a tmux mode, attended by a non-control client,
 reserved by an active MCP run, or may be the inherited caller. Malformed state
-fails closed. Caller context is detached only when both `TMUX` and `TMUX_PANE`
-are absent; partial, empty, noncanonical, stale, or unresolved selected-daemon
-context refuses input. `send_keys_batch` repeats the complete check for each
+fails closed. Caller context is detached when `TMUX` and `TMUX_PANE` are both
+absent or empty; partial, noncanonical, stale, or unresolved selected-daemon
+context refuses input, and a context that cannot be parsed is also reported
+once in the startup log. `send_keys_batch` repeats the complete check for each
 executed row.
 Returned pane IDs describe configured membership and do not prove delivery.
 `paste_text` applies the same refusals to its named target before buffer

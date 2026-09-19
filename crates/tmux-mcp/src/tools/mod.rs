@@ -368,6 +368,15 @@ impl TmuxTools {
         self.caller.as_ref().and_then(|caller| caller.pane_id())
     }
 
+    /// Whether the inherited caller context is set but malformed, which makes
+    /// pane-input and teardown tools refuse every call.
+    #[must_use]
+    pub fn caller_is_malformed(&self) -> bool {
+        self.caller
+            .as_ref()
+            .is_some_and(|caller| caller.is_malformed())
+    }
+
     /// Classify a refusal that protects the pane this process talks through.
     pub(super) fn self_protection(message: String) -> ToolError {
         ErrorData::invalid_params(

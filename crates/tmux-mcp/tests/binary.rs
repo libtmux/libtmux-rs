@@ -564,6 +564,50 @@ fn default_daemon_loads_the_shipped_minimal_configuration() {
     std::fs::remove_dir_all(root).expect("fixture cleanup");
 }
 
+/// `TMUX= TMUX_PANE=` is how a shell un-nests tmux; it means detached. A
+/// context that is set and malformed says so once, at startup.
+#[test]
+fn empty_caller_variables_are_detached_and_malformed_ones_are_logged() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (guard, pane) = runtime.block_on(async {
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let pane = guard
+            .server()
+            .new_session("caller")
+            .await
+            .expect("session starts")
+            .panes()
+            .await
+            .expect("panes list")
+            .remove(0)
+            .id()
+            .to_string();
+        (guard, pane)
+    });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let typed = json!({"name": "send_keys", "arguments": {"pane": pane, "text": "x"}});
+
+    let mut empty = Process::start(&["--socket", socket], &[("TMUX", ""), ("TMUX_PANE", "")]);
+    let sent = empty.request("tools/call", &typed);
+    let empty_log = empty.finish();
+    assert_ne!(sent["result"]["isError"], true, "{sent}");
+    assert!(!empty_log.contains("TMUX_PANE"), "{empty_log}");
+
+    let mut malformed = Process::start(
+        &["--socket", socket],
+        &[("TMUX", "not-a-context"), ("TMUX_PANE", "%0")],
+    );
+    let refused = malformed.request("tools/call", &typed);
+    let malformed_log = malformed.finish();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert_eq!(
+        malformed_log.matches("TMUX and TMUX_PANE").count(),
+        1,
+        "{malformed_log}"
+    );
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+}
+
 /// Measured over JSON-RPC, because a transcript is where a value leaks to.
 ///
 /// The fixture daemon inherits this test's environment, so no failure message

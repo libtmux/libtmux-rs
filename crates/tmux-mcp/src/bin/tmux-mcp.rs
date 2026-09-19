@@ -291,6 +291,13 @@ async fn serve(options: Options) -> Result<(), Box<dyn std::error::Error>> {
             .map(|pane| format!(", from pane {pane}"))
             .unwrap_or_default(),
     );
+    if tools.caller_is_malformed() {
+        eprintln!(
+            "tmux-mcp: TMUX and TMUX_PANE do not describe one tmux pane, so pane-input and \
+             teardown tools will refuse every call; unset both, or start tmux-mcp from a tmux \
+             pane"
+        );
+    }
 
     let (stdin, stdout) = stdio();
     let transport = RequestIdTransport::new(AsyncRwTransport::<RoleServer, _, _>::new_server(
