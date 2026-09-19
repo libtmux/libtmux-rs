@@ -888,6 +888,7 @@ async fn configure_session(
             &workspace.script_directory,
             report,
             Some(effects.input),
+            &[],
         )
         .await
         {

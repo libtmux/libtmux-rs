@@ -163,17 +163,29 @@ pub(super) async fn python() -> Result<OsString> {
             CliError::new(
                 "python_runtime",
                 format!(
-                    "tmuxp 1.74.0 Python bridge is unavailable: {e}; set TMUX_WORKSPACE_PYTHON"
+                    "tmuxp 1.74.x Python bridge is unavailable: {e}; set TMUX_WORKSPACE_PYTHON"
                 ),
             )
         })?;
-    if !output.status.success() || output.stdout.as_slice().trim_ascii() != b"1.74.0" {
+    let version = String::from_utf8_lossy(output.stdout.trim_ascii());
+    if !output.status.success() || !is_supported_tmuxp_version(&version) {
         return Err(CliError::new(
             "python_runtime",
-            "Python bridge requires tmuxp 1.74.0; install that version and set TMUX_WORKSPACE_PYTHON to its Python executable",
+            "Python bridge requires tmuxp 1.74.x; install a matching release and set TMUX_WORKSPACE_PYTHON to its Python executable",
         ));
     }
     Ok(python)
+}
+
+/// A patch release of the pinned minor is accepted; anything else is not.
+///
+/// An exact pin rots on tmuxp's next patch release for no behavioural
+/// reason: this bridge calls internal `tmuxp` modules whose shapes move at
+/// a minor release, not a patch one, so `1.74.1` is as usable as `1.74.0`.
+fn is_supported_tmuxp_version(version: &str) -> bool {
+    version
+        .strip_prefix("1.74.")
+        .is_some_and(|patch| !patch.is_empty() && patch.bytes().all(|b| b.is_ascii_digit()))
 }
 
 pub(super) async fn shell(options: &ArgMatches, report: &mut Reporter) -> Result<()> {
@@ -229,7 +241,7 @@ pub(super) async fn shell(options: &ArgMatches, report: &mut Reporter) -> Result
     let output = if let Some(terminal) = terminal {
         run_terminal(&argv, terminal).await?
     } else {
-        run(&argv, &std::env::current_dir()?, report, None).await?
+        run(&argv, &std::env::current_dir()?, report, None, &[]).await?
     };
     if report.machine() {
         let mut value = output.value();
@@ -264,7 +276,7 @@ pub(super) async fn edit(options: &ArgMatches, report: &mut Reporter) -> Result<
         run_terminal(&argv, terminal).await?
     } else {
         require_support()?;
-        run(&argv, &std::env::current_dir()?, report, None).await?
+        run(&argv, &std::env::current_dir()?, report, None, &[]).await?
     };
     if !report.machine() {
         return output.success();
@@ -309,7 +321,29 @@ pub(super) async fn diagnostics(report: &Reporter) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::split;
+    use super::{is_supported_tmuxp_version, split};
+
+    #[test]
+    fn a_patch_release_of_the_pinned_minor_is_accepted() {
+        assert!(is_supported_tmuxp_version("1.74.0"));
+        assert!(is_supported_tmuxp_version("1.74.1"));
+        assert!(is_supported_tmuxp_version("1.74.12"));
+    }
+
+    #[test]
+    fn a_different_minor_or_a_malformed_version_is_refused() {
+        for version in [
+            "1.73.0",
+            "1.75.0",
+            "2.74.0",
+            "1.74",
+            "1.74.",
+            "1.74.0rc1",
+            "",
+        ] {
+            assert!(!is_supported_tmuxp_version(version), "{version}");
+        }
+    }
 
     #[test]
     fn child_words_preserve_backslashes_inside_double_quotes() -> Result<(), super::CliError> {

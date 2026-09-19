@@ -11,6 +11,7 @@ pub(in crate::cli) async fn run(
     _directory: &Path,
     _report: &mut Reporter,
     _input_index: Option<usize>,
+    _envs: &[(&str, &str)],
 ) -> Result<ChildOutput> {
     Err(unsupported())
 }
