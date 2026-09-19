@@ -78,6 +78,7 @@ impl BuildContext {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct CoreConfiguration {
     identity: ServerIdentity,
     socket_name: Option<OsString>,
@@ -363,10 +364,37 @@ impl Core {
         }
     }
 
+    /// Build a core that dispatches over an already-attached connection.
+    ///
+    /// The capabilities are carried across rather than re-probed: the version
+    /// probe is `tmux -V`, a client flag and not a command, so it has no
+    /// control-mode spelling at all.
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn over_control_mode(
+        &self,
+        sender: crate::control::ControlSender,
+        capabilities: EngineCapabilities,
+    ) -> Self {
+        let executor = crate::internal::control_executor::ControlModeExecutor::new(sender);
+
+        Self {
+            configuration: self.configuration.clone(),
+            executor: Arc::new(executor),
+            capabilities: OnceCell::new_with(Some(capabilities)),
+            next_request_id: AtomicU64::new(1),
+            persistent_clients: PersistentClients::new(self.configuration.control_client_limits),
+            // Shared with the parent: a control client this process spawned is
+            // the same process whichever handle dispatches through it.
+            control_client_pids: Arc::clone(&self.control_client_pids),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
         let configuration = CoreConfiguration {
-            identity: ServerIdentity::from_socket_path(PathBuf::from("/tmp/libtmux-test")),
+            identity: ServerIdentity::from_socket_path(PathBuf::from(
+                "/tmp/libtmux-rs-test/no-such-socket",
+            )),
             socket_name: None,
             config_file: None,
             colors: None,
@@ -388,20 +416,36 @@ impl Core {
     }
 
     pub(crate) async fn execute(&self, command: Command) -> Result<CommandResult, Error> {
+        // Rendered before the command is consumed, and only for the transport
+        // that reads a line. A subprocess dispatch pays nothing for it.
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| command.control_mode_line());
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
             &self.configuration.global_argv,
             command,
         );
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
         self.executor.execute(request).await
     }
 
     pub(crate) async fn execute_chain(&self, chain: CommandChain) -> Result<CommandResult, Error> {
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| chain.control_mode_line());
         let request = CommandRequest::chain_with_global_argv(
             self.next_request_id(),
             &self.configuration.global_argv,
             chain,
         );
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
         self.executor.execute(request).await
     }
 

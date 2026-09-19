@@ -48,4 +48,13 @@ pub(crate) trait Executor: Send + Sync + 'static {
     fn execute(&self, request: CommandRequest) -> DispatchFuture;
 
     fn shutdown(&self) -> ShutdownFuture;
+
+    /// Whether this executor dispatches a text line rather than an argv.
+    ///
+    /// Asked before a request is built, so the line is rendered only for the
+    /// one transport that reads it. A subprocess executor pays nothing.
+    #[cfg(feature = "control-mode")]
+    fn renders_control_line(&self) -> bool {
+        false
+    }
 }

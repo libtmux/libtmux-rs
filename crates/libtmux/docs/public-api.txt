@@ -537,6 +537,7 @@ function libtmux::Server::new: fn() -> Result<Self, libtmux::Error>
 function libtmux::Server::new_session: async fn(&self, options: impl Into<libtmux::NewSessionOptions>) -> Result<libtmux::Session, libtmux::Error>
 function libtmux::Server::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
 function libtmux::Server::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
+function libtmux::Server::over_control_mode: async fn(&self, sender: &libtmux::control::ControlSender) -> Result<Self, libtmux::Error>
 function libtmux::Server::owns_control_client: fn(&self, pid: u32) -> bool
 function libtmux::Server::pane_by_id: async fn(&self, id: &libtmux::PaneId) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Server::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>

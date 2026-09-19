@@ -1,3 +1,5 @@
+#[cfg(feature = "control-mode")]
+pub(crate) mod control_executor;
 pub(crate) mod core;
 pub(crate) mod environment;
 pub(crate) mod executor;

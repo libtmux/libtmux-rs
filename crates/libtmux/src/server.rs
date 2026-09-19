@@ -9,8 +9,6 @@ use std::time::Duration;
 use crate::SessionId;
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
-#[cfg(test)]
-use crate::internal::executor::Executor;
 use crate::internal::listing;
 #[cfg(feature = "control-mode")]
 use crate::internal::process::PersistentChild;
@@ -1607,10 +1605,94 @@ impl Server {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
+    pub(crate) fn from_executor_for_test(
+        executor: Arc<dyn crate::internal::executor::Executor>,
+    ) -> Self {
         Self {
             core: Arc::new(Core::from_executor_for_test(executor)),
         }
+    }
+
+    /// Return a handle whose commands run over an open control connection.
+    ///
+    /// Every typed call on the returned server -- `sessions`, `send_keys`,
+    /// `capture`, the option and hook accessors -- is written to `sender` as
+    /// one control-mode line and answered from its `%begin`/`%end` block,
+    /// rather than spawning `tmux`. Handles reached through it inherit the
+    /// route, because they carry the same connection.
+    ///
+    /// The original server is unchanged and still dispatches processes. Use it
+    /// for the two things a connection is wrong for: a command that answers at
+    /// once and then parks the client's queue, such as `wait-for` or a
+    /// foreground `run-shell`, and a command whose arguments are not valid
+    /// UTF-8, which a text protocol cannot carry.
+    ///
+    /// Commands wait for the sender's own [`reply_timeout`], not this server's
+    /// [`default_timeout`]. They are not the same budget: one bounds a round
+    /// trip on an open connection, the other bounds forking tmux.
+    ///
+    /// # Draining events
+    ///
+    /// The connection stops reading tmux once a caller is far enough behind on
+    /// [`ControlEvents`], and refuses commands past that. Either keep reading
+    /// events, drop the watching half, or narrow what tmux reports with
+    /// [`ControlSender::watch_only`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the sender reaches a different server, or when
+    /// the tmux version cannot be detected. Detection runs here, once, through
+    /// this server's process transport, because `tmux -V` is a client flag and
+    /// has no control-mode spelling; the returned handle never probes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::control::ControlMode;
+    /// use libtmux::test::TestServer;
+    ///
+    /// let guard = TestServer::new().await?;
+    /// let session = guard.server().new_session("routed").await?;
+    ///
+    /// let (sender, events) = ControlMode::attach(guard.server(), session.id())
+    ///     .await?
+    ///     .split();
+    /// let routed = guard.server().over_control_mode(&sender).await?;
+    ///
+    /// // One line on the connection, not a process.
+    /// assert_eq!(routed.sessions().await?.len(), 1);
+    ///
+    /// // And a handle it found keeps the route.
+    /// let pane = routed.panes().await?.remove(0);
+    /// pane.send_line("true").await?;
+    ///
+    /// events.shutdown().await?;
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`reply_timeout`]: crate::control::ControlSender::reply_timeout
+    /// [`default_timeout`]: Server::default_timeout
+    /// [`ControlEvents`]: crate::control::ControlEvents
+    /// [`ControlSender::watch_only`]: crate::control::ControlSender::watch_only
+    #[cfg(feature = "control-mode")]
+    pub async fn over_control_mode(
+        &self,
+        sender: &crate::control::ControlSender,
+    ) -> Result<Self, Error> {
+        self.core
+            .require_same_server(sender.identity(), "over_control_mode")?;
+        let capabilities = self.core.capabilities().await?.clone();
+
+        Ok(Self {
+            core: Arc::new(self.core.over_control_mode(sender.clone(), capabilities)),
+        })
     }
 }
 

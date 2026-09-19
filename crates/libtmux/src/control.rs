@@ -488,15 +488,12 @@ impl ControlMode {
             commands,
             timeout,
             pane_off_is_safe,
+            identity: server.identity().clone(),
         };
 
-        // Ask for JSON layouts before anything else can read one. tmux 3.8+
-        // hands a control client the classic `window_layout` string it hands
-        // a plain client only after this flag is set, so `Event::LayoutChanged`
-        // and a snapshot taken through this connection would otherwise
-        // disagree with each other on format. A release below 3.8 has no such
-        // flag: `server_client_set_flags` skips a name it does not recognise,
-        // so this is a no-op there rather than a refusal.
+        // Without this, tmux 3.8+ hands a control client the classic
+        // `window_layout` string instead of JSON, disagreeing with a plain
+        // client's snapshot; a release below 3.8 ignores the unknown flag.
         sender
             .send(Command::new("refresh-client").arg("-f").arg("new-layouts"))
             .await?
@@ -633,6 +630,12 @@ pub struct ControlSender {
     /// Read once at attach rather than per call: the server cannot change
     /// release under a connection.
     pane_off_is_safe: bool,
+    /// Which server this connection reaches.
+    ///
+    /// A sender says nothing about where it points, so routing one onto a
+    /// handle for a different server would silently talk to this one.
+    /// [`crate::Server::over_control_mode`] compares it and refuses.
+    identity: crate::ServerIdentity,
 }
 
 impl ControlSender {
@@ -682,17 +685,44 @@ impl ControlSender {
         self.send_ordered(command, None).await
     }
 
+    /// Return the server this connection reaches.
+    pub(crate) const fn identity(&self) -> &crate::ServerIdentity {
+        &self.identity
+    }
+
     /// Send a command whose completed block marks one point in event order.
     async fn send_ordered(
         &self,
         command: Command,
         boundary: Option<Boundary>,
     ) -> Result<BlockResult, Error> {
-        let deadline = Instant::now().checked_add(self.timeout);
         let sensitive_input = command.summary().sensitive_argument_count() > 0;
         let line = command
             .control_mode_line()
             .ok_or_else(Error::control_mode_unrepresentable)?;
+        self.dispatch_line(line, sensitive_input, boundary).await
+    }
+
+    /// Send one already-rendered control-mode line.
+    ///
+    /// The typed API routes through here: a request built for dispatch carries
+    /// its own rendering, so re-deriving one from the argv is neither needed
+    /// nor correct.
+    pub(crate) async fn send_line(
+        &self,
+        line: String,
+        sensitive_input: bool,
+    ) -> Result<BlockResult, Error> {
+        self.dispatch_line(line, sensitive_input, None).await
+    }
+
+    async fn dispatch_line(
+        &self,
+        line: String,
+        sensitive_input: bool,
+        boundary: Option<Boundary>,
+    ) -> Result<BlockResult, Error> {
+        let deadline = Instant::now().checked_add(self.timeout);
         let (result, mut answer) = oneshot::channel();
         let (commit, mut commitment) = oneshot::channel();
         let finish = |answer: Result<Result<BlockResult, Error>, oneshot::error::RecvError>| {

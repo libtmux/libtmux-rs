@@ -294,7 +294,25 @@ table on your own machine.
 
 Control mode is never the default transport, and turning the feature on does
 not make it one: normal commands stay one process per command until you attach
-a connection and use it.
+a connection and use it. `Server::over_control_mode` is how you use it for
+everything rather than command by command -- it returns a handle whose ordinary
+typed calls travel down the connection, and handles reached through it inherit
+the route:
+
+```text
+let (commands, events) = ControlMode::attach(&server, session.id()).await?.split();
+let routed = server.over_control_mode(&commands).await?;
+
+// One connection, no processes: the whole typed API, not a plan's worth of it.
+for pane in routed.panes().await? {
+    pane.send_line("echo hello").await?;
+}
+```
+
+Keep the original server for the two things a connection is wrong for: a
+command that parks the client's queue, such as `wait-for` or a foreground
+`run-shell`, and arguments that are not valid UTF-8, which a text protocol
+cannot carry. See `Server::over_control_mode` for the runnable version.
 
 ## When the typed API does not cover it
 
