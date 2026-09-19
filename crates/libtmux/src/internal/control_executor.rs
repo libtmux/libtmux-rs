@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::command::{CommandRequest, CommandResult, ProcessStatus};
 use crate::control::ControlSender;
-use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, ShutdownFuture};
 
 /// Runs commands over a connection someone else opened.
 pub(crate) struct ControlModeExecutor {
@@ -27,13 +27,14 @@ impl ControlModeExecutor {
 impl Executor for ControlModeExecutor {
     fn execute(&self, request: CommandRequest) -> DispatchFuture {
         let sender = Arc::clone(&self.sender);
+        let span = DispatchSpan::new(&request, "control");
         let request_id = request.request_id();
         let summary = request.summary().clone();
         let sensitive_input = summary.sensitive_argument_count() > 0;
         let commands = request.command_count();
         let line = request.into_control_line();
 
-        DispatchFuture::new(async move {
+        span.run(async move {
             let Some(line) = line else {
                 return Err(crate::Error::control_mode_unrepresentable());
             };

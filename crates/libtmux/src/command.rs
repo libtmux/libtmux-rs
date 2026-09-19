@@ -627,6 +627,12 @@ impl CommandSummary {
     pub const fn sensitive_argument_count(&self) -> usize {
         self.sensitive_argument_count
     }
+
+    /// The escaped subcommand, which is never a sensitive argument.
+    #[cfg(feature = "tracing")]
+    pub(crate) fn subcommand(&self) -> &str {
+        &self.subcommand
+    }
 }
 
 impl fmt::Display for CommandSummary {

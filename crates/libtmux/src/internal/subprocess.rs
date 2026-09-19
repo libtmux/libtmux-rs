@@ -20,11 +20,11 @@ use tokio::time::Instant;
 use crate::limits::{DispatchLimits, OutputLimits};
 
 #[cfg(feature = "tracing")]
-use tracing::instrument::WithSubscriber as _;
+use tracing::instrument::{Instrument as _, WithSubscriber as _};
 
 use crate::Error;
 use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatus, RequestId};
-use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
+use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, ShutdownFuture};
 use crate::internal::process::{
     LaunchContext, ProcessAdmission, ProcessGroupGuard, validate_request,
 };
@@ -338,7 +338,7 @@ impl SubprocessExecutor {
             self.configuration.hooks.clone(),
         );
         #[cfg(feature = "tracing")]
-        tokio::spawn(supervisor.with_current_subscriber());
+        tokio::spawn(supervisor.in_current_span().with_current_subscriber());
         #[cfg(not(feature = "tracing"))]
         tokio::spawn(supervisor);
 
@@ -348,7 +348,7 @@ impl SubprocessExecutor {
 
 impl Executor for SubprocessExecutor {
     fn execute(&self, request: CommandRequest) -> DispatchFuture {
-        DispatchFuture::new(self.clone().run(request))
+        DispatchSpan::new(&request, "subprocess").run(self.clone().run(request))
     }
 
     fn shutdown(&self) -> ShutdownFuture {

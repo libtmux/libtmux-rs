@@ -88,7 +88,7 @@ below, so a caller who wants them all does not have to list them.
 | `derive` | `#[derive(Filterable)]`, for filtering your own structs with the same expressions |
 | `serde` | Versioned serialization for `FilterExpr<T>`, for sending expressions over a wire |
 | `schema` | JSON Schema for serialized plans and portable filter expressions |
-| `tracing` | Sanitized command instrumentation |
+| `tracing` | Sanitized command instrumentation: a `tmux_command` span per dispatch |
 | `test-support` | The real-tmux test guard, for your own tests |
 | `full` | Every capability above, but not `test-support` |
 
