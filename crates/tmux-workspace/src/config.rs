@@ -4,6 +4,7 @@ mod locate;
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use yaml_rust2::{Yaml, YamlLoader};
 
@@ -97,7 +98,7 @@ pub struct Workspace {
     /// Global options to apply once the session exists.
     pub global_options: Vec<(String, String)>,
     /// Commands run in every pane before its own, in order.
-    pub shell_command_before: Vec<String>,
+    pub shell_command_before: Vec<ShellCommand>,
     /// Whether to keep pane commands out of the shell's history.
     ///
     /// A file that does not say reads as `true`, as in tmuxp.
@@ -131,7 +132,7 @@ pub struct WindowConfig {
     /// Window options to apply once the window exists.
     pub options: Vec<(String, String)>,
     /// Commands run in this window's panes before their own, in order.
-    pub shell_command_before: Vec<String>,
+    pub shell_command_before: Vec<ShellCommand>,
     /// Whether this window's commands stay out of the shell's history.
     ///
     /// `None` inherits the workspace setting.
@@ -143,27 +144,121 @@ pub struct WindowConfig {
 }
 
 /// One pane.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+///
+/// The default is a pane that runs nothing and would press Enter after
+/// anything it were given, which is what tmuxp's `- pane`, `- blank` and an
+/// empty `-` all mean.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaneConfig {
     /// Commands to run in the pane once it exists.
-    pub shell_commands: Vec<String>,
+    pub shell_commands: Vec<ShellCommand>,
     /// Environment variables set for the process this pane starts.
     pub environment: Vec<(String, String)>,
     /// The pane's working directory.
     pub start_directory: Option<PathBuf>,
     /// Whether this pane should end up selected.
     pub focus: bool,
-    /// Whether to press Enter after each command.
+    /// Whether to press Enter after each command, until a command sets its
+    /// own [`ShellCommand::enter`].
     ///
     /// tmuxp's `enter: false` types a command without running it, which is
-    /// how a file leaves something ready for the user to review.
+    /// how a file leaves something ready for the user to review. It covers
+    /// the `shell_command_before` commands typed into this pane too.
     pub enter: bool,
+    /// How long to wait before each command, until a command sets its own.
+    ///
+    /// Read and kept, not acted on: see [`ShellCommand::sleep_before`].
+    pub sleep_before: Option<Duration>,
+    /// How long to wait after each command, until a command sets its own.
+    ///
+    /// Read and kept, not acted on: see [`ShellCommand::sleep_before`].
+    pub sleep_after: Option<Duration>,
     /// Whether this pane's commands stay out of the shell's history.
     ///
     /// `None` inherits the window, then the workspace.
     pub suppress_history: Option<bool>,
     /// Keys this parser recognized on the pane but does not act on.
     pub unsupported_keys: Vec<String>,
+}
+
+impl Default for PaneConfig {
+    fn default() -> Self {
+        Self {
+            shell_commands: Vec::new(),
+            environment: Vec::new(),
+            start_directory: None,
+            focus: false,
+            enter: true,
+            sleep_before: None,
+            sleep_after: None,
+            suppress_history: None,
+            unsupported_keys: Vec::new(),
+        }
+    }
+}
+
+/// One command typed into a pane, with tmuxp's per-command settings.
+///
+/// A file writes it as a string, or as a mapping with `cmd` and any of
+/// `enter`, `sleep_before` and `sleep_after`. A setting given here holds for
+/// the commands after it in the same pane until one of them sets its own,
+/// because that is what tmuxp does: `enter: false` on one command leaves the
+/// next one unentered too.
+///
+/// # Examples
+///
+/// ```
+/// use tmux_workspace::{ShellCommand, Workspace};
+///
+/// let workspace = Workspace::from_yaml(
+///     "
+/// session_name: demo
+/// windows:
+///   - panes:
+///       - shell_command:
+///           - cd src
+///           - cmd: cargo test
+///             enter: false
+/// ",
+/// )?;
+///
+/// let commands = &workspace.windows[0].panes[0].shell_commands;
+/// assert_eq!(commands[0], ShellCommand::new("cd src"));
+/// assert_eq!(commands[1].cmd, "cargo test");
+/// assert_eq!(commands[1].enter, Some(false));
+/// # Ok::<(), tmux_workspace::ConfigError>(())
+/// ```
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ShellCommand {
+    /// The text typed into the pane.
+    pub cmd: String,
+    /// Whether to press Enter after it. `None` keeps whatever is in force.
+    pub enter: Option<bool>,
+    /// How long tmuxp waits before typing it.
+    ///
+    /// Read and kept so the file round-trips, and not acted on: a
+    /// [`libtmux::plan::Plan`] runs start to finish with no way to pause
+    /// between steps. tmux buffers typed input until the pane reads it, so a
+    /// sleep that only waited for a shell to start is not needed.
+    pub sleep_before: Option<Duration>,
+    /// How long tmuxp waits after typing it. Read and kept, not acted on.
+    pub sleep_after: Option<Duration>,
+}
+
+impl ShellCommand {
+    /// A command with no settings of its own.
+    #[must_use]
+    pub fn new(cmd: impl Into<String>) -> Self {
+        Self {
+            cmd: cmd.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Whether this is the bare string form, with no settings of its own.
+    const fn is_plain(&self) -> bool {
+        self.enter.is_none() && self.sleep_before.is_none() && self.sleep_after.is_none()
+    }
 }
 
 impl Workspace {
@@ -295,16 +390,22 @@ impl WindowConfig {
 impl PaneConfig {
     fn from_yaml(value: &Yaml, window: &str, index: usize) -> Result<Self, Problem> {
         let at = format!("{window}.panes[{index}]");
-        // tmuxp lets a pane be a bare command string.
-        if let Some(command) = value.as_str() {
-            return Ok(Self {
-                shell_commands: vec![command.to_owned()],
-                ..Self::default()
-            });
-        }
-
-        if !matches!(value, Yaml::Hash(_)) {
-            return Err(Problem::new(at, "must be a command string or a mapping"));
+        match value {
+            // tmuxp lets a pane be its commands alone, or nothing at all.
+            Yaml::Null | Yaml::String(_) | Yaml::Array(_) => {
+                return Ok(Self {
+                    shell_commands: commands(value, &at)?,
+                    ..Self::default()
+                });
+            }
+            Yaml::Hash(_) => {}
+            _ => {
+                return Err(Problem::new(
+                    at,
+                    "must be a command, a list of commands, or a mapping; \
+                     quote a command YAML would read as a number or a boolean",
+                ));
+            }
         }
 
         Ok(Self {
@@ -317,6 +418,8 @@ impl PaneConfig {
             focus: is_true(&value["focus"], &format!("{at}.focus"))?,
             // tmuxp presses Enter unless a file says otherwise.
             enter: optional_bool(&value["enter"], &format!("{at}.enter"))?.unwrap_or(true),
+            sleep_before: optional_seconds(&value["sleep_before"], &format!("{at}.sleep_before"))?,
+            sleep_after: optional_seconds(&value["sleep_after"], &format!("{at}.sleep_after"))?,
             suppress_history: optional_bool(
                 &value["suppress_history"],
                 &format!("{at}.suppress_history"),
@@ -348,6 +451,8 @@ const PANE_KEYS: &[&str] = &[
     "start_directory",
     "focus",
     "enter",
+    "sleep_before",
+    "sleep_after",
     "suppress_history",
 ];
 
@@ -412,22 +517,76 @@ fn pairs(value: &Yaml, path: &str) -> Result<Vec<(String, String)>, Problem> {
     }
 }
 
-/// Read a value tmuxp allows as a string or a list of strings.
-fn commands(value: &Yaml, path: &str) -> Result<Vec<String>, Problem> {
+/// Read `shell_command` or `shell_command_before`: one command, a list of
+/// them, or nothing.
+fn commands(value: &Yaml, path: &str) -> Result<Vec<ShellCommand>, Problem> {
+    let (entries, single) = match value {
+        Yaml::BadValue | Yaml::Null => return Ok(Vec::new()),
+        Yaml::Array(entries) => (entries.as_slice(), false),
+        _ => (std::slice::from_ref(value), true),
+    };
+    // tmuxp reads a lone null, `pane` or `blank` as a pane with no command.
+    // Among other commands the words are typed, and a null is refused.
+    if let [only] = entries {
+        if matches!(only, Yaml::Null) || matches!(only.as_str(), Some("pane" | "blank")) {
+            return Ok(Vec::new());
+        }
+    }
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let at = if single {
+                path.to_owned()
+            } else {
+                format!("{path}[{index}]")
+            };
+            command(entry, &at)
+        })
+        .collect()
+}
+
+fn command(value: &Yaml, path: &str) -> Result<ShellCommand, Problem> {
     match value {
-        Yaml::BadValue | Yaml::Null => Ok(Vec::new()),
-        Yaml::String(command) => Ok(vec![command.clone()]),
-        Yaml::Array(entries) => entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                entry
-                    .as_str()
-                    .map(ToOwned::to_owned)
-                    .ok_or_else(|| Problem::new(format!("{path}[{index}]"), "must be a string"))
-            })
-            .collect(),
-        _ => Err(Problem::new(path, "must be a string or a list of strings")),
+        Yaml::String(text) => Ok(ShellCommand::new(text.as_str())),
+        Yaml::Hash(_) => Ok(ShellCommand {
+            cmd: value["cmd"]
+                .as_str()
+                .ok_or_else(|| Problem::new(format!("{path}.cmd"), "must be a string"))?
+                .to_owned(),
+            enter: optional_bool(&value["enter"], &format!("{path}.enter"))?,
+            sleep_before: optional_seconds(
+                &value["sleep_before"],
+                &format!("{path}.sleep_before"),
+            )?,
+            sleep_after: optional_seconds(&value["sleep_after"], &format!("{path}.sleep_after"))?,
+        }),
+        Yaml::Null => Err(Problem::new(
+            path,
+            "is empty among other commands; remove it, or write \"\" to press Enter",
+        )),
+        _ => Err(Problem::new(
+            path,
+            "must be a command or a mapping with `cmd`; \
+             quote a command YAML would read as a number or a boolean",
+        )),
+    }
+}
+
+/// Read a number of seconds, which tmuxp passes to `time.sleep`.
+fn optional_seconds(value: &Yaml, path: &str) -> Result<Option<Duration>, Problem> {
+    let refused = || Problem::new(path, "must be a number of seconds, zero or more");
+    match value {
+        Yaml::BadValue | Yaml::Null => Ok(None),
+        Yaml::Integer(seconds) => u64::try_from(*seconds)
+            .map(|seconds| Some(Duration::from_secs(seconds)))
+            .map_err(|_| refused()),
+        Yaml::Real(_) => value
+            .as_f64()
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .map(Some)
+            .ok_or_else(refused),
+        _ => Err(refused()),
     }
 }
 
@@ -531,7 +690,7 @@ impl Workspace {
         write_pairs(&mut out, Some("environment"), &self.environment, 2);
         write_pairs(&mut out, Some("options"), &self.options, 2);
         write_pairs(&mut out, Some("global_options"), &self.global_options, 2);
-        write_list(
+        write_commands(
             &mut out,
             Some("shell_command_before"),
             &self.shell_command_before,
@@ -610,7 +769,7 @@ impl WindowConfig {
         }
         if !self.shell_command_before.is_empty() {
             entry.key(out, "shell_command_before:");
-            write_list(out, None, &self.shell_command_before, 6);
+            write_commands(out, None, &self.shell_command_before, 6);
         }
 
         // Always written, even when empty: an entry with no keys at all is
@@ -628,10 +787,10 @@ impl PaneConfig {
         let mut entry = Entry::new("      - ", "        ");
 
         if let [only] = self.shell_commands.as_slice() {
-            entry.key(out, &format!("shell_command: {}", quoted(only)));
+            entry.key(out, &format!("shell_command: {}", command_yaml(only)));
         } else if !self.shell_commands.is_empty() {
             entry.key(out, "shell_command:");
-            write_list(out, None, &self.shell_commands, 10);
+            write_commands(out, None, &self.shell_commands, 10);
         }
         if let Some(directory) = &self.start_directory {
             entry.key(out, &format!("start_directory: {}", path(directory)));
@@ -641,6 +800,12 @@ impl PaneConfig {
         }
         if !self.enter {
             entry.key(out, "enter: false");
+        }
+        if let Some(sleep) = self.sleep_before {
+            entry.key(out, &format!("sleep_before: {}", sleep.as_secs_f64()));
+        }
+        if let Some(sleep) = self.sleep_after {
+            entry.key(out, &format!("sleep_after: {}", sleep.as_secs_f64()));
         }
         if let Some(suppress) = self.suppress_history {
             entry.key(out, &format!("suppress_history: {suppress}"));
@@ -670,17 +835,35 @@ fn write_pairs(out: &mut String, name: Option<&str>, values: &[(String, String)]
     }
 }
 
-/// Write a sequence of strings, indented.
-fn write_list(out: &mut String, name: Option<&str>, values: &[String], indent: usize) {
-    if values.is_empty() {
+/// Write a sequence of commands, indented.
+fn write_commands(out: &mut String, name: Option<&str>, commands: &[ShellCommand], indent: usize) {
+    if commands.is_empty() {
         return;
     }
     if let Some(name) = name {
         let _ = writeln!(out, "{name}:");
     }
-    for value in values {
-        let _ = writeln!(out, "{:indent$}- {}", "", quoted(value));
+    for command in commands {
+        let _ = writeln!(out, "{:indent$}- {}", "", command_yaml(command));
     }
+}
+
+/// A command as a string, or as a flow mapping when it has settings of its own.
+fn command_yaml(command: &ShellCommand) -> String {
+    if command.is_plain() {
+        return quoted(&command.cmd);
+    }
+    let mut fields = vec![format!("cmd: {}", quoted(&command.cmd))];
+    if let Some(enter) = command.enter {
+        fields.push(format!("enter: {enter}"));
+    }
+    if let Some(sleep) = command.sleep_before {
+        fields.push(format!("sleep_before: {}", sleep.as_secs_f64()));
+    }
+    if let Some(sleep) = command.sleep_after {
+        fields.push(format!("sleep_after: {}", sleep.as_secs_f64()));
+    }
+    format!("{{{}}}", fields.join(", "))
 }
 
 /// Quote a path the way a scalar is quoted.

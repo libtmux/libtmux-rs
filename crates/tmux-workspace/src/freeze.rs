@@ -13,7 +13,7 @@
 
 use libtmux::{Error, Session};
 
-use crate::config::{PaneConfig, WindowConfig, Workspace};
+use crate::config::{PaneConfig, ShellCommand, WindowConfig, Workspace};
 
 /// Describe a live session as a workspace.
 ///
@@ -69,16 +69,13 @@ pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
             panes.push(PaneConfig {
                 shell_commands: pane
                     .current_command()
-                    .map(|command| vec![command.to_string_lossy().into_owned()])
+                    .map(|command| vec![ShellCommand::new(command.to_string_lossy())])
                     .unwrap_or_default(),
-                environment: Vec::new(),
                 start_directory: pane
                     .current_path()
                     .map(|path| path.to_string_lossy().into_owned().into()),
                 focus: pane.is_active(),
-                enter: true,
-                suppress_history: None,
-                unsupported_keys: Vec::new(),
+                ..PaneConfig::default()
             });
         }
 

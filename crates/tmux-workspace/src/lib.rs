@@ -33,7 +33,7 @@
 mod config;
 mod freeze;
 
-pub use config::{ConfigError, PaneConfig, WindowConfig, Workspace};
+pub use config::{ConfigError, PaneConfig, ShellCommand, WindowConfig, Workspace};
 pub use freeze::freeze;
 
 use std::path::Path;
@@ -201,15 +201,17 @@ impl<'server> WorkspaceBuilder<'server> {
                     .or(config.suppress_history)
                     .unwrap_or(workspace.suppress_history);
 
-                let before = workspace
+                // As in tmuxp, the `shell_command_before` commands lead the
+                // pane's own list, and a command's `enter` holds for the rest.
+                let mut enter = pane_config.enter;
+                let commands = workspace
                     .shell_command_before
                     .iter()
-                    .chain(&config.shell_command_before);
-                for command in before {
-                    plan.add(Self::typing(*pane, command, suppress, true));
-                }
-                for command in &pane_config.shell_commands {
-                    plan.add(Self::typing(*pane, command, suppress, pane_config.enter));
+                    .chain(&config.shell_command_before)
+                    .chain(&pane_config.shell_commands);
+                for command in commands {
+                    enter = command.enter.unwrap_or(enter);
+                    plan.add(Self::typing(*pane, &command.cmd, suppress, enter));
                 }
                 if pane_config.focus {
                     focus_pane = Some(*pane);
