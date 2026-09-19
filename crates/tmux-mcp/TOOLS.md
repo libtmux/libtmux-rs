@@ -711,15 +711,15 @@ Block until something signals a tmux wait-for channel. A pending signal is consu
 
 ## `wait_for_text`
 
-Wait until a pane writes matching text. Reads the pane's live output stream, so text that scrolls past between checks is still seen. The returned text is that raw stream, not the rendered screen: a line redrawn in place repeats; capture_pane shows the screen. Prefer run_shell_command for commands you are sending yourself: it reports an exit status instead of guessing from output. Use this for output you did not author, such as a server logging that it is ready. A pattern that is a substring of a command you just sent with send_keys can already be on screen as its echo; outcome present_at_entry reports that rather than matched, so a still-pending command does not read as already done. The live stream attaches a client while waiting, changing the session's attached-client state. Each list accepts at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time regex engine. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
+Wait until a pane writes matching text. Reads the pane's live output stream, so text that scrolls past between checks is still seen. The returned text is that raw stream, not the rendered screen: a line redrawn in place repeats; capture_pane shows the screen. Prefer run_shell_command for commands you are sending yourself: it reports an exit status instead of guessing from output. Use this for output you did not author, such as a server logging that it is ready. A pattern that is a substring of a command you just sent with send_keys can already be on screen as its echo; outcome present_at_entry reports that rather than matched, so a still-pending command does not read as already done. Waiting owns an observer client until the wait ends. Each list accepts at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time regex engine. Read pane output; accepts no client-supplied executable input. Returned content may be sensitive or untrusted.
 
 - Toolset: `inspect`
 - Process reach: `none`
-- Tmux effects: `["observe","change"]`
+- Tmux effects: `["observe"]`
 - Output classes: `["tmux-metadata","terminal-content"]`
 - May expose secrets: `true`
 - May return untrusted content: `true`
-- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":false,"openWorldHint":true,"readOnlyHint":false}`
+- Whole-call annotations: `{"destructiveHint":false,"idempotentHint":true,"openWorldHint":true,"readOnlyHint":true}`
 - Input literalization: `{}`
 - Nested authority: `[]`
 - Amplifies future input: `false`

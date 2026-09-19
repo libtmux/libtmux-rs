@@ -391,10 +391,12 @@ observes tmux is `readOnlyHint: true`. Deleting tmux state or sending pane
 input is `destructiveHint: true`, because the receiving shell runs whatever
 arrives. Reads, teardown, and changes that set a named value, such as a
 rename, are `idempotentHint: true`. Starting or driving a process, or
-returning terminal text, is `openWorldHint: true`. `wait_for_text` is not
-read-only: it attaches a client while it waits. `set_history_limit` is
-destructive: from tmux 3.7 a lower limit discards existing panes' scrollback
-past it, so it is in `teardown` beside `clear_pane_scrollback`.
+returning terminal text, is `openWorldHint: true`. Every `inspect` tool is
+read-only: the observer client that `wait_for_text` or `capture_since` attaches
+only reads, and changes no session, window, pane, or option.
+`set_history_limit` is destructive: from tmux 3.7 a lower limit discards
+existing panes' scrollback past it, so it is in `teardown` beside
+`clear_pane_scrollback`.
 
 When launched from tmux, the process inherits a pane ID, session number, server
 PID, and socket. Pane listings mark that pane `caller: "self"` only when the

@@ -121,12 +121,17 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
 }
 
 /// The hand-kept lists above, not the capability rows the hints derive from,
-/// say which tools must never look read-only or harmless to a client.
+/// say which tools must never look read-only or harmless to a client, and
+/// that every inspect tool looks read-only. The observer client that
+/// `wait_for_text` or `capture_since` attaches only reads.
 #[test]
 fn listed_mutating_tools_carry_mutating_hints() -> TestResult {
     for tool in tools("inspect,manage,execute,teardown")?.offered() {
         let name = tool.name.as_ref();
         let hints = tool.annotations.as_ref().expect("annotations");
+        if INSPECT.contains(&name) {
+            assert_eq!(hints.read_only_hint, Some(true), "{name} readOnlyHint");
+        }
         if [MANAGE, EXECUTE, TEARDOWN]
             .iter()
             .any(|names| names.contains(&name))
