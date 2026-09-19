@@ -158,6 +158,7 @@ pub(in crate::cli) async fn run(
     directory: &Path,
     report: &mut Reporter,
     input_index: Option<usize>,
+    envs: &[(&str, &str)],
 ) -> Result<ChildOutput> {
     let (program, arguments) = argv
         .split_first()
@@ -172,6 +173,7 @@ pub(in crate::cli) async fn run(
     let mut command = tokio::process::Command::new(program);
     command
         .args(arguments)
+        .envs(envs.iter().copied())
         .current_dir(directory)
         .stdin(if report.machine() {
             Stdio::null()
