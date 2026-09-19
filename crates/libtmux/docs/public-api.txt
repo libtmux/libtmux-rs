@@ -15,6 +15,7 @@ assoc_const libtmux::query::FilterEnum::FILTER_VARIANTS: &'static [&'static str]
 assoc_const libtmux::query::Filterable::FILTER_TARGET: &'static str
 assoc_type libtmux::plan::Operation::Creates: libtmux::plan::FromStep
 assoc_type libtmux::query::Filterable::Fields
+assoc_type libtmux::query::ReadField::Value<'a> where Target: 'a
 constant libtmux::option_names::ACTIVITY_ACTION: &str
 constant libtmux::option_names::AFTER_BIND_KEY: &str
 constant libtmux::option_names::AFTER_CAPTURE_PANE: &str
@@ -243,6 +244,7 @@ constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PROMPT_HISTORY: libtmux::ReleaseVersion
 constant libtmux::since::SERVER_ACCESS: libtmux::ReleaseVersion
 enum libtmux::AccessMode
+enum libtmux::Availability<T>
 enum libtmux::ChannelWait
 enum libtmux::Chooser
 enum libtmux::ControlModeErrorKind
@@ -297,6 +299,9 @@ enum libtmux::test::TestServerErrorKind
 function libtmux::AccessRule::mode: const fn(&self) -> libtmux::AccessMode
 function libtmux::AccessRule::name: fn(&self) -> &str
 function libtmux::AccessRule::principal: const fn(&self) -> libtmux::Principal
+function libtmux::Availability::as_ref: const fn(&self) -> libtmux::Availability<&T>
+function libtmux::Availability::available: fn(self) -> Option<T>
+function libtmux::Availability::is_available: const fn(&self) -> bool
 function libtmux::CaptureOptions::end: const fn(self, line: i32) -> Self
 function libtmux::CaptureOptions::escape_sequences: const fn(self) -> Self
 function libtmux::CaptureOptions::history: const fn() -> Self
@@ -311,6 +316,7 @@ function libtmux::Client::attached_session: async fn(&self) -> Result<Option<lib
 function libtmux::Client::attached_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Client::created: fn(&self) -> i64
 function libtmux::Client::detach: async fn(self) -> Result<(), libtmux::Error>
+function libtmux::Client::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Client::height: fn(&self) -> Option<u32>
 function libtmux::Client::is_control_mode: fn(&self) -> bool
 function libtmux::Client::is_own: fn(&self) -> bool
@@ -419,6 +425,7 @@ function libtmux::Pane::exit_mode: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Pane::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Pane::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Pane::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Pane::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Pane::get_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Pane::height: fn(&self) -> u32
 function libtmux::Pane::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
@@ -605,6 +612,7 @@ function libtmux::Session::environment_all: async fn(&self) -> Result<BTreeMap<S
 function libtmux::Session::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Session::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Session::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Session::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Session::get_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Session::hide_environment: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Session::hook: async fn(&self, name: &str) -> Result<Option<libtmux::IndexedHooks>, libtmux::Error>
@@ -682,6 +690,7 @@ function libtmux::Window::focus_direction: async fn(&self, direction: libtmux::P
 function libtmux::Window::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Window::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Window::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
+function libtmux::Window::get: fn<F: libtmux::query::ReadField<Self>>(&self, field: F) -> libtmux::Availability<<F as libtmux::query::ReadField>::Value<'_>>
 function libtmux::Window::get_option: async fn(&self, name: &str) -> Result<Option<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Window::has_activity: const fn(&self) -> bool
 function libtmux::Window::has_bell: const fn(&self) -> bool
@@ -1700,6 +1709,30 @@ impl libtmux::query::Filterable for libtmux::Session
 impl libtmux::query::Filterable for libtmux::SessionTree
 impl libtmux::query::Filterable for libtmux::Window
 impl libtmux::query::Filterable for libtmux::WindowTree
+impl libtmux::query::ReadField<libtmux::Client> for libtmux::query::BoolField<libtmux::Client>
+impl libtmux::query::ReadField<libtmux::Client> for libtmux::query::IntegerField<libtmux::Client, i64>
+impl libtmux::query::ReadField<libtmux::Client> for libtmux::query::IntegerField<libtmux::Client, u32>
+impl libtmux::query::ReadField<libtmux::Client> for libtmux::query::IntegerField<libtmux::Client, u64>
+impl libtmux::query::ReadField<libtmux::Client> for libtmux::query::TextField<libtmux::Client, libtmux::TmuxText>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::BoolField<libtmux::Pane>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::EnumField<libtmux::Pane, libtmux::PaneProgressState>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::IntegerField<libtmux::Pane, i32>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::IntegerField<libtmux::Pane, i64>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::IntegerField<libtmux::Pane, u32>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::IntegerField<libtmux::Pane, u64>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::IntegerField<libtmux::Pane, u8>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::TextField<libtmux::Pane, libtmux::PaneId>
+impl libtmux::query::ReadField<libtmux::Pane> for libtmux::query::TextField<libtmux::Pane, libtmux::TmuxText>
+impl libtmux::query::ReadField<libtmux::Session> for libtmux::query::BoolField<libtmux::Session>
+impl libtmux::query::ReadField<libtmux::Session> for libtmux::query::IntegerField<libtmux::Session, i64>
+impl libtmux::query::ReadField<libtmux::Session> for libtmux::query::IntegerField<libtmux::Session, u32>
+impl libtmux::query::ReadField<libtmux::Session> for libtmux::query::TextField<libtmux::Session, libtmux::SessionId>
+impl libtmux::query::ReadField<libtmux::Session> for libtmux::query::TextField<libtmux::Session, libtmux::TmuxText>
+impl libtmux::query::ReadField<libtmux::Window> for libtmux::query::BoolField<libtmux::Window>
+impl libtmux::query::ReadField<libtmux::Window> for libtmux::query::IntegerField<libtmux::Window, i64>
+impl libtmux::query::ReadField<libtmux::Window> for libtmux::query::IntegerField<libtmux::Window, u32>
+impl libtmux::query::ReadField<libtmux::Window> for libtmux::query::TextField<libtmux::Window, libtmux::TmuxText>
+impl libtmux::query::ReadField<libtmux::Window> for libtmux::query::TextField<libtmux::Window, libtmux::WindowId>
 impl<'de, T: libtmux::query::Filterable> Deserialize<'de> for libtmux::query::FilterExpr<T>
 impl<'de, T> Deserialize<'de> for libtmux::plan::Slot<T>
 impl<'de> Deserialize<'de> for libtmux::plan::CapturePane
@@ -1750,12 +1783,22 @@ impl<T, N> Copy for libtmux::query::IntegerField<T, N>
 impl<T, N> Debug for libtmux::query::IntegerField<T, N>
 impl<T, N> Eq for libtmux::query::IntegerField<T, N>
 impl<T, N> PartialEq for libtmux::query::IntegerField<T, N>
+impl<T, V> Clone for libtmux::query::TextField<T, V>
+impl<T, V> Copy for libtmux::query::TextField<T, V>
+impl<T, V> Debug for libtmux::query::TextField<T, V>
+impl<T, V> Eq for libtmux::query::TextField<T, V>
+impl<T, V> PartialEq for libtmux::query::TextField<T, V>
+impl<T: Clone> Clone for libtmux::Availability<T>
 impl<T: Clone> Clone for libtmux::SparseValues<T>
+impl<T: Copy> Copy for libtmux::Availability<T>
+impl<T: Debug> Debug for libtmux::Availability<T>
 impl<T: Debug> Debug for libtmux::SparseValues<T>
 impl<T: Default> Default for libtmux::SparseValues<T>
+impl<T: Eq> Eq for libtmux::Availability<T>
 impl<T: Eq> Eq for libtmux::SparseValues<T>
 impl<T: Into<std::ffi::OsString>> From<T> for libtmux::NewSessionOptions
 impl<T: Into<std::ffi::OsString>> From<T> for libtmux::NewWindowOptions
+impl<T: PartialEq> PartialEq for libtmux::Availability<T>
 impl<T: PartialEq> PartialEq for libtmux::SparseValues<T>
 impl<T: fmt::Debug, E: fmt::Debug + fmt::Display> Error for libtmux::ScopeError<T, E>
 impl<T: fmt::Debug, E: fmt::Debug> Debug for libtmux::ScopeError<T, E>
@@ -1766,24 +1809,19 @@ impl<T: libtmux::query::Filterable> libtmux::query::Matcher<T> for libtmux::quer
 impl<T> Clone for libtmux::plan::Slot<T>
 impl<T> Clone for libtmux::query::BoolField<T>
 impl<T> Clone for libtmux::query::FilterExpr<T>
-impl<T> Clone for libtmux::query::TextField<T>
 impl<T> Copy for libtmux::plan::Slot<T>
 impl<T> Copy for libtmux::query::BoolField<T>
-impl<T> Copy for libtmux::query::TextField<T>
 impl<T> Debug for libtmux::plan::Slot<T>
 impl<T> Debug for libtmux::query::BoolField<T>
 impl<T> Debug for libtmux::query::FilterExpr<T>
-impl<T> Debug for libtmux::query::TextField<T>
 impl<T> Eq for libtmux::plan::Slot<T>
 impl<T> Eq for libtmux::query::BoolField<T>
 impl<T> Eq for libtmux::query::FilterExpr<T>
-impl<T> Eq for libtmux::query::TextField<T>
 impl<T> From<BTreeMap<u32, T>> for libtmux::SparseValues<T>
 impl<T> JsonSchema for libtmux::plan::Slot<T>
 impl<T> PartialEq for libtmux::plan::Slot<T>
 impl<T> PartialEq for libtmux::query::BoolField<T>
 impl<T> PartialEq for libtmux::query::FilterExpr<T>
-impl<T> PartialEq for libtmux::query::TextField<T>
 impl<T> Serialize for libtmux::plan::Slot<T>
 impl<T> libtmux::plan::FromStep for libtmux::plan::Slot<T>
 impl<Target> Debug for libtmux::ClientFields<Target>
@@ -1874,11 +1912,12 @@ struct libtmux::query::IntegerField<T, N>
 struct libtmux::query::ManyRelation<From, To>
 struct libtmux::query::MultipleItemsError
 struct libtmux::query::OneRelation<From, To>
-struct libtmux::query::TextField<T>
+struct libtmux::query::TextField<T, V = libtmux::TmuxText>
 struct libtmux::test::RetryTimeout
 struct libtmux::test::TestServer
 struct libtmux::test::TestServerBuilder
 struct libtmux::test::TestServerError
+struct_field libtmux::Availability::Available::0: T
 struct_field libtmux::CapturedLine::starts_output: bool
 struct_field libtmux::CapturedLine::starts_prompt: bool
 struct_field libtmux::CapturedLine::text: libtmux::TmuxText
@@ -2029,7 +2068,7 @@ struct_field libtmux::PaneFields::pane_fg: libtmux::query::TextField<Target>
 struct_field libtmux::PaneFields::pane_flags: libtmux::query::TextField<Target>
 struct_field libtmux::PaneFields::pane_floating_flag: libtmux::query::BoolField<Target>
 struct_field libtmux::PaneFields::pane_height: libtmux::query::IntegerField<Target, u32>
-struct_field libtmux::PaneFields::pane_id: libtmux::query::TextField<Target>
+struct_field libtmux::PaneFields::pane_id: libtmux::query::TextField<Target, libtmux::PaneId>
 struct_field libtmux::PaneFields::pane_in_mode: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::PaneFields::pane_index: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::PaneFields::pane_input_off: libtmux::query::BoolField<Target>
@@ -2075,7 +2114,7 @@ struct_field libtmux::ScopeError::OperationAndCleanup::operation: E
 struct_field libtmux::SessionFields::session_activity: libtmux::query::IntegerField<Target, i64>
 struct_field libtmux::SessionFields::session_attached: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::SessionFields::session_created: libtmux::query::IntegerField<Target, i64>
-struct_field libtmux::SessionFields::session_id: libtmux::query::TextField<Target>
+struct_field libtmux::SessionFields::session_id: libtmux::query::TextField<Target, libtmux::SessionId>
 struct_field libtmux::SessionFields::session_last_attached: libtmux::query::IntegerField<Target, i64>
 struct_field libtmux::SessionFields::session_many_attached: libtmux::query::BoolField<Target>
 struct_field libtmux::SessionFields::session_name: libtmux::query::TextField<Target>
@@ -2091,7 +2130,7 @@ struct_field libtmux::WindowFields::window_activity: libtmux::query::IntegerFiel
 struct_field libtmux::WindowFields::window_cell_height: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::WindowFields::window_cell_width: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::WindowFields::window_height: libtmux::query::IntegerField<Target, u32>
-struct_field libtmux::WindowFields::window_id: libtmux::query::TextField<Target>
+struct_field libtmux::WindowFields::window_id: libtmux::query::TextField<Target, libtmux::WindowId>
 struct_field libtmux::WindowFields::window_layout: libtmux::query::TextField<Target>
 struct_field libtmux::WindowFields::window_name: libtmux::query::TextField<Target>
 struct_field libtmux::WindowFields::window_panes: libtmux::query::IntegerField<Target, u32>
@@ -2189,9 +2228,15 @@ trait libtmux::query::FilterSchema: libtmux::query::Filterable
 trait libtmux::query::Filterable: Sized
 trait libtmux::query::Matcher<T>
 trait libtmux::query::QueryIteratorExt: Iterator + Sized
+trait libtmux::query::ReadField<Target>: Copy + sealed::Sealed
+trait libtmux::snapshot::sealed::Sealed
 type_alias libtmux::IndexedHooks = libtmux::SparseValues<libtmux::TmuxText>
 variant libtmux::AccessMode::ReadOnly
 variant libtmux::AccessMode::Write
+variant libtmux::Availability::Absent
+variant libtmux::Availability::Available
+variant libtmux::Availability::Unproven
+variant libtmux::Availability::Unsupported
 variant libtmux::ChannelWait::Signalled
 variant libtmux::ChannelWait::TimedOut
 variant libtmux::Chooser::Buffer

@@ -11,11 +11,11 @@ use crate::internal::listing;
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
+use crate::query::{FilterSchema, Filterable, ReadField};
 use crate::session::Session;
 use crate::snapshot::WindowProjection;
 #[cfg(feature = "query")]
-use crate::snapshot::{WindowFields, WindowInfo};
+use crate::snapshot::{Availability, FieldRef, WindowFields, WindowInfo};
 use crate::target::{ServerIdentity, SessionId, WindowId};
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
@@ -1134,6 +1134,54 @@ impl fmt::Debug for Window {
             .field("session_id", &self.session_id())
             .field("index", &self.index())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl Window {
+    /// Read one field of this window's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field in [`WindowFields`] reads this way, including those with no
+    /// getter of their own. Nothing is sent to tmux, so the value is as old as
+    /// the snapshot. The result says why a field holds no value: see
+    /// [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::query::Filterable as _;
+    /// use libtmux::{Availability, Window};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("read").await?;
+    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let fields = Window::filter_fields();
+    ///
+    /// // The layout as shown, which only differs from the layout while zoomed.
+    /// assert_eq!(
+    ///     window.get(fields.window_visible_layout),
+    ///     Availability::Available(window.layout()),
+    /// );
+    /// assert_eq!(window.get(fields.window_id), Availability::Available(window.id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.projection.window().stored(name)
     }
 }
 

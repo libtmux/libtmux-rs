@@ -13,10 +13,10 @@ use crate::internal::listing::{self, Pushdown as _};
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
-#[cfg(feature = "query")]
-use crate::snapshot::SessionFields;
+use crate::query::{FilterSchema, Filterable, ReadField};
 use crate::snapshot::SessionInfo;
+#[cfg(feature = "query")]
+use crate::snapshot::{Availability, FieldRef, SessionFields};
 use crate::target::{ServerIdentity, SessionId};
 use crate::window::Window;
 use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
@@ -847,6 +847,50 @@ impl fmt::Debug for Session {
             .debug_struct("Session")
             .field("id", &self.id())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl Session {
+    /// Read one field of this session's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field in [`SessionFields`] reads this way, including those with no
+    /// getter of their own. Nothing is sent to tmux, so the value is as old as
+    /// the snapshot. The result says why a field holds no value: see
+    /// [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::query::Filterable as _;
+    /// use libtmux::{Availability, Session};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("read").await?;
+    /// let fields = Session::filter_fields();
+    ///
+    /// // Nobody is attached, so nobody is attached twice.
+    /// assert_eq!(session.get(fields.session_many_attached), Availability::Available(false));
+    /// assert_eq!(session.get(fields.session_id), Availability::Available(session.id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.info.stored(name)
     }
 }
 

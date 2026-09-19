@@ -16,6 +16,22 @@ for: tmux refuses the respawn while the old command is alive.
 `Server::display_menu` takes `MenuItem::new(label, key, command)` in place of
 a `(String, String, String)` triple.
 
+## ID filter handles carry their ID type
+
+`PaneFields::pane_id`, `WindowFields::window_id` and
+`SessionFields::session_id` are `TextField<Target, PaneId>`,
+`TextField<Target, WindowId>` and `TextField<Target, SessionId>`. Filtering
+through them is unchanged. Only code that spells the handle's type changes:
+
+```
+use libtmux::query::{Filterable as _, TextField};
+use libtmux::{Pane, PaneId};
+
+// was: let handle: TextField<Pane> = Pane::filter_fields().pane_id;
+let handle: TextField<Pane, PaneId> = Pane::filter_fields().pane_id;
+let _ = handle.eq("%1");
+```
+
 ## The `_or_empty` listing twins are gone
 
 Replace `x_or_empty().await` with `x().await.unwrap_or_default()`:

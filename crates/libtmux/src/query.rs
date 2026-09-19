@@ -391,6 +391,8 @@ use matching::{
 mod schema;
 pub use schema::FilterSchema;
 
+pub use crate::snapshot::ReadField;
+
 /// A predicate that evaluates a borrowed candidate.
 ///
 /// Functions and closures with the same signature implement this trait.

@@ -374,7 +374,7 @@ pub use server::{
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};
 pub use session::{EnvironmentEntry, NewWindowOptions, Session, WindowPlacement};
-pub use snapshot::PaneProgressState;
+pub use snapshot::{Availability, PaneProgressState};
 #[cfg(feature = "query")]
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{

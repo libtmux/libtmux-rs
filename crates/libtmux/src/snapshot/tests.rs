@@ -21,7 +21,9 @@ use crate::formats::{
 #[cfg(all(feature = "query", feature = "serde"))]
 use crate::query::FilterExpr;
 #[cfg(feature = "query")]
-use crate::query::{BoolField, EnumField, FilterEnum, Filterable, IntegerField, TextField};
+use crate::query::{
+    BoolField, EnumField, FilterEnum, Filterable, IntegerField, ReadField, TextField,
+};
 use crate::target::WindowLinkIdentity;
 #[cfg(feature = "test-support")]
 use crate::test::TestServer;
@@ -364,6 +366,30 @@ macro_rules! assert_stored_fields {
 
 #[cfg(feature = "query")]
 macro_rules! assert_text_handles {
+    (
+        @typed $text:ty,
+        $value:expr,
+        $info:ty,
+        $fixture:ident,
+        $raw:expr,
+        $expected:expr,
+        [$($field:ident),+ $(,)?]
+    ) => {
+        $(
+            let handle: &TextField<$info, $text> = &$value.$field;
+            assert_eq!(
+                *handle,
+                TextField::<$info, $text>::typed(
+                    <$info as Filterable>::FILTER_TARGET,
+                    stringify!($field),
+                )
+            );
+            let candidate = $fixture(b"tmux 3.7\n", &[(stringify!($field), $raw)])
+                .ok()
+                .expect(concat!("distinct ", stringify!($field), " fixture hydrates"));
+            assert!((*handle).eq($expected).matches(&candidate));
+        )+
+    };
     (
         $value:expr,
         $info:ty,
@@ -886,6 +912,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
     );
 
     assert_text_handles!(
+        @typed SessionId,
         session_fields,
         SessionInfo,
         session_fixture,
@@ -927,6 +954,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
     );
 
     assert_text_handles!(
+        @typed WindowId,
         window_fields,
         WindowInfo,
         window_fixture,
@@ -973,7 +1001,15 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
         [window_zoomed_flag]
     );
 
-    assert_text_handles!(pane_fields, PaneInfo, pane_fixture, b"%7", "%7", [pane_id]);
+    assert_text_handles!(
+        @typed PaneId,
+        pane_fields,
+        PaneInfo,
+        pane_fixture,
+        b"%7",
+        "%7",
+        [pane_id]
+    );
     assert_text_handles!(
         pane_fields,
         PaneInfo,
@@ -1286,6 +1322,84 @@ fn snapshot_catalog_empty_policy_distinguishes_all_three_states() {
     assert_eq!(error.offset(), offsets.get("pane_width").copied());
     assert_eq!(error.profile(), None);
     assert_safe_diagnostic(&error);
+}
+
+/// Every filter handle reads the field it filters.
+///
+/// Naming `unread` for a public target compiles only when every handle type
+/// in its field set implements `ReadField` for it. Calling it on a complete
+/// fixture names any handle whose name or type finds no stored field.
+#[test]
+#[cfg(feature = "query")]
+fn every_filter_handle_reads_its_field() {
+    let _ = SessionFields::<crate::Session>::unread;
+    let _ = WindowFields::<crate::Window>::unread;
+    let _ = PaneFields::<crate::Pane>::unread;
+    let _ = ClientFields::<crate::Client>::unread;
+
+    let none: Vec<&str> = Vec::new();
+    let session = session_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete SessionInfo hydrates");
+    assert_eq!(generated_fields::<SessionInfo>().unread(&session), none);
+    let window = window_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete WindowInfo hydrates");
+    assert_eq!(generated_fields::<WindowInfo>().unread(&window), none);
+    let pane = pane_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete PaneInfo hydrates");
+    assert_eq!(generated_fields::<PaneInfo>().unread(&pane), none);
+    let client = client_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete ClientInfo hydrates");
+    assert_eq!(generated_fields::<ClientInfo>().unread(&client), none);
+}
+
+/// A read keeps the reason a field has no value.
+#[test]
+#[cfg(feature = "query")]
+fn a_read_through_a_handle_keeps_the_reason_a_value_is_missing() {
+    fn read<F: ReadField<PaneInfo>>(pane: &PaneInfo, field: F) -> Availability<F::Value<'_>> {
+        field
+            .__read(pane)
+            .expect("a generated handle names a stored field")
+    }
+
+    let fields = generated_fields::<PaneInfo>();
+    let current = pane_fixture(b"tmux 3.7\n", &[("pane_current_path", b"")])
+        .ok()
+        .expect("3.7 pane hydrates");
+    assert_eq!(
+        read(&current, fields.pane_current_path),
+        Availability::Absent
+    );
+    assert_eq!(
+        read(&current, fields.pane_pb_state),
+        Availability::Available(PaneProgressState::Normal)
+    );
+    assert_eq!(read(&current, fields.cursor_x), Availability::Available(0));
+    assert_eq!(
+        read(&current, fields.pane_id),
+        Availability::Available(&"%1".parse::<PaneId>().expect("a pane id"))
+    );
+
+    let old = pane_fixture(b"tmux 3.2a\n", &[])
+        .ok()
+        .expect("3.2a pane hydrates");
+    assert_eq!(read(&old, fields.pane_pb_state), Availability::Unsupported);
+    assert_eq!(
+        read(&old, fields.scroll_position),
+        Availability::Available(0)
+    );
+
+    let development = pane_fixture(b"tmux master\n", &[])
+        .ok()
+        .expect("development pane hydrates");
+    assert_eq!(
+        read(&development, fields.pane_pb_state),
+        Availability::Unproven
+    );
 }
 
 #[test]

@@ -10,11 +10,11 @@ use crate::formats::TmuxText;
 use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
+use crate::query::{FilterSchema, Filterable, ReadField};
 use crate::session::Session;
 use crate::snapshot::PaneProjection;
 #[cfg(feature = "query")]
-use crate::snapshot::{PaneFields, PaneInfo};
+use crate::snapshot::{Availability, FieldRef, PaneFields, PaneInfo};
 use crate::target::{PaneId, ServerIdentity, SessionId, WindowId};
 use crate::version::TmuxVersion;
 use crate::window::Respawn;
@@ -177,6 +177,11 @@ impl Pane {
     }
 
     /// Return the pane's working directory.
+    ///
+    /// `None` when tmux reported none, which a pane straight from
+    /// [`Self::split`] can do until its process has started; [`Self::refresh`]
+    /// asks again. Reading `pane_current_path` through [`Self::get`] says
+    /// which kind of missing it is.
     #[must_use]
     pub fn current_path(&self) -> Option<&TmuxText> {
         self.projection.pane().pane_current_path().available()
@@ -1249,6 +1254,59 @@ impl fmt::Debug for Pane {
             .field("id", &self.id())
             .field("window_id", &self.window_id())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl Pane {
+    /// Read one field of this pane's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field a pane listing fetches reads this way, including those
+    /// with no getter of their own. Nothing is sent to tmux, so the value is
+    /// as old as the snapshot; [`Self::refresh`] renews it. The result says
+    /// why a field holds no value: see [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::query::Filterable as _;
+    /// use libtmux::{Availability, Pane, TmuxText};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("read").await?;
+    /// let mut pane = session.panes().await?.remove(0);
+    /// let fields = Pane::filter_fields();
+    ///
+    /// // Outside copy mode tmux reports no scroll position at all.
+    /// assert_eq!(pane.get(fields.scroll_position), Availability::Absent);
+    ///
+    /// pane.copy_mode().await?;
+    /// pane.refresh().await?;
+    /// assert_eq!(pane.get(fields.scroll_position), Availability::Available(0));
+    /// assert_eq!(
+    ///     pane.get(fields.pane_mode),
+    ///     Availability::Available(&TmuxText::from("copy-mode")),
+    /// );
+    /// assert_eq!(pane.get(fields.pane_id), Availability::Available(pane.id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.projection.pane().stored(name)
     }
 }
 

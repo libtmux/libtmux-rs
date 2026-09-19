@@ -10,10 +10,10 @@ use crate::formats::TmuxText;
 use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
-#[cfg(feature = "query")]
-use crate::snapshot::ClientFields;
+use crate::query::{FilterSchema, Filterable, ReadField};
 use crate::snapshot::ClientInfo;
+#[cfg(feature = "query")]
+use crate::snapshot::{Availability, ClientFields, FieldRef};
 use crate::target::ServerIdentity;
 use crate::{Command, Error, ObjectKind};
 
@@ -498,6 +498,44 @@ impl Hash for Client {
 impl fmt::Debug for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("Client").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl Client {
+    /// Read one field of this client's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field in [`ClientFields`] reads this way, including those with no
+    /// getter of their own. Nothing is sent to tmux, so the value is as old as
+    /// the snapshot. The result says why a field holds no value: see
+    /// [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// use libtmux::Client;
+    /// use libtmux::query::Filterable as _;
+    ///
+    /// let fields = Client::filter_fields();
+    /// for client in server.clients().await? {
+    ///     // The key table a client is in: `prefix` right after the prefix key.
+    ///     if let Some(table) = client.get(fields.client_key_table).available() {
+    ///         println!("{client}: {}", table.to_string_lossy());
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.info.stored(name)
     }
 }
 

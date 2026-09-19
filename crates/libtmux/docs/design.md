@@ -352,11 +352,12 @@ permanently attached to stale parents.
 
 ### Private snapshots and future refresh
 
-The current `SessionInfo`, `WindowInfo`, `PaneInfo`, `ClientInfo`,
-`Availability<T>`, projections, format plans, and built-in fields are
-crate-private. No public hierarchy handle or listing can return them yet. The
-discovery slice will promote only the values needed by a public consumer and
-define handle refresh around complete owned snapshots.
+The `SessionInfo`, `WindowInfo`, `PaneInfo`, and `ClientInfo` structs,
+projections, format plans, and built-in fields are crate-private. Each field
+is readable through the handle that filters it: `Pane::get(fields.cursor_x)`
+returns `Availability<u32>`, so one name serves filtering and reading and no
+per-field method commits the crate to a field's storage shape. Hand-written
+getters remain for the common fields.
 
 Inside that private kernel, known IDs, indices, flags, sizes, timestamps, and
 enums use typed fields. `TmuxText` retains stored bytes exactly and exposes
