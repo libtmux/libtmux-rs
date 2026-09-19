@@ -245,20 +245,10 @@ impl TmuxTools {
             Some("server") => Ok(OptionScope::Server),
             None | Some("global-session") => Ok(OptionScope::GlobalSession),
             Some("global-window") => Ok(OptionScope::GlobalWindow),
-            Some("session") => {
-                let target = target.ok_or_else(|| needs("session"))?;
-                let session = self
-                    .server
-                    .sessions()
-                    .await
-                    .map_err(|e| tmux_error(&e))?
-                    .into_iter()
-                    .find(|session| {
-                        session.id().to_string() == target || session.name() == target.as_bytes()
-                    })
-                    .ok_or_else(|| bad_input(format!("no session {target}")))?;
-                Ok(OptionScope::Session(Box::new(session)))
-            }
+            Some("session") => Ok(OptionScope::Session(Box::new(
+                self.find_session(target.ok_or_else(|| needs("session"))?)
+                    .await?,
+            ))),
             Some("window") => Ok(OptionScope::Window(Box::new(
                 self.find_window(target.ok_or_else(|| needs("window"))?)
                     .await?,
@@ -451,14 +441,35 @@ impl TmuxTools {
             .ok_or_else(|| object_gone("pane", id))
     }
 
-    /// Resolve a session by name, reporting an unknown one as invalid input.
-    pub(super) async fn find_session(&self, name: &str) -> Result<libtmux::Session, ToolError> {
-        self.server
+    /// Resolve a session by `$`-prefixed id or by name.
+    ///
+    /// An id is looked up as one, because the server's instructions tell an
+    /// agent to prefer ids. Text that starts with `$` and is neither an id
+    /// nor a session's name is invalid input, not a session that went away.
+    pub(super) async fn find_session(&self, target: &str) -> Result<libtmux::Session, ToolError> {
+        if target.starts_with('$')
+            && let Ok(id) = target.parse::<libtmux::SessionId>()
+        {
+            return self
+                .server
+                .session_by_id(&id)
+                .await
+                .map_err(|e| tmux_error(&e))?
+                .ok_or_else(|| object_gone("session", target));
+        }
+        let named = self
+            .server
             .sessions()
             .await
             .map_err(|e| tmux_error(&e))?
             .into_iter()
-            .find(|session| session.name() == name.as_bytes())
-            .ok_or_else(|| object_gone("session", name))
+            .find(|session| session.name() == target.as_bytes());
+        match named {
+            Some(session) => Ok(session),
+            None if target.starts_with('$') => Err(bad_input(format!(
+                "{target} is not a session id or name: an id is $ followed by digits, as in $1"
+            ))),
+            None => Err(object_gone("session", target)),
+        }
     }
 }

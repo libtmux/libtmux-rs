@@ -17,7 +17,7 @@ use libtmux::{
     SplitOptions,
 };
 use serde_json::Value;
-use tmux_mcp::{CallerIdentity, TmuxTools};
+use tmux_mcp::{CallerIdentity, Selection, TmuxTools};
 use tokio_util::sync::CancellationToken;
 
 mod support;
@@ -3738,6 +3738,86 @@ async fn window_selection_uses_core_fixture_setup() {
             .iter()
             .any(|window| window["id"] == second && window["active"] == true)
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The server's instructions tell an agent to prefer ids, so every tool that
+/// names a session takes the id `list_sessions` returned, not only its name.
+#[tokio::test]
+async fn every_session_input_accepts_the_listed_id() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let tools = TmuxTools::builder(server.clone())
+        .caller(None)
+        .selection(
+            Selection::parse(Some("inspect,manage,execute,teardown"), None, None)
+                .expect("every toolset"),
+        )
+        .build();
+    server.new_session("by-id").await.expect("session starts");
+    let donor = server.new_session("donor").await.expect("donor starts");
+    let moving = donor
+        .new_window(NewWindowOptions::new("moving"))
+        .await
+        .expect("donor gains a second window")
+        .id()
+        .to_string();
+    let listed = call_tool(tools.clone(), "list_sessions", serde_json::json!({})).await;
+    let id = listed.structured_content.expect("session listing")["sessions"]
+        .as_array()
+        .expect("sessions")
+        .iter()
+        .find(|session| session["name"] == "by-id")
+        .expect("the session is listed")["id"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+
+    for (tool, arguments) in [
+        ("get_session_info", serde_json::json!({"session": id})),
+        ("show_environment", serde_json::json!({"session": id})),
+        ("show_hooks", serde_json::json!({"session": id})),
+        (
+            "search_panes",
+            serde_json::json!({"pattern": "unmatched", "session": id}),
+        ),
+        (
+            "show_option",
+            serde_json::json!({"name": "status", "scope": "session", "target": id}),
+        ),
+        (
+            "set_history_limit",
+            serde_json::json!({"session": id, "limit": 5000}),
+        ),
+        (
+            "set_mouse_enabled",
+            serde_json::json!({"session": id, "enabled": true}),
+        ),
+        ("create_window", serde_json::json!({"session": id})),
+        (
+            "move_window",
+            serde_json::json!({"window": moving, "destination_session": id, "destination_index": 7}),
+        ),
+        (
+            "rename_session",
+            serde_json::json!({"session": id, "name": "renamed"}),
+        ),
+        ("kill_session", serde_json::json!({"session": id})),
+    ] {
+        let result = call_tool(tools.clone(), tool, arguments).await;
+        assert_ne!(result.is_error, Some(true), "{tool}: {result:?}");
+    }
+
+    let malformed = call_tool(
+        tools,
+        "get_session_info",
+        serde_json::json!({"session": "$not-an-id"}),
+    )
+    .await;
+    let wire = serde_json::to_string(&malformed).expect("result serializes");
+    assert_eq!(malformed.is_error, Some(true), "{wire}");
+    assert!(wire.contains("invalid_input"), "{wire}");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

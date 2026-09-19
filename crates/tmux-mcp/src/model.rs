@@ -10,7 +10,8 @@ use crate::schema::{
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionArgs {
-    /// The session name, as `list_sessions` reports it.
+    /// The session, by `$`-prefixed id as `list_sessions` reports it, or by
+    /// name.
     pub session: String,
 }
 
@@ -82,7 +83,8 @@ pub struct RunCommandArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShowEnvironmentArgs {
-    /// The session whose environment to read. Omit for the server's own.
+    /// The session whose environment to read, by `$`-prefixed id or name.
+    /// Omit for the server's own.
     pub session: Option<String>,
 }
 
@@ -90,7 +92,8 @@ pub struct ShowEnvironmentArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShowHooksArgs {
-    /// The session whose hooks to read. Omit for the server's own.
+    /// The session whose hooks to read, by `$`-prefixed id or name. Omit for
+    /// the server's own.
     pub session: Option<String>,
 }
 
@@ -186,7 +189,7 @@ pub struct SearchPanesArgs {
     /// Search scrollback as well as the visible screen.
     #[serde(default)]
     pub history: bool,
-    /// Only search panes in this session, by name.
+    /// Only search panes in this session, by `$`-prefixed id or name.
     pub session: Option<String>,
     /// Only search panes in this window, by `@`-prefixed id.
     pub window: Option<String>,

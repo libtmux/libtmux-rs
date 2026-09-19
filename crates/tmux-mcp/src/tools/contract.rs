@@ -28,6 +28,7 @@ const READ_BATCH_TRUNCATED_ERROR: &str =
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RenameSessionArgs {
+    /// The session to rename, by `$`-prefixed id or name.
     pub(crate) session: String,
     pub(crate) name: String,
 }
@@ -51,6 +52,7 @@ pub(crate) struct WindowSizeArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct MoveWindowArgs {
     pub(crate) window: String,
+    /// The session to move the window into, by `$`-prefixed id or name.
     pub(crate) destination_session: String,
     pub(crate) destination_index: i32,
 }
@@ -95,6 +97,8 @@ pub struct VariablesValue {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionFlagArgs {
+    /// The session to change, by `$`-prefixed id or name. Omit to change the
+    /// global default.
     pub(crate) session: Option<String>,
     pub(crate) enabled: bool,
 }
@@ -102,6 +106,8 @@ pub(crate) struct SessionFlagArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HistoryLimitArgs {
+    /// The session to change, by `$`-prefixed id or name. Omit to change the
+    /// global default.
     pub(crate) session: Option<String>,
     pub(crate) limit: u32,
 }
@@ -123,6 +129,7 @@ pub(crate) struct SettingChanged {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateWindowArgs {
+    /// The session to create the window in, by `$`-prefixed id or name.
     pub(crate) session: String,
     pub(crate) name: Option<String>,
     pub(crate) start_directory: Option<String>,
