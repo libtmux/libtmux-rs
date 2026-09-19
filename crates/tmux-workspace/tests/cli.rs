@@ -4187,3 +4187,37 @@ async fn refusals_report_only_shared_machine_codes() {
     }
     guard.shutdown().await.unwrap();
 }
+
+/// A window option a workspace lists under the session's `options:` is
+/// applied where tmux keeps it, so the document's request takes effect
+/// instead of stopping the load.
+#[tokio::test]
+async fn a_window_option_under_session_options_lands_on_the_windows() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("pbi.yaml"),
+        "session_name: pbi\noptions:\n  base-index: 1\n  pane-base-index: 1\nwindows:\n  - window_name: w\n    panes: [echo A, echo B]\n",
+    )
+    .unwrap();
+    let output = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "--json",
+            "pbi.yaml",
+        ],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let session = guard.server().session("pbi").await.unwrap().unwrap();
+    let windows = session.windows().await.unwrap();
+    assert_eq!(windows.len(), 1);
+    let panes = windows[0].panes().await.unwrap();
+    assert_eq!(panes.len(), 2);
+    assert_eq!(panes[0].index(), 1, "pane-base-index was not applied");
+    assert_eq!(windows[0].index(), 1, "base-index was not applied");
+    guard.shutdown().await.unwrap();
+}

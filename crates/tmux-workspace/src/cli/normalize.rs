@@ -101,6 +101,27 @@ pub(super) fn pairs(value: &Value, options: bool) -> Result<Vec<(String, String)
         .collect()
 }
 
+/// tmux keeps some of the options a workspace lists under `options:` in the
+/// window table, so writing one through the session would land it at a scope
+/// the document did not name. They are taken out of the session's list and
+/// applied to each of the workspace's own windows, where what the document
+/// asked for takes effect.
+fn window_scoped(options: &mut Vec<(String, String)>) -> Vec<(String, String)> {
+    use libtmux::{OptionScope, option_schema};
+
+    let mut moved = Vec::new();
+    options.retain(|(name, value)| {
+        let window_only = option_schema(name).is_some_and(|schema| {
+            !schema.accepts(OptionScope::Session) && schema.accepts(OptionScope::Window)
+        });
+        if window_only {
+            moved.push((name.clone(), value.clone()));
+        }
+        !window_only
+    });
+    moved
+}
+
 fn keys(value: &Value, names: &[&str], scope: &str) -> Result<()> {
     for key in document::object(value)?.keys() {
         // A key starting with `x-`, at any level, is inert: accepted here,
@@ -254,10 +275,21 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     if source_windows.is_empty() {
         return Err(CliError::invalid("workspace requires at least one window"));
     }
+    let mut options = pairs(&value["options"], true)?;
+    let inherited = window_scoped(&mut options);
     let mut indexes = BTreeSet::new();
     let windows = source_windows
         .iter()
-        .map(|source| window(source, value, &directory, suppress, &mut indexes))
+        .map(|source| {
+            window(
+                source,
+                value,
+                &directory,
+                suppress,
+                &mut indexes,
+                &inherited,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     Ok(Workspace {
         source: path.to_owned(),
@@ -265,7 +297,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
         script_directory: directory.clone(),
         directory,
         environment: pairs(&value["environment"], false)?,
-        options: pairs(&value["options"], true)?,
+        options,
         global_options: pairs(&value["global_options"], true)?,
         before_script: text(&value["before_script"], "before_script")?,
         bridge,
@@ -327,6 +359,7 @@ fn window(
     directory: &Path,
     suppress: bool,
     indexes: &mut BTreeSet<i32>,
+    inherited: &[(String, String)],
 ) -> Result<Window> {
     keys(
         window,
@@ -391,7 +424,11 @@ fn window(
         index,
         layout: text(&window["layout"], "layout")?,
         focus: boolean(&window["focus"], false, "focus")?,
-        options: pairs(&window["options"], true)?,
+        options: {
+            let mut options = inherited.to_vec();
+            options.extend(pairs(&window["options"], true)?);
+            options
+        },
         options_after: pairs(&window["options_after"], true)?,
         panes,
     })
