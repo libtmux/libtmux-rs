@@ -84,6 +84,7 @@ pub struct RunCommandArgs {
 #[serde(deny_unknown_fields)]
 pub struct ShowEnvironmentArgs {
     /// The session whose environment to read, by `$`-prefixed id or name.
+    ///
     /// Omit for the server's own.
     pub session: Option<String>,
 }
