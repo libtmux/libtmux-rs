@@ -78,6 +78,13 @@ fn directory(value: &Value, parent: &Path) -> Result<PathBuf> {
     })
 }
 
+/// The separator in a session name that tmux would read as the start of a
+/// window or pane in target syntax, which leaves the session unaddressable.
+/// One rule, so what `freeze` writes is what `load` accepts.
+pub(super) fn unaddressable(name: &str) -> Option<char> {
+    name.chars().find(|c| matches!(c, ':' | '.'))
+}
+
 pub(super) fn pairs(value: &Value, options: bool) -> Result<Vec<(String, String)>> {
     if value.is_null() {
         return Ok(Vec::new());
@@ -233,9 +240,7 @@ pub(super) fn workspace(value: &Value, path: &Path) -> Result<Workspace> {
     let name = text(&value["session_name"], "session_name")?
         .filter(|v| !v.is_empty())
         .ok_or_else(|| CliError::invalid("session_name is required"))?;
-    // tmux stores the name verbatim; `:` and `.` are `-t`'s window and pane
-    // separators, so a name with either becomes unaddressable.
-    if let Some(separator) = name.chars().find(|c| matches!(c, ':' | '.')) {
+    if let Some(separator) = unaddressable(&name) {
         return Err(CliError::invalid(format!(
             "session_name must not contain {separator:?}; tmux reads it as a target separator and the session could not be addressed afterward"
         )));
