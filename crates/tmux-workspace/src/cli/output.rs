@@ -83,6 +83,21 @@ impl Reporter {
         self.publish_event(name, data)
     }
 
+    /// Something the command carries on past and a person still needs told.
+    /// The machine modes already carry every event; this adds the line the
+    /// human mode otherwise never shows, on stderr so it never mixes with a
+    /// captured document.
+    pub(super) fn warn(&mut self, code: &str, message: &str) -> Result<()> {
+        self.event("warning", json!({"code":code,"message":message}))?;
+        if self.mode == Mode::Human {
+            self.clear_progress()?;
+            let mut errors = io::stderr().lock();
+            writeln!(errors, "Warning: {message}")?;
+            errors.flush()?;
+        }
+        Ok(())
+    }
+
     fn publish_event(&mut self, name: &str, data: Value) -> Result<()> {
         self.terminal |= matches!(name, "completed" | "failed");
         if self.mode == Mode::Ndjson {
