@@ -4322,3 +4322,41 @@ async fn a_pane_command_waits_for_any_shell_not_only_zsh() {
     );
     guard.shutdown().await.unwrap();
 }
+
+/// tmux runs a session whose name holds a target separator; a workspace file
+/// naming one cannot be loaded, because the name cannot be addressed. Capture
+/// refuses it where the session is, rather than writing a file that is
+/// rejected the moment it is used.
+#[tokio::test]
+async fn freeze_refuses_a_session_name_load_would_not_accept() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    guard
+        .server()
+        .new_session(libtmux::NewSessionOptions::new("my.proj"))
+        .await
+        .unwrap();
+    assert!(guard.server().has_session("my.proj").await.unwrap());
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let destination = directory.path().join("frozen.yaml");
+    let output = at(
+        &[
+            "freeze",
+            "my.proj",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "--json",
+            "--save-to",
+            destination.to_str().unwrap(),
+        ],
+        directory.path(),
+    );
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["code"], "invalid_workspace", "{diagnostic}");
+    assert!(
+        diagnostic["message"].as_str().unwrap().contains("my.proj"),
+        "{diagnostic}"
+    );
+    assert!(!destination.exists(), "the refused capture wrote a file");
+    guard.shutdown().await.unwrap();
+}

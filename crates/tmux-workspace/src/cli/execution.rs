@@ -1207,6 +1207,14 @@ fn session_dimensions() -> Result<Option<(u32, u32)>> {
 }
 
 pub(super) async fn capture(session: &Session) -> Result<Value> {
+    // Capture is only worth anything if the result loads again, so a name
+    // load would refuse is refused here, before a file is written.
+    let name = session.name().to_string_lossy().into_owned();
+    if let Some(separator) = normalize::unaddressable(&name) {
+        return Err(CliError::invalid(format!(
+            "session {name:?} cannot be captured: its name contains {separator:?}, which tmux reads as a target separator, so the workspace could not be loaded back"
+        )));
+    }
     let workspace = tmux_workspace::freeze(session).await?;
     let mut value = document::parse(&workspace.to_yaml())?;
     let windows = session.windows().await?;
