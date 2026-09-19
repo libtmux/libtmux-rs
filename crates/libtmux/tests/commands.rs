@@ -117,6 +117,112 @@ async fn key_bindings_can_be_added_and_removed() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Each field reads back as tmux holds it, for the shapes the `bind-key` lines
+/// get wrong: a table name with a space, a key tmux quotes, a note with a
+/// newline, the repeat flag, and a command holding the field separator.
+///
+/// `solo` holds one binding, the listing tmux 3.7 through 3.7c print nowhere
+/// when asked for with `-T`.
+#[tokio::test]
+async fn real_tmux_compat_key_bindings_read_as_fields() {
+    use libtmux::{Error, since};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let version = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .clone();
+    if !version.has_behavior(&since::LIST_KEYS_FORMAT) {
+        let refused = server
+            .typed_key_bindings(None)
+            .await
+            .expect_err("list-keys -F is 3.7 and later");
+        assert!(
+            matches!(refused, Error::UnsupportedCapability { .. }),
+            "{refused:?}"
+        );
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    }
+
+    for command in [
+        Command::new("bind-key")
+            .arg("-r")
+            .arg("-N")
+            .arg("a\nnote")
+            .arg("-T")
+            .arg("sp ace")
+            .arg("\"")
+            .arg("display-message 'two words'"),
+        Command::new("bind-key")
+            .arg("-T")
+            .arg("solo")
+            .arg("M-'")
+            .arg("display-message a=b ; display-message c"),
+    ] {
+        let bound = server.cmd(command).await.expect("bind-key runs");
+        assert!(bound.success(), "{:?}", bound.stderr_lossy());
+    }
+
+    let spaced = server
+        .typed_key_bindings(Some("sp ace"))
+        .await
+        .expect("bindings decode");
+    assert_eq!(spaced.len(), 1);
+    assert_eq!(spaced[0].table(), "sp ace");
+    assert_eq!(spaced[0].key(), "\"");
+    assert_eq!(spaced[0].command(), "display-message \"two words\"");
+    assert_eq!(
+        spaced[0].note().map(libtmux::TmuxText::as_bytes),
+        Some(b"a\nnote".as_slice())
+    );
+    assert!(spaced[0].repeats());
+
+    let solo = server
+        .typed_key_bindings(Some("solo"))
+        .await
+        .expect("bindings decode");
+    assert_eq!(solo.len(), 1, "a one-binding table is listed");
+    assert_eq!(solo[0].key(), "M-'");
+    assert_eq!(
+        solo[0].command(),
+        r"display-message a=b \; display-message c"
+    );
+    assert_eq!(solo[0].note(), None);
+    assert!(!solo[0].repeats());
+
+    // Nothing tmux printed was dropped: one binding per `bind-key` line, and
+    // the command is the text that line ends with.
+    let all = server
+        .typed_key_bindings(None)
+        .await
+        .expect("bindings decode");
+    let lines = server
+        .key_bindings(None)
+        .await
+        .expect("bindings are listed");
+    assert_eq!(all.len(), lines.len());
+    let command = solo[0].command().as_str().expect("the command is UTF-8");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("-T solo") && line.ends_with(command)),
+        "{lines:?}",
+    );
+    assert!(
+        server
+            .typed_key_bindings(Some("no-such-table"))
+            .await
+            .expect("bindings decode")
+            .is_empty()
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn formats_expand_against_a_target() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

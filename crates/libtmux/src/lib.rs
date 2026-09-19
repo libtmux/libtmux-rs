@@ -377,9 +377,12 @@ pub use options::{
     option_schema,
 };
 pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use server::__fuzz_parse_key_bindings;
 pub use server::{
-    AccessMode, AccessRule, ChannelWait, Chooser, MenuItem, NewSessionOptions, Principal,
-    PromptKind, Server, ServerBuilder, SessionTree, WindowTree,
+    AccessMode, AccessRule, ChannelWait, Chooser, KeyBinding, MenuItem, NewSessionOptions,
+    Principal, PromptKind, Server, ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};

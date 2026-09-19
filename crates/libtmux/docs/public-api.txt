@@ -238,6 +238,7 @@ constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS: libtmux::ReleaseVersion
 constant libtmux::since::CLIENTS_HIDE_STOPPED: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
 constant libtmux::since::JSON_LAYOUTS: libtmux::ReleaseVersion
+constant libtmux::since::LIST_KEYS_FORMAT: libtmux::ReleaseVersion
 constant libtmux::since::MIRRORED_LAYOUTS: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_FORMAT_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
@@ -379,6 +380,11 @@ function libtmux::IdParseError::expected_sigil: const fn(self) -> char
 function libtmux::JoinOptions::full: const fn(self) -> Self
 function libtmux::JoinOptions::new: const fn(direction: libtmux::SplitDirection) -> Self
 function libtmux::JoinOptions::size: const fn(self, size: libtmux::PaneSize) -> Self
+function libtmux::KeyBinding::command: const fn(&self) -> &libtmux::TmuxText
+function libtmux::KeyBinding::key: const fn(&self) -> &libtmux::TmuxText
+function libtmux::KeyBinding::note: const fn(&self) -> Option<&libtmux::TmuxText>
+function libtmux::KeyBinding::repeats: const fn(&self) -> bool
+function libtmux::KeyBinding::table: const fn(&self) -> &libtmux::TmuxText
 function libtmux::Layout::as_str: const fn(self) -> &'static str
 function libtmux::Layout::minimum_release: const fn(self) -> libtmux::ReleaseVersion
 function libtmux::ListingDecodeError::field_name: const fn(&self) -> Option<&'static str>
@@ -580,6 +586,7 @@ function libtmux::Server::start: async fn(&self) -> Result<(), libtmux::Error>
 function libtmux::Server::tmux_executable: fn(&self) -> &OsStr
 function libtmux::Server::typed_global_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
 function libtmux::Server::typed_global_window_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
+function libtmux::Server::typed_key_bindings: async fn(&self, table: Option<&str>) -> Result<Vec<libtmux::KeyBinding>, libtmux::Error>
 function libtmux::Server::typed_option: async fn(&self, name: &str) -> Result<Option<libtmux::OptionValue>, libtmux::Error>
 function libtmux::Server::unbind_key: async fn(&self, table: &str, key: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::unlock_channel: async fn(&self, channel: &str) -> Result<(), libtmux::Error>
@@ -1017,6 +1024,7 @@ impl Clone for libtmux::EnvironmentEntry
 impl Clone for libtmux::ErrorKind
 impl Clone for libtmux::IdParseError
 impl Clone for libtmux::JoinOptions
+impl Clone for libtmux::KeyBinding
 impl Clone for libtmux::Layout
 impl Clone for libtmux::LayoutSpec
 impl Clone for libtmux::ListingDecodeError
@@ -1192,6 +1200,7 @@ impl Debug for libtmux::Error
 impl Debug for libtmux::ErrorKind
 impl Debug for libtmux::IdParseError
 impl Debug for libtmux::JoinOptions
+impl Debug for libtmux::KeyBinding
 impl Debug for libtmux::Layout
 impl Debug for libtmux::LayoutSpec
 impl Debug for libtmux::ListingDecodeError
@@ -1354,6 +1363,7 @@ impl Eq for libtmux::EnvironmentEntry
 impl Eq for libtmux::ErrorKind
 impl Eq for libtmux::IdParseError
 impl Eq for libtmux::JoinOptions
+impl Eq for libtmux::KeyBinding
 impl Eq for libtmux::Layout
 impl Eq for libtmux::LayoutSpec
 impl Eq for libtmux::ListingDecodeError
@@ -1502,6 +1512,7 @@ impl Hash for libtmux::ChannelWait
 impl Hash for libtmux::Client
 impl Hash for libtmux::ErrorKind
 impl Hash for libtmux::IdParseError
+impl Hash for libtmux::KeyBinding
 impl Hash for libtmux::Layout
 impl Hash for libtmux::MenuItem
 impl Hash for libtmux::Pane
@@ -1577,6 +1588,7 @@ impl PartialEq for libtmux::EnvironmentEntry
 impl PartialEq for libtmux::ErrorKind
 impl PartialEq for libtmux::IdParseError
 impl PartialEq for libtmux::JoinOptions
+impl PartialEq for libtmux::KeyBinding
 impl PartialEq for libtmux::Layout
 impl PartialEq for libtmux::LayoutSpec
 impl PartialEq for libtmux::ListingDecodeError
@@ -1864,6 +1876,7 @@ struct libtmux::DispatchLimits
 struct libtmux::EngineCapabilities
 struct libtmux::IdParseError
 struct libtmux::JoinOptions
+struct libtmux::KeyBinding
 struct libtmux::ListingDecodeError
 struct libtmux::MenuItem
 struct libtmux::NewSessionOptions

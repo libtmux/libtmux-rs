@@ -37,6 +37,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "list_keys"
+path = "fuzz_targets/list_keys.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "workspace_yaml"
 path = "fuzz_targets/workspace_yaml.rs"
 test = false

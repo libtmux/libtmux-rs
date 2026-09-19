@@ -133,6 +133,7 @@ jobs:
           - filter_expr_json
           - format_rows
           - text_filter
+          - list_keys
           - workspace_yaml
     steps:
       - uses: actions/checkout@v7

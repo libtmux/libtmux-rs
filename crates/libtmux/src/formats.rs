@@ -14,8 +14,9 @@ pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose};
 #[cfg(test)]
 use plan::{PlanVersion, TransportDialect, for_profile_selection_test};
 #[cfg(test)]
-pub(crate) use row::{FIELD_SEPARATOR, FormatCodecPhase, decode_ascii};
+pub(crate) use row::{FIELD_SEPARATOR, decode_ascii};
 pub(crate) use row::{FormatCodecError, FormatCodecErrorKind, ParsedRow, ParsedSlot, decode_text};
+pub(crate) use row::{FormatCodecPhase, split_quoted_rows};
 #[cfg(test)]
 use row::{QUOTE_SHELL_SPECIALS, encode_like_tmux};
 pub use text::TmuxText;

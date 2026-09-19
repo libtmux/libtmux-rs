@@ -728,6 +728,12 @@ pub mod since {
     /// `capture-pane -F`, and so [`crate::Pane::capture_lines`].
     pub const CAPTURE_LINE_FLAGS: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 
+    /// `list-keys -F`, and so [`crate::Server::typed_key_bindings`].
+    ///
+    /// Below this release `list-keys` prints only its own `bind-key` lines,
+    /// which quote a key and leave a table name bare, and carry no note.
+    pub const LIST_KEYS_FORMAT: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
     /// Taking a pane out of a control client's stream without crashing the
     /// server, and so [`crate::control::ControlSender::mute_pane`] using `off`.
     ///

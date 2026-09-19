@@ -25,6 +25,11 @@ mod channels;
 mod discovery;
 mod interactive;
 pub use interactive::MenuItem;
+mod keys;
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use keys::__fuzz_parse_key_bindings;
+pub use keys::KeyBinding;
 mod settings;
 pub use builder::ServerBuilder;
 pub use discovery::{SessionTree, WindowTree};
@@ -1098,7 +1103,12 @@ impl Server {
     ///
     /// Each line is a complete `bind-key` command in tmux's own quoting, which
     /// this crate deliberately does not re-parse: the same value is rendered
-    /// bare, double quoted, or single quoted depending on content.
+    /// bare, double quoted, or single quoted depending on content, and a table
+    /// name is printed bare, spaces and all. [`Self::typed_key_bindings`]
+    /// reads the same bindings as fields on tmux 3.7 and later.
+    ///
+    /// On tmux 3.7 through 3.7c, a `table` holding exactly one binding lists
+    /// empty: those releases send a one-line listing to the message log.
     ///
     /// # Errors
     ///

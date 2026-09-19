@@ -1358,6 +1358,25 @@ assertion blamed the arguments. `TestServer::daemon_state` exists because of
 that: a test driving tmux cannot tell the two apart from the reply, and the
 fixture is the daemon's parent, so it is the only thing that can.
 
+### A one-binding key listing goes to the message log on tmux 3.7 through 3.7c
+
+`list-keys` gained `-F` in 3.7, and in the same release its print loop reads
+`if ((single && tc != NULL) || n == 1) status_message_set(...)`: a listing of
+exactly one binding becomes a status message instead of a line of output. With
+no attached client the message goes to the server's message log. The command
+still exits zero, so `list-keys -T <table>` on a table holding one binding
+answers with nothing, in the `bind-key` form and the `-F` form alike.
+
+`Server::typed_key_bindings` therefore never passes `-T`. It lists every table
+and narrows the rows itself, and across every table a listing is one binding
+only on a server with a single binding left. `Server::key_bindings` still
+sends `-T`, since its lines are tmux's own, and says so.
+
+The source of 3.7 and 3.7c has the condition and 3.8-rc does not. Measured:
+3.7c prints nothing for a one-binding table and 3.7d prints it.
+`real_tmux_compat_key_bindings_read_as_fields` binds two one-binding tables,
+and fails on 3.7c when `-T` is sent.
+
 ### Two shapes that make a test flaky under load
 
 Both of these passed locally for a long time and failed in CI, which has fewer

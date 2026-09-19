@@ -450,6 +450,27 @@ impl FormatCodecError {
         }
     }
 
+    /// Construct a failure in a field named outside the catalog.
+    pub(crate) const fn uncatalogued(
+        kind: FormatCodecErrorKind,
+        phase: FormatCodecPhase,
+        row: usize,
+        field: usize,
+        field_name: &'static str,
+        offset: Option<usize>,
+    ) -> Self {
+        Self {
+            kind,
+            phase,
+            row: Some(row),
+            field: Some(field),
+            field_name: Some(field_name),
+            expected: None,
+            offset,
+            profile: None,
+        }
+    }
+
     /// Construct an ASCII decoder failure from slot coordinates only.
     const fn non_ascii(slot: &ParsedSlot<'_>) -> Self {
         Self {
@@ -703,4 +724,91 @@ pub(crate) fn decode_ascii(slot: ParsedSlot<'_>) -> Result<&str, FormatCodecErro
 /// Copy a text slot into an exact byte-preserving public value.
 pub(crate) fn decode_text(slot: ParsedSlot<'_>) -> TmuxText {
     TmuxText::from_bytes(slot.as_bytes())
+}
+
+/// Split output of a template naming formats the catalog does not carry.
+///
+/// Each of `names` was rendered `#{q:name}` or bare, followed by
+/// [`FIELD_SEPARATOR`], and each row ends with LF, as in a plan's template.
+/// Only [`TransportDialect::RawQ`] escapes are accepted, so a caller needs a
+/// release outside the `vis` range. A row that does not frame fails the
+/// whole listing: nothing is skipped.
+pub(crate) fn split_quoted_rows<const N: usize>(
+    stdout: &[u8],
+    names: [&'static str; N],
+) -> Result<Vec<[Vec<u8>; N]>, FormatCodecError> {
+    let mut cursor = 0;
+    let mut rows = Vec::new();
+
+    while cursor < stdout.len() {
+        let row = rows.len();
+        let mut fields: [Vec<u8>; N] = std::array::from_fn(|_| Vec::new());
+        for (field, (bytes, name)) in fields.iter_mut().zip(names).enumerate() {
+            let error = |kind, phase, offset| {
+                FormatCodecError::uncatalogued(kind, phase, row, field, name, Some(offset))
+            };
+            loop {
+                let offset = cursor;
+                let Some(byte) = stdout.get(cursor).copied() else {
+                    return Err(error(
+                        FormatCodecErrorKind::MissingFieldTerminator,
+                        FormatCodecPhase::Field,
+                        offset,
+                    ));
+                };
+                cursor += 1;
+                match byte {
+                    0 => {
+                        return Err(error(
+                            FormatCodecErrorKind::EmbeddedNul,
+                            FormatCodecPhase::Field,
+                            offset,
+                        ));
+                    }
+                    FIELD_SEPARATOR => break,
+                    b'\\' => match stdout.get(cursor).copied() {
+                        Some(escaped) if QUOTE_SHELL_SPECIALS.contains(&escaped) => {
+                            bytes.push(escaped);
+                            cursor += 1;
+                        }
+                        Some(_) => {
+                            return Err(error(
+                                FormatCodecErrorKind::InvalidEscape,
+                                FormatCodecPhase::Escape,
+                                cursor,
+                            ));
+                        }
+                        None => {
+                            return Err(error(
+                                FormatCodecErrorKind::DanglingEscape,
+                                FormatCodecPhase::Escape,
+                                cursor,
+                            ));
+                        }
+                    },
+                    _ => bytes.push(byte),
+                }
+            }
+        }
+
+        let last = N.saturating_sub(1);
+        let terminator = |kind| {
+            FormatCodecError::uncatalogued(
+                kind,
+                FormatCodecPhase::RowTerminator,
+                row,
+                last,
+                names.get(last).copied().unwrap_or_default(),
+                Some(cursor),
+            )
+        };
+        match stdout.get(cursor) {
+            Some(b'\n') => cursor += 1,
+            Some(_) => return Err(terminator(FormatCodecErrorKind::UnexpectedRowTerminator)),
+            None => return Err(terminator(FormatCodecErrorKind::MissingRowLf)),
+        }
+        rows.push(fields);
+    }
+
+    Ok(rows)
 }
