@@ -1690,6 +1690,9 @@ async fn imported_state(guard: &libtmux::test::TestServer, kind: &str) -> serde_
         .id()
         .to_string();
     let panes = windows[1].panes().await.unwrap();
+    // Conversion writes focus out explicitly, so an imported document always
+    // claims a pane: teamocil's own second pane, and tmuxinator's first for
+    // want of one in the source.
     let expected_focus = panes[usize::from(kind == "teamocil")].id().to_string();
     let option = windows[1]
         .get_option(if kind == "tmuxinator" {
@@ -1806,7 +1809,7 @@ async fn imported_workspaces_load_with_ordered_commands_and_relocated_roots() {
         let state = observations.unwrap();
         assert_eq!(state["counts"], serde_json::json!([1, 2]));
         assert_eq!(state["active"], state["expected_active"]);
-        assert_eq!(state["focused"], state["expected_focus"]);
+        assert_eq!(state["focused"], state["expected_focus"], "{kind}: {state}");
         assert_eq!(
             state["option"],
             if kind == "tmuxinator" {
@@ -4358,5 +4361,44 @@ async fn freeze_refuses_a_session_name_load_would_not_accept() {
         "{diagnostic}"
     );
     assert!(!destination.exists(), "the refused capture wrote a file");
+    guard.shutdown().await.unwrap();
+}
+
+/// A window nothing claims focus in is left on the pane the load finished
+/// making, which is where the reference implementation leaves it. A pane that
+/// does claim focus still wins.
+#[tokio::test]
+async fn a_window_with_no_declared_focus_ends_on_its_last_pane() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("focus.yaml"),
+        "session_name: focused\nwindows:\n  - window_name: silent\n    panes: [blank, blank, blank]\n  - window_name: claimed\n    panes:\n      - blank\n      - shell_command: blank\n        focus: true\n      - blank\n",
+    )
+    .unwrap();
+    let output = at(
+        &[
+            "load",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-d",
+            "focus.yaml",
+        ],
+        directory.path(),
+    );
+    assert!(output.status.success(), "{output:?}");
+    let session = guard.server().session("focused").await.unwrap().unwrap();
+    let windows = session.windows().await.unwrap();
+    for (window, expected) in windows.iter().zip([2, 1]) {
+        let panes = window.panes().await.unwrap();
+        assert_eq!(panes.len(), 3);
+        let active = window.active_pane().await.unwrap().unwrap();
+        assert_eq!(
+            active.id(),
+            panes[expected].id(),
+            "{}: wrong pane left active",
+            window.name().to_string_lossy()
+        );
+    }
     guard.shutdown().await.unwrap();
 }

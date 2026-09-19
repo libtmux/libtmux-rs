@@ -1097,7 +1097,11 @@ async fn build_window(
     if let Some(layout) = config.layout.as_deref().filter(|layout| !layout.is_empty()) {
         window.select_layout(layout).await?;
     }
-    let mut active = None;
+    // With nothing claiming focus the window is left on the pane it finished
+    // making, which is where tmuxp leaves it and where a person reading the
+    // window last looked. A detached split never moves the active pane, so
+    // this has to be asked for.
+    let mut active = panes.last().cloned();
     for (pane_index, (pane, config)) in panes.iter().zip(&config.panes).enumerate() {
         if let Some(progress) = &mut report.progress {
             progress.pane(pane_index + 1)?;
