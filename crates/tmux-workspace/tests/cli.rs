@@ -252,7 +252,11 @@ async fn wait_for_client(server: &libtmux::Server, session: &str) {
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    panic!("no client attached to {session}");
+    // `session` stays out of the panic text itself: it is a target string
+    // built from a session ID, and CodeQL's cleartext-logging query treats
+    // any value shaped like one as sensitive wherever it reaches a sink that
+    // writes to a log, panic message included.
+    panic!("no client attached to the session under test");
 }
 
 /// Aimed at a server other than the current pane's, an attached load refuses
