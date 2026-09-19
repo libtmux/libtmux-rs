@@ -723,6 +723,30 @@ def wait_for_path(
     raise AssertionError(f"timed out waiting for {path.name}; pid={process.pid}")
 
 
+def arm_after(
+    milestone: t.Callable[[subprocess.Popen[str]], None],
+    armed: list[float],
+) -> t.Callable[[subprocess.Popen[str]], None]:
+    """Hold a case deadline under test until the case reaches its subject.
+
+    A failed milestone also ends the run with status 1, so a caller asserts
+    ``armed`` before reading that status as a contained timeout.
+    """
+
+    def hook(process: subprocess.Popen[str]) -> None:
+        milestone(process)
+        armed.append(time.monotonic())
+
+    return hook
+
+
+def milestone_path(
+    path: pathlib.Path,
+) -> t.Callable[[subprocess.Popen[str]], None]:
+    """Wait for a control file a case writes once it reaches its subject."""
+    return lambda process: wait_for_path(process, path, timeout=WAIT_TIMEOUT)
+
+
 def finish(process: subprocess.Popen[str], started: float) -> Outcome:
     """Collect one bounded supervisor result."""
     try:
@@ -1757,7 +1781,6 @@ def test_frontier_timeout_defers_root_cleanup_to_enclosing_owner() -> None:
         try:
             status = run_selected_cases(
                 ["test_kill_closure_discovers_adopted_frontier"],
-                case_timeout=3.0,
                 case_cleanup_timeout=0.5,
                 environment={
                     FRONTIER_TIMEOUT_CONTROL_ENV: os.fspath(control),
@@ -2136,7 +2159,7 @@ def test_dangling_symlink_root_residue_is_rejected() -> None:
         control = pathlib.Path(raw)
         outcome = run_isolated_case(
             RUNNER_DANGLING_ROOT_PROBE,
-            timeout=2.0,
+            timeout=CASE_TIMEOUT,
             cleanup_timeout=0.5,
             environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
         )
@@ -2236,7 +2259,6 @@ def test_failed_case_has_outer_containment() -> None:
         control = pathlib.Path(raw)
         status = run_selected_cases(
             [RUNNER_FAILURE_PROBE],
-            case_timeout=2.0,
             environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
         )
         root = pathlib.Path(
@@ -2252,13 +2274,18 @@ def test_timed_out_case_has_outer_containment() -> None:
     with tempfile.TemporaryDirectory(prefix="libtmux-runner-timeout-") as raw:
         control = pathlib.Path(raw)
         case_timeout = 0.5
-        started = time.monotonic()
+        armed: list[float] = []
         status = run_selected_cases(
             [RUNNER_TIMEOUT_PROBE],
             case_timeout=case_timeout,
             environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
+            after_owner_validation=arm_after(
+                milestone_path(control / "ready"),
+                armed,
+            ),
         )
-        elapsed = time.monotonic() - started
+        assert armed, "the probe never became ready, so no deadline was tested"
+        elapsed = time.monotonic() - armed[0]
         root = pathlib.Path(
             (control / "outer-root").read_text(encoding="utf-8").strip()
         )
@@ -2275,7 +2302,6 @@ def test_failed_case_cleans_nested_supervisor_root() -> None:
         try:
             status = run_selected_cases(
                 [RUNNER_INNER_FAILURE_PROBE],
-                case_timeout=2.0,
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
             )
             inner_root = pathlib.Path(
@@ -2296,18 +2322,19 @@ def test_timed_out_case_cleans_nested_supervisor_root() -> None:
     """Timeout containment removes nested supervisor roots and identities."""
     with tempfile.TemporaryDirectory(prefix="libtmux-runner-inner-timeout-") as raw:
         control = pathlib.Path(raw)
-        started = time.monotonic()
+        armed: list[float] = []
         try:
             status = run_selected_cases(
                 [RUNNER_INNER_TIMEOUT_PROBE],
                 case_timeout=0.5,
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
-                after_owner_validation=lambda process: wait_for_path(
-                    process,
-                    control / "inner-root",
+                after_owner_validation=arm_after(
+                    milestone_path(control / "inner-root"),
+                    armed,
                 ),
             )
-            elapsed = time.monotonic() - started
+            assert armed, "the nested supervisor never started"
+            elapsed = time.monotonic() - armed[0]
             inner_root = pathlib.Path(
                 (control / "inner-root").read_text(encoding="utf-8").strip()
             )
@@ -2327,15 +2354,26 @@ def test_topmost_failure_has_independent_containment() -> None:
     """A stopped outer supervisor cannot escape the top-level pidfd owner."""
     with tempfile.TemporaryDirectory(prefix="libtmux-runner-topmost-") as raw:
         control = pathlib.Path(raw)
-        started = time.monotonic()
+        armed: list[float] = []
+
+        def outer_stopped(process: subprocess.Popen[str]) -> None:
+            wait_for_path(process, control / "inner-root", timeout=WAIT_TIMEOUT)
+            wait_for_exact_process_stopped(
+                process,
+                require_process_start_time(process),
+                timeout=WAIT_TIMEOUT,
+            )
+
         try:
             status = run_selected_cases(
                 [RUNNER_TOPMOST_FAILURE_PROBE],
                 case_timeout=3.0,
                 case_cleanup_timeout=0.25,
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
+                after_owner_validation=arm_after(outer_stopped, armed),
             )
-            elapsed = time.monotonic() - started
+            assert armed, "the outer supervisor never stopped"
+            elapsed = time.monotonic() - armed[0]
             inner_root = pathlib.Path(
                 (control / "inner-root").read_text(encoding="utf-8").strip()
             )
@@ -2364,7 +2402,7 @@ def test_untrusted_case_cannot_report_an_unrelated_root() -> None:
         try:
             outcome = run_isolated_case(
                 RUNNER_FORGED_ROOT_PROBE,
-                timeout=2.0,
+                timeout=CASE_TIMEOUT,
                 cleanup_timeout=0.5,
                 environment={
                     "TFC_RUNNER_CONTROL": os.fspath(control),
@@ -2394,7 +2432,7 @@ def test_post_exit_direct_child_forces_top_level_closure() -> None:
         try:
             outcome = run_isolated_case(
                 RUNNER_CLEAN_EXIT_PROBE,
-                timeout=2.0,
+                timeout=CASE_TIMEOUT,
                 cleanup_timeout=0.5,
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
                 after_owner_validation=retain_direct_child,
@@ -2468,6 +2506,9 @@ def test_hard_kill_after_child_root_creation_cleans_container() -> None:
                 environment={
                     AFTER_ROOT_CREATE_CONTROL_ENV: os.fspath(control),
                 },
+                after_owner_validation=milestone_path(
+                    control / "after-root-create-root"
+                ),
                 outer_fault="after-root-create",
             )
         except AssertionError as error:
@@ -2484,6 +2525,7 @@ def assert_forced_case_timeout_cleans_root(test_name: str, pause_label: str) -> 
     """Force-kill one allocated case and require its enclosing owner to clean."""
     with tempfile.TemporaryDirectory(prefix="libtmux-runner-case-root-") as raw:
         control = pathlib.Path(raw)
+        armed: list[float] = []
         status = run_selected_cases(
             [test_name],
             case_timeout=2.0,
@@ -2492,7 +2534,9 @@ def assert_forced_case_timeout_cleans_root(test_name: str, pause_label: str) -> 
                 PAUSE_CASE_ROOT_ENV: pause_label,
                 PAUSE_CASE_ROOT_CONTROL_ENV: os.fspath(control),
             },
+            after_owner_validation=arm_after(milestone_path(control / "ready"), armed),
         )
+        assert armed, "the case never paused after allocating its root"
         root = pathlib.Path(
             (control / "allocated-root").read_text(encoding="utf-8").strip()
         )
@@ -2524,7 +2568,7 @@ def test_same_name_root_replacement_is_not_deleted() -> None:
         try:
             run_isolated_case(
                 RUNNER_ROOT_REPLACEMENT_PROBE,
-                timeout=2.0,
+                timeout=CASE_TIMEOUT,
                 cleanup_timeout=0.5,
                 environment={"TFC_RUNNER_CONTROL": os.fspath(control)},
             )
