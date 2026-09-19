@@ -9,7 +9,7 @@
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 
 #[derive(libtmux::Filterable)]
-#[filterable(target = "job", crate = "libtmux")]
+#[filterable(target = "job")]
 struct Job {
     name: String,
     attempts: u32,

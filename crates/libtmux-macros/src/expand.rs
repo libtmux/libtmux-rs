@@ -71,7 +71,11 @@ fn resolve_core_path(override_path: Option<Path>, span: Span) -> syn::Result<Tok
         return Ok(quote!(#path));
     }
     match crate_name("libtmux") {
-        Ok(FoundCrate::Itself) => Ok(quote!(crate)),
+        // `Itself` means the package being compiled is `libtmux`, which covers
+        // its doctests, integration tests and examples: separate crates, where
+        // `crate` is not `libtmux` and `::libtmux` is. The library names
+        // itself the same way through `extern crate self as libtmux`.
+        Ok(FoundCrate::Itself) => Ok(quote!(::libtmux)),
         Ok(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name.replace('-', "_"), Span::call_site());
             Ok(quote!(::#ident))

@@ -365,11 +365,10 @@ impl<'server> WorkspaceBuilder<'server> {
 
 /// Compiles the `libtmux-macros` README's examples, and nothing else.
 ///
-/// It cannot be compiled from `libtmux`, where the derive resolves the crate
-/// to `crate`, nor from `libtmux-macros`, whose only dependency on `libtmux`
-/// is deliberately renamed so the UI tests prove that resolution works. Here
-/// `libtmux` is an ordinary dependency under its own name, which is the one
-/// case a reader of that README is actually in.
+/// It cannot be compiled from `libtmux-macros`, whose only dependency on
+/// `libtmux` is deliberately renamed so the UI tests prove the derive resolves
+/// the crate. Here `libtmux` is an ordinary dependency under its own name,
+/// which is the case a reader of that README is in.
 #[cfg(doctest)]
 #[doc = include_str!("../libtmux-macros-README.md")]
 pub struct MacrosReadme;

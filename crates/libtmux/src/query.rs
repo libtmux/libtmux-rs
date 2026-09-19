@@ -40,7 +40,6 @@
 //!
 //! #[derive(libtmux::Filterable)]
 //! #[filterable(target = "task")]
-//! # #[filterable(crate = "libtmux")]
 //! struct Task {
 //!     name: String,
 //!     done: bool,
@@ -1300,6 +1299,26 @@ mod tests {
 
     fn predicate(data: PredicateData) -> __private::Predicate {
         __private::Predicate::new(TEST_FIELD, data)
+    }
+
+    /// The derive expanding inside the library itself, with no `crate`
+    /// override: `proc-macro-crate` reports `Itself` here too.
+    #[cfg(feature = "derive")]
+    #[test]
+    fn the_derive_resolves_the_crate_inside_the_library() {
+        use super::{Filterable as _, QueryIteratorExt as _};
+
+        #[derive(crate::Filterable)]
+        #[filterable(target = "inside")]
+        struct Inside {
+            name: String,
+        }
+
+        let values = [Inside {
+            name: "kept".into(),
+        }];
+        let fields = Inside::filter_fields();
+        assert_eq!(values.iter().matching(&fields.name.eq("kept")).count(), 1);
     }
 
     #[cfg(feature = "serde")]

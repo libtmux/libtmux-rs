@@ -327,6 +327,12 @@ println!("{} sessions", sessions.len());
 #[cfg(not(unix))]
 compile_error!("libtmux requires a Unix target with tmux available");
 
+// The derive names this crate `::libtmux` wherever it expands inside the
+// `libtmux` package; this alias makes that path resolve here as well as in the
+// package's tests and doctests.
+#[cfg(feature = "derive")]
+extern crate self as libtmux;
+
 #[cfg(feature = "blocking")]
 pub mod blocking;
 mod capabilities;
@@ -427,7 +433,6 @@ pub struct DesignNotes;
 ///
 /// #[derive(libtmux::Filterable)]
 /// #[filterable(target = "task")]
-/// # #[filterable(crate = "libtmux")]
 /// struct Task {
 ///     name: String,
 ///     done: bool,

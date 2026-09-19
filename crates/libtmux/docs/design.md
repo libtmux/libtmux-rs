@@ -485,7 +485,7 @@ data through the current public API:
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 
 #[derive(libtmux::Filterable)]
-#[filterable(target = "task", crate = "::libtmux")]
+#[filterable(target = "task")]
 struct Task {
     name: String,
     done: bool,
