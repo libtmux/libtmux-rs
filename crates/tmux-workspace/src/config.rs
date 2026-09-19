@@ -1,5 +1,7 @@
 //! Parsing tmuxp-style workspace YAML.
 
+mod locate;
+
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -10,8 +12,15 @@ use yaml_rust2::{Yaml, YamlLoader};
 #[non_exhaustive]
 pub enum ConfigError {
     /// The document was not valid YAML.
-    #[error("workspace configuration is not valid YAML")]
-    Yaml(#[from] yaml_rust2::ScanError),
+    #[error("workspace configuration is not valid YAML at line {line}, column {column}: {reason}")]
+    Yaml {
+        /// The line the parser stopped on, counting from 1.
+        line: usize,
+        /// The column the parser stopped on, counting from 1.
+        column: usize,
+        /// What the parser expected and did not find.
+        reason: String,
+    },
 
     /// The document was empty, or held more than one workspace.
     #[error("expected exactly one workspace document, found {found}")]
@@ -21,17 +30,55 @@ pub enum ConfigError {
     },
 
     /// A required key was absent or the wrong shape.
-    #[error("workspace configuration is invalid: {reason}")]
+    #[error("workspace configuration is invalid at line {line}, column {column}: {path} {reason}")]
     Invalid {
+        /// Where, as a key path such as `windows[0].panes[1]`.
+        path: String,
+        /// The line of the offending value, counting from 1. A missing key
+        /// is placed at the mapping that should have held it.
+        line: usize,
+        /// The column of the offending value, counting from 1.
+        column: usize,
         /// What was wrong, in terms of the configuration's own vocabulary.
         reason: String,
     },
 }
 
-impl ConfigError {
-    fn invalid(reason: impl Into<String>) -> Self {
-        Self::Invalid {
+impl From<yaml_rust2::ScanError> for ConfigError {
+    fn from(error: yaml_rust2::ScanError) -> Self {
+        let mark = error.marker();
+        Self::Yaml {
+            line: mark.line(),
+            // `Marker::col` counts from zero; `ScanError`'s own `Display` adds one.
+            column: mark.col() + 1,
+            reason: error.info().to_owned(),
+        }
+    }
+}
+
+/// A key path and what is wrong there, before the source is scanned for
+/// where that path sits.
+#[derive(Debug)]
+struct Problem {
+    path: String,
+    reason: String,
+}
+
+impl Problem {
+    fn new(path: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
             reason: reason.into(),
+        }
+    }
+
+    fn locate(self, source: &str) -> ConfigError {
+        let (line, column) = locate::locate(source, &self.path);
+        ConfigError::Invalid {
+            path: self.path,
+            line,
+            column,
+            reason: self.reason,
         }
     }
 }
@@ -127,7 +174,8 @@ impl Workspace {
     /// # Errors
     ///
     /// Returns an error when the document is not valid YAML, does not hold
-    /// exactly one workspace, or is missing `session_name`.
+    /// exactly one workspace, or is missing `session_name`. Every error
+    /// except the document count names the line and column to look at.
     ///
     /// # Examples
     ///
@@ -157,10 +205,13 @@ impl Workspace {
                 found: documents.len(),
             });
         };
+        Self::from_document(document).map_err(|problem| problem.locate(source))
+    }
 
+    fn from_document(document: &Yaml) -> Result<Self, Problem> {
         let session_name = document["session_name"]
             .as_str()
-            .ok_or_else(|| ConfigError::invalid("session_name must be a string"))?
+            .ok_or_else(|| Problem::new("session_name", "must be a string"))?
             .to_owned();
 
         let windows = match &document["windows"] {
@@ -170,16 +221,19 @@ impl Workspace {
                 .enumerate()
                 .map(|(index, window)| WindowConfig::from_yaml(window, index))
                 .collect::<Result<Vec<_>, _>>()?,
-            _ => return Err(ConfigError::invalid("windows must be a list")),
+            _ => return Err(Problem::new("windows", "must be a list")),
         };
 
         Ok(Self {
             session_name,
             start_directory: optional_path(&document["start_directory"], "start_directory")?,
-            environment: pairs(&document["environment"])?,
-            options: pairs(&document["options"])?,
-            global_options: pairs(&document["global_options"])?,
-            shell_command_before: commands(&document["shell_command_before"])?,
+            environment: pairs(&document["environment"], "environment")?,
+            options: pairs(&document["options"], "options")?,
+            global_options: pairs(&document["global_options"], "global_options")?,
+            shell_command_before: commands(
+                &document["shell_command_before"],
+                "shell_command_before",
+            )?,
             suppress_history: is_true(&document["suppress_history"], "suppress_history")?,
             windows,
             unsupported_keys: unsupported(document, SESSION_KEYS),
@@ -188,10 +242,10 @@ impl Workspace {
 }
 
 impl WindowConfig {
-    fn from_yaml(value: &Yaml, index: usize) -> Result<Self, ConfigError> {
+    fn from_yaml(value: &Yaml, index: usize) -> Result<Self, Problem> {
         let at = format!("windows[{index}]");
         if !matches!(value, Yaml::Hash(_)) {
-            return Err(ConfigError::invalid(format!("{at} must be a mapping")));
+            return Err(Problem::new(at, "must be a mapping"));
         }
         let panes = match &value["panes"] {
             // A window with no panes still has the one tmux creates with it.
@@ -201,22 +255,25 @@ impl WindowConfig {
                 .enumerate()
                 .map(|(pane, entry)| PaneConfig::from_yaml(entry, &at, pane))
                 .collect::<Result<Vec<_>, _>>()?,
-            _ => return Err(ConfigError::invalid(format!("{at}.panes must be a list"))),
+            _ => return Err(Problem::new(format!("{at}.panes"), "must be a list")),
         };
 
         Ok(Self {
             window_name: value["window_name"].as_str().map(ToOwned::to_owned),
-            window_index: optional_index(&value["window_index"])?,
+            window_index: optional_index(&value["window_index"], &format!("{at}.window_index"))?,
             window_shell: value["window_shell"].as_str().map(ToOwned::to_owned),
-            environment: pairs(&value["environment"])?,
+            environment: pairs(&value["environment"], &format!("{at}.environment"))?,
             layout: optional_text(&value["layout"], &format!("{at}.layout"))?,
             start_directory: optional_path(
                 &value["start_directory"],
                 &format!("{at}.start_directory"),
             )?,
             focus: is_true(&value["focus"], &format!("{at}.focus"))?,
-            options: pairs(&value["options"])?,
-            shell_command_before: commands(&value["shell_command_before"])?,
+            options: pairs(&value["options"], &format!("{at}.options"))?,
+            shell_command_before: commands(
+                &value["shell_command_before"],
+                &format!("{at}.shell_command_before"),
+            )?,
             suppress_history: optional_bool(
                 &value["suppress_history"],
                 &format!("{at}.suppress_history"),
@@ -232,7 +289,7 @@ impl WindowConfig {
 }
 
 impl PaneConfig {
-    fn from_yaml(value: &Yaml, window: &str, index: usize) -> Result<Self, ConfigError> {
+    fn from_yaml(value: &Yaml, window: &str, index: usize) -> Result<Self, Problem> {
         let at = format!("{window}.panes[{index}]");
         // tmuxp lets a pane be a bare command string.
         if let Some(command) = value.as_str() {
@@ -243,14 +300,12 @@ impl PaneConfig {
         }
 
         if !matches!(value, Yaml::Hash(_)) {
-            return Err(ConfigError::invalid(format!(
-                "{at} must be a command string or a mapping"
-            )));
+            return Err(Problem::new(at, "must be a command string or a mapping"));
         }
 
         Ok(Self {
-            shell_commands: commands(&value["shell_command"])?,
-            environment: pairs(&value["environment"])?,
+            shell_commands: commands(&value["shell_command"], &format!("{at}.shell_command"))?,
+            environment: pairs(&value["environment"], &format!("{at}.environment"))?,
             start_directory: optional_path(
                 &value["start_directory"],
                 &format!("{at}.start_directory"),
@@ -319,7 +374,7 @@ fn unsupported(document: &Yaml, known: &[&str]) -> Vec<String> {
 }
 
 /// Read a mapping of names to values, as `environment` and `options` use.
-fn pairs(value: &Yaml) -> Result<Vec<(String, String)>, ConfigError> {
+fn pairs(value: &Yaml, path: &str) -> Result<Vec<(String, String)>, Problem> {
     match value {
         Yaml::BadValue | Yaml::Null => Ok(Vec::new()),
         Yaml::Hash(entries) => entries
@@ -327,7 +382,7 @@ fn pairs(value: &Yaml) -> Result<Vec<(String, String)>, ConfigError> {
             .map(|(key, value)| {
                 let key = key
                     .as_str()
-                    .ok_or_else(|| ConfigError::invalid("names must be strings"))?;
+                    .ok_or_else(|| Problem::new(path, "names must be strings"))?;
                 // tmuxp writes option values as strings, numbers, or bools.
                 let value = value.as_str().map(ToOwned::to_owned).or_else(|| {
                     value.as_i64().map(|number| number.to_string()).or_else(|| {
@@ -341,49 +396,49 @@ fn pairs(value: &Yaml) -> Result<Vec<(String, String)>, ConfigError> {
                     })
                 });
 
-                value
-                    .map(|value| (key.to_owned(), value))
-                    .ok_or_else(|| ConfigError::invalid("values must be scalars"))
+                value.map(|value| (key.to_owned(), value)).ok_or_else(|| {
+                    Problem::new(
+                        format!("{path}.{key}"),
+                        "must be a string, a number, or a boolean",
+                    )
+                })
             })
             .collect(),
-        _ => Err(ConfigError::invalid(
-            "expected a mapping of names to values",
-        )),
+        _ => Err(Problem::new(path, "must be a mapping of names to values")),
     }
 }
 
 /// Read a value tmuxp allows as a string or a list of strings.
-fn commands(value: &Yaml) -> Result<Vec<String>, ConfigError> {
+fn commands(value: &Yaml, path: &str) -> Result<Vec<String>, Problem> {
     match value {
         Yaml::BadValue | Yaml::Null => Ok(Vec::new()),
         Yaml::String(command) => Ok(vec![command.clone()]),
         Yaml::Array(entries) => entries
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(index, entry)| {
                 entry
                     .as_str()
                     .map(ToOwned::to_owned)
-                    .ok_or_else(|| ConfigError::invalid("shell_command entries must be strings"))
+                    .ok_or_else(|| Problem::new(format!("{path}[{index}]"), "must be a string"))
             })
             .collect(),
-        _ => Err(ConfigError::invalid(
-            "shell_command must be a string or a list of strings",
-        )),
+        _ => Err(Problem::new(path, "must be a string or a list of strings")),
     }
 }
 
 /// Read a window index, which tmuxp writes as an integer or a string.
-fn optional_index(value: &Yaml) -> Result<Option<i32>, ConfigError> {
+fn optional_index(value: &Yaml, path: &str) -> Result<Option<i32>, Problem> {
     match value {
         Yaml::BadValue | Yaml::Null => Ok(None),
         Yaml::Integer(index) => i32::try_from(*index)
             .map(Some)
-            .map_err(|_| ConfigError::invalid("window_index is out of range")),
+            .map_err(|_| Problem::new(path, "is out of range")),
         Yaml::String(index) => index
             .parse()
             .map(Some)
-            .map_err(|_| ConfigError::invalid("window_index must be a number")),
-        _ => Err(ConfigError::invalid("window_index must be a number")),
+            .map_err(|_| Problem::new(path, "must be a number")),
+        _ => Err(Problem::new(path, "must be a number")),
     }
 }
 
@@ -392,20 +447,20 @@ fn optional_index(value: &Yaml) -> Result<Option<i32>, ConfigError> {
 /// Absence defaults; a wrong shape does not. `start_directory: 123` used to
 /// read as "no start directory", which builds a workspace that is valid and
 /// not the one the file describes.
-fn optional_path(value: &Yaml, path: &str) -> Result<Option<PathBuf>, ConfigError> {
+fn optional_path(value: &Yaml, path: &str) -> Result<Option<PathBuf>, Problem> {
     match value {
         Yaml::BadValue | Yaml::Null => Ok(None),
         Yaml::String(text) => Ok(Some(PathBuf::from(text))),
-        _ => Err(ConfigError::invalid(format!("{path} must be a string"))),
+        _ => Err(Problem::new(path, "must be a string")),
     }
 }
 
 /// Read an optional string, refusing a value that is present and not one.
-fn optional_text(value: &Yaml, path: &str) -> Result<Option<String>, ConfigError> {
+fn optional_text(value: &Yaml, path: &str) -> Result<Option<String>, Problem> {
     match value {
         Yaml::BadValue | Yaml::Null => Ok(None),
         Yaml::String(text) => Ok(Some(text.clone())),
-        _ => Err(ConfigError::invalid(format!("{path} must be a string"))),
+        _ => Err(Problem::new(path, "must be a string")),
     }
 }
 
@@ -413,23 +468,24 @@ fn optional_text(value: &Yaml, path: &str) -> Result<Option<String>, ConfigError
 ///
 /// Both spellings are accepted; a third thing is refused. `focus: "tru"` used
 /// to read as `false`, which is a different workspace rather than an error.
-fn optional_bool(value: &Yaml, path: &str) -> Result<Option<bool>, ConfigError> {
+fn optional_bool(value: &Yaml, path: &str) -> Result<Option<bool>, Problem> {
     match value {
         Yaml::BadValue | Yaml::Null => Ok(None),
         Yaml::Boolean(flag) => Ok(Some(*flag)),
         Yaml::String(text) => match text.as_str() {
             "true" | "yes" | "on" => Ok(Some(true)),
             "false" | "no" | "off" => Ok(Some(false)),
-            _ => Err(ConfigError::invalid(format!(
-                "{path} must be a boolean, found {text:?}"
-            ))),
+            _ => Err(Problem::new(
+                path,
+                format!("must be a boolean, found {text:?}"),
+            )),
         },
-        _ => Err(ConfigError::invalid(format!("{path} must be a boolean"))),
+        _ => Err(Problem::new(path, "must be a boolean")),
     }
 }
 
 /// Read a boolean that defaults to false when absent, and fails when wrong.
-fn is_true(value: &Yaml, path: &str) -> Result<bool, ConfigError> {
+fn is_true(value: &Yaml, path: &str) -> Result<bool, Problem> {
     Ok(optional_bool(value, path)?.unwrap_or(false))
 }
 

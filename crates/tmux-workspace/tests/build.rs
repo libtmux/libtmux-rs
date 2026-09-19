@@ -7,7 +7,7 @@
 use libtmux::TmuxText;
 use libtmux::plan::Planner;
 use libtmux::test::TestServer;
-use tmux_workspace::{BuildError, Workspace, WorkspaceBuilder};
+use tmux_workspace::{BuildError, ConfigError, Workspace, WorkspaceBuilder};
 
 fn text(value: &TmuxText) -> String {
     String::from_utf8(value.as_bytes().to_vec()).expect("fixture values are UTF-8")
@@ -63,7 +63,7 @@ windows:
 #[test]
 fn a_missing_session_name_is_rejected() {
     let error = Workspace::from_yaml("windows: []").expect_err("session_name is required");
-    assert!(matches!(error, tmux_workspace::ConfigError::Invalid { .. },));
+    assert!(matches!(error, ConfigError::Invalid { .. },));
 }
 
 #[tokio::test]
@@ -785,4 +785,56 @@ windows:
 
     guard.shutdown().await.expect("tmux fixture shuts down");
     drop(session);
+}
+
+/// A file is fixed in an editor, so an error names the line to go to.
+#[test]
+fn an_error_names_the_line_and_column_to_fix() {
+    let syntax = Workspace::from_yaml(
+        "session_name: s\nwindows:\n  - window_name: a\n    panes:\n      - vim\n     - htop\n",
+    )
+    .expect_err("a misindented entry is not YAML");
+    assert!(
+        matches!(
+            syntax,
+            ConfigError::Yaml {
+                line: 6,
+                column: 6,
+                ..
+            }
+        ),
+        "{syntax:?}",
+    );
+    assert_eq!(
+        syntax.to_string(),
+        "workspace configuration is not valid YAML at line 6, column 6: \
+         while parsing a block mapping, did not find expected key",
+    );
+
+    for (source, expected) in [
+        (
+            "session_name: s\nwindows:\n  - window_name: a\n    focus: tru\n",
+            "at line 4, column 12: windows[0].focus must be a boolean, found \"tru\"",
+        ),
+        (
+            "session_name: s\nwindows:\n  - {panes: [a, 5]}\n",
+            "at line 3, column 17: windows[0].panes[1] must be",
+        ),
+        // A missing key is reported at the mapping that should hold it.
+        ("windows: []\n", "at line 1, column 1: session_name must be"),
+        // The parser marks an entry with nothing after its `-` at whatever
+        // token follows, two lines down here, rather than at the `-`.
+        (
+            "session_name: s\nwindows:\n  - window_name: a\n  -\n  -\n  - window_name: b\n",
+            "at line 4, column 3: windows[1] must be a mapping",
+        ),
+    ] {
+        let message = Workspace::from_yaml(source)
+            .expect_err("the value is refused")
+            .to_string();
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in {message:?}"
+        );
+    }
 }
