@@ -4021,7 +4021,7 @@ async fn load_accepts_both_options_and_options_after_spellings() {
         let value = window.typed_option("main-pane-width").await.unwrap();
         assert_eq!(
             value,
-            Some(libtmux::OptionValue::Number(expected)),
+            Some(libtmux::OptionValue::Text(expected.to_string().into())),
             "window {:?}",
             window.name().to_string_lossy()
         );
