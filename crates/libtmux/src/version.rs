@@ -786,6 +786,7 @@ pub mod since {
     /// accepted; control mode clients receive old layouts unless they set the
     /// new-layouts flag." Below this release a JSON string is refused as an
     /// unrecognised layout, with no hint that the value is simply from a
-    /// newer tmux.
-    pub const JSON_LAYOUTS: ReleaseVersion = ReleaseVersion::new(3, 8, ReleaseSuffix::FINAL);
+    /// newer tmux. The format is already present in 3.8-rc.
+    pub const JSON_LAYOUTS: ReleaseVersion =
+        ReleaseVersion::new(3, 8, ReleaseSuffix::RELEASE_CANDIDATE);
 }

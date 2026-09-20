@@ -288,8 +288,10 @@ mod tests {
             resolve(&pending, &new).unwrap_err().kind(),
             crate::ErrorKind::UnsupportedVersion
         );
-        let json_capable = TmuxVersion::parse_output(b"tmux 3.8\n").unwrap();
-        resolve(&pending, &json_capable).unwrap();
+        for output in ["tmux 3.8-rc\n", "tmux 3.8\n", "tmux next-3.9\n"] {
+            let json_capable = TmuxVersion::parse_output(output.as_bytes()).unwrap();
+            resolve(&pending, &json_capable).unwrap();
+        }
         let mirrored = [(OsStr::new("main-horizontal-mirrored"), 1)];
         assert_eq!(
             resolve(&prepare(mirrored).unwrap(), &old)
