@@ -59,7 +59,7 @@ impl Error {
         // different files. `cmd-find.c` resolves a target and says "can't
         // find"; `options.c` and the environment commands resolve their own
         // and say "no such". A caller asking `is_object_gone` about one dead
-        // session got `true` from `windows()` and `false` from `get_option`
+        // session got `true` from `windows()` and `false` from `typed_option`
         // until both were matched here.
         const MISSING: [(&str, ObjectKind); 7] = [
             ("can't find session:", ObjectKind::Session),

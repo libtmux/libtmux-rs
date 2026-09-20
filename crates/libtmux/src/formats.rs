@@ -2,18 +2,23 @@
 
 use crate::version::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
 
+#[cfg(feature = "unstable-fuzzing")]
+mod fuzz;
 mod plan;
 mod row;
 mod text;
 
-pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose};
+#[cfg(feature = "unstable-fuzzing")]
+pub use fuzz::__fuzz_format_rows;
+pub(crate) use plan::{FormatPlan, PlanFieldState, PlanPurpose, TransportDialect};
 #[cfg(test)]
-use plan::{PlanVersion, TransportDialect, for_profile_selection_test};
+use plan::{PlanVersion, for_profile_selection_test};
 #[cfg(test)]
-use row::QUOTE_SHELL_SPECIALS;
-#[cfg(test)]
-pub(crate) use row::{FIELD_SEPARATOR, FormatCodecPhase, decode_ascii};
+pub(crate) use row::{FIELD_SEPARATOR, decode_ascii};
 pub(crate) use row::{FormatCodecError, FormatCodecErrorKind, ParsedRow, ParsedSlot, decode_text};
+pub(crate) use row::{FormatCodecPhase, split_quoted_rows};
+#[cfg(test)]
+use row::{QUOTE_SHELL_SPECIALS, encode_like_tmux};
 pub use text::TmuxText;
 
 /// Decoder applied to a parsed format slot.
@@ -362,7 +367,7 @@ macro_rules! format_catalog {
                     (PANE_PATH, pane_path, "pane_path", Pane, Pane, All, V3_2A, Text, Available),
                     (PANE_PB_PROGRESS, pane_pb_progress, "pane_pb_progress", Pane, Pane, All, V3_7, PaneProgress, Required),
                     (PANE_PB_STATE, pane_pb_state, "pane_pb_state", Pane, Pane, All, V3_7, PaneProgressState, Required),
-                    (PANE_PID, pane_pid, "pane_pid", Pane, Pane, All, V3_2A, U32, Required),
+                    (PANE_PID, pane_pid, "pane_pid", Pane, Pane, All, V3_2A, U32, Absent),
                     (PANE_PIPE, pane_pipe, "pane_pipe", Pane, Pane, All, V3_2A, Bool, Required),
                     (PANE_PIPE_PID, pane_pipe_pid, "pane_pipe_pid", Pane, Pane, All, V3_7, U32, Absent),
                     (PANE_RIGHT, pane_right, "pane_right", Pane, Pane, All, V3_2A, I32, Required),
@@ -380,6 +385,7 @@ macro_rules! format_catalog {
                     (PANE_Y, pane_y, "pane_y", Pane, Pane, All, V3_7, I32, Required),
                     (PANE_Z, pane_z, "pane_z", Pane, Pane, All, V3_7, U32, Required),
                     (PANE_ZOOMED_FLAG, pane_zoomed_flag, "pane_zoomed_flag", Pane, Pane, All, V3_7, Bool, Required),
+                    (SCROLL_POSITION, scroll_position, "scroll_position", CopyMode, Pane, All, V3_2A, I32, Absent),
                     (SCROLL_REGION_LOWER, scroll_region_lower, "scroll_region_lower", Pane, Pane, All, V3_2A, U32, Required),
                     (SCROLL_REGION_UPPER, scroll_region_upper, "scroll_region_upper", Pane, Pane, All, V3_2A, U32, Required),
                     (SYNCHRONIZED_OUTPUT_FLAG, synchronized_output_flag, "synchronized_output_flag", Pane, Pane, All, V3_7, Bool, Required),
@@ -437,7 +443,6 @@ macro_rules! format_catalog {
                     (PANE_FORMAT, pane_format, "pane_format", ListRow, FormatType, All, V3_2A, Bool, Required),
                     (PANE_MARKED_SET, pane_marked_set, "pane_marked_set", Server, Pane, All, V3_2A, Bool, Required),
                     (PID, pid, "pid", Server, None, All, V3_2A, U32, Required),
-                    (SCROLL_POSITION, scroll_position, "scroll_position", CopyMode, CopyMode, None, V3_2A, I32, Required),
                     (SEARCH_MATCH, search_match, "search_match", CopyMode, CopyMode, None, V3_2A, Text, Absent),
                     (SELECTION_END_X, selection_end_x, "selection_end_x", CopyMode, CopyMode, None, V3_2A, I32, Absent),
                     (SELECTION_END_Y, selection_end_y, "selection_end_y", CopyMode, CopyMode, None, V3_2A, I32, Absent),

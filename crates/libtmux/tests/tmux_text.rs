@@ -79,6 +79,59 @@ fn explicit_views_prevent_implicit_lossy_conversion() {
 }
 
 #[test]
+fn byte_references_preserve_the_allocation_and_invalid_utf8() {
+    let text = TmuxText::from_bytes([b'a', 0, 0xff]);
+    let bytes: &[u8] = text.as_ref();
+    assert!(std::ptr::eq(bytes, text.as_bytes()));
+    assert_eq!(bytes, [b'a', 0, 0xff]);
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn accessor_names_compose_with_byte_name_lookups() {
+    let guard = libtmux::test::TestServer::new().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("s\u{fffd}")
+        .await
+        .expect("session");
+    let found = guard
+        .server()
+        .session(session.name())
+        .await
+        .expect("session lookup")
+        .expect("session exists");
+    assert_eq!(found.id(), session.id());
+    assert_eq!(found.name(), session.name());
+    assert!(
+        guard
+            .server()
+            .session(TmuxText::from_bytes([b's', 0xff]))
+            .await
+            .expect("byte name lookup")
+            .is_none(),
+        "invalid UTF-8 must not match a name containing the replacement character"
+    );
+
+    let window = session.new_window("w\u{fffd}").await.expect("window");
+    let found = session
+        .window(window.name())
+        .await
+        .expect("window lookup")
+        .expect("window exists");
+    assert_eq!(found.id(), window.id());
+    assert_eq!(found.name(), window.name());
+    assert!(
+        session
+            .window(TmuxText::from_bytes([b'w', 0xfe]))
+            .await
+            .expect("byte name lookup")
+            .is_none()
+    );
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[test]
 fn bytewise_traits_reject_unicode_based_equality_and_ordering() {
     let lower = TmuxText::from_bytes(Vec::from([0x80]));
     let higher = TmuxText::from_bytes(Vec::from([0x81]));

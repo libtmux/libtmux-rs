@@ -3,6 +3,11 @@
 Build tmux workspaces from [tmuxp](https://tmuxp.git-pull.com/)-style YAML,
 using [libtmux](https://docs.rs/libtmux).
 
+It is a library, with no command to run: a program reads the file and builds
+it. It reads tmuxp's own example files, and ignores five of tmuxp's keys;
+[Reading a tmuxp file](#reading-a-tmuxp-file) names them and says where the
+two disagree.
+
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not
 > resolve a prerelease unless the requirement names one, so a plain `0.1`
@@ -59,8 +64,9 @@ use tmux_workspace::{Workspace, WorkspaceBuilder};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Runs for real, against an isolated tmux under `/tmp/libtmux-rs-test/`.
-    // Your own code reads the file and uses `libtmux::Server::new()?`:
-    //   let source = std::fs::read_to_string("dev.yaml")?;
+    // Your own code reads the file, so a `./` start directory is the file's,
+    // and uses `libtmux::Server::new()?`:
+    //   let workspace = Workspace::from_file("dev.yaml")?;
     let source = "
 session_name: dev
 windows:
@@ -118,6 +124,49 @@ windows:
     Ok(())
 }
 ```
+
+## Reading a tmuxp file
+
+A file written for tmuxp builds the session tmuxp would build, including
+where tmuxp's behaviour is surprising:
+
+- A lone `pane`, `blank` or empty `-` is a pane with no command. Among other
+  commands the word is typed.
+- Commands are typed after a space, which keeps them out of history in a
+  shell set to ignore such lines, unless `suppress_history: false`. The space
+  reaches whatever the pane runs, a program as much as a shell.
+- `enter: false` on a command holds for the commands after it in that pane,
+  so the next one is typed onto the same line. A pane's `enter: false` covers
+  its `shell_command_before` commands, which are typed first.
+- `sleep_before` and `sleep_after` hold the same way, and are waited for in
+  tmux: each is a `libtmux::plan::Pause` between the commands it separates.
+- `~` and `$NAME` or `${NAME}` expand from the loading process's environment
+  in names, start directories, and `environment` and option values. An unset
+  variable stays as written, and there is no escape: a frozen name holding
+  `$HOME` reads back as the home directory.
+- A window's relative `start_directory` joins the session's. One starting
+  with `.` starts from the directory it would inherit, else from the file's.
+  tmuxp's `start-directory.yaml` names a window for the file's directory that
+  tmuxp's loader, and this crate, put in the session's. A pane's other
+  relative path is not joined to its window's: it starts from the current
+  directory, as tmux would start it.
+
+It differs where following tmuxp would be unsafe or impossible:
+
+- Commands are typed as written, for the pane's shell to expand. tmuxp
+  expands variables in them first, which reads a variable's value as shell
+  code.
+- `~name` in a start directory is refused, not looked up; elsewhere it stays
+  as written.
+- A `.` path with nothing to inherit, and a null among commands, crash
+  tmuxp. Here the first starts from the file's directory and the second is
+  an error naming its line.
+- `window_shell` starts the window's first pane only, and a pane's
+  `environment` adds to its window's rather than replacing it.
+
+Five of tmuxp's keys are not acted on, and are listed in `unsupported_keys`
+along with any key tmuxp does not have: `before_script`, `plugins`,
+`options_after`, and a pane's `shell` and `shell_command_before`.
 
 ## Install
 

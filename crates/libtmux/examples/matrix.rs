@@ -1,6 +1,6 @@
 //! One workload, every execution mode, side by side.
 //!
-//! The same plan runs five ways. What changes is the price and what the run
+//! The same plan runs six ways. What changes is the price and what the run
 //! can prove; what does not change is the tmux state it leaves or the query
 //! that reads it back. Run it with:
 //!
@@ -8,16 +8,22 @@
 //! $ cargo run --example matrix \
 //!     --features plan,control-mode,blocking,test-support,query
 //! ```
+//!
+//! The `processes` column is counted, not asserted: every tmux the example
+//! starts goes through a wrapper that logs each start before it runs the real
+//! executable, and a row reports how many lines its run added.
 
 #![allow(clippy::expect_used, clippy::print_stdout, reason = "an example")]
 
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use libtmux::plan::{
     Attribution, NewSession, NewWindow, Outcome, Plan, Planner, SelectPane, SendKeys, SetOption,
 };
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
-use libtmux::test::TestServer;
+use libtmux::test::{TestServer, TestServerBuilder};
 use libtmux::{Server, blocking};
 
 /// One row of the comparison.
@@ -29,6 +35,66 @@ struct Row {
     elapsed: Duration,
     attribution: &'static str,
     query: String,
+}
+
+/// A `tmux` that logs each start, then runs the real one in its place.
+///
+/// The log gains one line per process, whatever its arguments hold, so a
+/// mode that fell back to a subprocess, or spent two where it claims one,
+/// changes the table rather than only the prose around it.
+struct Witness {
+    directory: tempfile::TempDir,
+}
+
+impl Witness {
+    fn new() -> Self {
+        let real = real_tmux();
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let witness = Self { directory };
+        let script = format!(
+            "#!/bin/sh\nprintf 'start\\n' >> '{log}'\nexec '{real}' \"$@\"\n",
+            log = witness.log().display(),
+            real = real.display(),
+        );
+        std::fs::write(witness.executable(), script).expect("the wrapper is written");
+        std::fs::set_permissions(witness.executable(), std::fs::Permissions::from_mode(0o755))
+            .expect("the wrapper is executable");
+        std::fs::write(witness.log(), "").expect("the log starts empty");
+        witness
+    }
+
+    fn executable(&self) -> PathBuf {
+        self.directory.path().join("tmux")
+    }
+
+    fn log(&self) -> PathBuf {
+        self.directory.path().join("started.log")
+    }
+
+    /// A fixture whose every tmux, daemon and clients alike, is this wrapper.
+    fn server(&self) -> TestServerBuilder {
+        TestServer::builder().tmux_executable(self.executable())
+    }
+
+    /// How many tmux processes have started so far.
+    fn started(&self) -> usize {
+        std::fs::read_to_string(self.log())
+            .expect("the log is readable")
+            .lines()
+            .count()
+    }
+}
+
+/// The tmux the fixture would have run: `LIBTMUX_TEST_TMUX`, else `PATH`.
+fn real_tmux() -> PathBuf {
+    if let Some(pinned) = std::env::var_os("LIBTMUX_TEST_TMUX") {
+        return PathBuf::from(pinned);
+    }
+    let path = std::env::var_os("PATH").expect("PATH is set");
+    std::env::split_paths(&path)
+        .map(|directory| directory.join("tmux"))
+        .find(|candidate| Path::is_file(candidate))
+        .expect("tmux is on PATH")
 }
 
 /// The workload: build a session, split it, decorate the new pane, focus back.
@@ -57,8 +123,8 @@ fn workload(name: &str) -> Plan {
 /// This is the "query output" column: if a mode changed what was built, this
 /// is where it would show.
 async fn query(server: &Server, session: &str) -> String {
-    // Scoped to the session the workload built: the control-mode row needs a
-    // session of its own to attach to, and counting the whole server would
+    // Scoped to the session the workload built: the control-mode rows need a
+    // session of their own to attach to, and counting the whole server would
     // compare that fixture rather than the work.
     let session = server
         .session(session)
@@ -95,13 +161,16 @@ fn fidelity(outcomes: impl IntoIterator<Item = Outcome>, attribution: Attributio
 }
 
 async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let witness = Witness::new();
+    let guard = witness.server().start().await.expect("tmux starts");
     let server = guard.server();
 
     let plan = workload(name);
+    let before = witness.started();
     let started = Instant::now();
     let result = plan.run(server, planner).await.expect("the plan runs");
     let elapsed = started.elapsed();
+    let processes = witness.started() - before;
 
     let attribution = result
         .steps()
@@ -118,8 +187,7 @@ async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row
         mode,
         feature: "plan",
         dispatches: result.dispatches(),
-        // A subprocess transport spends one tmux client per invocation.
-        processes: result.dispatches(),
+        processes,
         elapsed,
         attribution: fidelity(
             result
@@ -135,8 +203,19 @@ async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row
     row
 }
 
-async fn run_control_mode(name: &str) -> Row {
-    let guard = TestServer::builder().start().await.expect("tmux starts");
+/// Which way a plan reaches tmux over one control-mode connection.
+#[derive(Clone, Copy)]
+enum Connection {
+    /// `Plan::run_over_control_mode`, a plan-only route.
+    Streaming,
+    /// `Plan::run` on a handle from `Server::over_control_mode`, the route
+    /// the whole typed API can take.
+    Routed,
+}
+
+async fn run_control_mode(connection: Connection, name: &str) -> Row {
+    let witness = Witness::new();
+    let guard = witness.server().start().await.expect("tmux starts");
     let server = guard.server();
 
     // Control mode attaches to a session, so the plan cannot be the thing that
@@ -146,6 +225,9 @@ async fn run_control_mode(name: &str) -> Row {
         .new_session("control-host")
         .await
         .expect("host session");
+
+    // Counted from here, so the connection's own process is in the row.
+    let before = witness.started();
     let control = libtmux::control::ControlMode::attach(server, host.id())
         .await
         .expect("control mode attaches");
@@ -153,18 +235,31 @@ async fn run_control_mode(name: &str) -> Row {
 
     let plan = workload(name);
     let started = Instant::now();
-    let result = plan
-        .run_over_control_mode(&sender)
-        .await
-        .expect("the plan runs");
+    let (mode, result) = match connection {
+        Connection::Streaming => (
+            "control-mode/streaming",
+            plan.run_over_control_mode(&sender).await,
+        ),
+        Connection::Routed => {
+            let routed = server
+                .over_control_mode(&sender)
+                .await
+                .expect("the connection reaches this server");
+            (
+                "control-mode/routed",
+                plan.run(&routed, Planner::Sequential).await,
+            )
+        }
+    };
+    let result = result.expect("the plan runs");
     let elapsed = started.elapsed();
+    let processes = witness.started() - before;
 
     let row = Row {
-        mode: "control-mode/streaming",
+        mode,
         feature: "plan,control-mode",
         dispatches: result.dispatches(),
-        // Every block shares one connection, so the whole plan costs one.
-        processes: 1,
+        processes,
         elapsed,
         attribution: fidelity(
             result
@@ -196,7 +291,8 @@ async fn main() {
         run_subprocess("async/sequential", Planner::Sequential, "async-seq").await,
         run_subprocess("async/folded", Planner::Folding, "async-fold").await,
         run_subprocess("async/marked-fold", Planner::Marked, "async-marked").await,
-        run_control_mode("control").await,
+        run_control_mode(Connection::Streaming, "control").await,
+        run_control_mode(Connection::Routed, "routed").await,
     ];
     // The blocking runtime owns a reactor, so it cannot be built inside one.
     rows.insert(

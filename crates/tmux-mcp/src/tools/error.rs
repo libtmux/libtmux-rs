@@ -1,4 +1,51 @@
-use rmcp::model::ErrorData;
+use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData, IntoContents};
+
+/// A tool-execution failure, reported as `isError` tool content.
+///
+/// MCP separates protocol faults (unknown tool, arguments that do not match
+/// the schema -- rejected before a tool body ever runs) from failures a tool
+/// body discovers itself. Only the first belongs in the JSON-RPC `error`
+/// field; the second is data the model reads and acts on, which is what
+/// [`rmcp::model::CallToolResult::is_error`] is for. Every helper below
+/// builds one of these instead of a raw [`ErrorData`], so a tool signature
+/// that returns `Result<_, ToolError>` cannot surface a tmux or input
+/// refusal as a protocol error by construction.
+///
+/// Public, and re-exported at the crate root: a caller that invokes
+/// [`crate::TmuxTools`]'s methods directly, rather than over the wire, gets
+/// this type back and needs [`Self::into_error_data`] to read it.
+#[derive(Debug)]
+pub struct ToolError(ErrorData);
+
+impl From<ErrorData> for ToolError {
+    fn from(value: ErrorData) -> Self {
+        Self(value)
+    }
+}
+
+impl ToolError {
+    /// Recover the underlying [`ErrorData`].
+    ///
+    /// For the one caller that reports a nested tool's own failure inside a
+    /// batch item rather than as this tool's failure
+    /// ([`crate::TmuxTools::call_read_tools_batch`]), and for a
+    /// test that calls a tool directly and inspects the classification a
+    /// wire client would otherwise read from `isError` content.
+    #[must_use]
+    pub fn into_error_data(self) -> ErrorData {
+        self.0
+    }
+}
+
+impl IntoContents for ToolError {
+    fn into_contents(self) -> Vec<ContentBlock> {
+        let body = serde_json::json!({
+            "message": self.0.message,
+            "data": self.0.data,
+        });
+        vec![ContentBlock::text(body.to_string())]
+    }
+}
 
 // Every error this server returns carries the same three fields on its `data`,
 // so an agent decides what to do next by reading them rather than by matching
@@ -20,7 +67,7 @@ use rmcp::model::ErrorData;
 ///
 /// libtmux already draws the distinctions above, so they are carried through
 /// rather than flattened.
-pub(super) fn tmux_error(error: &libtmux::Error) -> ErrorData {
+pub(super) fn tmux_error(error: &libtmux::Error) -> ToolError {
     use libtmux::ErrorKind;
 
     let kind = error.kind();
@@ -55,9 +102,10 @@ pub(super) fn tmux_error(error: &libtmux::Error) -> ErrorData {
         }
         _ => ErrorData::internal_error(message, Some(detail)),
     }
+    .into()
 }
 
-fn partial_effect(message: impl Into<String>) -> ErrorData {
+fn partial_effect(message: impl Into<String>) -> ToolError {
     ErrorData::internal_error(
         message.into(),
         Some(serde_json::json!({
@@ -66,6 +114,7 @@ fn partial_effect(message: impl Into<String>) -> ErrorData {
             "stale": false,
         })),
     )
+    .into()
 }
 
 pub(super) struct EffectBoundary {
@@ -85,7 +134,7 @@ impl EffectBoundary {
         self.effect_seen = true;
     }
 
-    pub(super) fn error(&self, error: libtmux::Error) -> ErrorData {
+    pub(super) fn error(&self, error: libtmux::Error) -> ToolError {
         let error = if self.effect_seen {
             error.after_effect(self.operation)
         } else {
@@ -94,11 +143,11 @@ impl EffectBoundary {
         tmux_error(&error)
     }
 
-    pub(super) fn tmux<T>(&self, result: Result<T, libtmux::Error>) -> Result<T, ErrorData> {
+    pub(super) fn tmux<T>(&self, result: Result<T, libtmux::Error>) -> Result<T, ToolError> {
         result.map_err(|error| self.error(error))
     }
 
-    pub(super) fn local(&self, message: impl Into<String>) -> ErrorData {
+    pub(super) fn local(&self, message: impl Into<String>) -> ToolError {
         debug_assert!(self.effect_seen);
         partial_effect(message)
     }
@@ -124,8 +173,8 @@ fn stale_detail() -> serde_json::Value {
 /// libtmux, so they mint the classification directly. An agent should not have
 /// to tell the two apart: a pane that vanished between the listing and the call
 /// reads the same either way.
-pub(super) fn object_gone(what: &str, id: &str) -> ErrorData {
-    ErrorData::invalid_params(format!("no {what} {id}"), Some(stale_detail()))
+pub(super) fn object_gone(what: &str, id: &str) -> ToolError {
+    ErrorData::invalid_params(format!("no {what} {id}"), Some(stale_detail())).into()
 }
 
 /// Report state that moved between two calls this server made.
@@ -133,15 +182,15 @@ pub(super) fn object_gone(what: &str, id: &str) -> ErrorData {
 /// Not the caller's mistake — the handle was good when it was taken — so the
 /// code stays an internal error. The classification is the one for a target
 /// that was already gone, because the useful response is the same: look again.
-pub(super) fn vanished(message: &str) -> ErrorData {
-    ErrorData::internal_error(message.to_owned(), Some(stale_detail()))
+pub(super) fn vanished(message: &str) -> ToolError {
+    ErrorData::internal_error(message.to_owned(), Some(stale_detail())).into()
 }
 
 /// Report an argument this server will not pass to tmux.
 ///
 /// Nothing about the server needs to change for the next call to work, and
 /// nothing has gone stale: the caller has to send something else.
-pub(super) fn bad_input(message: impl Into<String>) -> ErrorData {
+pub(super) fn bad_input(message: impl Into<String>) -> ToolError {
     ErrorData::invalid_params(
         message.into(),
         Some(serde_json::json!({
@@ -150,6 +199,64 @@ pub(super) fn bad_input(message: impl Into<String>) -> ErrorData {
             "stale": false,
         })),
     )
+    .into()
+}
+
+/// Give a failed result rmcp answered itself the body every tool failure has.
+///
+/// rmcp reports arguments that do not deserialize as a failed result whose
+/// only content is its own message. Every tool here fails through
+/// [`ToolError`], whose content is a JSON object carrying `data`, so a failed
+/// result without one is rmcp's, and it concerned the arguments.
+pub(crate) fn typed_result(mut result: CallToolResult) -> CallToolResult {
+    if result.is_error != Some(true) {
+        return result;
+    }
+    let [block] = result.content.as_slice() else {
+        return result;
+    };
+    let Some(text) = block.as_text() else {
+        return result;
+    };
+    let typed = serde_json::from_str::<serde_json::Value>(&text.text)
+        .is_ok_and(|body| body.get("data").is_some_and(serde_json::Value::is_object));
+    if !typed {
+        result.content = bad_input(text.text.clone()).into_contents();
+    }
+    result
+}
+
+/// Give a protocol error rmcp raised before any tool ran the three fields.
+pub(crate) fn typed_protocol_error(mut error: ErrorData) -> ErrorData {
+    if error.data.is_none() {
+        let kind = if error.code == ErrorCode::INVALID_PARAMS {
+            "invalid_input"
+        } else {
+            "internal"
+        };
+        error.data = Some(serde_json::json!({
+            "kind": kind,
+            "retryable": false,
+            "stale": false,
+        }));
+    }
+    error
+}
+
+/// Refuse a tool name this process does not serve.
+///
+/// The name is either a tool the startup selection left out or no tool at
+/// all, and the fix differs: only the operator can offer the first.
+pub(crate) fn unoffered_tool(tool: &str, exists: bool) -> ErrorData {
+    let message = if exists {
+        format!(
+            "tool {tool} is not offered: this server's startup selection left it out; the \
+             operator can add it with LIBTMUX_TOOLSETS or LIBTMUX_TOOLS"
+        )
+    } else {
+        format!("no tool {tool}")
+    };
+    bad_input(message).into_error_data()
 }
 
 #[cfg(test)]
@@ -165,7 +272,9 @@ mod tests {
     #[test]
     fn an_effect_boundary_changes_only_later_failures() {
         let mut boundary = EffectBoundary::new("send_keys");
-        let first = boundary.error(libtmux::Error::RuntimeNested);
+        let first = boundary
+            .error(libtmux::Error::RuntimeNested)
+            .into_error_data();
         assert_eq!(first.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
             first.data.expect("the first error carries detail")["kind"],
@@ -173,14 +282,18 @@ mod tests {
         );
 
         boundary.mark();
-        let later = boundary.error(libtmux::Error::RuntimeNested);
+        let later = boundary
+            .error(libtmux::Error::RuntimeNested)
+            .into_error_data();
         assert_eq!(later.code, ErrorCode::INTERNAL_ERROR);
         let detail = later.data.expect("the later error carries detail");
         assert_eq!(detail["kind"], "partial_effect", "{detail}");
         assert_eq!(detail["retryable"], false, "{detail}");
         assert_eq!(detail["stale"], false, "{detail}");
 
-        let local = boundary.local("the selected object vanished");
+        let local = boundary
+            .local("the selected object vanished")
+            .into_error_data();
         assert_eq!(local.code, ErrorCode::INTERNAL_ERROR);
         let detail = local.data.expect("the local error carries detail");
         assert_eq!(detail["kind"], "partial_effect", "{detail}");
@@ -241,7 +354,7 @@ mod tests {
 
         assert_eq!(held, libtmux::ChannelWait::Signalled);
         assert_eq!(error.kind(), ErrorKind::Refused);
-        let projected = tmux_error(&error);
+        let projected = tmux_error(&error).into_error_data();
         assert_eq!(projected.code, ErrorCode::INTERNAL_ERROR);
         let detail = projected.data.expect("the refusal carries detail");
         assert_eq!(detail["kind"], "refused", "{detail}");

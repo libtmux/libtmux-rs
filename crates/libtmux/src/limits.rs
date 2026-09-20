@@ -93,6 +93,10 @@ impl Default for OutputLimits {
 /// into process, descriptor, and memory pressure on the machine, and tmux
 /// itself serializes on the far side regardless.
 ///
+/// The client [`Server::wait_for_channel`](crate::Server::wait_for_channel)
+/// parks on a channel is the exception, and is not counted: it is waiting
+/// rather than working, and what releases it is a dispatch of its own.
+///
 /// # Examples
 ///
 /// ```

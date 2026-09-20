@@ -39,6 +39,11 @@ impl Pane {
     /// error when tmux could not be read, or an error when the control-mode
     /// connection cannot be opened.
     ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held: a dropped call closes the connection it opened,
+    /// and the mutes it set end with that connection.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -54,6 +59,29 @@ impl Pane {
     /// ```
     #[cfg(feature = "control-mode")]
     pub async fn stream_output(&self) -> Result<crate::control::PaneOutput, Error> {
+        self.stream_output_with_limits(crate::ControlLimits::default())
+            .await
+    }
+
+    /// Like [`Self::stream_output`], with explicit frame budgets.
+    ///
+    /// The connection this opens is a whole `%begin`/`%end`-framed
+    /// control-mode session, not only this one pane's bytes, so a budget set
+    /// here bounds every frame that connection reads -- the same tradeoff
+    /// [`crate::control::ControlMode::attach_with_limits`] documents.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::stream_output`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held, as for [`Self::stream_output`].
+    #[cfg(feature = "control-mode")]
+    pub async fn stream_output_with_limits(
+        &self,
+        limits: crate::ControlLimits,
+    ) -> Result<crate::control::PaneOutput, Error> {
         // tmux reports a pane only to a client attached to a session that
         // links its window, so attaching through this handle's cached session
         // would deliver silence after the pane was joined elsewhere.
@@ -62,13 +90,17 @@ impl Pane {
             id: self.id().to_string(),
         })?;
         let server = crate::Server::from_core(Arc::clone(&self.core));
-        let (sender, events) = crate::control::ControlMode::attach(&server, window.session_id())
-            .await?
-            .split();
+        let (sender, events) =
+            crate::control::ControlMode::attach_with_limits(&server, window.session_id(), limits)
+                .await?
+                .split();
 
         // One session can hold many panes, and the connection carries all of
         // them, so narrowing happens before the caller reads.
-        sender.watch_only(std::slice::from_ref(self.id())).await?;
+        if let Err(error) = sender.watch_only(std::slice::from_ref(self.id())).await {
+            drop(sender);
+            return Err(events.shutdown_after_error(error).await);
+        }
 
         Ok(crate::control::PaneOutput::new(
             self.id().clone(),
@@ -133,6 +165,7 @@ impl Pane {
             .await?
             .tmux_version()
             .clone();
+        let needs_wrap_trim = options.needs_wrap_trim();
         let command = options.lower(self.id().as_ref(), &version)?;
         let target = command.target().map(OsStr::to_os_string);
         let result = self.core.execute(command).await?;
@@ -144,18 +177,12 @@ impl Pane {
             ));
         }
 
-        // tmux terminates every line, including the last, so a trailing empty
-        // element after the final newline is framing rather than content.
-        let stdout = result.stdout();
-        let stdout = stdout.strip_suffix(b"\n").unwrap_or(stdout);
-        if stdout.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        Ok(stdout
-            .split(|byte| *byte == b'\n')
-            .map(|line| TmuxText::from(line.to_vec()))
-            .collect())
+        let lines = split_lines(result.stdout());
+        Ok(if needs_wrap_trim {
+            lines.into_iter().map(trim_wrap_padding).collect()
+        } else {
+            lines
+        })
     }
 
     /// Capture with the per-line flags tmux records, marking shell prompts.
@@ -188,7 +215,7 @@ impl Pane {
     /// let session = server.new_session("prompts").await?;
     /// let pane = session.panes().await?.remove(0);
     ///
-    /// if server.capabilities().await?.tmux_version().meets(&libtmux::since::CAPTURE_LINE_FLAGS) {
+    /// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
     ///     let lines = pane.capture_lines(CaptureOptions::history()).await?;
     ///     // Without shell integration nothing is marked, which is an answer.
     ///     let prompts = lines.iter().filter(|line| line.starts_prompt).count();
@@ -216,6 +243,8 @@ impl Pane {
 
     /// Wait until this pane's output contains `needle`.
     ///
+    /// [`Pane::wait_until`] takes a predicate over the lines instead.
+    ///
     /// Polls rather than streams, so it needs no feature: a caller who
     /// dispatches a command needs to know when it finished, and
     /// [`Pane::send_keys`] without that is half an operation. A control-mode
@@ -237,10 +266,23 @@ impl Pane {
     /// A pane whose process ends answers [`PaneWait::Dead`] rather than
     /// running to the deadline, because waiting longer cannot change it.
     ///
+    /// A [`Pane::capture`] called immediately after this returns can
+    /// occasionally miss the very output that satisfied the wait: tmux's own
+    /// redraw of the screen a fast, multi-byte-heavy write produced can still
+    /// be in flight when the next `capture-pane` reads it, independent of
+    /// this crate. Raw tmux shows the same gap running the equivalent
+    /// `send-keys`/`capture-pane` sequence directly. A caller sensitive to
+    /// this should retry the capture rather than trust it on the first look.
+    ///
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached or refuses a capture.
     /// Running out of time is [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened. A look only reads, so output a dropped wait missed
+    /// stays in the scrollback, up to `history-limit`, for the next wait.
     ///
     /// # Examples
     ///
@@ -270,7 +312,7 @@ impl Pane {
         within: Duration,
     ) -> Result<PaneWait, Error> {
         let needle = needle.as_ref();
-        self.wait_until(within, |text, _| contains(text, needle))
+        self.look_until(within, |text, _| contains(text, needle))
             .await
     }
 
@@ -287,6 +329,11 @@ impl Pane {
     ///
     /// Returns an error when tmux cannot be reached or refuses a capture.
     /// Running out of time is [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a look only reads. A retry measures quiet afresh,
+    /// from its own first look.
     ///
     /// # Examples
     ///
@@ -317,7 +364,7 @@ impl Pane {
     ) -> Result<PaneWait, Error> {
         let mut last_change = tokio::time::Instant::now();
         let mut previous: Option<Vec<u8>> = None;
-        self.wait_until(within, move |text, now| {
+        self.look_until(within, move |text, now| {
             if previous.as_deref() == Some(text) {
                 return now.duration_since(last_change) >= quiet_for;
             }
@@ -328,8 +375,86 @@ impl Pane {
         .await
     }
 
+    /// Wait until `settled` holds for this pane's captured lines.
+    ///
+    /// For what a literal [`Pane::wait_for_text`] cannot say: a line equal to
+    /// something rather than containing it, a count, a pattern, the shape of
+    /// the last line. `settled` sees what [`Pane::capture_with`] returns for
+    /// `CaptureOptions::history().join_wrapped()`: scrollback and screen, one
+    /// entry per line, a line tmux wrapped joined back into one, and the
+    /// screen's unused rows as empty lines at the end.
+    ///
+    /// Looks are the ones [`Pane::wait_for_text`] describes: 120ms apart,
+    /// the first before any sleep, so lines already there answer at once. A
+    /// pane whose process ends answers [`PaneWait::Dead`] rather than running
+    /// to the deadline. It polls even on a handle routed through
+    /// `Server::over_control_mode`, because that connection's `%output`
+    /// belongs to whoever reads its events, so waking on it would attach a
+    /// second client per wait to save under three milliseconds on a marker
+    /// (`benches/waits.rs`).
+    ///
+    /// A `query::Matcher` over one line fits as
+    /// `|lines| lines.iter().any(|line| matcher.matches(line))`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot be reached or refuses a look, which
+    /// includes a pane that has been closed. Running out of time is
+    /// [`PaneWait::TimedOut`], not an error.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened. A look only reads, so a future dropped mid-look
+    /// leaves tmux as it was, and output produced in the meantime stays in the
+    /// scrollback, up to `history-limit`, for the next wait to find.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::PaneWait;
+    /// use std::time::Duration;
+    ///
+    /// # let guard = libtmux::test::TestServer::builder().start().await?;
+    /// # let session = guard.server().new_session("counting").await?;
+    /// # let pane = session.panes().await?.remove(0);
+    /// pane.send_line("for n in 1 2 3; do echo tick; done").await?;
+    ///
+    /// // The echoed command contains `tick`; only the output is a line equal to it.
+    /// let ticked = pane
+    ///     .wait_until(Duration::from_secs(10), |lines| {
+    ///         lines.iter().filter(|line| **line == "tick").count() == 3
+    ///     })
+    ///     .await?;
+    /// assert_eq!(ticked, PaneWait::Arrived);
+    /// # guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_until(
+        &self,
+        within: Duration,
+        mut settled: impl FnMut(&[TmuxText]) -> bool,
+    ) -> Result<PaneWait, Error> {
+        // The loop's own capture is `history().join_wrapped()` with no
+        // `trailing_spaces`, so a joined line always needs this trim -- see
+        // `trim_wrap_padding`.
+        self.look_until(within, |text, _| {
+            let lines: Vec<TmuxText> = split_lines(text)
+                .into_iter()
+                .map(trim_wrap_padding)
+                .collect();
+            settled(&lines)
+        })
+        .await
+    }
+
     /// The shared loop: look, decide, sleep, repeat until the deadline.
-    async fn wait_until(
+    async fn look_until(
         &self,
         within: Duration,
         mut settled: impl FnMut(&[u8], tokio::time::Instant) -> bool,
@@ -388,6 +513,46 @@ impl Pane {
             }
             tokio::time::sleep(POLL_INTERVAL.min(within)).await;
         }
+    }
+}
+
+/// Split `capture-pane` output into lines.
+///
+/// tmux terminates every line, including the last, so a trailing empty element
+/// after the final newline is framing rather than content.
+fn split_lines(stdout: &[u8]) -> Vec<TmuxText> {
+    let stdout = stdout.strip_suffix(b"\n").unwrap_or(stdout);
+    if stdout.is_empty() {
+        return Vec::new();
+    }
+
+    stdout
+        .split(|byte| *byte == b'\n')
+        .map(|line| TmuxText::from(line.to_vec()))
+        .collect()
+}
+
+/// Drop the blank-cell padding `-J` leaves on a wrapped line's last row.
+///
+/// `-J` joins a wrapped line back into one and is documented to preserve
+/// trailing spaces, which is right for what a program printed -- tmux
+/// already trims a row's genuinely unwritten cells everywhere else. tmux
+/// 3.2a's join carries those unwritten cells past the printed text too:
+/// printing 300 bytes into an 80-column pane and joining the wrap back
+/// returns 320 bytes there, the last 20 of them cells nothing wrote. Every
+/// later release already drops them unasked -- confirmed by building 3.3,
+/// 3.3a, 3.4, 3.5, and 3.5a and running this same join against each, well
+/// before `capture-pane -T` gives 3.4 and newer a flag for it. Trimming here
+/// matches what every one of those already returns, instead of adding a
+/// version gate for one release, so a caller comparing a joined line for
+/// equality is not reading a pane's width instead of what ran in it.
+fn trim_wrap_padding(line: TmuxText) -> TmuxText {
+    let bytes = line.as_bytes();
+    let content_len = bytes.len() - bytes.iter().rev().take_while(|&&byte| byte == b' ').count();
+    if content_len == bytes.len() {
+        line
+    } else {
+        TmuxText::from(bytes[..content_len].to_vec())
     }
 }
 

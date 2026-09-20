@@ -29,8 +29,8 @@ You may be looking for:
   transport switches, testing
 - [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
   package**, if you want an agent to drive tmux
-- [Examples](crates/libtmux/examples) — six programs that run and clean up
-  after themselves, from reading a server to watching one over control mode
+- [Examples](crates/libtmux/examples) — programs that run and clean up after
+  themselves, from reading a server to watching one over control mode
 - [Design notes](crates/libtmux/docs/design.md) — why it is shaped this way
 - [Parity ledger](crates/libtmux/docs/parity.md) — capability-by-capability
   against Python libtmux
@@ -190,7 +190,9 @@ a CLI, a config file, or an MCP tool call can carry one.
 Three switches, each a Cargo feature, none of them the default. The same
 workload under each, printed by `cargo run --example matrix --all-features`.
 Every column but `wall` is exact and checked against this block by
-`just example-tables`; the timings are one run on one developer machine:
+`just example-tables`; the timings are one run on one developer machine.
+`processes` is counted: the example runs tmux through a wrapper that logs
+each start. `routed` is `Plan::run` on a `Server::over_control_mode` handle:
 
 <!-- example-output: matrix --all-features -->
 
@@ -201,7 +203,8 @@ blocking/sequential      plan                        6         6     16ms  per-c
 async/sequential         plan                        6         6     16ms  per-command  2 panes, 2 windows, 2 active
 async/folded             plan                        3         3      9ms  merged       2 panes, 2 windows, 2 active
 async/marked-fold        plan                        3         3     10ms  merged       2 panes, 2 windows, 2 active
-control-mode/streaming   plan,control-mode           6         1      6ms  per-command  2 panes, 2 windows, 2 active
+control-mode/streaming   plan,control-mode           6         1     10ms  per-command  2 panes, 2 windows, 2 active
+control-mode/routed      plan,control-mode           6         1      6ms  per-command  2 panes, 2 windows, 2 active
 
 every mode built the same thing: true
 dispatches ranged 3..6, processes ranged 1..6

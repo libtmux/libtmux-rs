@@ -21,7 +21,136 @@ fn reply(number: u64) -> BlockResult {
         succeeded: true,
         output: Vec::new(),
         sensitive_input: false,
+        chained: 0,
     }
+}
+
+#[tokio::test]
+async fn bootstrap_cleanup_drains_events_and_preserves_error_priority() {
+    let mut failed = reply(2);
+    failed.succeeded = false;
+    let refusal = || {
+        failed
+            .refusal_for("refresh-client")
+            .expect("command refused")
+    };
+    for (primary, recover_terminal) in [
+        (Error::control_mode_closed(), true),
+        (
+            Error::control_mode_closed().after_effect("watch-only"),
+            true,
+        ),
+        (refusal(), false),
+        (refusal().after_effect("watch-only"), false),
+    ] {
+        let original = format!("{primary:?}");
+        let after_effect = matches!(primary, Error::AfterEffect { .. });
+        let (deliveries, received) = mpsc::channel(1);
+        deliveries
+            .send(Delivery::Boundary(super::Boundary(1)))
+            .await
+            .expect("queue has room");
+        let (stop, _stopped) = watch::channel(());
+        let connection = tokio::spawn(async move {
+            deliveries.closed().await;
+            Err(Error::control_mode_frame_too_large("line", 64))
+        });
+        let events = ControlEvents {
+            events: received,
+            stop,
+            connection: Some(connection),
+        };
+        let error =
+            tokio::time::timeout(Duration::from_secs(1), events.shutdown_after_error(primary))
+                .await
+                .expect("cleanup closes the unread event queue before joining");
+        if !recover_terminal {
+            assert_eq!(format!("{error:?}"), original);
+            continue;
+        }
+        let cause = match error {
+            Error::AfterEffect { operation, source } => {
+                assert!(after_effect);
+                assert_eq!(operation, "watch-only");
+                *source
+            }
+            error => {
+                assert!(!after_effect);
+                error
+            }
+        };
+        assert!(matches!(
+            cause,
+            Error::ControlModeFrameTooLarge {
+                frame: "line",
+                limit: 64
+            }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn cancelling_bootstrap_cleanup_still_stops_the_connection() {
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, mut stopped) = watch::channel(());
+    let (release, released) = oneshot::channel();
+    let (finished, complete) = oneshot::channel();
+    let connection = tokio::spawn(async move {
+        stopped.changed().await.expect("cleanup requested closure");
+        drop(deliveries);
+        released.await.expect("cleanup is released");
+        finished.send(()).expect("completion is observed");
+        Ok(())
+    });
+    let events = ControlEvents {
+        events: received,
+        stop,
+        connection: Some(connection),
+    };
+    {
+        let cleanup = events.shutdown_after_error(Error::control_mode_closed());
+        tokio::select! {
+            biased;
+            _ = cleanup => panic!("the connection has not finished cleanup"),
+            () = std::future::ready(()) => {}
+        }
+    }
+    release.send(()).expect("the connection still owns cleanup");
+    tokio::time::timeout(Duration::from_secs(1), complete)
+        .await
+        .expect("cancelled cleanup still stops the connection")
+        .expect("connection finished");
+}
+
+#[tokio::test]
+async fn cancelling_a_pending_next_preserves_the_terminal_error() {
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, _stopped) = watch::channel(());
+    let (release, released) = oneshot::channel();
+    let connection = tokio::spawn(async move {
+        released.await.expect("cleanup is released");
+        Err(Error::control_mode_timeout())
+    });
+    let mut events = ControlEvents {
+        events: received,
+        stop,
+        connection: Some(connection),
+    };
+    drop(deliveries);
+    tokio::select! {
+        biased;
+        _ = events.next_event() => panic!("EOF must wait for connection cleanup"),
+        () = std::future::ready(()) => {}
+    }
+    release.send(()).expect("cleanup is waiting");
+    let error = events
+        .next_event()
+        .await
+        .expect("terminal diagnostic")
+        .expect_err("timeout");
+    assert_eq!(error.kind(), ErrorKind::Timeout);
+    assert!(events.next_event().await.is_none());
+    events.shutdown().await.expect("error already delivered");
 }
 
 fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
@@ -34,6 +163,7 @@ fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
             commit,
             result,
             boundary: None,
+            blocks: 1,
         },
         answer,
     )
@@ -44,6 +174,9 @@ fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
         commands,
         timeout,
         pane_off_is_safe: true,
+        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
+            "/tmp/libtmux-rs-test/control-sender",
+        )),
     }
 }
 
@@ -64,6 +197,7 @@ fn block_refusal_classification_withholds_sensitive_output() {
         succeeded: false,
         output: vec![TmuxText::from(secret)],
         sensitive_input: true,
+        chained: 0,
     };
     let error = block
         .refusal_for("display-message")
@@ -93,6 +227,9 @@ async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
+            "/tmp/libtmux-rs-test/control-sender",
+        )),
     };
     let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
 
@@ -105,6 +242,7 @@ async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
             succeeded: true,
             output: vec![TmuxText::from_bytes(*b"%1"), TmuxText::from_bytes(*b"%2")],
             sensitive_input: false,
+            chained: 0,
         }))
         .expect("watch is waiting for the listing");
 
@@ -144,6 +282,9 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
+            "/tmp/libtmux-rs-test/control-sender",
+        )),
     };
     let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
 
@@ -155,6 +296,7 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
             succeeded: false,
             output: vec![TmuxText::from_bytes(*b"listing refused")],
             sensitive_input: false,
+            chained: 0,
         }))
         .expect("watch is waiting for the listing");
 
@@ -168,18 +310,53 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
 }
 
 #[tokio::test]
+async fn pane_output_shutdown_reports_the_specific_terminal_error() {
+    // PaneOutput's own Stream and next_chunk stay infallible by design (see
+    // its doc comment): whatever ends the connection collapses into `None`.
+    // shutdown() is where a caller who needs to tell "frame too large" from
+    // "pane finished" looks -- it never touches ControlEvents::poll_next, so
+    // the connection's own JoinHandle is still there to consult when asked.
+    let (commands, _requests) = mpsc::channel(1);
+    let sender = sender(commands, Duration::from_secs(5));
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, _stopped) = watch::channel(());
+    let connection =
+        tokio::spawn(async { Err(Error::control_mode_frame_too_large("test-frame", 42)) });
+    let mut output = PaneOutput::new(
+        "%1".parse().expect("a pane id"),
+        ControlEvents {
+            events: received,
+            stop,
+            connection: Some(connection),
+        },
+        sender,
+    );
+    drop(deliveries);
+
+    assert!(
+        output.next_chunk().await.is_none(),
+        "the stream ends quietly"
+    );
+    let error = output
+        .shutdown()
+        .await
+        .expect_err("the frame-too-large diagnostic survives to shutdown");
+    assert!(matches!(error, Error::ControlModeFrameTooLarge { .. }));
+}
+
+#[tokio::test]
 async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
     let (commands, mut requests) = mpsc::channel(4);
     let sender = sender(commands, Duration::from_secs(5));
     let (_events, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
     let connection = tokio::spawn(async { Ok::<(), Error>(()) });
-    let output = PaneOutput::new(
+    let mut output = PaneOutput::new(
         "%1".parse().expect("a pane id"),
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );
@@ -216,7 +393,7 @@ async fn cancelling_a_snapshot_leaves_consumed_output_in_the_callers_sink() {
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );
@@ -292,7 +469,7 @@ async fn a_snapshot_streams_a_flood_into_caller_owned_storage() {
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );
@@ -365,7 +542,7 @@ async fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
         ControlEvents {
             events: received,
             stop,
-            connection,
+            connection: Some(connection),
         },
         sender,
     );
@@ -395,6 +572,9 @@ async fn mute_pane_reports_a_control_error_block() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
+            "/tmp/libtmux-rs-test/control-sender",
+        )),
     };
     let pane: PaneId = "%1".parse().expect("a pane id");
     let mute = tokio::spawn(async move { sender.mute_pane(&pane).await });
@@ -407,6 +587,7 @@ async fn mute_pane_reports_a_control_error_block() {
             succeeded: false,
             output: vec![TmuxText::from_bytes(*b"mute refused")],
             sensitive_input: false,
+            chained: 0,
         }))
         .expect("mute is waiting for its block");
 
@@ -455,6 +636,77 @@ fn a_refused_reply_keeps_the_next_reply_aligned() {
             .expect("C succeeds")
             .number(),
         3,
+    );
+}
+
+/// tmux answers each command of a chain with its own block and runs nothing
+/// after the first that fails. Either way the chain gets every block it is
+/// owed, and the next caller gets none of them.
+#[test]
+fn a_chain_takes_one_block_per_command_and_stops_at_a_failure() {
+    fn block(number: u64, succeeded: bool, text: &str) -> BlockResult {
+        BlockResult {
+            output: vec![TmuxText::from(text)],
+            succeeded,
+            ..reply(number)
+        }
+    }
+    let pending = |answer: &mut oneshot::Receiver<Result<BlockResult, Error>>| {
+        matches!(answer.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+    };
+
+    let mut replies = ReplySlots::default();
+    let (chain, mut chain_answer) = oneshot::channel();
+    let (next, mut next_answer) = oneshot::channel();
+    let (failing, mut failing_answer) = oneshot::channel();
+    replies.push_chain(chain, 2);
+    replies.push(next, None);
+    replies.push_chain(failing, 3);
+
+    replies.complete(block(1, true, "first"));
+    assert!(
+        pending(&mut chain_answer),
+        "one block of two is not the answer"
+    );
+    replies.complete(block(2, true, "second"));
+    let chained = chain_answer
+        .try_recv()
+        .expect("the chain is answered")
+        .expect("both commands succeeded");
+    assert_eq!(
+        chained.output(),
+        [TmuxText::from("first"), TmuxText::from("second")]
+    );
+    assert!(pending(&mut next_answer), "the chain's blocks stay its own");
+
+    replies.complete(reply(3));
+    assert_eq!(
+        next_answer
+            .try_recv()
+            .expect("the next caller is answered")
+            .expect("it succeeded")
+            .number(),
+        3,
+    );
+
+    replies.complete(block(4, true, "printed"));
+    replies.complete(block(5, false, "refused"));
+    let failed = failing_answer
+        .try_recv()
+        .expect("a failure ends the chain early")
+        .expect("a refusal is a result");
+    assert!(!failed.succeeded());
+    assert_eq!(
+        failed.split_by_outcome(),
+        (
+            &[TmuxText::from("printed")][..],
+            &[TmuxText::from("refused")][..]
+        ),
+        "what ran before the failure is kept apart from the refusal",
+    );
+    assert!(
+        replies.slots.is_empty(),
+        "no slot waits for a skipped command"
     );
 }
 

@@ -13,7 +13,7 @@ use crate::{
     TmuxTools, WaitForTextArgs, WaitView,
 };
 
-use super::error::{EffectBoundary, bad_input, tmux_error};
+use super::error::{EffectBoundary, ToolError, bad_input, tmux_error};
 use super::pane_input::{MissingSource, PaneInputPlan, PaneInputReach, active_run_error};
 
 #[derive(Clone, Eq, PartialEq)]
@@ -48,7 +48,7 @@ fn known_posix_shell(command: &libtmux::TmuxText) -> bool {
 fn require_known_shell(
     plan: &PaneInputPlan,
     checkpoint: &str,
-) -> Result<libtmux::TmuxText, ErrorData> {
+) -> Result<libtmux::TmuxText, ToolError> {
     let pane = plan.target.id();
     let Some(command) = plan
         .target
@@ -62,7 +62,7 @@ fn require_known_shell(
     Ok(command.clone())
 }
 
-fn resolved_executable(server: &libtmux::Server) -> Result<PathBuf, ErrorData> {
+fn resolved_executable(server: &libtmux::Server) -> Result<PathBuf, ToolError> {
     server.resolved_tmux_executable().ok_or_else(|| {
         ErrorData::internal_error(
             "the configured tmux executable cannot be resolved from its captured launch context"
@@ -73,10 +73,11 @@ fn resolved_executable(server: &libtmux::Server) -> Result<PathBuf, ErrorData> {
                 "stale": false,
             })),
         )
+        .into()
     })
 }
 
-fn run_route(server: &libtmux::Server, plan: &PaneInputPlan) -> Result<RunRoute, ErrorData> {
+fn run_route(server: &libtmux::Server, plan: &PaneInputPlan) -> Result<RunRoute, ToolError> {
     let executable = resolved_executable(server)?;
     if !exec::route_is_terminal_safe(executable.as_os_str(), &plan.endpoint) {
         return Err(run_error(run_request::RunError::Frame));
@@ -90,7 +91,7 @@ fn run_route(server: &libtmux::Server, plan: &PaneInputPlan) -> Result<RunRoute,
 }
 
 /// Translate a request-owned run failure at the protocol boundary.
-fn run_error(error: run_request::RunError) -> ErrorData {
+fn run_error(error: run_request::RunError) -> ToolError {
     match error {
         run_request::RunError::Tmux(error) => tmux_error(&error),
         run_request::RunError::DispatchUnknown(cause) => ErrorData::internal_error(
@@ -105,7 +106,8 @@ fn run_error(error: run_request::RunError) -> ErrorData {
                 "retryable": false,
                 "stale": false,
             })),
-        ),
+        )
+        .into(),
         run_request::RunError::Guard(error) => error,
         run_request::RunError::Frame => ErrorData::internal_error(
             "run_shell_command could not prepare a secure completion frame; no pane input was sent"
@@ -115,11 +117,12 @@ fn run_error(error: run_request::RunError) -> ErrorData {
                 "retryable": false,
                 "stale": false,
             })),
-        ),
+        )
+        .into(),
     }
 }
 
-fn tail_error(error: TailError) -> ErrorData {
+fn tail_error(error: TailError) -> ToolError {
     match error {
         TailError::Tmux(error) => tmux_error(&error),
         TailError::Snapshot { error, opened } => tail_snapshot_error(error, opened),
@@ -144,6 +147,7 @@ fn tail_error(error: TailError) -> ErrorData {
                         "capacity": limit,
                     })),
                 )
+                .into()
             }
         }
         TailError::ReaderStopped { opened } => {
@@ -164,6 +168,7 @@ fn tail_error(error: TailError) -> ErrorData {
                         "stale": false,
                     })),
                 )
+                .into()
             }
         }
         TailError::OwnerUnavailable => ErrorData::internal_error(
@@ -173,7 +178,8 @@ fn tail_error(error: TailError) -> ErrorData {
                 "retryable": true,
                 "stale": false,
             })),
-        ),
+        )
+        .into(),
         TailError::OpeningAtCapacity { limit } => ErrorData::internal_error(
             "another pane tail is opening; retry capture_since after it finishes".to_owned(),
             Some(serde_json::json!({
@@ -183,11 +189,12 @@ fn tail_error(error: TailError) -> ErrorData {
                 "resource": "tail_opening",
                 "capacity": limit,
             })),
-        ),
+        )
+        .into(),
     }
 }
 
-fn tail_snapshot_error(error: libtmux::Error, opened: bool) -> ErrorData {
+fn tail_snapshot_error(error: libtmux::Error, opened: bool) -> ToolError {
     let mut boundary = EffectBoundary::new("capture_since");
     if opened {
         boundary.mark();
@@ -202,8 +209,10 @@ impl TmuxTools {
         name = "run_shell_command",
         description = "Run a shell command in a pane, wait for it to finish, and report its \
                        exit status with everything it wrote. This is the tool for \"run this \
-                       and tell me if it worked\". Output is read from the pane's live stream, \
-                       so nothing is missed and the shell prompt is not included. The command \
+                       and tell me if it worked\". Output is the pane's raw output stream, not \
+                       the rendered screen: nothing is missed, the shell prompt is not \
+                       included, and a line redrawn in place repeats; capture_pane shows the \
+                       screen. The command \
                        runs in a subshell, so cd and export do not persist and invalid syntax \
                        completes with a nonzero status. Valid inherited Bash and zsh ERR and \
                        DEBUG traps remain visible to the command while parent-shell traps and \
@@ -218,7 +227,9 @@ impl TmuxTools {
                        race with dispatch. The pane shell, tmux server, and configuration must be \
                        trusted. Reaching the deadline, cancelling, or an uncertain dispatch stops \
                        this request while its watcher keeps the reservation until completion is \
-                       proved.",
+                       proved. To stop the command, send_keys with keys [\"C-c\"] alone passes \
+                       the reservation, and the command reports completion when it ends; \
+                       respawn_pane with kill_first replaces a program that ignores C-c and C-\\.",
         title = "Run Command In Pane",
         meta = crate::capability_meta!(Execute, PaneCommand, [Change], [TmuxMetadata, TerminalContent], true, true, {
             "pane" => [TmuxLookup],
@@ -237,7 +248,7 @@ impl TmuxTools {
         }): Parameters<RunCommandArgs>,
         cancelled: tokio_util::sync::CancellationToken,
         reporter: Reporter,
-    ) -> Result<Json<RunView>, ErrorData> {
+    ) -> Result<Json<RunView>, ToolError> {
         if command.as_bytes().contains(&0) {
             return Err(bad_input("command must not contain a NUL byte".to_owned()));
         }
@@ -318,6 +329,7 @@ impl TmuxTools {
                     endpoint: &route.endpoint,
                     shell: foreground.as_bytes(),
                     lease,
+                    echoes: self.echoes.as_ref(),
                 },
                 final_check,
             ),
@@ -331,17 +343,27 @@ impl TmuxTools {
     /// Wait until a pane writes something a caller is looking for.
     #[tool(
         description = "Wait until a pane writes matching text. Reads the pane's live output \
-                       stream, so text that scrolls past between checks is still seen. Prefer \
+                       stream, so text that scrolls past between checks is still seen. The \
+                       returned text is that raw stream, not the rendered screen: a line \
+                       redrawn in place repeats; capture_pane shows the screen. Prefer \
                        run_shell_command for commands you are sending yourself: it reports an exit \
                        status instead of guessing from output. Use this for output you did \
-                       not author, such as a server logging that it is ready. The live stream \
-                       attaches a client while waiting, changing the session's attached-client \
-                       state. Each list accepts at most 32 patterns, each at most 4,096 bytes, \
-                       using Rust's linear-time regex engine.",
+                       not author, such as a server logging that it is ready. A line this server \
+                       itself types and submits -- with send_keys, paste_text, or \
+                       run_shell_command's own dispatch -- is discounted from a match for a \
+                       short time afterward, so waiting for text you just sent does not match \
+                       its own echo; output that happens to repeat the same words still does. A \
+                       submitted line that wrapped across terminal rows when it was typed is not \
+                       discounted. A pattern still on the row being typed into, not yet \
+                       submitted, reports outcome pending instead of matched, and one already on \
+                       a completed row before this call attached reports present_at_entry. \
+                       Waiting owns an observer client until the wait ends. Each list accepts \
+                       at most 32 patterns, each at most 4,096 bytes, using Rust's linear-time \
+                       regex engine.",
         title = "Wait For Pane Text",
         meta = crate::capability_meta!(
             Inspect, None,
-            effects = [Observe, Change],
+            effects = [Observe],
             outputs = [TmuxMetadata, TerminalContent],
             secrets = true,
             untrusted = true,
@@ -371,7 +393,7 @@ impl TmuxTools {
         }): Parameters<WaitForTextArgs>,
         cancelled: tokio_util::sync::CancellationToken,
         reporter: Reporter,
-    ) -> Result<Json<WaitView>, ErrorData> {
+    ) -> Result<Json<WaitView>, ToolError> {
         let compile = |sources: Vec<String>| {
             Patterns::compile(&sources, regex, match_case).map_err(|(source, reason)| {
                 bad_input(format!("pattern {source} is invalid: {reason}"))
@@ -381,10 +403,26 @@ impl TmuxTools {
         let stops = compile(stop.unwrap_or_default())?;
 
         let target = self.find_pane(&pane).await?;
+        // Best-effort: a generation this crate cannot read is not a reason
+        // to refuse the wait, only to skip discounting this server's own
+        // recent echo on it.
+        let key = self.server.generation().await.ok().and_then(|generation| {
+            crate::echo::EchoKey::new(generation, self.server.socket_path(), target.id().as_ref())
+        });
         let view = reporting(
             reporter,
             "still watching for the pattern",
-            exec::wait_for_text(&target, &wanted, &stops, Self::budget(seconds), &cancelled),
+            exec::wait_for_text(
+                &target,
+                &wanted,
+                &stops,
+                Self::budget(seconds),
+                &cancelled,
+                exec::EchoContext {
+                    echoes: &self.echoes,
+                    key: key.as_ref(),
+                },
+            ),
         )
         .await
         .map_err(|e| tmux_error(&e))?;
@@ -396,7 +434,9 @@ impl TmuxTools {
     #[tool(
         description = "Read what a pane wrote since the previous call. The first call, with no \
                        cursor, starts watching and returns a cursor; later calls pass it back \
-                       and receive only what is new. Use this to follow a pane over several \
+                       and receive only what is new, as the raw output stream, not the rendered \
+                       screen: a line redrawn in place repeats; capture_pane shows the screen. \
+                       Use this to follow a pane over several \
                        turns without re-reading the whole screen. The answer says missed=true \
                        if the cursor no longer names retained output, including when the pane \
                        outran the buffer, its live tail was evicted, or the server restarted. \
@@ -411,7 +451,7 @@ impl TmuxTools {
     pub async fn capture_since(
         &self,
         Parameters(CaptureSinceArgs { pane, cursor }): Parameters<CaptureSinceArgs>,
-    ) -> Result<Json<Since>, ErrorData> {
+    ) -> Result<Json<Since>, ToolError> {
         let target = self.find_pane(&pane).await?;
         let cursor = cursor
             .as_deref()
@@ -461,7 +501,7 @@ impl TmuxTools {
     pub async fn wait_for_channel(
         &self,
         Parameters(ChannelArgs { channel, seconds }): Parameters<ChannelArgs>,
-    ) -> Result<Json<ChannelWait>, ErrorData> {
+    ) -> Result<Json<ChannelWait>, ToolError> {
         // libtmux caps this at its own command timeout and reports running
         // out of time as an outcome rather than an error, which is the shape
         // this tool wants: the budget stays a request, and a deadline stays
@@ -480,7 +520,8 @@ impl TmuxTools {
                 return Err(ErrorData::internal_error(
                     "tmux reported a wait outcome this server does not know".to_owned(),
                     None,
-                ));
+                )
+                .into());
             }
             Err(error) => return Err(tmux_error(&error)),
         };
@@ -581,7 +622,7 @@ mod tests {
         source: &str,
         foreground: &libtmux::TmuxText,
         lease: &run_request::PaneReservation,
-    ) -> Result<(), ErrorData> {
+    ) -> Result<(), ToolError> {
         if transition == "caller" {
             server
                 .window_by_id(pane.window_id())
@@ -598,7 +639,7 @@ mod tests {
                 "exec sleep 30"
             };
             let pane_id = pane.id().clone();
-            pane.respawn(Some(command), true)
+            pane.respawn(Some(command), libtmux::Respawn::Replacing)
                 .await
                 .expect("pane begins its final transition");
             if transition == "dead" {
@@ -648,7 +689,8 @@ mod tests {
             .socket_path("/tmp/libtmux-rs-test/conflicting.sock")
             .build()
             .expect_err("two socket selectors are refused");
-        let error = run_error(run_request::RunError::DispatchUnknown(Box::new(source)));
+        let error =
+            run_error(run_request::RunError::DispatchUnknown(Box::new(source))).into_error_data();
         let data = error.data.as_ref().expect("the failure carries metadata");
 
         assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
@@ -743,6 +785,7 @@ mod tests {
                     endpoint: &socket,
                     shell: foreground.as_bytes(),
                     lease,
+                    echoes: tools.echoes.as_ref(),
                 },
                 final_check,
             )
@@ -751,6 +794,7 @@ mod tests {
             let Err(run_request::RunError::Guard(error)) = result else {
                 panic!("the final preflight must reject the {transition} transition");
             };
+            let error = error.into_error_data();
             assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
             assert!(error.message.contains(expected_refusal), "{transition}");
             assert_eq!(
@@ -777,7 +821,7 @@ mod tests {
 
     #[test]
     fn unavailable_cursor_identity_is_an_internal_failure() {
-        let error = tail_error(TailError::OwnerUnavailable);
+        let error = tail_error(TailError::OwnerUnavailable).into_error_data();
         let data = error.data.expect("the failure is classified");
 
         assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
@@ -790,7 +834,7 @@ mod tests {
 
     #[test]
     fn a_busy_tail_opener_is_retryable_without_a_partial_effect() {
-        let error = tail_error(TailError::OpeningAtCapacity { limit: 1 });
+        let error = tail_error(TailError::OpeningAtCapacity { limit: 1 }).into_error_data();
         let data = error.data.expect("the failure is classified");
 
         assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
@@ -813,14 +857,16 @@ mod tests {
         let existing = tail_error(TailError::Snapshot {
             error: configuration_error(),
             opened: false,
-        });
+        })
+        .into_error_data();
         let existing_data = existing.data.expect("the failure is classified");
         assert_eq!(existing_data["kind"], "unreachable");
 
         let error = tail_error(TailError::Snapshot {
             error: configuration_error(),
             opened: true,
-        });
+        })
+        .into_error_data();
         let data = error.data.expect("the failure is classified");
 
         assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);

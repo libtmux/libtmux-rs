@@ -9,6 +9,9 @@ use crate::version::{ReleaseVersion, TmuxVersion};
 
 mod classification;
 mod refusal;
+mod scoped;
+
+pub use scoped::ScopeError;
 
 /// The category of an invalid [`crate::ServerBuilder`] configuration.
 ///
@@ -160,6 +163,14 @@ pub enum ControlModeErrorKind {
     /// the rest of the request with it. Refused here rather than sent,
     /// because tmux accepts the result and reports no error.
     InvalidSubscriptionName,
+    /// The command would hold the connection's one command queue.
+    ///
+    /// A connection runs one command at a time, and tmux closes a blocking
+    /// `wait-for` -- or the delayed `run-shell` a plan's `Pause` renders --
+    /// the moment it queues it: routed, the call would report success without
+    /// waiting, and nothing else would be answered on that connection until
+    /// the wait ended. Run it from a handle that starts its own clients.
+    BlockingCommand,
 }
 
 /// What tmux says when it holds no session to resolve a target against.
@@ -495,6 +506,21 @@ pub enum Error {
         declared: &'static [crate::OptionScope],
     },
 
+    /// A typed option write that tmux's option table refuses, so nothing was
+    /// sent.
+    ///
+    /// Raised by `set_typed_option` and its siblings before dispatch, never by
+    /// tmux, and the option is left as it was. [`crate::OptionValue`] says
+    /// which variant each kind of option takes. The value is not kept, as no
+    /// option value is; `reason` says what the option takes instead.
+    #[error("refused to write {option} before sending it: {reason}")]
+    OptionValueRefused {
+        /// The option, as tmux's table names it.
+        option: &'static str,
+        /// What the option takes that the value is not.
+        reason: crate::OptionValueRefusal,
+    },
+
     /// tmux answered a format query with a value this crate cannot read.
     ///
     /// Reports a disagreement between the crate and the tmux that answered,
@@ -670,6 +696,35 @@ pub enum Error {
     ServerMismatch {
         /// The operation that rejected the foreign handle.
         operation: &'static str,
+    },
+
+    /// A saved layout value is not a preset name, a classic layout string, or
+    /// a JSON layout.
+    ///
+    /// Refused before dispatch rather than handed to tmux: 3.3 and 3.3a exit
+    /// on a layout `select-layout` cannot parse, destroying every session on
+    /// the socket, and a value such as `-o` is never a layout on any release.
+    /// The rejected value is not retained.
+    #[error("select-layout needs a preset name or a layout tmux reported")]
+    UnrecognizedLayout,
+
+    /// A saved layout value is a preset prefix that names more than one
+    /// preset on the running tmux release.
+    ///
+    /// tmux's own `layout_set_lookup` accepts a unique prefix (`tile` and
+    /// `even-h` both apply cleanly on every supported release), so refusing
+    /// every prefix would reject values tmux itself understands. An
+    /// ambiguous one is refused before dispatch instead of leaving tmux to
+    /// pick one silently. The candidates are only the presets available on
+    /// the running release: `main-h` is unique on tmux 3.2a and ambiguous
+    /// from 3.5, where the mirrored pair exists.
+    #[non_exhaustive]
+    #[error("layout {input:?} names more than one preset: {}", candidates.join(", "))]
+    AmbiguousLayout {
+        /// The value the caller passed.
+        input: String,
+        /// The preset names it could mean.
+        candidates: Vec<&'static str>,
     },
 
     /// A plan has a dependency that cannot be resolved before dispatch.
@@ -910,6 +965,24 @@ pub enum Error {
         stderr: String,
     },
 
+    /// A creating command exited 0 without creating anything.
+    ///
+    /// `tmux -S <dir>/missing/sock new-session ...` prints `error creating
+    /// <path> (No such file or directory)` on stderr and exits 0 with empty
+    /// stdout: exit 0 usually means the command ran, so this is its own
+    /// variant rather than [`Self::CommandFailed`], which would print the
+    /// exit code as `Some(0)` beside the word "rejected" -- a contradiction
+    /// -- and rather than [`Self::AfterEffect`], which would claim an
+    /// effect that never happened.
+    #[non_exhaustive]
+    #[error("{command} had no effect: {stderr}")]
+    NoEffect {
+        /// The tmux command that exited 0 without effect.
+        command: &'static str,
+        /// The message tmux printed on stderr.
+        stderr: String,
+    },
+
     /// tmux listing output could not be decoded into typed snapshots.
     ///
     /// This reports a disagreement between the crate and the tmux that
@@ -922,6 +995,21 @@ pub enum Error {
         list_command: &'static str,
         /// Payload-free decoding metadata.
         detail: ListingDecodeError,
+    },
+
+    /// A `server-access -l` line matched neither grammar tmux is known to
+    /// print.
+    ///
+    /// [`crate::Server::access_rules`] decodes the legacy `name (R)`/`name
+    /// (W)` grammar and the compound `name (U,R)`/`name (G,W)` grammar a
+    /// release with group ACLs uses, by inspecting each line rather than the
+    /// detected tmux version. This is the third case: a line this crate
+    /// cannot place in either grammar, reported rather than dropped.
+    #[non_exhaustive]
+    #[error("server-access -l printed an entry this crate does not recognize: {marker}")]
+    UnreadableAccessRule {
+        /// The unrecognized trailing marker, without the name it followed.
+        marker: String,
     },
 }
 
@@ -1054,6 +1142,15 @@ impl Error {
         }
     }
 
+    /// A command would hold a connection's one command queue.
+    #[cfg(feature = "control-mode")]
+    pub(crate) const fn control_mode_blocking() -> Self {
+        Self::ControlMode {
+            kind: ControlModeErrorKind::BlockingCommand,
+            source: None,
+        }
+    }
+
     /// A protocol frame ran past its budget.
     ///
     /// Not recoverable in place: the parser is mid-frame and cannot know where
@@ -1134,6 +1231,12 @@ impl Error {
 
     pub(crate) fn from_invalid_version_output(output_len: usize) -> Self {
         Self::InvalidVersionOutput { output_len }
+    }
+
+    pub(crate) fn unreadable_access_rule(marker: &str) -> Self {
+        Self::UnreadableAccessRule {
+            marker: marker.to_owned(),
+        }
     }
 
     pub(crate) fn unsupported_tmux_version(found: TmuxVersion, minimum: ReleaseVersion) -> Self {
@@ -1306,7 +1409,18 @@ impl fmt::Debug for Error {
                 .field("requested", requested)
                 .field("declared", declared)
                 .finish(),
+            Self::OptionValueRefused { option, reason } => formatter
+                .debug_struct("OptionValueRefused")
+                .field("option", option)
+                .field("reason", reason)
+                .finish(),
             Self::RuntimeNested => formatter.debug_struct("RuntimeNested").finish(),
+            Self::UnrecognizedLayout => formatter.debug_struct("UnrecognizedLayout").finish(),
+            Self::AmbiguousLayout { input, candidates } => formatter
+                .debug_struct("AmbiguousLayout")
+                .field("input", input)
+                .field("candidates", candidates)
+                .finish(),
             Self::InvalidServerConfiguration { kind } => formatter
                 .debug_struct("InvalidServerConfiguration")
                 .field("kind", kind)
@@ -1520,6 +1634,11 @@ impl fmt::Debug for Error {
                 .field("exit_code", exit_code)
                 .field("stderr", stderr)
                 .finish(),
+            Self::NoEffect { command, stderr } => formatter
+                .debug_struct("NoEffect")
+                .field("command", command)
+                .field("stderr", stderr)
+                .finish(),
             Self::ObjectGone { kind, id } => formatter
                 .debug_struct("ObjectGone")
                 .field("kind", kind)
@@ -1537,6 +1656,10 @@ impl fmt::Debug for Error {
                 .debug_struct("DecodeListing")
                 .field("list_command", list_command)
                 .field("detail", detail)
+                .finish(),
+            Self::UnreadableAccessRule { marker } => formatter
+                .debug_struct("UnreadableAccessRule")
+                .field("marker", marker)
                 .finish(),
         }
     }

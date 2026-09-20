@@ -7,7 +7,9 @@
 use libtmux::TmuxText;
 use libtmux::plan::Planner;
 use libtmux::test::TestServer;
-use tmux_workspace::{BuildError, Workspace, WorkspaceBuilder};
+use tmux_workspace::{
+    BuildError, ConfigError, PaneConfig, ShellCommand, Workspace, WorkspaceBuilder,
+};
 
 fn text(value: &TmuxText) -> String {
     String::from_utf8(value.as_bytes().to_vec()).expect("fixture values are UTF-8")
@@ -38,9 +40,15 @@ windows:
 
     let panes = &workspace.windows[0].panes;
     assert_eq!(panes.len(), 3);
-    assert_eq!(panes[0].shell_commands, ["echo bare"]);
-    assert_eq!(panes[1].shell_commands, ["echo single"]);
-    assert_eq!(panes[2].shell_commands, ["echo first", "echo second"]);
+    assert_eq!(panes[0].shell_commands, [ShellCommand::new("echo bare")]);
+    assert_eq!(panes[1].shell_commands, [ShellCommand::new("echo single")]);
+    assert_eq!(
+        panes[2].shell_commands,
+        [
+            ShellCommand::new("echo first"),
+            ShellCommand::new("echo second")
+        ]
+    );
     assert!(panes[2].focus);
     assert!(!panes[0].focus);
 }
@@ -63,7 +71,7 @@ windows:
 #[test]
 fn a_missing_session_name_is_rejected() {
     let error = Workspace::from_yaml("windows: []").expect_err("session_name is required");
-    assert!(matches!(error, tmux_workspace::ConfigError::Invalid { .. },));
+    assert!(matches!(error, ConfigError::Invalid { .. },));
 }
 
 #[tokio::test]
@@ -497,13 +505,8 @@ windows:
         Some(libtmux::EnvironmentEntry::Set(value)) if value.as_bytes() == b"applied",
     ));
     assert_eq!(
-        session
-            .get_option("base-index")
-            .await
-            .expect("read")
-            .expect("the option is set")
-            .as_bytes(),
-        b"3",
+        session.typed_option("base-index").await.expect("read"),
+        Some(libtmux::OptionValue::Number(3)),
     );
 
     let window = session
@@ -514,13 +517,8 @@ windows:
         .next()
         .expect("one window");
     assert_eq!(
-        window
-            .get_option("main-pane-width")
-            .await
-            .expect("read")
-            .expect("the option is set")
-            .as_bytes(),
-        b"42",
+        window.typed_option("main-pane-width").await.expect("read"),
+        Some(libtmux::OptionValue::from("42")),
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -659,7 +657,7 @@ session_name: original
 windows:
   - window_name: editor
     panes:
-      - sleep 400
+      - blank
       - sleep 401
   - window_name: logs
     panes:
@@ -673,9 +671,34 @@ windows:
         .await
         .expect("the workspace builds");
 
+    // Typed commands start once each shell reads them.
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+        let panes = built.panes().await.unwrap_or_default();
+        panes.len() == 3
+            && panes.iter().skip(1).all(|pane| {
+                pane.current_command()
+                    .is_some_and(|command| command.to_string_lossy() == "sleep")
+            })
+    })
+    .await;
+    assert!(settled.is_ok(), "the typed commands are running");
+
     let frozen = tmux_workspace::freeze(&built)
         .await
         .expect("the session freezes");
+
+    // A pane at its prompt freezes to no command: recording the shell would
+    // start a shell inside it on the way back. A pane running something
+    // freezes to that command's name.
+    assert!(
+        frozen.windows[0].panes[0].shell_commands.is_empty(),
+        "{:?}",
+        frozen.windows[0].panes[0].shell_commands,
+    );
+    assert_eq!(
+        frozen.windows[0].panes[1].shell_commands,
+        [ShellCommand::new("sleep")]
+    );
 
     assert_eq!(frozen.session_name, "original");
     assert_eq!(frozen.windows.len(), 2);
@@ -795,4 +818,620 @@ windows:
 
     guard.shutdown().await.expect("tmux fixture shuts down");
     drop(session);
+}
+
+/// The line some pane of `session` shows holding exactly `text`, once one does.
+///
+/// Callers point `default-command` at `cat`, so a pane shows exactly what was
+/// typed into it: a command kept out of history is the line that starts with
+/// a space.
+async fn typed_line(session: &libtmux::Session, text: &str) -> String {
+    let mut seen = None;
+    let settled = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+        for pane in session.panes().await.unwrap_or_default() {
+            seen = pane.capture().await.ok().and_then(|lines| {
+                lines
+                    .iter()
+                    .map(|line| line.to_string_lossy().trim_end().to_owned())
+                    .find(|line| line.trim_start() == text)
+            });
+            if seen.is_some() {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert!(settled.is_ok(), "{text:?} reached a pane");
+    seen.expect("the line was seen")
+}
+
+/// tmuxp keeps a file's commands out of shell history unless it says not to,
+/// by typing each with a leading space.
+#[tokio::test]
+async fn commands_stay_out_of_history_unless_the_file_says_otherwise() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut silent = Workspace::from_yaml(
+        "session_name: silent\nwindows:\n  - panes:\n      - typed by default\n",
+    )
+    .expect("configuration parses");
+    // tmuxp's own example: the session records, one window and one pane opt
+    // back out.
+    let mut example = Workspace::from_yaml(include_str!("fixtures/tmuxp/suppress-history.yaml"))
+        .expect("tmuxp's example parses");
+    for workspace in [&mut silent, &mut example] {
+        workspace
+            .global_options
+            .push(("default-command".to_owned(), "exec cat".to_owned()));
+    }
+
+    let silent = WorkspaceBuilder::new(server)
+        .build(&silent)
+        .await
+        .expect("workspace builds");
+    assert_eq!(
+        typed_line(&silent, "typed by default").await,
+        " typed by default"
+    );
+
+    let example = WorkspaceBuilder::new(server)
+        .build(&example)
+        .await
+        .expect("tmuxp's example builds");
+    for (command, suppressed) in [
+        (r#"echo "window in the history!""#, false),
+        (r#"echo "window not in the history!""#, true),
+        (r#"echo "session in the history!""#, false),
+        (r#"echo "command in the history!""#, false),
+        (r#"echo "command not in the history!""#, true),
+    ] {
+        let line = typed_line(&example, command).await;
+        assert_eq!(line.starts_with(' '), suppressed, "{line:?}");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Whether some pane of `session` shows `text`, waiting for it to.
+async fn shows(session: &libtmux::Session, text: &str) -> bool {
+    libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+        for pane in session.panes().await.unwrap_or_default() {
+            if pane.capture().await.is_ok_and(|lines| {
+                lines
+                    .iter()
+                    .any(|line| line.to_string_lossy().contains(text))
+            }) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .is_ok()
+}
+
+/// `- vim` is tmuxp's commonest pane, and it runs `vim`.
+#[tokio::test]
+async fn a_bare_command_pane_runs_its_command() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let workspace = Workspace::from_yaml(
+        "session_name: bare\nwindows:\n  - panes:\n      - echo ran-$((20+22))\n",
+    )
+    .expect("configuration parses");
+
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("workspace builds");
+    // Only the shell's arithmetic prints `ran-42`; the typed text does not.
+    assert!(shows(&session, "ran-42").await, "the command ran");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Every example tmuxp ships reads here.
+#[test]
+fn every_tmuxp_example_parses() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tmuxp");
+    let mut read = 0;
+    for entry in std::fs::read_dir(&directory).expect("the fixtures are present") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_none_or(|extension| extension != "yaml") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("the fixture reads");
+        if let Err(error) = Workspace::from_yaml(&source) {
+            panic!("{}: {error}", path.display());
+        }
+        read += 1;
+    }
+    assert!(read >= 20, "only {read} examples were found to read");
+}
+
+/// tmuxp reads an empty entry, `pane` and `blank` as a pane with no command.
+#[test]
+fn a_blank_pane_is_a_pane_without_a_command() {
+    let minimal = Workspace::from_yaml(include_str!("fixtures/tmuxp/minimal.yaml"))
+        .expect("tmuxp's minimal example parses");
+    assert_eq!(minimal.windows[0].panes, [PaneConfig::default()]);
+
+    let blank = Workspace::from_yaml(include_str!("fixtures/tmuxp/blank-panes.yaml"))
+        .expect("tmuxp's blank-pane example parses");
+    let shapes: Vec<Vec<Vec<ShellCommand>>> = blank
+        .windows
+        .iter()
+        .map(|window| {
+            window
+                .panes
+                .iter()
+                .map(|pane| pane.shell_commands.clone())
+                .collect()
+        })
+        .collect();
+    let enter = || vec![ShellCommand::new("")];
+    assert_eq!(
+        shapes,
+        [
+            vec![vec![], vec![], vec![]],
+            vec![vec![], vec![], vec![]],
+            // An empty string is a command: it presses Enter.
+            vec![enter(), enter(), enter()],
+            vec![vec![], vec![]],
+        ],
+    );
+
+    let focus = Workspace::from_yaml(include_str!("fixtures/tmuxp/focus-window-and-panes.yaml"))
+        .expect("tmuxp's focus example parses");
+    assert!(focus.windows[1].panes[0].shell_commands.is_empty());
+
+    // Only a lone blank is blank: among other commands the word is typed.
+    let listed =
+        Workspace::from_yaml("session_name: s\nwindows:\n  - panes:\n      - [ls, pane]\n")
+            .expect("a pane may be a list of commands");
+    assert_eq!(
+        listed.windows[0].panes[0].shell_commands,
+        [ShellCommand::new("ls"), ShellCommand::new("pane")],
+    );
+    let message = Workspace::from_yaml(
+        "session_name: s\nwindows:\n  - panes:\n      - shell_command: [ls, null]\n",
+    )
+    .expect_err("tmuxp fails on a null among commands")
+    .to_string();
+    assert!(
+        message.contains("windows[0].panes[0].shell_command[1] is empty among other commands"),
+        "{message}",
+    );
+}
+
+#[tokio::test]
+async fn tmuxp_blank_pane_examples_build() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let builder = WorkspaceBuilder::new(guard.server());
+
+    for (source, panes) in [
+        (include_str!("fixtures/tmuxp/minimal.yaml"), vec![1]),
+        (
+            include_str!("fixtures/tmuxp/blank-panes.yaml"),
+            vec![3, 3, 3, 2],
+        ),
+    ] {
+        let workspace = Workspace::from_yaml(source).expect("tmuxp's example parses");
+        let session = builder.build(&workspace).await.expect("the example builds");
+        let mut counts = Vec::new();
+        for window in session.windows().await.expect("windows list") {
+            counts.push(window.pane_count());
+        }
+        assert_eq!(counts, panes, "{}", workspace.session_name);
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// tmuxp's per-command form: `cmd` with its own `enter` and sleeps.
+#[test]
+fn a_command_may_carry_its_own_settings() {
+    let seconds = |seconds| Some(std::time::Duration::from_secs(seconds));
+
+    let skip = Workspace::from_yaml(include_str!("fixtures/tmuxp/skip-send.yaml"))
+        .expect("tmuxp's skip-send example parses");
+    assert_eq!(
+        skip.windows[0].panes[0].shell_commands[1],
+        ShellCommand {
+            cmd: r#"echo "___$((1 + 3))___""#.to_owned(),
+            enter: Some(false),
+            ..ShellCommand::default()
+        },
+    );
+    let pane_level = Workspace::from_yaml(include_str!("fixtures/tmuxp/skip-send-pane-level.yaml"))
+        .expect("tmuxp's pane-level skip-send example parses");
+    assert!(pane_level.windows[0].panes.iter().all(|pane| !pane.enter));
+
+    let sleep = Workspace::from_yaml(include_str!("fixtures/tmuxp/sleep.yaml"))
+        .expect("tmuxp's sleep example parses");
+    let commands = &sleep.windows[0].panes[0].shell_commands;
+    assert_eq!(commands[1].sleep_before, seconds(2));
+    assert_eq!(commands[3].sleep_after, seconds(2));
+    let sleep_pane = Workspace::from_yaml(include_str!("fixtures/tmuxp/sleep-pane-level.yaml"))
+        .expect("tmuxp's pane-level sleep example parses");
+    assert_eq!(sleep_pane.windows[0].panes[0].sleep_before, seconds(2));
+    let venv = Workspace::from_yaml(include_str!("fixtures/tmuxp/sleep-virtualenv.yaml"))
+        .expect("tmuxp's virtualenv example parses");
+    assert_eq!(
+        venv.shell_command_before,
+        [ShellCommand {
+            cmd: "source .venv/bin/activate".to_owned(),
+            sleep_before: seconds(1),
+            sleep_after: seconds(1),
+            ..ShellCommand::default()
+        }],
+    );
+
+    for workspace in [skip, pane_level, sleep, sleep_pane, venv] {
+        assert_eq!(
+            Workspace::from_yaml(&workspace.to_yaml()).expect("the rendered YAML parses"),
+            workspace,
+        );
+    }
+
+    let fractional = Workspace::from_yaml(
+        "session_name: s\nwindows:\n  - panes:\n      - shell_command: {cmd: ls, sleep_after: 0.25}\n",
+    )
+    .expect("a fraction of a second is a sleep");
+    assert_eq!(
+        fractional.windows[0].panes[0].shell_commands[0].sleep_after,
+        Some(std::time::Duration::from_millis(250)),
+    );
+    let message = Workspace::from_yaml(
+        "session_name: s\nwindows:\n  - panes:\n      - shell_command: [{cmd: ls, sleep_before: -1}]\n",
+    )
+    .expect_err("a negative sleep is refused")
+    .to_string();
+    assert!(
+        message.contains("shell_command[0].sleep_before must be a number of seconds"),
+        "{message}",
+    );
+}
+
+/// `enter: false` types a command and leaves it, and holds for the commands
+/// after it until one says otherwise, the `shell_command_before` ones
+/// included: that is what tmuxp does.
+#[tokio::test]
+async fn enter_false_types_without_running_until_a_command_says_otherwise() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let mut workspace = Workspace::from_yaml(
+        "
+session_name: typed
+windows:
+  - shell_command_before: [before]
+    panes:
+      - shell_command:
+          - cmd: first
+            enter: false
+          - second
+          - cmd: third
+            enter: true
+      - enter: false
+        shell_command:
+          - cmd: last
+            enter: true
+",
+    )
+    .expect("configuration parses");
+    workspace
+        .global_options
+        .push(("default-command".to_owned(), "exec cat".to_owned()));
+
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("workspace builds");
+
+    // Each command is typed after a space that keeps it out of history, so
+    // commands sent without Enter share a line, separated by those spaces.
+    assert_eq!(typed_line(&session, "before").await, " before");
+    assert_eq!(
+        typed_line(&session, "first second third").await,
+        " first second third"
+    );
+    assert_eq!(typed_line(&session, "before last").await, " before last");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// tmuxp expands `~` and variables in names, directories and values, joins a
+/// window's relative directory onto the session's, and starts a `.` path
+/// from the directory it inherits.
+#[test]
+fn start_directories_and_names_expand_as_tmuxp_does() {
+    let home = std::env::var("HOME").expect("tests run with HOME set");
+    let home_path = std::path::PathBuf::from(&home);
+    let current = std::env::current_dir().expect("a current directory");
+    let workspace = Workspace::from_yaml(
+        "
+session_name: dirs-${HOME}
+start_directory: ~/code
+environment:
+  WHERE: $HOME/x
+windows:
+  - window_name: w $TMUX_WORKSPACE_UNSET_VARIABLE
+    start_directory: ${HOME}
+  - start_directory: src
+    panes:
+      - start_directory: ./tests
+      - start_directory: tests
+      - echo $HOME
+",
+    )
+    .expect("configuration parses");
+
+    assert_eq!(workspace.session_name, format!("dirs-{home}"));
+    assert_eq!(workspace.start_directory, Some(home_path.join("code")));
+    assert_eq!(
+        workspace.environment,
+        [("WHERE".to_owned(), format!("{home}/x"))]
+    );
+    let windows = &workspace.windows;
+    assert_eq!(
+        windows[0].window_name.as_deref(),
+        Some("w $TMUX_WORKSPACE_UNSET_VARIABLE"),
+        "an unset variable stays as written",
+    );
+    assert_eq!(windows[0].start_directory, Some(home_path.clone()));
+    assert_eq!(
+        windows[1].start_directory,
+        Some(home_path.join("code/src")),
+        "a window's relative directory joins the session's",
+    );
+    let panes = &windows[1].panes;
+    assert_eq!(
+        panes[0].start_directory,
+        Some(home_path.join("code/src/tests")),
+        "a `.` path starts from the directory it inherits",
+    );
+    assert_eq!(
+        panes[1].start_directory,
+        Some(current.join("tests")),
+        "tmuxp leaves a pane's other relative path to tmux, which starts from here",
+    );
+    assert_eq!(
+        panes[2].shell_commands,
+        [ShellCommand::new("echo $HOME")],
+        "a command is the pane shell's to expand",
+    );
+
+    let top = Workspace::from_yaml("session_name: s\nstart_directory: ./\n")
+        .expect("configuration parses");
+    assert_eq!(top.start_directory, Some(current));
+
+    let message = Workspace::from_yaml("session_name: s\nstart_directory: ~root/x\n")
+        .expect_err("`~name` is refused")
+        .to_string();
+    assert!(
+        message.contains("start_directory starts with `~name`"),
+        "{message}"
+    );
+}
+
+/// The first pane of each window starts where the file says.
+async fn first_pane_directories(session: &libtmux::Session) -> Vec<String> {
+    let mut directories = Vec::new();
+    for window in session.windows().await.expect("windows list") {
+        let panes = window.panes().await.expect("panes list");
+        directories.push(text_optional(panes[0].current_path()));
+    }
+    directories
+}
+
+fn canonical(path: impl AsRef<std::path::Path>) -> String {
+    path.as_ref()
+        .canonicalize()
+        .expect("the directory exists")
+        .display()
+        .to_string()
+}
+
+#[tokio::test]
+async fn a_dot_start_directory_is_relative_to_the_file_it_is_in() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    std::fs::create_dir_all(root.path().join("nested/deeper")).expect("nested directories");
+    let file = root.path().join("workspace.yaml");
+    std::fs::write(
+        &file,
+        "
+session_name: relative
+start_directory: ./
+windows:
+  - window_name: file
+  - window_name: joined
+    start_directory: nested
+  - window_name: dotted
+    start_directory: ./nested
+    panes:
+      - start_directory: ./deeper
+",
+    )
+    .expect("the file is written");
+
+    // The tests run from the crate's directory, which has no `nested`, so a
+    // path resolved from there lands tmux in its fallback directory.
+    let workspace = Workspace::from_file(&file).expect("the file parses");
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("workspace builds");
+
+    assert_eq!(
+        first_pane_directories(&session).await,
+        [
+            canonical(root.path()),
+            canonical(root.path().join("nested")),
+            canonical(root.path().join("nested/deeper")),
+        ],
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// tmuxp's own start-directory example, which its window names describe.
+///
+/// The last window is named for the file's directory, and tmuxp's loader
+/// puts it in the session's: a `.` path starts from the directory it would
+/// otherwise inherit. This follows the loader.
+#[tokio::test]
+async fn tmuxp_start_directory_example_builds_where_tmuxp_does() {
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/tmuxp/start-directory.yaml");
+    let workspace = Workspace::from_file(&file).expect("tmuxp's example parses");
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("tmuxp's example builds");
+
+    let home = std::env::var("HOME").expect("tests run with HOME set");
+    assert_eq!(
+        first_pane_directories(&session).await,
+        [
+            canonical("/var"),
+            canonical("/var/log"),
+            canonical(home),
+            canonical("/bin"),
+            canonical("/var"),
+        ],
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[test]
+fn a_missing_file_is_named() {
+    let error = Workspace::from_file("/nonexistent/tmux-workspace.yaml")
+        .expect_err("there is no such file");
+    assert!(matches!(error, ConfigError::Read { .. }), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "cannot read workspace file /nonexistent/tmux-workspace.yaml",
+    );
+}
+
+/// A file is fixed in an editor, so an error names the line to go to.
+#[test]
+fn an_error_names_the_line_and_column_to_fix() {
+    let syntax = Workspace::from_yaml(
+        "session_name: s\nwindows:\n  - window_name: a\n    panes:\n      - vim\n     - htop\n",
+    )
+    .expect_err("a misindented entry is not YAML");
+    assert!(
+        matches!(
+            syntax,
+            ConfigError::Yaml {
+                line: 6,
+                column: 6,
+                ..
+            }
+        ),
+        "{syntax:?}",
+    );
+    assert_eq!(
+        syntax.to_string(),
+        "workspace configuration is not valid YAML at line 6, column 6: \
+         while parsing a block mapping, did not find expected key",
+    );
+
+    for (source, expected) in [
+        (
+            "session_name: s\nwindows:\n  - window_name: a\n    focus: tru\n",
+            "at line 4, column 12: windows[0].focus must be a boolean, found \"tru\"",
+        ),
+        (
+            "session_name: s\nwindows:\n  - {panes: [a, 5]}\n",
+            "at line 3, column 17: windows[0].panes[1] must be",
+        ),
+        // A missing key is reported at the mapping that should hold it.
+        ("windows: []\n", "at line 1, column 1: session_name must be"),
+        // The parser marks an entry with nothing after its `-` at whatever
+        // token follows, two lines down here, rather than at the `-`.
+        (
+            "session_name: s\nwindows:\n  - window_name: a\n  -\n  -\n  - window_name: b\n",
+            "at line 4, column 3: windows[1] must be a mapping",
+        ),
+    ] {
+        let message = Workspace::from_yaml(source)
+            .expect_err("the value is refused")
+            .to_string();
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in {message:?}"
+        );
+    }
+}
+
+/// tmuxp's sleeps become pauses around the commands they belong to, and hold
+/// for the later commands in the pane as `enter` does. The pause happens in
+/// tmux, so a folded build waits too.
+#[tokio::test]
+async fn sleeps_pause_the_build_between_commands() {
+    use std::time::{Duration, Instant};
+
+    use libtmux::plan::Op;
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: sleepy
+windows:
+  - panes:
+      - sleep_before: 0.1
+        shell_command:
+          - echo one
+          - cmd: echo two
+            sleep_after: 0.05
+          - echo three
+",
+    )
+    .expect("configuration parses");
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let builder = WorkspaceBuilder::new(guard.server());
+
+    let shape: Vec<String> = builder
+        .plan(&workspace)
+        .steps()
+        .iter()
+        .map(|op| match op {
+            Op::Pause(pause) => format!("pause {:?}", pause.duration()),
+            other => other.name().to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            "new-session",
+            "new-window",
+            "pause 100ms",
+            "send-keys",
+            "pause 100ms",
+            "send-keys",
+            "pause 50ms",
+            "pause 100ms",
+            "send-keys",
+            "pause 50ms",
+            "kill-window",
+        ],
+    );
+
+    let started = Instant::now();
+    builder
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(400),
+        "built in {elapsed:?}"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }

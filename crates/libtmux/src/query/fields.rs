@@ -8,6 +8,7 @@ use super::{
     PredicateData, RelationPredicate, RelationQuantifier, SetOperator, SetPredicate, TextOperator,
     TextPredicate,
 };
+use crate::TmuxText;
 
 /// A typed handle for a portable text field on `T`.
 ///
@@ -16,6 +17,10 @@ use super::{
 /// accepts any `IntoIterator`; the version 1 wire representation uses an
 /// array. A scalar string is not substring membership: use
 /// [`TextField::contains`] for that operation.
+///
+/// `V` is the type a snapshot reads the field as: [`TmuxText`] unless the
+/// field is a typed ID such as [`crate::PaneId`]. Filtering matches the text
+/// either way.
 ///
 /// # Examples
 ///
@@ -27,9 +32,9 @@ use super::{
 /// let field: TextField<Row> = __private::text_field("row", "name");
 /// let _ = field.contains("build");
 /// ```
-pub struct TextField<T> {
+pub struct TextField<T, V = TmuxText> {
     pub(super) id: FieldId,
-    pub(super) marker: PhantomData<fn() -> T>,
+    pub(super) marker: PhantomData<fn() -> (T, V)>,
 }
 
 /// A typed handle for a portable boolean field on `T`.
@@ -245,6 +250,14 @@ impl<From, To> OneRelation<From, To> {
 
 macro_rules! impl_handle_traits {
     ($name:ident<$($type_parameter:ident),+>) => {
+        impl<$($type_parameter),+> $name<$($type_parameter),+> {
+            /// Return the field name this handle names.
+            #[allow(dead_code, reason = "only snapshot reads ask a handle its name")]
+            pub(crate) const fn field_name(self) -> &'static str {
+                self.id.field
+            }
+        }
+
         impl<$($type_parameter),+> Copy for $name<$($type_parameter),+> {}
 
         impl<$($type_parameter),+> Clone for $name<$($type_parameter),+> {
@@ -273,14 +286,22 @@ macro_rules! impl_handle_traits {
     };
 }
 
-impl_handle_traits!(TextField<T>);
+impl_handle_traits!(TextField<T, V>);
 impl_handle_traits!(BoolField<T>);
 impl_handle_traits!(IntegerField<T, N>);
 impl_handle_traits!(EnumField<T, E>);
 impl_handle_traits!(ManyRelation<From, To>);
 impl_handle_traits!(OneRelation<From, To>);
 
-impl<T> TextField<T> {
+impl<T, V> TextField<T, V> {
+    /// Build a handle whose snapshot value is `V`.
+    pub(crate) const fn typed(target: &'static str, field: &'static str) -> Self {
+        Self {
+            id: FieldId { target, field },
+            marker: PhantomData,
+        }
+    }
+
     fn expression(
         self,
         operator: TextOperator,

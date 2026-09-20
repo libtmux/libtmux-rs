@@ -1,16 +1,15 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "control-mode")]
 use crate::SessionId;
-use crate::formats::TmuxText;
+use crate::formats::{TmuxText, TransportDialect, split_quoted_rows};
 use crate::internal::core::Core;
-#[cfg(test)]
-use crate::internal::executor::Executor;
 use crate::internal::listing;
 #[cfg(feature = "control-mode")]
 use crate::internal::process::PersistentChild;
@@ -18,14 +17,21 @@ use crate::internal::scoped;
 use crate::pane::Pane;
 use crate::session::Session;
 use crate::{
-    Command, CommandChain, CommandResult, EngineCapabilities, Error, ReleaseSuffix, ReleaseVersion,
-    ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
+    Command, CommandChain, CommandResult, EngineCapabilities, Error, ListingDecodeError,
+    ReleaseSuffix, ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
+    TmuxArg,
 };
 
 mod builder;
 mod channels;
 mod discovery;
 mod interactive;
+pub use interactive::MenuItem;
+mod keys;
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use keys::__fuzz_parse_key_bindings;
+pub use keys::KeyBinding;
 mod settings;
 pub use builder::ServerBuilder;
 pub use discovery::{SessionTree, WindowTree};
@@ -64,6 +70,38 @@ pub enum AccessMode {
     Write,
 }
 
+/// Whether an [`AccessRule`] names an operating-system user or group.
+///
+/// tmux originally listed only users. A later release let the server owner
+/// add a whole group to the access list, and marks each listed entry `U` or
+/// `G` so a caller can tell them apart. A release before that mark existed
+/// prints a bare `name (R)`/`name (W)` line with no marker at all -- every row
+/// such a release can print names a user, so decoding one reports
+/// [`Principal::User`].
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// use libtmux::Principal;
+///
+/// for rule in server.access_rules().await? {
+///     match rule.principal() {
+///         Principal::User => println!("{} (user)", rule.name()),
+///         Principal::Group => println!("{} (group)", rule.name()),
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Principal {
+    /// The entry names an operating-system user.
+    User,
+    /// The entry names an operating-system group.
+    Group,
+}
+
 /// One entry of the server's access list.
 ///
 /// # Examples
@@ -74,7 +112,7 @@ pub enum AccessMode {
 ///
 /// for rule in server.access_rules().await? {
 ///     if rule.mode() == AccessMode::Write {
-///         println!("{} can type", rule.user());
+///         println!("{} can type", rule.name());
 ///     }
 /// }
 /// # Ok(())
@@ -82,22 +120,69 @@ pub enum AccessMode {
 /// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccessRule {
-    user: String,
+    name: String,
+    principal: Principal,
     mode: AccessMode,
 }
 
 impl AccessRule {
-    /// The user this entry names.
+    /// The user or group this entry names.
     #[must_use]
-    pub fn user(&self) -> &str {
-        &self.user
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
-    /// What that user may do.
+    /// Whether [`Self::name`] is an operating-system user or group.
+    #[must_use]
+    pub const fn principal(&self) -> Principal {
+        self.principal
+    }
+
+    /// What that principal may do.
     #[must_use]
     pub const fn mode(&self) -> AccessMode {
         self.mode
     }
+}
+
+/// Decode one `server-access -l` line into an [`AccessRule`].
+///
+/// tmux prints either the legacy `name (R)`/`name (W)` (no principal marker,
+/// every row a user) or the compound `name (U,R)`/`name (G,W)` grammar a
+/// release with group ACLs uses for every row, owner included. Deciding which
+/// grammar applies from the line itself, rather than from the detected tmux
+/// version, is what lets this read a listing from either release without a
+/// version predicate.
+///
+/// # Errors
+///
+/// Returns [`Error::UnreadableAccessRule`] when the trailing marker matches
+/// neither grammar, naming the marker rather than silently dropping the row.
+fn parse_access_rule(line: &str) -> Result<AccessRule, Error> {
+    let (name, marker) = line
+        .rsplit_once(' ')
+        .ok_or_else(|| Error::unreadable_access_rule(line))?;
+    let inner = marker
+        .strip_prefix('(')
+        .and_then(|marker| marker.strip_suffix(')'))
+        .ok_or_else(|| Error::unreadable_access_rule(marker))?;
+    let (principal, mode) = match inner.split_once(',') {
+        Some(("U", mode)) => (Principal::User, mode),
+        Some(("G", mode)) => (Principal::Group, mode),
+        Some(_) => return Err(Error::unreadable_access_rule(marker)),
+        // No comma: the legacy grammar, which lists only users.
+        None => (Principal::User, inner),
+    };
+    let mode = match mode {
+        "R" => AccessMode::ReadOnly,
+        "W" => AccessMode::Write,
+        _ => return Err(Error::unreadable_access_rule(marker)),
+    };
+    Ok(AccessRule {
+        name: name.to_owned(),
+        principal,
+        mode,
+    })
 }
 
 /// The first tmux release that remembers prompt history.
@@ -118,7 +203,7 @@ use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
 ///
 /// // tmux keeps a separate history per prompt kind, so a command typed at the
 /// // `:` prompt is not offered when searching.
-/// if version.meets(&libtmux::since::PROMPT_HISTORY) {
+/// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
 ///     assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
 ///     assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
 /// }
@@ -175,17 +260,18 @@ impl PromptKind {
 /// Each reports `Ok(None)` when tmux does not have it.
 ///
 /// **Listing everything.** [`sessions`], [`windows`], [`panes`], and
-/// [`clients`], each with an `_or_empty` twin that reports no rows rather
-/// than the reason for a failure. [`hierarchy`] gathers the whole tree in
+/// [`clients`]. Each keeps the reason it failed, so an outage does not read
+/// as an empty server. [`hierarchy`] gathers the whole tree in
 /// three tmux commands rather than one per object.
 ///
 /// **Changing things.** [`new_session`], [`kill`], and [`with_session`],
 /// which cleans up after itself whether the body succeeded or not.
 ///
-/// **Options and hooks.** [`get_option`] and [`set_option`] for this server,
-/// [`get_global_option`] and [`set_global_option`] for the session and window
-/// defaults, [`typed_option`] to get a value tmux's own schema has typed, and
-/// [`set_hook`] and [`unset_hook`].
+/// **Options and hooks.** [`typed_option`] and [`set_typed_option`] for this
+/// server, [`typed_global_option`] and [`set_typed_global_option`] for the
+/// session defaults, [`set_option`] to send text tmux's option table does not
+/// check, and [`set_hook`] and [`unset_hook`]. [`OptionValue`] says how the
+/// reads and writes fit together.
 ///
 /// **Everything else tmux keeps.** Paste buffers ([`buffer`], [`set_buffer`],
 /// [`buffer_names`], [`delete_buffer`]), key bindings ([`bind_key`],
@@ -219,11 +305,12 @@ impl PromptKind {
 /// [`new_session`]: Server::new_session
 /// [`kill`]: Server::kill
 /// [`with_session`]: Server::with_session
-/// [`get_option`]: Server::get_option
-/// [`set_option`]: Server::set_option
-/// [`get_global_option`]: Server::get_global_option
-/// [`set_global_option`]: Server::set_global_option
 /// [`typed_option`]: Server::typed_option
+/// [`set_typed_option`]: Server::set_typed_option
+/// [`typed_global_option`]: Server::typed_global_option
+/// [`set_typed_global_option`]: Server::set_typed_global_option
+/// [`set_option`]: Server::set_option
+/// [`OptionValue`]: crate::OptionValue
 /// [`set_hook`]: Server::set_hook
 /// [`unset_hook`]: Server::unset_hook
 /// [`buffer`]: Server::buffer
@@ -318,6 +405,47 @@ impl Server {
         session: &SessionId,
     ) -> Result<PersistentChild, Error> {
         self.core.spawn_control(session).await
+    }
+
+    /// Report whether this process itself opened the control client with
+    /// this pid, and it is still running.
+    ///
+    /// [`crate::Client::is_own`] is the usual form, and reads better: ask a handle
+    /// from [`Self::clients`] rather than doing pid arithmetic. This one is
+    /// for a caller that already has a pid and no handle -- reading
+    /// `list-clients` itself to get sessions and pids in one command, which a
+    /// per-client lookup would turn into one command each.
+    ///
+    /// [`crate::Pane::stream_output`], [`crate::Client::pid`] and friends can
+    /// all open or report a control-mode connection; tmux counts any of them
+    /// as an attached client the same as a human's terminal. A caller telling
+    /// its own observation apart from an attached human reads every
+    /// [`crate::Client::pid`] it cares about through this rather than
+    /// tracking one connection it happened to keep, because more than one may
+    /// be open at once.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let server = guard.server();
+    ///
+    /// // Nothing has opened a control client yet.
+    /// assert!(!server.owns_control_client(std::process::id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "control-mode")]
+    #[must_use]
+    pub fn owns_control_client(&self, pid: u32) -> bool {
+        self.core.owns_control_client(pid)
     }
 
     /// Construct a server from the captured default endpoint context.
@@ -668,7 +796,7 @@ impl Server {
     /// Returns an error when the value is absent, empty, or not shaped like
     /// tmux's triple, and when the socket path it names is unusable.
     pub fn from_env_value(value: Option<impl Into<OsString>>) -> Result<Self, Error> {
-        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+        use std::os::unix::ffi::OsStrExt as _;
 
         let value: OsString = value.map(Into::into).ok_or_else(|| {
             Error::invalid_server_configuration(ServerConfigurationErrorKind::NotInsideTmux)
@@ -695,17 +823,6 @@ impl Server {
         Self::builder()
             .socket_path(PathBuf::from(OsString::from_vec(socket.to_vec())))
             .build()
-    }
-
-    /// List the sessions that have at least one client attached.
-    ///
-    /// This is the lenient form; use [`Server::attached_sessions`] when the
-    /// reason for an empty result matters.
-    pub async fn attached_sessions_or_empty(&self) -> Vec<Session> {
-        self.attached_sessions().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-sessions", &error);
-            Vec::new()
-        })
     }
 
     /// List the sessions that have at least one client attached.
@@ -808,20 +925,86 @@ impl Server {
         listing::mutate(&self.core, "set-buffer", command.sensitive_arg(data.into())).await
     }
 
+    /// Fill a paste buffer from a file, letting tmux read it.
+    ///
+    /// [`Self::set_buffer`] carries the data as a command argument, which the
+    /// kernel caps: on Linux a single argument stops at `MAX_ARG_STRLEN`,
+    /// 128 KiB, and a larger one fails with "argument list too long" before
+    /// tmux sees it. tmux opens the file itself here, so size is the file
+    /// system's problem rather than the command line's.
+    ///
+    /// `path` is tmux's to resolve, and tmux reads it as the user running the
+    /// server, which is not necessarily this process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when tmux cannot read the path.
+    pub async fn load_buffer(
+        &self,
+        name: Option<&str>,
+        path: impl AsRef<Path>,
+    ) -> Result<(), Error> {
+        let mut command = Command::new("load-buffer");
+        if let Some(name) = name {
+            command = command.arg("-b").arg(OsString::from(name));
+        }
+
+        listing::mutate(
+            &self.core,
+            "load-buffer",
+            command
+                .arg("--")
+                .arg(path.as_ref().as_os_str().to_os_string()),
+        )
+        .await
+    }
+
+    /// Write a paste buffer to a file, letting tmux do the writing.
+    ///
+    /// The counterpart to [`Self::load_buffer`], and the same reasoning: the
+    /// bytes never cross a command line, so a buffer larger than an argument
+    /// can hold still round-trips. tmux writes as the user running the
+    /// server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the buffer is missing or tmux cannot write the
+    /// path.
+    pub async fn save_buffer(
+        &self,
+        name: Option<&str>,
+        path: impl AsRef<Path>,
+    ) -> Result<(), Error> {
+        let mut command = Command::new("save-buffer");
+        if let Some(name) = name {
+            command = command.arg("-b").arg(OsString::from(name));
+        }
+
+        listing::mutate(
+            &self.core,
+            "save-buffer",
+            command
+                .arg("--")
+                .arg(path.as_ref().as_os_str().to_os_string()),
+        )
+        .await
+    }
+
     /// Read a paste buffer's exact bytes.
     ///
     /// Returns `None` when no buffer has that name. Buffer contents are
-    /// arbitrary bytes, so this is not a string.
+    /// arbitrary bytes, so this is not a string. The name is bytes too, so
+    /// one [`Self::buffer_names`] lists passes back as it is.
     ///
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached.
-    pub async fn buffer(&self, name: &str) -> Result<Option<Vec<u8>>, Error> {
+    pub async fn buffer(&self, name: impl AsRef<[u8]>) -> Result<Option<Vec<u8>>, Error> {
         let result = self
             .cmd(
                 Command::new("show-buffer")
                     .arg("-b")
-                    .arg(OsString::from(name)),
+                    .arg(OsString::from_vec(name.as_ref().to_vec())),
             )
             .await?;
 
@@ -836,17 +1019,23 @@ impl Server {
 
     /// List the paste buffer names.
     ///
-    /// A name containing a newline cannot be told apart from two names,
-    /// because tmux separates them with newlines and offers no framed form
-    /// for this listing. Names come from [`Server::set_buffer`], so a caller
-    /// that avoids newlines avoids the ambiguity.
+    /// A name is [`TmuxText`] because whoever made the buffer chose it: tmux
+    /// before 3.7 stores any bytes, a newline included. Each name is read
+    /// framed, so one holding a newline or `=` is one name, and
+    /// [`Self::buffer`] and [`Self::delete_buffer`] take it back unchanged.
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux refuses the listing.
-    pub async fn buffer_names(&self) -> Result<Vec<String>, Error> {
+    /// Returns an error when tmux refuses the listing, and
+    /// [`Error::DecodeListing`] when its output does not decode.
+    pub async fn buffer_names(&self) -> Result<Vec<TmuxText>, Error> {
+        let dialect = TransportDialect::for_version(self.capabilities().await?.tmux_version());
         let result = self
-            .cmd(Command::new("list-buffers").arg("-F").arg("#{buffer_name}"))
+            .cmd(
+                Command::new("list-buffers")
+                    .arg("-F")
+                    .arg("#{q:buffer_name}="),
+            )
             .await?;
         if !result.success() {
             return Err(Error::CommandFailed {
@@ -856,25 +1045,33 @@ impl Server {
             });
         }
 
-        Ok(result
-            .stdout_lossy()
-            .lines()
-            .map(ToOwned::to_owned)
+        let rows =
+            split_quoted_rows(result.stdout(), ["buffer_name"], dialect).map_err(|detail| {
+                Error::DecodeListing {
+                    list_command: "list-buffers",
+                    detail: ListingDecodeError::new(detail),
+                }
+            })?;
+        Ok(rows
+            .into_iter()
+            .map(|[name]| TmuxText::from(name))
             .collect())
     }
 
     /// Delete one paste buffer.
     ///
+    /// The name is bytes, as [`Self::buffer_names`] lists it.
+    ///
     /// # Errors
     ///
     /// Returns an error when no buffer has that name.
-    pub async fn delete_buffer(&self, name: &str) -> Result<(), Error> {
+    pub async fn delete_buffer(&self, name: impl AsRef<[u8]>) -> Result<(), Error> {
         listing::mutate(
             &self.core,
             "delete-buffer",
             Command::new("delete-buffer")
                 .arg("-b")
-                .arg(OsString::from(name)),
+                .arg(OsString::from_vec(name.as_ref().to_vec())),
         )
         .await
     }
@@ -896,6 +1093,7 @@ impl Server {
             Command::new("bind-key")
                 .arg("-T")
                 .arg(OsString::from(table))
+                .arg("--")
                 .arg(OsString::from(key))
                 .arg(command.into()),
         )
@@ -914,6 +1112,7 @@ impl Server {
             Command::new("unbind-key")
                 .arg("-T")
                 .arg(OsString::from(table))
+                .arg("--")
                 .arg(OsString::from(key)),
         )
         .await
@@ -923,7 +1122,12 @@ impl Server {
     ///
     /// Each line is a complete `bind-key` command in tmux's own quoting, which
     /// this crate deliberately does not re-parse: the same value is rendered
-    /// bare, double quoted, or single quoted depending on content.
+    /// bare, double quoted, or single quoted depending on content, and a table
+    /// name is printed bare, spaces and all. [`Self::typed_key_bindings`]
+    /// reads the same bindings as fields on tmux 3.7 and later.
+    ///
+    /// On tmux 3.7 through 3.7c, a `table` holding exactly one binding lists
+    /// empty: those releases send a one-line listing to the message log.
     ///
     /// # Errors
     ///
@@ -990,7 +1194,9 @@ impl Server {
             command = command.arg("-t").arg(pane.id().to_string());
         }
 
-        let result = self.cmd(command.arg(OsString::from(format))).await?;
+        let result = self
+            .cmd(command.arg("--").arg(OsString::from(format)))
+            .await?;
         if !result.success() {
             return Err(Error::from_refused_result("display-message", &result, None));
         }
@@ -1068,7 +1274,7 @@ impl Server {
     /// let version = server.capabilities().await?.tmux_version().clone();
     ///
     /// // A fresh server has answered no prompts.
-    /// if version.meets(&libtmux::since::PROMPT_HISTORY) {
+    /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
     ///     assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
     /// }
     ///
@@ -1146,7 +1352,7 @@ impl Server {
     /// let version = guard.server().capabilities().await?.tmux_version().clone();
     ///
     /// // Whoever started the server owns it and may act.
-    /// if version.meets(&libtmux::since::SERVER_ACCESS) {
+    /// if version.has_behavior(&libtmux::since::SERVER_ACCESS) {
     ///     let rules = guard.server().access_rules().await?;
     ///     assert_eq!(rules.len(), 1);
     ///     assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
@@ -1167,24 +1373,11 @@ impl Server {
             return Err(Error::from_refused_result("server-access", &result, None));
         }
 
-        // tmux writes `name (R)` or `name (W)`, one per line. Split from the
-        // right because the flag is fixed width and a name is not.
-        Ok(result
+        result
             .stdout_lossy()
             .lines()
-            .filter_map(|line| {
-                let (user, flag) = line.rsplit_once(' ')?;
-                let mode = match flag {
-                    "(R)" => AccessMode::ReadOnly,
-                    "(W)" => AccessMode::Write,
-                    _ => return None,
-                };
-                Some(AccessRule {
-                    user: user.to_owned(),
-                    mode,
-                })
-            })
-            .collect())
+            .map(parse_access_rule)
+            .collect()
     }
 
     /// Let a user attach to this server.
@@ -1206,6 +1399,7 @@ impl Server {
                     AccessMode::ReadOnly => "-r",
                     AccessMode::Write => "-w",
                 })
+                .arg("--")
                 .arg(OsString::from(user)),
         )
         .await
@@ -1226,6 +1420,7 @@ impl Server {
             "server-access",
             Command::new("server-access")
                 .arg("-d")
+                .arg("--")
                 .arg(OsString::from(user)),
         )
         .await
@@ -1250,33 +1445,27 @@ impl Server {
 
     /// Create a session, run an operation with it, then kill it.
     ///
-    /// Once this future is polled, the scope owns creation and cleanup.
-    /// Cancellation or unwinding can let an in-flight creation finish, but a
-    /// session whose creation yields a handle is killed while the Tokio
-    /// runtime remains active. Ordinary handle `Drop` remains non-destructive.
-    ///
-    /// Setup and teardown failures convert into the operation's own error
-    /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and cleanup fail, the cleanup error is returned as
-    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
-    /// creation; the operation error is discarded. When the operation fails
-    /// and cleanup succeeds, its generic error is returned unchanged: the
-    /// scope cannot certify replay safety for arbitrary callback work.
-    /// A canceled caller cannot receive a cleanup error, so tracing is its
-    /// only report.
+    /// [`crate::ScopeError`] retains creation, operation and cleanup failures
+    /// separately. If operation and cleanup both fail, both original errors
+    /// are returned. Cleanup errors carry [`Error::AfterEffect`] because
+    /// creation succeeded.
     ///
     /// # Errors
     ///
-    /// Returns the operation's error, or a converted [`Error`] when the
-    /// session could not be created or could not be killed after creation.
+    /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
+    /// fails. The operation's error needs no conversion into [`Error`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
+    /// of their own, so the session is killed even if this future is dropped
+    /// or the operation panics, while the Tokio runtime is alive. A cleanup
+    /// failure then has no caller to reach; the `tracing` feature records it.
     pub async fn with_session<T, E>(
         &self,
         options: impl Into<NewSessionOptions>,
         operation: impl AsyncFnOnce(&Session) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<Error>,
-    {
+    ) -> Result<T, crate::ScopeError<T, E>> {
         let server = self.clone();
         let options = options.into();
         scoped::run(
@@ -1303,6 +1492,12 @@ impl Server {
     /// zero, so the command appears to have produced nothing. Reporting an
     /// empty listing there would be a wrong answer the caller could not
     /// detect. 3.2a and 3.5 onwards are unaffected.
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect may have happened, and may still be happening. The shell
+    /// command runs under the tmux server, not this dispatch, so a dropped
+    /// call stops waiting for it without stopping it, and its output is lost.
     pub async fn run_shell(&self, command: impl Into<OsString>) -> Result<Vec<TmuxText>, Error> {
         self.refuse_if_defective(
             "run-shell output",
@@ -1312,7 +1507,11 @@ impl Server {
         .await?;
 
         let result = self
-            .cmd(Command::new("run-shell").sensitive_arg(command.into()))
+            .cmd(
+                Command::new("run-shell")
+                    .arg("--")
+                    .sensitive_arg(command.into()),
+            )
             .await?;
         if !result.success() {
             return Err(Error::from_refused_result("run-shell", &result, None));
@@ -1344,6 +1543,7 @@ impl Server {
             "run-shell",
             Command::new("run-shell")
                 .arg("-b")
+                .arg("--")
                 .sensitive_arg(command.into()),
         )
         .await
@@ -1375,7 +1575,7 @@ impl Server {
     /// # Errors
     ///
     /// Returns an error when tmux cannot be reached, or answers with something
-    /// that is not a pid and a start time.
+    /// that is not a pid and a start time this platform's `SystemTime` holds.
     ///
     /// # Examples
     ///
@@ -1404,12 +1604,13 @@ impl Server {
         let answer = self.format(None, "#{pid} #{start_time}").await?;
         let text = answer.to_string_lossy();
         let mut parts = text.split_whitespace();
-        let parsed = parts
+        let pid = parts.next().and_then(|pid| pid.parse::<u32>().ok());
+        let start_time = parts
             .next()
-            .and_then(|pid| pid.parse::<u32>().ok())
-            .zip(parts.next().and_then(|start| start.parse::<i64>().ok()));
+            .and_then(|start| start.parse::<i64>().ok())
+            .filter(|start| crate::snapshot::unix_time(*start).is_some());
 
-        let Some((pid, start_time)) = parsed else {
+        let (Some(pid), Some(start_time)) = (pid, start_time) else {
             return Err(Error::UnreadableFormatValue {
                 format: "#{pid} #{start_time}",
                 detail: crate::IdParseError::new('#'),
@@ -1458,10 +1659,100 @@ impl Server {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_executor_for_test(executor: Arc<dyn Executor>) -> Self {
+    pub(crate) fn from_executor_for_test(
+        executor: Arc<dyn crate::internal::executor::Executor>,
+    ) -> Self {
         Self {
             core: Arc::new(Core::from_executor_for_test(executor)),
         }
+    }
+
+    /// Return a handle whose commands run over an open control connection.
+    ///
+    /// Every typed call on the returned server -- `sessions`, `send_keys`,
+    /// `capture`, the option and hook accessors -- is written to `sender` as
+    /// one control-mode line and answered from its `%begin`/`%end` block,
+    /// rather than spawning `tmux`. Handles reached through it inherit the
+    /// route, because they carry the same connection.
+    ///
+    /// The original server is unchanged and still dispatches processes. Use it
+    /// for the two things a connection is wrong for: a command that answers at
+    /// once and then parks the client's queue, such as `wait-for` or a
+    /// foreground `run-shell`, and a command whose arguments are not valid
+    /// UTF-8, which a text protocol cannot carry.
+    ///
+    /// Commands wait for the sender's own [`reply_timeout`], not this server's
+    /// [`default_timeout`]. They are not the same budget: one bounds a round
+    /// trip on an open connection, the other bounds forking tmux.
+    ///
+    /// # Draining events
+    ///
+    /// The connection stops reading tmux once a caller is far enough behind on
+    /// [`ControlEvents`], and refuses commands past that. Either keep reading
+    /// events, drop the watching half, or narrow what tmux reports with
+    /// [`ControlSender::watch_only`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the sender reaches a different server, or when
+    /// the tmux version cannot be detected. Detection runs here, once, through
+    /// this server's process transport, because `tmux -V` is a client flag and
+    /// has no control-mode spelling; the returned handle never probes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::control::ControlMode;
+    /// use libtmux::test::TestServer;
+    ///
+    /// let guard = TestServer::new().await?;
+    /// let session = guard.server().new_session("routed").await?;
+    ///
+    /// let (sender, events) = ControlMode::attach(guard.server(), session.id())
+    ///     .await?
+    ///     .split();
+    /// let routed = guard.server().over_control_mode(&sender).await?;
+    ///
+    /// // One line on the connection, not a process.
+    /// assert_eq!(routed.sessions().await?.len(), 1);
+    ///
+    /// // And a handle it found keeps the route.
+    /// let pane = routed.panes().await?.remove(0);
+    /// pane.send_line("true").await?;
+    ///
+    /// events.shutdown().await?;
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`reply_timeout`]: crate::control::ControlSender::reply_timeout
+    /// [`default_timeout`]: Server::default_timeout
+    /// [`ControlEvents`]: crate::control::ControlEvents
+    /// [`ControlSender::watch_only`]: crate::control::ControlSender::watch_only
+    #[cfg(feature = "control-mode")]
+    pub async fn over_control_mode(
+        &self,
+        sender: &crate::control::ControlSender,
+    ) -> Result<Self, Error> {
+        self.core
+            .require_same_server(sender.identity(), "over_control_mode")?;
+        let capabilities = self.core.capabilities().await?.clone();
+
+        Ok(Self {
+            core: Arc::new(self.core.over_control_mode(sender.clone(), capabilities)),
+        })
+    }
+
+    /// Whether this handle came from [`Self::over_control_mode`].
+    #[cfg(all(feature = "control-mode", feature = "plan"))]
+    pub(crate) fn routes_over_control_mode(&self) -> bool {
+        self.core.routes_over_control_mode()
     }
 }
 
@@ -1498,7 +1789,7 @@ mod tests {
 
     use tokio::sync::{Notify, watch};
 
-    use super::{NewSessionOptions, Server};
+    use super::{AccessMode, NewSessionOptions, Principal, Server, parse_access_rule};
     use crate::command::{CommandRequest, CommandResult, ProcessStatus};
     use crate::formats::{DecoderKind, FormatDescriptor, FormatPlan, ListProfile};
     use crate::internal::executor::{DispatchFuture, Executor, ShutdownFuture};
@@ -1780,6 +2071,59 @@ mod tests {
         assert_eq!(summary.sensitive_argument_count(), 1);
         assert!(!summary.to_string().contains(secret));
     }
+
+    #[test]
+    fn access_rule_lines_decode_both_the_legacy_and_the_group_acl_grammar() {
+        // A release before group ACLs prints no principal marker at all, and
+        // every row it can print names a user.
+        let legacy_write = parse_access_rule("alice (W)").expect("legacy write row parses");
+        assert_eq!(legacy_write.name(), "alice");
+        assert_eq!(legacy_write.principal(), Principal::User);
+        assert_eq!(legacy_write.mode(), AccessMode::Write);
+
+        let legacy_read = parse_access_rule("bob (R)").expect("legacy read-only row parses");
+        assert_eq!(legacy_read.principal(), Principal::User);
+        assert_eq!(legacy_read.mode(), AccessMode::ReadOnly);
+
+        // A release with group ACLs marks every row, owner included, so the
+        // decoder must not assume the legacy shape just because a row is
+        // read-write.
+        let user_row = parse_access_rule("carol (U,W)").expect("compound user row parses");
+        assert_eq!(user_row.name(), "carol");
+        assert_eq!(user_row.principal(), Principal::User);
+        assert_eq!(user_row.mode(), AccessMode::Write);
+
+        let group_row = parse_access_rule("admins (G,R)").expect("compound group row parses");
+        assert_eq!(group_row.name(), "admins");
+        assert_eq!(group_row.principal(), Principal::Group);
+        assert_eq!(group_row.mode(), AccessMode::ReadOnly);
+    }
+
+    /// An unrecognized `server-access -l` marker is reported through
+    /// `Error::UnreadableAccessRule` rather than silently dropped: a
+    /// listing with only such a row used to come back empty.
+    #[test]
+    fn an_unrecognized_access_rule_marker_is_reported_not_dropped() {
+        let bad_principal = parse_access_rule("mallory (X,W)")
+            .expect_err("an unknown principal letter is rejected");
+        assert!(
+            matches!(&bad_principal, Error::UnreadableAccessRule { marker } if marker == "(X,W)"),
+            "the refusal names the marker rather than silently dropping the row: \
+             {bad_principal:?}",
+        );
+        assert_eq!(bad_principal.kind(), ErrorKind::Decode);
+
+        let bad_mode =
+            parse_access_rule("mallory (U,X)").expect_err("an unknown mode letter is rejected");
+        assert!(matches!(
+            &bad_mode,
+            Error::UnreadableAccessRule { marker } if marker == "(U,X)"
+        ));
+
+        let no_marker =
+            parse_access_rule("mallory").expect_err("a line with no trailing marker is rejected");
+        assert!(matches!(no_marker, Error::UnreadableAccessRule { .. }));
+    }
 }
 
 /// Options for creating a session.
@@ -1814,10 +2158,11 @@ mod tests {
 #[must_use = "options describe a session but do not create one"]
 #[derive(Clone)]
 pub struct NewSessionOptions {
-    name: OsString,
-    start_directory: Option<PathBuf>,
-    window_name: Option<OsString>,
+    name: TmuxArg,
+    start_directory: Option<TmuxArg>,
+    window_name: Option<TmuxArg>,
     command: Option<OsString>,
+    environment: Vec<(OsString, OsString)>,
     width: Option<u32>,
     height: Option<u32>,
 }
@@ -1829,6 +2174,7 @@ impl fmt::Debug for NewSessionOptions {
             .field("has_start_directory", &self.start_directory.is_some())
             .field("has_window_name", &self.window_name.is_some())
             .field("has_command", &self.command.is_some())
+            .field("environment_count", &self.environment.len())
             .field("width", &self.width)
             .field("height", &self.height)
             .finish_non_exhaustive()
@@ -1837,12 +2183,15 @@ impl fmt::Debug for NewSessionOptions {
 
 impl NewSessionOptions {
     /// Describe a session with the given name.
-    pub fn new(name: impl Into<OsString>) -> Self {
+    ///
+    /// The name is sent literally. [`TmuxArg::format`] opts into expansion.
+    pub fn new(name: impl Into<TmuxArg>) -> Self {
         Self {
             name: name.into(),
             start_directory: None,
             window_name: None,
             command: None,
+            environment: Vec::new(),
             width: None,
             height: None,
         }
@@ -1850,15 +2199,15 @@ impl NewSessionOptions {
 
     /// Set the working directory for the session's first window.
     ///
-    /// tmux expands this as a format, so [`crate::escape_format`] belongs
-    /// around text a program did not write.
-    pub fn start_directory(mut self, directory: impl Into<PathBuf>) -> Self {
+    /// The directory is sent literally. [`TmuxArg::format`] opts into
+    /// expansion, which is how `#{pane_current_path}` is asked for.
+    pub fn start_directory(mut self, directory: impl Into<TmuxArg>) -> Self {
         self.start_directory = Some(directory.into());
         self
     }
 
-    /// Name the session's first window.
-    pub fn window_name(mut self, name: impl Into<OsString>) -> Self {
+    /// Name the session's first window, literally.
+    pub fn window_name(mut self, name: impl Into<TmuxArg>) -> Self {
         self.window_name = Some(name.into());
         self
     }
@@ -1869,7 +2218,23 @@ impl NewSessionOptions {
         self
     }
 
+    /// Set an environment variable for the process the new session starts.
+    ///
+    /// Call this more than once for more than one variable. tmux applies
+    /// these to the new process only, not to the session. The value is not
+    /// format-expanded, so it needs no escaping.
+    pub fn environment(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.environment.push((name.into(), value.into()));
+        self
+    }
+
     /// Set the initial size, which a detached session would otherwise default.
+    ///
+    /// tmux 3.2a accepts this and sets `default-size` as asked, but still
+    /// draws the new, client-less window at its own classic default,
+    /// `80x23`: a pane's reported width and height on 3.2a do not reflect
+    /// this call, even though the option was set. Every later release draws
+    /// at the requested size.
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.width = Some(width);
         self.height = Some(height);
@@ -1889,12 +2254,12 @@ impl NewSessionOptions {
             .arg("-F")
             .arg(print_format)
             .arg("-s")
-            .arg(self.name);
+            .arg(self.name.into_os_string());
         if let Some(directory) = self.start_directory {
             command = command.arg("-c").arg(directory.into_os_string());
         }
         if let Some(name) = self.window_name {
-            command = command.arg("-n").arg(name);
+            command = command.arg("-n").arg(name.into_os_string());
         }
         if let (Some(width), Some(height)) = (self.width, self.height) {
             command = command
@@ -1903,8 +2268,13 @@ impl NewSessionOptions {
                 .arg("-y")
                 .arg(height.to_string());
         }
+        for (name, value) in self.environment {
+            command = command
+                .arg("-e")
+                .sensitive_arg(crate::window::assignment(&name, &value));
+        }
         if let Some(shell_command) = self.command {
-            command = command.sensitive_arg(shell_command);
+            command = command.arg("--").sensitive_arg(shell_command);
         }
         command
     }
@@ -1912,6 +2282,7 @@ impl NewSessionOptions {
 
 impl<T: Into<OsString>> From<T> for NewSessionOptions {
     fn from(name: T) -> Self {
+        let name: OsString = name.into();
         Self::new(name)
     }
 }

@@ -8,7 +8,7 @@ use rmcp::model::ErrorData;
 use crate::TmuxTools;
 use crate::run_request::{self, PaneReservation};
 
-use super::error::{bad_input, object_gone, tmux_error, vanished};
+use super::error::{ToolError, bad_input, object_gone, tmux_error, vanished};
 
 #[derive(Clone, Copy)]
 pub(crate) enum PaneInputReach {
@@ -111,7 +111,7 @@ struct ClientAttention {
 
 const CLIENT_ATTENTION_FORMAT: &str = "#{client_control_mode}|#{session_id}|#{window_id}|#{window_index}|#{pane_id}|#{window_zoomed_flag}";
 
-fn client_attention_error(detail: &str) -> ErrorData {
+fn client_attention_error(detail: &str) -> ToolError {
     ErrorData::internal_error(
         format!("tmux returned malformed client attention state: {detail}"),
         Some(serde_json::json!({
@@ -120,9 +120,10 @@ fn client_attention_error(detail: &str) -> ErrorData {
             "stale": false,
         })),
     )
+    .into()
 }
 
-fn endpoint_error(message: impl Into<String>) -> ErrorData {
+fn endpoint_error(message: impl Into<String>) -> ToolError {
     ErrorData::internal_error(
         message.into(),
         Some(serde_json::json!({
@@ -131,9 +132,10 @@ fn endpoint_error(message: impl Into<String>) -> ErrorData {
             "stale": false,
         })),
     )
+    .into()
 }
 
-fn pane_snapshot_error(detail: &str) -> ErrorData {
+fn pane_snapshot_error(detail: &str) -> ToolError {
     ErrorData::internal_error(
         format!("tmux returned malformed pane input state: {detail}"),
         Some(serde_json::json!({
@@ -142,9 +144,10 @@ fn pane_snapshot_error(detail: &str) -> ErrorData {
             "stale": false,
         })),
     )
+    .into()
 }
 
-fn missing_source_error(pane: &str, missing: MissingSource) -> ErrorData {
+fn missing_source_error(pane: &str, missing: MissingSource) -> ToolError {
     match missing {
         MissingSource::CallerInput => object_gone("pane", pane),
         MissingSource::ObservedTransition => {
@@ -156,10 +159,12 @@ fn missing_source_error(pane: &str, missing: MissingSource) -> ErrorData {
     }
 }
 
-pub(crate) fn active_run_error(pane: &str) -> ErrorData {
+pub(crate) fn active_run_error(pane: &str) -> ToolError {
     ErrorData::internal_error(
         format!(
-            "pane {pane} has an active run_shell_command; wait for its completion or pane closure before sending more input"
+            "pane {pane} has an active run_shell_command; wait for it to complete, or stop it \
+             with send_keys keys [\"C-c\"], which passes the reservation and releases it once \
+             the command ends"
         ),
         Some(serde_json::json!({
             "kind": "active_run",
@@ -167,6 +172,7 @@ pub(crate) fn active_run_error(pane: &str) -> ErrorData {
             "stale": false,
         })),
     )
+    .into()
 }
 
 fn parse_flag(value: &[u8]) -> Result<bool, &'static str> {
@@ -347,19 +353,30 @@ fn pane_snapshot(panes: &[libtmux::Pane]) -> Result<PaneSnapshot, &'static str> 
     Ok(PaneSnapshot { handles, members })
 }
 
+/// How pane input treats a pane an active `run_shell_command` reserves.
+#[derive(Clone, Copy)]
+enum RunGate<'a> {
+    /// Refuse it, unless this input holds the reservation.
+    Respect(Option<&'a PaneReservation>),
+    /// Pass it: an interrupt is meant to reach the running command.
+    Interrupt,
+}
+
 fn validate_configured_members(
     configured: &[String],
     members: &BTreeMap<String, PaneMember>,
     attended: &BTreeSet<String>,
     generation: ServerGeneration,
     endpoint: &Path,
-    reservation: Option<&PaneReservation>,
-) -> Result<(), ErrorData> {
+    gate: RunGate<'_>,
+) -> Result<(), ToolError> {
     for id in configured {
         let candidate = members
             .get(id)
             .ok_or_else(|| pane_snapshot_error("a selected pane disappeared"))?;
-        if run_request::is_reserved(generation, endpoint, id, reservation) {
+        if let RunGate::Respect(reservation) = gate
+            && run_request::is_reserved(generation, endpoint, id, reservation)
+        {
             return Err(active_run_error(id));
         }
         if attended.contains(id) {
@@ -389,7 +406,7 @@ fn validate_configured_members(
 fn configured_signature(
     configured: &[String],
     members: &BTreeMap<String, PaneMember>,
-) -> Result<Vec<PaneMember>, ErrorData> {
+) -> Result<Vec<PaneMember>, ToolError> {
     configured
         .iter()
         .map(|id| {
@@ -413,7 +430,7 @@ impl TmuxTools {
     /// byte into four safe ASCII characters. The configured path is
     /// byte-exact, and it is the path every command here already travels
     /// over, so it is what the caller comparison must rest on.
-    fn pane_input_endpoint(&self) -> Result<PathBuf, ErrorData> {
+    fn pane_input_endpoint(&self) -> Result<PathBuf, ToolError> {
         let endpoint = self.server.socket_path().to_path_buf();
         if !crate::exec::route_path_is_terminal_safe(endpoint.as_os_str()) {
             return Err(endpoint_error(
@@ -428,8 +445,8 @@ impl TmuxTools {
         pane: &str,
         reach: PaneInputReach,
         missing: MissingSource,
-    ) -> Result<PaneInputPlan, ErrorData> {
-        self.preflight_pane_input_with_run(pane, reach, missing, None)
+    ) -> Result<PaneInputPlan, ToolError> {
+        self.preflight_pane_input_with_run(pane, reach, missing, RunGate::Respect(None))
             .await
     }
 
@@ -439,8 +456,26 @@ impl TmuxTools {
         reach: PaneInputReach,
         missing: MissingSource,
         reservation: &PaneReservation,
-    ) -> Result<PaneInputPlan, ErrorData> {
-        self.preflight_pane_input_with_run(pane, reach, missing, Some(reservation))
+    ) -> Result<PaneInputPlan, ToolError> {
+        self.preflight_pane_input_with_run(
+            pane,
+            reach,
+            missing,
+            RunGate::Respect(Some(reservation)),
+        )
+        .await
+    }
+
+    /// Check an interrupt, which passes an active run's reservation.
+    ///
+    /// Every other refusal still applies.
+    pub(crate) async fn preflight_interrupt(
+        &self,
+        pane: &str,
+        reach: PaneInputReach,
+        missing: MissingSource,
+    ) -> Result<PaneInputPlan, ToolError> {
+        self.preflight_pane_input_with_run(pane, reach, missing, RunGate::Interrupt)
             .await
     }
 
@@ -449,8 +484,8 @@ impl TmuxTools {
         pane: &str,
         reach: PaneInputReach,
         missing: MissingSource,
-        reservation: Option<&PaneReservation>,
-    ) -> Result<PaneInputPlan, ErrorData> {
+        reservation: RunGate<'_>,
+    ) -> Result<PaneInputPlan, ToolError> {
         let generation = self
             .server
             .generation()
@@ -865,7 +900,8 @@ mod tests {
             )
             .await
             .err()
-            .expect("the linked caller placement remains protected");
+            .expect("the linked caller placement remains protected")
+            .into_error_data();
 
         assert_eq!(
             error.data.expect("typed refusal")["kind"],

@@ -63,12 +63,16 @@ fn shell_quote(path: &Path) -> String {
 }
 
 fn write_script(directory: &Path, body: &str) -> PathBuf {
+    write_script_with_version(directory, body, "printf 'tmux 3.5a\\n'")
+}
+
+fn write_script_with_version(directory: &Path, body: &str, version: &str) -> PathBuf {
     let path = directory.join("fake-tmux");
     let staging = directory.join(format!(".fake-tmux.{}.tmp", process::id()));
     let mut file = fs::File::create(&staging).expect("staged script is creatable");
     writeln!(
         file,
-        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    printf 'tmux 3.5a\\n'\n    exit 0\nfi\nset -eu\n{body}"
+        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\n{body}"
     )
     .expect("script is writable");
     file.sync_all().expect("script contents are durable");
@@ -212,8 +216,12 @@ fn process_script(parent: &Path, descendant: &Path, prefix: &str) -> String {
     )
 }
 
+/// The discarded opening block, followed by a success reply to the
+/// `refresh-client -f new-layouts` request `ControlMode::attach` now sends
+/// before returning -- block 1 is the opening handshake, block 2 answers that
+/// request, so a test's own first command after attaching is block 3.
 fn opening_success() -> &'static str {
-    "printf '%%begin 0 1 0\\n%%end 0 1 0\\n'"
+    "printf '%%begin 0 1 0\\n%%end 0 1 0\\n'\nIFS= read -r _new_layouts\nprintf '%%begin 0 2 0\\n%%end 0 2 0\\n'"
 }
 
 async fn attach(server: &Server) -> Result<ControlMode, Error> {
@@ -227,7 +235,7 @@ async fn attach_uses_the_cores_captured_launch_context() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{{\n    pwd\n    printf '%s\\n' \"$PATH\"\n    for argument in \"$@\"; do printf '<%s>\\n' \"$argument\"; done\n}} > {}\n{}",
+            "{{\n    pwd\n    printf '%s\\n' \"$PATH\"\n    for argument in \"$@\"; do printf '<%s>\\n' \"$argument\"; done\n}} > {}\n{}\nprintf '%%exit done\\n'",
             shell_quote(&record),
             opening_success(),
         ),
@@ -323,23 +331,40 @@ async fn a_short_reply_deadline_does_not_bound_attaching() {
 
 #[tokio::test]
 async fn cancelling_attach_reaps_the_process_group() {
-    let fixture = directory();
-    let parent = fixture.path().join("parent.pid");
-    let descendant = fixture.path().join("descendant.pid");
-    let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
-    let executable = write_script(fixture.path(), &process_script(&parent, &descendant, ""));
-    let server = basic_server(fixture.path(), executable, Duration::from_secs(30));
-    let attached = server.clone();
-    let task = tokio::spawn(async move { attach(&attached).await });
-    let parent_pid = wait_for_pid(&parent).await;
-    let descendant_pid = wait_for_pid(&descendant).await;
+    for negotiate_layouts in [false, true] {
+        let fixture = directory();
+        let parent = fixture.path().join("parent.pid");
+        let descendant = fixture.path().join("descendant.pid");
+        let layouts = fixture.path().join("layouts.pid");
+        let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
+        let prefix = if negotiate_layouts {
+            format!(
+                "printf '%%begin 0 1 0\\n%%end 0 1 0\\n'\nIFS= read -r layouts\nprintf '%s\\n' \"$$\" > {}",
+                shell_quote(&layouts),
+            )
+        } else {
+            String::new()
+        };
+        let executable = write_script(
+            fixture.path(),
+            &process_script(&parent, &descendant, &prefix),
+        );
+        let server = basic_server(fixture.path(), executable, Duration::from_secs(30));
+        let attached = server.clone();
+        let task = tokio::spawn(async move { attach(&attached).await });
+        let parent_pid = wait_for_pid(&parent).await;
+        let descendant_pid = wait_for_pid(&descendant).await;
+        if negotiate_layouts {
+            assert_eq!(wait_for_pid(&layouts).await, parent_pid);
+        }
 
-    task.abort();
-    let _ = task.await;
-    assert_process_gone(parent_pid).await;
-    assert_process_gone(descendant_pid).await;
+        task.abort();
+        assert!(task.await.expect_err("attach is cancelled").is_cancelled());
+        assert_process_gone(parent_pid).await;
+        assert_process_gone(descendant_pid).await;
 
-    server.shutdown().await.expect("server shuts down");
+        server.shutdown().await.expect("server shuts down");
+    }
 }
 
 #[tokio::test]
@@ -372,7 +397,7 @@ async fn an_open_response_block_has_one_deadline() {
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 2 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -586,7 +611,7 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 2 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -714,11 +739,19 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
 
         let mut sessions_changed = 0;
         let mut exits = 0;
+        let mut errors = 0;
         tokio::time::timeout(TEST_TIMEOUT, async {
             while let Some(event) = events.next_event().await {
                 match event {
-                    Event::SessionsChanged => sessions_changed += 1,
-                    Event::Exit { .. } => exits += 1,
+                    Ok(Event::SessionsChanged) => sessions_changed += 1,
+                    Ok(Event::Exit { .. }) => exits += 1,
+                    Err(Error::ControlMode {
+                        kind: ControlModeErrorKind::Closed,
+                        ..
+                    }) => {
+                        assert_eq!(sessions_changed, EVENT_QUEUE + 1);
+                        errors += 1;
+                    }
                     other => panic!("unexpected terminal fixture event: {other:?}"),
                 }
             }
@@ -728,6 +761,8 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
 
         assert_eq!(sessions_changed, EVENT_QUEUE + 1);
         assert_eq!(exits, expected_exits);
+        assert_eq!(errors, usize::from(expected_exits == 0));
+        assert!(events.next_event().await.is_none());
         events.shutdown().await.expect("connection shuts down");
         server.shutdown().await.expect("server shuts down");
     }
@@ -739,7 +774,7 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 2 0\\npartial\\n'",
+            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 3 0\\npartial\\n'",
             opening_success(),
             EVENT_QUEUE + 1,
         ),
@@ -763,9 +798,14 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
     ));
 
     let mut sessions_changed = 0;
+    let mut terminal_error = None;
     while let Some(event) = events.next_event().await {
         match event {
-            Event::SessionsChanged => sessions_changed += 1,
+            Ok(Event::SessionsChanged) => sessions_changed += 1,
+            Err(error) => {
+                assert!(terminal_error.replace(error).is_none());
+                assert_eq!(sessions_changed, EVENT_QUEUE + 1);
+            }
             other => panic!("unexpected terminal fixture event: {other:?}"),
         }
     }
@@ -775,10 +815,7 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
         "a malformed final reply must not discard already parsed notifications"
     );
 
-    let error = events
-        .shutdown()
-        .await
-        .expect_err("the incomplete reply remains the terminal cause");
+    let error = terminal_error.expect("the incomplete reply remains the terminal cause");
     assert!(matches!(
         error,
         Error::ControlMode {
@@ -786,6 +823,10 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
             ..
         }
     ));
+    events
+        .shutdown()
+        .await
+        .expect("the terminal error was delivered");
     server.shutdown().await.expect("server shuts down");
 }
 
@@ -848,7 +889,7 @@ async fn pane_snapshot_separates_output_at_the_capture_block() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 2 0\\nvisible\\n%%end 0 2 0\\n'\nprintf '%%output %%1 after\\n'",
+            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 3 0\\nvisible\\n%%end 0 3 0\\n'\nprintf '%%output %%1 after\\n'\nprintf '%%exit done\\n'",
             opening_success(),
         ),
     );
@@ -962,4 +1003,160 @@ async fn attach_after_server_shutdown_is_rejected() {
         .await
         .expect_err("shutdown closes persistent-client admission");
     assert!(matches!(error, Error::ExecutorShutdown { .. }));
+}
+
+#[tokio::test]
+async fn frame_error_during_bootstrap_remains_specific() {
+    for opening in ["", "%begin 0 1 0\n%end 0 1 0\n"] {
+        let fixture = directory();
+        let payload = fixture.path().join("payload");
+        fs::write(&payload, format!("{opening}{}\n", "x".repeat(256)))
+            .expect("payload is writable");
+        let executable = write_script(
+            fixture.path(),
+            &format!(
+                "/bin/cat {}\nwhile IFS= read -r line; do :; done",
+                shell_quote(&payload)
+            ),
+        );
+        let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
+        let error = ControlMode::attach_with_limits(
+            &server,
+            &session(),
+            crate::ControlLimits::default().max_line_bytes(64),
+        )
+        .await
+        .expect_err("the oversized frame is rejected");
+        server.shutdown().await.expect("server shuts down");
+        assert!(
+            matches!(
+                error,
+                Error::ControlModeFrameTooLarge {
+                    frame: "line",
+                    limit: 64
+                }
+            ),
+            "opening={opening:?}: got {error:?}",
+        );
+    }
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
+    let guard = crate::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("frame-closed")
+        .await
+        .expect("session starts");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    let (sender, events) = ControlMode::attach_with_limits(
+        server,
+        session.id(),
+        crate::ControlLimits::default().max_line_bytes(512),
+    )
+    .await
+    .expect("a quiet connection attaches")
+    .split();
+    let produced = server
+        .cmd(
+            Command::new("respawn-pane")
+                .arg("-k")
+                .arg("-t")
+                .arg(pane.id().as_ref())
+                .arg("head -c 4096 /dev/zero | tr '\\0' A; exec cat"),
+        )
+        .await
+        .expect("producer starts");
+    assert!(produced.success(), "producer is accepted: {produced:?}");
+    tokio::time::timeout(Duration::from_secs(1), sender.commands.closed())
+        .await
+        .expect("oversized output closes admission");
+    let send_error = sender
+        .watch_only(&[])
+        .await
+        .expect_err("narrowing is refused");
+    drop(sender);
+    assert!(matches!(
+        send_error,
+        Error::ControlMode {
+            kind: ControlModeErrorKind::Closed,
+            ..
+        }
+    ));
+    let error = events.shutdown_after_error(send_error).await;
+    guard.shutdown().await.expect("fixture shuts down");
+    assert!(
+        matches!(
+            error,
+            Error::ControlModeFrameTooLarge {
+                frame: "line",
+                limit: 512
+            }
+        ),
+        "got {error:?}"
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn initial_watch_failure_preserves_the_connection_error() {
+    let fixture = directory();
+    let payload = fixture.path().join("payload");
+    fs::write(
+        &payload,
+        format!("%begin 0 2 0\n%end 0 2 0\n{}\n", "x".repeat(256)),
+    )
+    .expect("payload is writable");
+    let guard = crate::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("initial-watch")
+        .await
+        .expect("session starts");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    let tmux = shell_quote(Path::new(guard.server().tmux_executable()));
+    let executable = write_script_with_version(
+        fixture.path(),
+        &format!(
+            "for argument in \"$@\"; do\nif [ \"$argument\" = '-C' ]; then\nprintf '%%begin 0 1 0\\n%%end 0 1 0\\n'\nIFS= read -r layouts\n/bin/cat {}\nwhile IFS= read -r line; do :; done\nexit\nfi\ndone\nexec {tmux} \"$@\"",
+            shell_quote(&payload),
+        ),
+        &format!("exec {tmux} -V"),
+    );
+    let wrapped = Server::builder()
+        .socket_path(guard.socket_path())
+        .tmux_executable(executable)
+        .build()
+        .expect("wrapper server resolves");
+    let observed = wrapped
+        .panes()
+        .await
+        .expect("pane lookup succeeds")
+        .into_iter()
+        .find(|candidate| candidate.id() == pane.id())
+        .expect("pane exists");
+    let error = observed
+        .stream_output_with_limits(crate::ControlLimits::default().max_line_bytes(64))
+        .await
+        .expect_err("initial narrowing sees the frame violation");
+    wrapped.shutdown().await.expect("wrapper shuts down");
+    guard.shutdown().await.expect("fixture shuts down");
+    assert!(
+        matches!(
+            error,
+            Error::ControlModeFrameTooLarge {
+                frame: "line",
+                limit: 64
+            }
+        ),
+        "got {error:?}"
+    );
 }

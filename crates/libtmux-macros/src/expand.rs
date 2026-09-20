@@ -14,14 +14,17 @@ pub(super) fn expand_filterable(input: &DeriveInput) -> syn::Result<TokenStream2
     let container = parse_container_options(&input.attrs, &mut errors);
     let named_fields = named_fields(input, &mut errors);
 
-    if !container.target_seen {
-        errors.push(syn::Error::new(
+    let target = container.target.ok_or_else(|| {
+        syn::Error::new(
             input.ident.span(),
             "missing required `#[filterable(target = \"stable_name\")]`",
-        ));
-    }
-    if let Some(target) = &container.target {
-        validate_wire_name(target, "filter target", &mut errors);
+        )
+    });
+    match &target {
+        Ok(target) => validate_wire_name(target, "filter target", &mut errors),
+        // A target given in the wrong form was reported where it was parsed.
+        Err(missing) if !container.target_seen => errors.push(missing.clone()),
+        Err(_) => {}
     }
 
     let mut field_specs = Vec::new();
@@ -42,13 +45,7 @@ pub(super) fn expand_filterable(input: &DeriveInput) -> syn::Result<TokenStream2
     }
 
     errors.finish()?;
-
-    let Some(target) = container.target else {
-        return Err(syn::Error::new(
-            input.ident.span(),
-            "missing required filter target after validation",
-        ));
-    };
+    let target = target?;
     let fields_ident = container.fields.unwrap_or_else(|| {
         Ident::new(
             &format!("{}Fields", input.ident.unraw()),
@@ -71,11 +68,15 @@ fn resolve_core_path(override_path: Option<Path>, span: Span) -> syn::Result<Tok
         return Ok(quote!(#path));
     }
     match crate_name("libtmux") {
-        Ok(FoundCrate::Itself) => Ok(quote!(crate)),
+        // `Itself`: compiling `libtmux` itself, not an integration test.
+        // `extern crate self as libtmux` is what makes `::libtmux` resolve here too.
+        Ok(FoundCrate::Itself) => Ok(quote!(::libtmux)),
         Ok(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name.replace('-', "_"), Span::call_site());
             Ok(quote!(::#ident))
         }
+        // No UI test reaches this: trybuild builds each case with this
+        // crate's dev-dependencies, and one of them is `libtmux`.
         Err(_) => Err(syn::Error::new(
             span,
             "could not locate the `libtmux` package; use `#[filterable(crate = \"path::to::libtmux\")]` to provide it explicitly",

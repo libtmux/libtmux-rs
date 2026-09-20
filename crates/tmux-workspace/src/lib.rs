@@ -33,16 +33,16 @@
 mod config;
 mod freeze;
 
-pub use config::{ConfigError, PaneConfig, WindowConfig, Workspace};
+pub use config::{ConfigError, PaneConfig, ShellCommand, WindowConfig, Workspace};
 pub use freeze::freeze;
 
 use std::path::Path;
 
 use libtmux::plan::{
-    KillWindow, NewSession, NewWindow, PaneSlot, Plan, Planner, SelectLayout, SelectPane,
+    KillWindow, NewSession, NewWindow, PaneSlot, Pause, Plan, Planner, SelectLayout, SelectPane,
     SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow,
 };
-use libtmux::{Server, Session, SessionId, escape_format};
+use libtmux::{Server, Session, SessionId};
 
 /// A failure while building a workspace.
 #[derive(Debug, thiserror::Error)]
@@ -179,7 +179,7 @@ impl<'server> WorkspaceBuilder<'server> {
                 let directory = pane.start_directory.as_deref().or(directory);
                 let mut split = SplitWindow::new(window);
                 if let Some(directory) = directory {
-                    split = split.start_directory(escape_format(directory));
+                    split = split.start_directory(directory);
                 }
                 for (name, value) in config.environment.iter().chain(&pane.environment) {
                     split = split.environment(name.as_str(), value.as_str());
@@ -201,15 +201,28 @@ impl<'server> WorkspaceBuilder<'server> {
                     .or(config.suppress_history)
                     .unwrap_or(workspace.suppress_history);
 
-                let before = workspace
+                // As in tmuxp, the `shell_command_before` commands lead the
+                // pane's own list, and a command's `enter` and sleeps hold
+                // for the rest.
+                let mut enter = pane_config.enter;
+                let mut sleep_before = pane_config.sleep_before;
+                let mut sleep_after = pane_config.sleep_after;
+                let commands = workspace
                     .shell_command_before
                     .iter()
-                    .chain(&config.shell_command_before);
-                for command in before {
-                    plan.add(Self::typing(*pane, command, suppress, true));
-                }
-                for command in &pane_config.shell_commands {
-                    plan.add(Self::typing(*pane, command, suppress, pane_config.enter));
+                    .chain(&config.shell_command_before)
+                    .chain(&pane_config.shell_commands);
+                for command in commands {
+                    enter = command.enter.unwrap_or(enter);
+                    sleep_before = command.sleep_before.or(sleep_before);
+                    sleep_after = command.sleep_after.or(sleep_after);
+                    if let Some(duration) = sleep_before {
+                        plan.add(Pause::new(duration));
+                    }
+                    plan.add(Self::typing(*pane, &command.cmd, suppress, enter));
+                    if let Some(duration) = sleep_after {
+                        plan.add(Pause::new(duration));
+                    }
                 }
                 if pane_config.focus {
                     focus_pane = Some(*pane);
@@ -297,12 +310,12 @@ impl<'server> WorkspaceBuilder<'server> {
     }
 
     fn session_op(workspace: &Workspace) -> NewSession {
-        // A workspace file is not this program's own text. tmux expands a
-        // name and a start directory alike as formats, so an unescaped
-        // `#(command)` in either would run a shell for whoever wrote the file.
-        let mut session = NewSession::new(escape_format(workspace.session_name.as_str()));
+        // A workspace file is not this program's own text, and every sink
+        // below escapes what it is given, so a `#(command)` in one arrives as
+        // the characters someone typed rather than as a shell command.
+        let mut session = NewSession::new(workspace.session_name.as_str());
         if let Some(directory) = workspace.start_directory.as_deref() {
-            session = session.start_directory(escape_format(directory));
+            session = session.start_directory(directory);
         }
         session
     }
@@ -315,10 +328,10 @@ impl<'server> WorkspaceBuilder<'server> {
     ) -> NewWindow {
         let mut window = NewWindow::new(session);
         if let Some(name) = config.window_name.as_deref() {
-            window = window.name(escape_format(name));
+            window = window.name(name);
         }
         if let Some(directory) = directory {
-            window = window.start_directory(escape_format(directory));
+            window = window.start_directory(directory);
         }
         if let Ok(index) = u32::try_from(config.window_index.unwrap_or(-1)) {
             window = window.index(index);
@@ -363,11 +376,10 @@ impl<'server> WorkspaceBuilder<'server> {
 
 /// Compiles the `libtmux-macros` README's examples, and nothing else.
 ///
-/// It cannot be compiled from `libtmux`, where the derive resolves the crate
-/// to `crate`, nor from `libtmux-macros`, whose only dependency on `libtmux`
-/// is deliberately renamed so the UI tests prove that resolution works. Here
-/// `libtmux` is an ordinary dependency under its own name, which is the one
-/// case a reader of that README is actually in.
+/// It cannot be compiled from `libtmux-macros`, whose only dependency on
+/// `libtmux` is deliberately renamed so the UI tests prove the derive resolves
+/// the crate. Here `libtmux` is an ordinary dependency under its own name,
+/// which is the case a reader of that README is in.
 #[cfg(doctest)]
 #[doc = include_str!("../libtmux-macros-README.md")]
 pub struct MacrosReadme;

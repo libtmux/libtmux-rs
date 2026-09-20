@@ -152,6 +152,7 @@ fn base_command() -> Command {
         .env_remove("LIBTMUX_SOCKET")
         .env_remove("LIBTMUX_SOCKET_PATH")
         .env_remove("LIBTMUX_TMUX_CONFIG")
+        .env_remove("LIBTMUX_ENVIRONMENT_VALUES")
         .env_remove("TMUX_TMPDIR")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -218,7 +219,7 @@ fn explicit_existing_socket_defaults_without_teardown() {
         &json!({"name": "list_sessions", "arguments": {}}),
     );
 
-    assert_eq!(names.len(), 41);
+    assert_eq!(names.len(), 40);
     assert!(!names.iter().any(|name| name == "kill_session"));
     assert_eq!(
         listed["result"]["structuredContent"]["sessions"][0]["name"],
@@ -486,7 +487,48 @@ fn only_the_process_whose_config_marker_loaded_claims_minimal_provenance() {
         follower_report["socket"]["configurationProvenance"],
         "unknown"
     );
-    assert_eq!(follower_report["toolCount"], 41);
+    assert_eq!(follower_report["toolCount"], 40);
+}
+
+/// Two clients on the default socket share one daemon, so the one that
+/// started it must not stop it while the other still answers from it.
+#[test]
+fn the_owner_leaves_a_shared_dedicated_daemon_running() {
+    let root = PathBuf::from("/tmp/libtmux-rs-test")
+        .join(format!("mcp-shared-owner-{}", std::process::id()));
+    std::fs::create_dir_all(&root).expect("fixture root");
+    let socket = root.join(format!(
+        "tmux-{}/libtmux-mcp",
+        std::fs::metadata(&root).expect("fixture metadata").uid()
+    ));
+    let environment = [("TMUX_TMPDIR", root.to_str().expect("UTF-8 fixture path"))];
+    let mut owner = Process::start(&[], &environment);
+    let created = owner.request(
+        "tools/call",
+        &json!({"name": "create_session", "arguments": {"name": "shared"}}),
+    );
+    let mut follower = Process::start(&[], &environment);
+
+    let owner_log = owner.finish();
+    let listed = follower.request(
+        "tools/call",
+        &json!({"name": "list_sessions", "arguments": {}}),
+    );
+    follower.finish();
+    let alive_after_both = daemon_is_alive(&socket);
+    stop_daemon(&socket);
+    std::fs::remove_dir_all(&root).expect("fixture cleanup");
+
+    assert_ne!(created["result"]["isError"], true, "{created}");
+    assert_eq!(
+        listed["result"]["structuredContent"]["sessions"][0]["name"], "shared",
+        "the follower lost its daemon when the owner exited: {listed}"
+    );
+    assert!(owner_log.contains("leaving"), "{owner_log}");
+    assert!(
+        alive_after_both,
+        "a follower stopped a daemon it did not start"
+    );
 }
 
 #[test]
@@ -522,12 +564,209 @@ fn default_daemon_loads_the_shipped_minimal_configuration() {
     std::fs::remove_dir_all(root).expect("fixture cleanup");
 }
 
+/// Errors rmcp raises before a tool runs carry the same `kind` as the rest,
+/// and a withheld tool says who can offer it.
+#[test]
+fn argument_and_routing_errors_are_typed() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard =
+        runtime.block_on(async { TestServer::builder().start().await.expect("tmux starts") });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let mut process = Process::start(&["--socket", socket], &[]);
+
+    let missing = process.request("tools/call", &json!({"name": "send_keys", "arguments": {}}));
+    let batched = process.request(
+        "tools/call",
+        &json!({
+            "name": "call_read_tools_batch",
+            "arguments": {"operations": [{"tool": "capture_pane", "arguments": {}}]}
+        }),
+    );
+    let withheld = process.request(
+        "tools/call",
+        &json!({"name": "kill_session", "arguments": {"session": "x"}}),
+    );
+    let unknown = process.request(
+        "tools/call",
+        &json!({"name": "no_such_tool", "arguments": {}}),
+    );
+    process.finish();
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+
+    let body: Value = serde_json::from_str(
+        missing["result"]["content"][0]["text"]
+            .as_str()
+            .expect("failed result text"),
+    )
+    .unwrap_or_else(|error| panic!("untyped argument error {missing}: {error}"));
+    assert_eq!(missing["result"]["isError"], true, "{missing}");
+    assert_eq!(body["data"]["kind"], "invalid_input", "{missing}");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("pane")),
+        "{missing}"
+    );
+    let nested =
+        batched["result"]["structuredContent"]["results"][0]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("nested failed result text");
+    assert!(nested.contains("invalid_input"), "{batched}");
+
+    assert_eq!(
+        withheld["error"]["data"]["kind"], "invalid_input",
+        "{withheld}"
+    );
+    assert!(
+        withheld["error"]["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("LIBTMUX_TOOLSETS")),
+        "{withheld}"
+    );
+    assert_eq!(
+        unknown["error"]["data"]["kind"], "invalid_input",
+        "{unknown}"
+    );
+    assert!(
+        unknown["error"]["message"]
+            .as_str()
+            .is_some_and(|text| !text.contains("LIBTMUX_TOOLSETS")),
+        "{unknown}"
+    );
+}
+
+/// `TMUX= TMUX_PANE=` is how a shell un-nests tmux; it means detached. A
+/// context that is set and malformed says so once, at startup.
+#[test]
+fn empty_caller_variables_are_detached_and_malformed_ones_are_logged() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let (guard, pane) = runtime.block_on(async {
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let pane = guard
+            .server()
+            .new_session("caller")
+            .await
+            .expect("session starts")
+            .panes()
+            .await
+            .expect("panes list")
+            .remove(0)
+            .id()
+            .to_string();
+        (guard, pane)
+    });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let typed = json!({"name": "send_keys", "arguments": {"pane": pane, "text": "x"}});
+
+    let mut empty = Process::start(&["--socket", socket], &[("TMUX", ""), ("TMUX_PANE", "")]);
+    let sent = empty.request("tools/call", &typed);
+    let empty_log = empty.finish();
+    assert_ne!(sent["result"]["isError"], true, "{sent}");
+    assert!(!empty_log.contains("TMUX_PANE"), "{empty_log}");
+
+    let mut malformed = Process::start(
+        &["--socket", socket],
+        &[("TMUX", "not-a-context"), ("TMUX_PANE", "%0")],
+    );
+    let refused = malformed.request("tools/call", &typed);
+    let malformed_log = malformed.finish();
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert_eq!(
+        malformed_log.matches("TMUX and TMUX_PANE").count(),
+        1,
+        "{malformed_log}"
+    );
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+}
+
+/// Measured over JSON-RPC, because a transcript is where a value leaks to.
+///
+/// The fixture daemon inherits this test's environment, so no failure message
+/// prints a response.
+#[test]
+fn environment_values_stay_off_the_wire_unless_allowed() {
+    const SECRET: &str = "planted-secret-2d7e";
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let guard = runtime.block_on(async {
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let server = guard.server();
+        server.new_session("wire").await.expect("session starts");
+        server
+            .set_environment("PLANTED_API_KEY", SECRET)
+            .await
+            .expect("secret is planted");
+        server
+            .set_environment("PLANTED_ALLOWED", "allowed-value")
+            .await
+            .expect("allowed value is planted");
+        guard
+    });
+    let socket = guard.socket_path().to_str().expect("UTF-8 socket");
+    let calls = [
+        json!({"name": "show_environment", "arguments": {}}),
+        json!({"name": "get_tmux_variables", "arguments": {"names": ["PLANTED_API_KEY"]}}),
+        json!({
+            "name": "call_read_tools_batch",
+            "arguments": {"operations": [
+                {"tool": "show_environment", "arguments": {}},
+                {"tool": "get_tmux_variables", "arguments": {"names": ["PLANTED_API_KEY"]}}
+            ]}
+        }),
+    ];
+
+    let mut default = Process::start(&["--socket", socket], &[]);
+    for call in &calls {
+        let response = default.request("tools/call", call).to_string();
+        assert!(
+            !response.contains(SECRET),
+            "{} put a withheld value on the wire",
+            call["name"]
+        );
+    }
+    default.finish();
+
+    let mut allowed = Process::start(
+        &["--socket", socket],
+        &[("LIBTMUX_ENVIRONMENT_VALUES", "PLANTED_ALLOWED")],
+    );
+    for call in &calls {
+        let response = allowed.request("tools/call", call).to_string();
+        assert!(
+            !response.contains(SECRET),
+            "{} put a withheld value on the wire",
+            call["name"]
+        );
+    }
+    let listing = allowed.request("tools/call", &calls[0]).to_string();
+    assert!(
+        listing.contains("allowed-value"),
+        "an allowed value is returned"
+    );
+    allowed.finish();
+
+    let refused = failed_start(&[("LIBTMUX_ENVIRONMENT_VALUES", "A=B")]);
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success());
+    assert!(stderr.contains("LIBTMUX_ENVIRONMENT_VALUES"), "{stderr}");
+    runtime.block_on(async { guard.shutdown().await.expect("tmux stops") });
+}
+
 #[test]
 fn help_names_current_startup_controls_only() {
     let output = Command::new(BIN).arg("--help").output().expect("help runs");
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    for flag in ["--socket", "--socket-name"] {
+    for flag in [
+        "--socket",
+        "--socket-name",
+        "LIBTMUX_SOCKET_PATH",
+        "LIBTMUX_SOCKET ",
+        "LIBTMUX_TMUX_CONFIG",
+        "LIBTMUX_TOOLSETS",
+        "LIBTMUX_TOOLS ",
+        "LIBTMUX_EXCLUDE_TOOLS",
+        "LIBTMUX_ENVIRONMENT_VALUES",
+    ] {
         assert!(help.contains(flag), "{flag}");
     }
     for retired in ["--safety", "--confirm", "--no-confirm", "TMUX_MCP_CONFIRM"] {

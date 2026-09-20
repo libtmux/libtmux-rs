@@ -17,6 +17,40 @@ fn finding_a_needle_reports_where_it_starts() {
     assert_eq!(find(b"abc", b""), None);
 }
 
+/// A wait that timed out must not report `Deadline` over a buffer that
+/// already contains a match (a timeout report holding the matched text in
+/// its own `tail`).
+#[test]
+fn reconcile_deadline_promotes_a_match_the_buffer_already_holds() {
+    let patterns = Patterns::compile(&["MARK".to_owned()], false, false).expect("pattern compiles");
+
+    let (outcome, index, pattern) =
+        reconcile_deadline(WaitOutcome::Deadline, None, None, &patterns, b"...MARK...");
+    assert_eq!(outcome, WaitOutcome::Matched);
+    assert_eq!(index, Some(0));
+    assert_eq!(pattern, Some("MARK".to_owned()));
+
+    // A genuine timeout with nothing to reclassify stays a timeout.
+    let (outcome, index, pattern) = reconcile_deadline(
+        WaitOutcome::Deadline,
+        None,
+        None,
+        &patterns,
+        b"nothing here",
+    );
+    assert_eq!(outcome, WaitOutcome::Deadline);
+    assert_eq!(index, None);
+    assert_eq!(pattern, None);
+
+    // A terminal outcome that already carries its own reason is untouched,
+    // even when the buffer also happens to contain a wanted pattern.
+    let (outcome, index, pattern) =
+        reconcile_deadline(WaitOutcome::Cancelled, None, None, &patterns, b"...MARK...");
+    assert_eq!(outcome, WaitOutcome::Cancelled);
+    assert_eq!(index, None);
+    assert_eq!(pattern, None);
+}
+
 #[test]
 fn shell_words_preserve_raw_bytes_and_split_apostrophes() {
     for (input, expected) in [
@@ -164,8 +198,9 @@ case $- in
 case $- in
 *e*)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set -e; \eval '\set -x
+( \trap - INT QUIT; \set -e; \eval '\set -x
 printf body # trailing comment' )
 \set -- "$?"
 {separator}
@@ -174,8 +209,9 @@ fi
 ;;
 *)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set +e; \eval '\set -x
+( \trap - INT QUIT; \set +e; \eval '\set -x
 printf body # trailing comment' )
 \set -- "$?"
 {separator}
@@ -188,8 +224,9 @@ esac
 case $- in
 *e*)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set -e; \eval 'printf body # trailing comment' )
+( \trap - INT QUIT; \set -e; \eval 'printf body # trailing comment' )
 \set -- "$?"
 {separator}
 {closing}
@@ -197,8 +234,9 @@ fi
 ;;
 *)
 \set +e
+\trap : INT QUIT
 if {separator} && {opening}; then
-( \set +e; \eval 'printf body # trailing comment' )
+( \trap - INT QUIT; \set +e; \eval 'printf body # trailing comment' )
 \set -- "$?"
 {separator}
 {closing}
@@ -932,4 +970,194 @@ async fn a_staged_frame_removes_itself_and_refuses_an_occupied_path() {
         .expect_err("an occupied path is refused");
 
     std::fs::remove_file(&path).expect("the frame is removed");
+}
+
+/// A non-`Closed` shutdown error propagates rather than being tolerated.
+///
+/// `wait_for_text` tolerates only `ControlModeErrorKind::Closed` from
+/// `output.shutdown()`; every other shutdown error is real and must discard
+/// the view being built. Nothing in the ordinary tool path can reach that
+/// branch, since [`crate::exec::wait_for_text`] always attaches with
+/// [`libtmux::ControlLimits::default`], which no ordinary pane output
+/// exceeds -- this is why `wait_for_text_with_limits` exists.
+///
+/// Attaches before sending the adversarial line, rather than sending it a
+/// fixed delay after spawning a concurrent wait: attach-then-consume are
+/// split at `wait_on_output` for exactly this, so this test can prove attach
+/// is complete before the flood starts instead of racing it.
+#[tokio::test]
+async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() {
+    use libtmux::ControlLimits;
+    use libtmux::test::TestServer;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("wait-frame-budget")
+        .await
+        .expect("session starts");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    // Comfortably above the connection's own opening handshake and the
+    // narrowing command's reply, and comfortably below the one long line the
+    // pane is made to print once attached.
+    let tiny = ControlLimits::default().max_line_bytes(256);
+    let output = pane
+        .stream_output_with_limits(tiny)
+        .await
+        .expect("attaching on a quiet pane succeeds");
+
+    // Sent only now that attach and narrow have provably finished: the very
+    // next line tmux reports on this connection already exceeds the budget.
+    pane.send_line("printf '%s\\n' \"$(head -c 4096 /dev/zero | tr '\\0' A)\"")
+        .await
+        .expect("the adversarial line is sent");
+
+    // A run of 10 `A`s: absent from the echoed command line above, which
+    // types the letter only in isolation, so this never matches the echo.
+    // It also never arrives as a delivered chunk: tmux's own protocol line
+    // carrying it is what exceeds the budget, so the connection dies before
+    // that line becomes an `Event::Output` this stream could read.
+    let patterns =
+        Patterns::compile(&["AAAAAAAAAA".to_owned()], false, false).expect("pattern compiles");
+    let stops = Patterns::compile(&[], false, false).expect("empty stop patterns compile");
+    let cancelled = CancellationToken::new();
+    let echoes = PaneEchoes::new();
+
+    let error = wait_on_output(
+        &pane,
+        output,
+        &patterns,
+        &stops,
+        Duration::from_secs(5),
+        &cancelled,
+        EchoContext {
+            echoes: &echoes,
+            key: None,
+        },
+    )
+    .await
+    .expect_err("a too-small frame budget is a real shutdown error, not a tolerated Closed");
+    assert!(
+        matches!(error, Error::ControlModeFrameTooLarge { .. }),
+        "the frame-budget error surfaces rather than being swallowed: {error:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// S2 (echo contract), attached-before-send variant: a wait that is already
+/// watching before a command is even typed must still match the command's
+/// real output, not the echo of the line it submitted.
+///
+/// Attaches before dispatching `send_keys`, rather than racing a concurrent
+/// wait against it: `tokio::spawn`ing the wait first proves nothing on a
+/// single-threaded test runtime, since the spawned task does not run a step
+/// until the spawning task yields, so `send_keys`'s own first await point
+/// could easily run before the wait's. `pane.stream_output` awaited to
+/// completion is the same seam
+/// `wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it`
+/// above uses for exactly this: attach, then, only once that is provably
+/// done, act.
+///
+/// Goes through the real `send_keys` tool method (not a raw `send-keys`
+/// dispatch) so the echo this test defends against is recorded exactly as
+/// production code records it.
+#[tokio::test]
+async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo() {
+    use rmcp::handler::server::wrapper::Parameters;
+
+    use crate::{SendKeysArgs, TmuxTools};
+
+    let guard = libtmux::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("echo-contract-s2-before")
+        .await
+        .expect("session starts");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    libtmux::test::retry_until(Duration::from_secs(2), async || {
+        server
+            .cmd(
+                libtmux::Command::new("display-message")
+                    .arg("-p")
+                    .arg("-t")
+                    .arg(pane.id().to_string())
+                    .arg("#{cursor_x},#{cursor_y}"),
+            )
+            .await
+            .ok()
+            .map(|result| result.stdout_lossy().trim().to_owned())
+            .is_some_and(|reading| !reading.is_empty() && reading != "0,0")
+    })
+    .await
+    .expect("the pane draws a prompt");
+
+    let tools = TmuxTools::builder(server.clone()).caller(None).build();
+
+    // Attached before anything is typed: proves this wait cannot be
+    // answered by a screen it only read after the command already ran.
+    let output = pane
+        .stream_output()
+        .await
+        .expect("attaching on a quiet pane succeeds");
+
+    tools
+        .send_keys(Parameters(SendKeysArgs {
+            pane: pane.id().to_string(),
+            text: Some("sleep 1; echo MARKER".to_owned()),
+            keys: None,
+            enter: true,
+        }))
+        .await
+        .expect("the command is sent");
+
+    let patterns =
+        Patterns::compile(&["MARKER".to_owned()], false, false).expect("pattern compiles");
+    let stops = Patterns::compile(&[], false, false).expect("empty stop patterns compile");
+    let cancelled = CancellationToken::new();
+    let generation = server.generation().await.expect("server generation");
+    let key = EchoKey::new(generation, server.socket_path(), pane.id().as_ref())
+        .expect("a key builds against a live socket");
+
+    let started = std::time::Instant::now();
+    let view = wait_on_output(
+        &pane,
+        output,
+        &patterns,
+        &stops,
+        Duration::from_secs(5),
+        &cancelled,
+        EchoContext {
+            echoes: &tools.echoes,
+            key: Some(&key),
+        },
+    )
+    .await
+    .expect("the wait completes");
+
+    assert_eq!(
+        view.outcome,
+        WaitOutcome::Matched,
+        "must not time out over the masked echo either: {view:?}"
+    );
+    // A match on the submitted line's own echo would land in a few
+    // milliseconds; the real `echo MARKER` output cannot exist before the
+    // pane's `sleep 1` returns.
+    assert!(
+        started.elapsed() >= Duration::from_millis(800),
+        "matched after only {:?}, too fast to be sleep 1's real output",
+        started.elapsed()
+    );
+    assert!(
+        view.text.lines().any(|line| line.trim() == "MARKER"),
+        "the bare output line must be in the reported text: {:?}",
+        view.text
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
 }

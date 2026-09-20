@@ -124,7 +124,13 @@ impl RunProof {
         let marker = matches!(&capture, Ok(Ok(lines)) if lines.iter().any(|line| {
             completion_status(line.as_bytes(), &self.closing).is_some()
         }));
+        // A respawned pane keeps its id and runs a new process, and the shell
+        // that ran the frame went with the old one.
         let pane_ended = matches!(&refreshed, Ok(Ok(pane)) if pane.is_dead())
+            || matches!(&refreshed, Ok(Ok(pane)) if matches!(
+                (self.pane.pid(), pane.pid()),
+                (Some(before), Some(now)) if before != now
+            ))
             || matches!(&refreshed, Ok(Err(Error::ObjectGone { .. })))
             || matches!(&capture, Ok(Err(Error::ObjectGone { .. })));
         marker || pane_ended
@@ -334,6 +340,15 @@ async fn remove_frame(path: &Path) {
 }
 
 impl PreparedRun {
+    /// The exact line this run's dispatch will type into the pane.
+    ///
+    /// Not the requested command: the command runs from a staged frame file
+    /// this loads and evaluates, so this is the short loader line the pane's
+    /// terminal actually echoes.
+    pub(crate) fn typed_line(&self) -> &OsStr {
+        &self.staged
+    }
+
     /// Send the prepared payload and Enter while retaining its watcher.
     pub(crate) async fn dispatch(self) -> RunDispatch {
         let Self {
@@ -503,6 +518,17 @@ pub(super) fn staged_line(path: &Path, shell: &[u8], suppress_history: bool) -> 
     OsString::from_vec(line)
 }
 
+/// Keeps the frame alive through `C-c` and `C-\` so it still prints the
+/// closing marker, which is what releases the pane's reservation. Without it
+/// the whole job dies, no marker comes, and the pane stays reserved until it
+/// closes. A handler rather than `''`, because an ignored signal stays
+/// ignored in the command it starts.
+const INTERRUPT_SURVIVES: &[u8] = b"\\trap : INT QUIT\n";
+
+/// Restores the default in the command's own subshell, which zsh would
+/// otherwise run with the frame's handler.
+const INTERRUPT_REACHES_COMMAND: &[u8] = b"\\trap - INT QUIT";
+
 fn marker_message(nonce: &str, closing: bool) -> Vec<u8> {
     let mut message = Vec::new();
     message.extend_from_slice(b"'__LIBTMUX_MCP_DONE_''");
@@ -525,14 +551,18 @@ fn append_command_branch(
     closing: &[u8],
 ) {
     payload.extend_from_slice(if inherited_errexit {
-        b"*e*)\n\\set +e\nif "
+        b"*e*)\n\\set +e\n"
     } else {
-        b"*)\n\\set +e\nif "
+        b"*)\n\\set +e\n"
     });
+    payload.extend_from_slice(INTERRUPT_SURVIVES);
+    payload.extend_from_slice(b"if ");
     payload.extend_from_slice(separator);
     payload.extend_from_slice(b" && ");
     payload.extend_from_slice(opening);
     payload.extend_from_slice(b"; then\n( ");
+    payload.extend_from_slice(INTERRUPT_REACHES_COMMAND);
+    payload.extend_from_slice(b"; ");
     payload.extend_from_slice(if inherited_errexit {
         b"\\set -e; \\eval "
     } else {
@@ -567,13 +597,18 @@ fn render_trapped_payload(
     }
     payload.extend_from_slice(b"(\n");
     payload.extend_from_slice(&capture.setup);
-    payload.extend_from_slice(b"\\set +e\nif ");
+    payload.extend_from_slice(b"\\set +e\n");
+    // After the capture setup, which clears every zsh signal trap.
+    payload.extend_from_slice(INTERRUPT_SURVIVES);
+    payload.extend_from_slice(b"if ");
     payload.extend_from_slice(separator);
     payload.extend_from_slice(b" && ");
     payload.extend_from_slice(opening);
     payload.extend_from_slice(b"; then\nif [ \"$");
     payload.extend_from_slice(capture.status.as_bytes());
-    payload.extend_from_slice(b"\" -eq 0 ]; then\n( case \"$");
+    payload.extend_from_slice(b"\" -eq 0 ]; then\n( ");
+    payload.extend_from_slice(INTERRUPT_REACHES_COMMAND);
+    payload.extend_from_slice(b"\ncase \"$");
     payload.extend_from_slice(capture.errexit.as_bytes());
     payload.extend_from_slice(b"\" in 1) \\set -e;; *) \\set +e;; esac\n\\eval \"");
     payload.push(b'$');

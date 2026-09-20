@@ -114,6 +114,15 @@ msrv:
     rustup run 1.88.0 cargo test --locked \
         --package tmux-mcp --all-targets
 
+# The compile-fail cases run only on the toolchain `rust-toolchain.toml` pins,
+# because their `.stderr` files quote rustc's own wording. A toolchain bump
+# rewords some of them; this rewrites every mismatch for review.
+#
+# Rewrite the derive's compile-fail expectations for the pinned toolchain
+[group: 'test']
+macros-ui-bless:
+    TRYBUILD=overwrite cargo test --locked --package libtmux-macros --test derive
+
 # Test the native tool that points agent CLIs at a build of this server
 [doc('Test the native tool that points agent CLIs at a build of this server')]
 [group: 'test']

@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
@@ -13,13 +14,13 @@ use crate::internal::listing::{self, Pushdown as _};
 use crate::internal::scoped;
 use crate::pane::Pane;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
+use crate::query::{FilterSchema, Filterable, ReadField};
 #[cfg(feature = "query")]
-use crate::snapshot::SessionFields;
-use crate::snapshot::SessionInfo;
+use crate::snapshot::{Availability, FieldRef, SessionFields};
+use crate::snapshot::{SessionInfo, stored_time};
 use crate::target::{ServerIdentity, SessionId};
 use crate::window::Window;
-use crate::{Command, CommandResult, Error, ObjectKind};
+use crate::{Command, CommandResult, Error, ObjectKind, TmuxArg};
 
 /// What a session's environment holds for one name.
 ///
@@ -232,36 +233,36 @@ impl Session {
         self.attached_client_count() > 0
     }
 
-    /// Return when the session was created, as a Unix timestamp.
+    /// Return when the session was created.
+    ///
+    /// tmux keeps whole seconds. `SessionFields::session_created` filters and
+    /// reads the same field as the `i64` of Unix seconds tmux reports, because
+    /// the query grammar compares integers.
     #[must_use]
-    pub fn created(&self) -> i64 {
-        *self.info.session_created()
+    pub fn created(&self) -> SystemTime {
+        stored_time(*self.info.session_created())
     }
 
-    /// Return when a client last attached, as a Unix timestamp.
+    /// Return when a client last attached.
     ///
     /// This is `None` for a session that has never been attached, which is the
-    /// ordinary state for one started with `new-session -d`.
+    /// ordinary state for one started with `new-session -d`. tmux keeps whole
+    /// seconds. `SessionFields::session_last_attached` filters and reads the
+    /// same field as the `i64` of Unix seconds tmux reports, because the query
+    /// grammar compares integers.
     #[must_use]
-    pub fn last_attached(&self) -> Option<i64> {
-        self.info.session_last_attached().copied().available()
+    pub fn last_attached(&self) -> Option<SystemTime> {
+        self.info
+            .session_last_attached()
+            .copied()
+            .available()
+            .map(stored_time)
     }
 
     /// Return the identity of the server this session belongs to.
     #[must_use]
     pub(crate) fn server_identity(&self) -> &ServerIdentity {
         self.core.configuration().identity()
-    }
-
-    /// List the windows linked into this session, in tmux's own order.
-    ///
-    /// This is the lenient form; use [`Session::windows`] when the reason
-    /// for an empty result matters.
-    pub async fn windows_or_empty(&self) -> Vec<Window> {
-        self.windows().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-windows", &error);
-            Vec::new()
-        })
     }
 
     /// List the windows linked into this session, preserving any failure.
@@ -282,26 +283,6 @@ impl Session {
             .into_iter()
             .map(|projection| Window::new(Arc::clone(&self.core), projection))
             .collect())
-    }
-
-    /// The windows under this session that a matcher accepts.
-    ///
-    /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::search_windows`] when the difference matters.
-    ///
-    /// Filtering happens here rather than in tmux. A [`crate::query::FilterExpr`]
-    /// is built to stay compilable to a tmux `-f` predicate, so pushing one
-    /// down later would change what this costs and not what it answers.
-    #[cfg(feature = "query")]
-    #[must_use]
-    pub async fn search_windows_or_empty<M: crate::query::Matcher<Window>>(
-        &self,
-        matcher: M,
-    ) -> Vec<Window> {
-        self.search_windows(matcher).await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-windows", &error);
-            Vec::new()
-        })
     }
 
     /// The windows under this session that a matcher accepts, reporting why
@@ -447,17 +428,6 @@ impl Session {
         Ok(self.windows().await?.into_iter().find(Window::is_active))
     }
 
-    /// List every pane in this session, in tmux's own order.
-    ///
-    /// This is the lenient form; use [`Session::panes`] when the reason
-    /// for an empty result matters.
-    pub async fn panes_or_empty(&self) -> Vec<Pane> {
-        self.panes().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-panes", &error);
-            Vec::new()
-        })
-    }
-
     /// List every pane in this session, preserving any failure.
     ///
     /// # Errors
@@ -537,7 +507,7 @@ impl Session {
     /// tmux expands the name as a format before it checks it, so `#(command)`
     /// in one runs a shell command. See [the crate documentation][crate#a-name-reaches-tmux-as-a-format]
     /// before passing text a caller supplied.
-    pub async fn rename(&mut self, name: impl Into<OsString>) -> Result<&mut Self, Error> {
+    pub async fn rename(&mut self, name: impl Into<TmuxArg>) -> Result<&mut Self, Error> {
         listing::mutate(
             &self.core,
             "rename-session",
@@ -545,7 +515,7 @@ impl Session {
                 .arg("-t")
                 .arg(self.id().to_string())
                 .arg("--")
-                .arg(name.into()),
+                .arg(name.into().into_os_string()),
         )
         .await?;
 
@@ -648,6 +618,7 @@ impl Session {
             .cmd(
                 Command::new("display-message")
                     .arg("-p")
+                    .arg("--")
                     .arg(OsString::from(template)),
             )
             .await?;
@@ -680,7 +651,11 @@ impl Session {
     /// Returns an error when tmux cannot be reached or refuses the message.
     pub async fn display(&self, message: &str) -> Result<(), Error> {
         let result = self
-            .cmd(Command::new("display-message").arg(OsString::from(message)))
+            .cmd(
+                Command::new("display-message")
+                    .arg("--")
+                    .arg(OsString::from(message)),
+            )
             .await?;
         if result.success() {
             return Ok(());
@@ -736,7 +711,7 @@ impl Session {
     /// Succeeds when no client was attached. tmux reports that as a failure,
     /// but the state this asks for -- nobody attached to this session -- is
     /// already true, and a caller that has to tell "detached them" from
-    /// "there was nobody" can compare [`crate::Server::clients_or_empty`] before and
+    /// "there was nobody" can compare [`crate::Server::clients`] before and
     /// after.
     ///
     /// # Errors
@@ -788,33 +763,27 @@ impl Session {
 
     /// Create a window, run an operation with it, then kill it.
     ///
-    /// Once this future is polled, the scope owns creation and cleanup.
-    /// Cancellation or unwinding can let an in-flight creation finish, but a
-    /// window whose creation yields a handle is killed while the Tokio runtime
-    /// remains active. Ordinary handle `Drop` remains non-destructive.
-    ///
-    /// Setup and teardown failures convert into the operation's own error
-    /// type, so a caller writes one `?` rather than unwrapping twice. When
-    /// both the operation and cleanup fail, the cleanup error is returned as
-    /// [`Error::AfterEffect`], because tmux had already accepted the scope's
-    /// creation; the operation error is discarded. When the operation fails
-    /// and cleanup succeeds, its generic error is returned unchanged: the
-    /// scope cannot certify replay safety for arbitrary callback work.
-    /// A canceled caller cannot receive a cleanup error, so tracing is its
-    /// only report.
+    /// [`crate::ScopeError`] retains creation, operation and cleanup failures
+    /// separately. If operation and cleanup both fail, both original errors
+    /// are returned. Cleanup errors carry [`Error::AfterEffect`] because
+    /// creation succeeded.
     ///
     /// # Errors
     ///
-    /// Returns the operation's error, or a converted [`Error`] when the
-    /// window could not be created or could not be killed after creation.
+    /// Returns [`crate::ScopeError`] when creation, the operation, or cleanup
+    /// fails. The operation's error needs no conversion into [`Error`].
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
+    /// of their own, so the window is killed even if this future is dropped
+    /// or the operation panics, while the Tokio runtime is alive. A cleanup
+    /// failure then has no caller to reach; the `tracing` feature records it.
     pub async fn with_window<T, E>(
         &self,
         options: impl Into<NewWindowOptions>,
         operation: impl AsyncFnOnce(&Window) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<Error>,
-    {
+    ) -> Result<T, crate::ScopeError<T, E>> {
         let session = self.clone();
         let options = options.into();
         scoped::run(
@@ -899,6 +868,50 @@ impl fmt::Debug for Session {
     }
 }
 
+#[cfg(feature = "query")]
+impl Session {
+    /// Read one field of this session's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field in [`SessionFields`] reads this way, including those with no
+    /// getter of their own. Nothing is sent to tmux, so the value is as old as
+    /// the snapshot. The result says why a field holds no value: see
+    /// [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// use libtmux::query::Filterable as _;
+    /// use libtmux::{Availability, Session};
+    ///
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let session = guard.server().new_session("read").await?;
+    /// let fields = Session::filter_fields();
+    ///
+    /// // Nobody is attached, so nobody is attached twice.
+    /// assert_eq!(session.get(fields.session_many_attached), Availability::Available(false));
+    /// assert_eq!(session.get(fields.session_id), Availability::Available(session.id()));
+    ///
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.info.stored(name)
+    }
+}
+
 /// Filtering a session uses the same handles as the snapshot beneath it.
 ///
 /// Matching and validation delegate to that snapshot, so an expression can
@@ -966,8 +979,8 @@ impl FilterSchema for Session {
 #[must_use = "options describe a window but do not create one"]
 #[derive(Clone)]
 pub struct NewWindowOptions {
-    name: Option<OsString>,
-    start_directory: Option<std::path::PathBuf>,
+    name: Option<TmuxArg>,
+    start_directory: Option<TmuxArg>,
     command: Option<OsString>,
     index: Option<i32>,
     placement: Option<WindowPlacement>,
@@ -1048,8 +1061,10 @@ impl NewWindowOptions {
         }
     }
 
-    /// Describe a window with the given name.
-    pub fn new(name: impl Into<OsString>) -> Self {
+    /// Describe a window with the given name, sent literally.
+    ///
+    /// [`TmuxArg::format`] opts into expansion.
+    pub fn new(name: impl Into<TmuxArg>) -> Self {
         Self {
             name: Some(name.into()),
             ..Self::unnamed()
@@ -1058,9 +1073,9 @@ impl NewWindowOptions {
 
     /// Set the window's working directory.
     ///
-    /// tmux expands this as a format, so [`crate::escape_format`] belongs
-    /// around text a program did not write.
-    pub fn start_directory(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+    /// The directory is sent literally. [`TmuxArg::format`] opts into
+    /// expansion, which is how `#{pane_current_path}` is asked for.
+    pub fn start_directory(mut self, directory: impl Into<TmuxArg>) -> Self {
         self.start_directory = Some(directory.into());
         self
     }
@@ -1139,7 +1154,7 @@ impl NewWindowOptions {
             command = command.arg("-k");
         }
         if let Some(name) = self.name {
-            command = command.arg("-n").arg(name);
+            command = command.arg("-n").arg(name.into_os_string());
         }
         if let Some(directory) = self.start_directory {
             command = command.arg("-c").arg(directory.into_os_string());
@@ -1150,7 +1165,7 @@ impl NewWindowOptions {
                 .sensitive_arg(crate::window::assignment(&name, &value));
         }
         if let Some(shell_command) = self.command {
-            command = command.sensitive_arg(shell_command);
+            command = command.arg("--").sensitive_arg(shell_command);
         }
         command
     }
@@ -1158,6 +1173,7 @@ impl NewWindowOptions {
 
 impl<T: Into<OsString>> From<T> for NewWindowOptions {
     fn from(name: T) -> Self {
+        let name: OsString = name.into();
         Self::new(name)
     }
 }

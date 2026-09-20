@@ -23,7 +23,7 @@ use super::Filterable;
 /// use libtmux::query::FilterExpr;
 ///
 /// #[derive(libtmux::Filterable)]
-/// #[filterable(target = "task", crate = "libtmux")]
+/// #[filterable(target = "task")]
 /// struct Task {
 ///     name: String,
 ///     done: bool,

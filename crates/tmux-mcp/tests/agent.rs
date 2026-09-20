@@ -17,7 +17,7 @@ use libtmux::{
     SplitOptions,
 };
 use serde_json::Value;
-use tmux_mcp::{CallerIdentity, TmuxTools};
+use tmux_mcp::{CallerIdentity, Selection, TmuxTools};
 use tokio_util::sync::CancellationToken;
 
 mod support;
@@ -78,11 +78,13 @@ impl GuardedDispatch {
                 Self::Send => tools
                     .send_keys(args(serde_json::json!({"pane": pane, "keys": ["C-l"]})))
                     .await
-                    .map(|_| ()),
+                    .map(|_| ())
+                    .map_err(tmux_mcp::ToolError::into_error_data),
                 Self::Paste => tools
                     .paste_text(args(serde_json::json!({"pane": pane, "text": "race"})))
                     .await
-                    .map(|_| ()),
+                    .map(|_| ())
+                    .map_err(tmux_mcp::ToolError::into_error_data),
             }
         })
     }
@@ -596,6 +598,7 @@ async fn run_error(tools: &TmuxTools, pane: &str, command: &str) -> rmcp::model:
         .await
         .err()
         .unwrap_or_else(|| panic!("guarded run is refused: {command}"))
+        .into_error_data()
 }
 
 type RunTask = tokio::task::JoinHandle<
@@ -631,6 +634,7 @@ async fn waiting_run(
                     tmux_mcp::Reporter::none(),
                 )
                 .await
+                .map_err(tmux_mcp::ToolError::into_error_data)
         }
     });
     await_channel(server, &started).await;
@@ -698,7 +702,8 @@ async fn assert_paste_refused_unchanged(
         .paste_text(args(serde_json::json!({"pane": pane, "text": "guarded"})))
         .await
         .err()
-        .expect("paste is refused");
+        .expect("paste is refused")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], kind);
     assert_eq!(server.buffer_names().await.expect("buffers list"), buffers);
     assert_eq!(pane_screen(tools, pane).await, screen);
@@ -862,7 +867,8 @@ async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
         })))
         .await
         .err()
-        .expect("a modal configured peer refuses the whole input");
+        .expect("a modal configured peer refuses the whole input")
+        .into_error_data();
     assert_eq!(
         modal_error.data.expect("typed refusal")["kind"],
         "invalid_input"
@@ -879,7 +885,7 @@ async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
         .expect("fixture retains a dead pane");
     let mut peer_handle = peer_handle;
     peer_handle
-        .respawn(Some("exit 0"), true)
+        .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
         .await
         .expect("fixture command exits");
     libtmux::test::retry_until(Duration::from_secs(2), async || {
@@ -916,7 +922,8 @@ async fn pane_input_refuses_input_disabled_configured_members() {
         })))
         .await
         .err()
-        .expect("an input-disabled configured peer refuses the whole input");
+        .expect("an input-disabled configured peer refuses the whole input")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_channel_quiet(guard.server(), channel).await;
 
@@ -952,7 +959,8 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
         })))
         .await
         .err()
-        .expect("the attended active pane refuses input");
+        .expect("the attended active pane refuses input")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_channel_quiet(guard.server(), source_channel).await;
     assert_paste_refused_unchanged(&tools, guard.server(), &source, "invalid_input").await;
@@ -962,7 +970,8 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
         .send_keys(args(serde_json::json!({"pane": source, "keys": ["C-l"]})))
         .await
         .err()
-        .expect("caller protection still takes precedence");
+        .expect("caller protection still takes precedence")
+        .into_error_data();
     assert_self_protection(error, &source);
 
     pane_handle(guard.server(), &source)
@@ -992,7 +1001,8 @@ async fn pane_input_refuses_terminal_attention_but_not_control_clients() {
         })))
         .await
         .err()
-        .expect("every pane visible to a terminal client refuses input");
+        .expect("every pane visible to a terminal client refuses input")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_channel_quiet(guard.server(), peer_channel).await;
 
@@ -1115,7 +1125,8 @@ async fn pane_input_and_batch_protect_only_reached_caller_panes() {
         })))
         .await
         .err()
-        .expect("direct caller input is refused");
+        .expect("direct caller input is refused")
+        .into_error_data();
     assert_self_protection(error, &source);
     assert_channel_quiet(guard.server(), direct_channel).await;
 
@@ -1132,7 +1143,8 @@ async fn pane_input_and_batch_protect_only_reached_caller_panes() {
         })))
         .await
         .err()
-        .expect("a synchronized caller peer refuses the whole input");
+        .expect("a synchronized caller peer refuses the whole input")
+        .into_error_data();
     assert_self_protection(error, &peer);
     assert_channel_quiet(guard.server(), peer_channel).await;
 
@@ -1245,7 +1257,8 @@ async fn pane_input_fails_closed_on_incomplete_or_inconsistent_caller_context() 
             .paste_text(args(serde_json::json!({"pane": source, "text": ""})))
             .await
             .err()
-            .unwrap_or_else(|| panic!("{case} must fail pane input closed"));
+            .unwrap_or_else(|| panic!("{case} must fail pane input closed"))
+            .into_error_data();
         assert_eq!(
             error.data.as_ref().expect("typed caller refusal")["kind"],
             "self_protection",
@@ -1319,7 +1332,7 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
         .await
         .expect("fixture retains a dead pane");
     source_handle
-        .respawn(Some("exit 0"), true)
+        .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
         .await
         .expect("fixture command exits");
     libtmux::test::retry_until(Duration::from_secs(2), async || {
@@ -1363,7 +1376,8 @@ async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
         .paste_text(args(serde_json::json!({"pane": pane, "text": "late"})))
         .await
         .err()
-        .expect("a transition after setup refuses the paste");
+        .expect("a transition after setup refuses the paste")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert!(pane_handle(guard.server(), &pane).await.is_in_mode());
     assert_eq!(
@@ -1387,7 +1401,8 @@ async fn paste_text_keeps_empty_input_buffer_free_and_cleans_late_refusal() {
         .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
         .await
         .err()
-        .expect("even an empty paste performs its target guard");
+        .expect("even an empty paste performs its target guard")
+        .into_error_data();
     assert_eq!(error.data.expect("typed refusal")["kind"], "invalid_input");
     assert_eq!(
         guard.server().buffer_names().await.expect("buffers list"),
@@ -1528,7 +1543,8 @@ async fn teardown_refuses_the_inherited_caller_pane() {
         .kill_pane(args(serde_json::json!({"pane": own})))
         .await
         .map(|_| ())
-        .expect_err("caller pane is protected");
+        .expect_err("caller pane is protected")
+        .into_error_data();
 
     assert!(error.message.contains(&own), "{}", error.message);
     assert_eq!(panes(&tools).await.len(), 1);
@@ -1587,7 +1603,8 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
             .err()
-            .expect("the interrupted command still reserves the pane");
+            .expect("the interrupted command still reserves the pane")
+            .into_error_data();
         assert_active_run(&refusal, outcome);
         signal_channel(guard.server(), &release).await;
         assert_eq!(
@@ -1604,6 +1621,163 @@ async fn real_tmux_compat_run_shell_command_reports_output_status_and_cancellati
             .expect("pane list")
             .is_empty()
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A run that outlives its deadline keeps its pane reserved, and the recovery
+/// the README prescribes has to reach it: `C-c` alone passes the reservation,
+/// the frame survives the interrupt to report completion, and the pane is
+/// free for the next run. Before this the interrupt was refused, and when it
+/// did land the whole frame died without a marker, reserving the pane until
+/// it closed.
+#[tokio::test]
+async fn an_interrupt_ends_a_run_that_outlived_its_deadline() {
+    for (shell, flags) in [
+        ("/bin/sh", None),
+        ("/bin/bash", Some("--noprofile --norc")),
+        ("/bin/zsh", Some("-f")),
+    ] {
+        if !std::path::Path::new(shell).is_file() {
+            continue;
+        }
+        let shell_name = shell.rsplit('/').next().expect("shell basename");
+        let (guard, tools, pane) = typing_fixture(&format!("interrupt-{shell_name}")).await;
+        if let Some(flags) = flags {
+            pane_handle(guard.server(), &pane)
+                .await
+                .respawn(
+                    Some(&format!("exec {shell} {flags}")),
+                    libtmux::Respawn::Replacing,
+                )
+                .await
+                .expect("fixture pane changes shell");
+            libtmux::test::retry_until(Duration::from_secs(2), async || {
+                pane_handle(guard.server(), &pane)
+                    .await
+                    .current_command()
+                    .is_some_and(|command| command.as_bytes() == shell_name.as_bytes())
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{shell_name} becomes the foreground shell"));
+            prompt_ready(guard.server(), &pane).await;
+        }
+        let baseline = client_count(guard.server()).await;
+        // `sleep`, not `tmux wait-for`: a tmux command client ignores SIGINT.
+        let started = format!("mcp-interrupt-{shell_name}-started");
+        let request = tokio::spawn({
+            let tools = tools.clone();
+            let pane = pane.clone();
+            let command = format!("tmux wait-for -S {started}; sleep 30");
+            async move {
+                tools
+                    .run_command(
+                        args(serde_json::json!({
+                            "pane": pane,
+                            "command": command,
+                            "seconds": 1
+                        })),
+                        CancellationToken::new(),
+                        tmux_mcp::Reporter::none(),
+                    )
+                    .await
+                    .map_err(tmux_mcp::ToolError::into_error_data)
+            }
+        });
+        await_channel(guard.server(), &started).await;
+        let stopped = json(request.await.expect("request joins").expect("run answers"));
+        assert_eq!(stopped["outcome"], "deadline", "{shell_name}");
+        let refused = tools
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .err()
+            .expect("other input waits for the run")
+            .into_error_data();
+        assert_active_run(&refused, shell_name);
+
+        tools
+            .send_keys(args(serde_json::json!({"pane": pane, "keys": ["C-c"]})))
+            .await
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{shell_name}: the interrupt was refused: {}",
+                    error.into_error_data()
+                )
+            });
+        assert_eq!(
+            clients_settle(guard.server(), baseline).await,
+            baseline,
+            "{shell_name}: the interrupted run never proved its completion"
+        );
+        libtmux::test::retry_until(Duration::from_secs(5), async || {
+            tools
+                .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+                .await
+                .is_ok()
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{shell_name}: the reservation outlived the run"));
+        prompt_ready(guard.server(), &pane).await;
+        assert_eq!(
+            run_view(&tools, &pane, "true").await["exit_status"],
+            0,
+            "{shell_name}"
+        );
+
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+}
+
+/// A command that ignores both interrupts still leaves an escape short of
+/// teardown: respawning the pane replaces the shell that ran the frame, and
+/// the new process is the proof the run is over.
+#[tokio::test]
+async fn respawning_releases_a_run_that_ignores_interrupts() {
+    let (guard, tools, pane) = typing_fixture("interrupt-ignored").await;
+    let started = "mcp-interrupt-ignored-started";
+    let request = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .run_command(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "command": format!("trap '' INT QUIT; tmux wait-for -S {started}; sleep 30"),
+                        "seconds": 1
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+                .map_err(tmux_mcp::ToolError::into_error_data)
+        }
+    });
+    await_channel(guard.server(), started).await;
+    let stopped = json(request.await.expect("request joins").expect("run answers"));
+    assert_eq!(stopped["outcome"], "deadline");
+    tools
+        .send_keys(args(serde_json::json!({"pane": pane, "keys": ["C-c"]})))
+        .await
+        .expect("an interrupt passes the reservation");
+
+    let respawned = call_tool(
+        tools.clone(),
+        "respawn_pane",
+        serde_json::json!({"pane": pane, "kill_first": true}),
+    )
+    .await;
+    assert_ne!(respawned.is_error, Some(true), "{respawned:?}");
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        tools
+            .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
+            .await
+            .is_ok()
+    })
+    .await
+    .expect("respawning released the reservation");
+    prompt_ready(guard.server(), &pane).await;
+    assert_eq!(run_view(&tools, &pane, "true").await["exit_status"], 0);
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -1747,7 +1921,7 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
             .err()
-            .and_then(|error| error.data)
+            .and_then(|error| error.into_error_data().data)
             .is_some_and(|data| data["kind"] == "invalid_input")
     })
     .await
@@ -1766,7 +1940,7 @@ async fn run_requires_a_known_posix_shell_before_watcher_setup() {
     let (guard, tools, pane) = typing_fixture("run-known-shell").await;
     let mut target = pane_handle(guard.server(), &pane).await;
     target
-        .respawn(Some("exec cat"), true)
+        .respawn(Some("exec cat"), libtmux::Respawn::Replacing)
         .await
         .expect("the pane enters an input-reading non-shell");
     libtmux::test::retry_until(Duration::from_secs(2), async || {
@@ -1838,7 +2012,9 @@ async fn active_run_reservation_is_process_wide_and_guards_all_input() {
         ("run", overlapping.map(|_| ())),
     ] {
         assert_active_run(
-            &result.expect_err("active run guards every pane-input route"),
+            &result
+                .expect_err("active run guards every pane-input route")
+                .into_error_data(),
             operation,
         );
     }
@@ -1914,7 +2090,8 @@ async fn assert_input_reservation_blocks_run(operation: GuardedDispatch) {
     );
     assert_active_run(
         &run.err()
-            .expect("the input reservation refuses the racing run"),
+            .expect("the input reservation refuses the racing run")
+            .into_error_data(),
         &format!("run racing a {}", operation.name()),
     );
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -2005,7 +2182,8 @@ async fn uncertain_dispatch_keeps_the_run_reserved_until_proven() {
         )
         .await
         .err()
-        .expect("the accepted send times out before acknowledgement");
+        .expect("the accepted send times out before acknowledgement")
+        .into_error_data();
     assert_eq!(
         error.data.expect("typed uncertain dispatch")["kind"],
         "dispatch_unknown"
@@ -2017,7 +2195,8 @@ async fn uncertain_dispatch_keeps_the_run_reserved_until_proven() {
         .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
         .await
         .err()
-        .expect("uncertain delivery reserves the pane");
+        .expect("uncertain delivery reserves the pane")
+        .into_error_data();
     assert_active_run(&refusal, "paste after uncertain dispatch");
 
     signal_channel(guard.server(), release).await;
@@ -2080,7 +2259,7 @@ async fn run_refuses_initial_input_before_watcher_setup() {
         assert_eq!(
             guard
                 .server()
-                .get_global_option("@mcp-initial-watcher")
+                .typed_global_option("@mcp-initial-watcher")
                 .await
                 .expect("hook record is read"),
             None,
@@ -2166,7 +2345,8 @@ async fn run_reports_phase_aware_source_disappearance() {
         )
         .await
         .err()
-        .expect("a pane killed after the initial checkpoint is refused");
+        .expect("a pane killed after the initial checkpoint is refused")
+        .into_error_data();
     let final_detail = final_error.data.expect("transition detail");
     assert_eq!(final_error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
     assert_eq!(final_detail["kind"], "object_gone");
@@ -2190,7 +2370,8 @@ async fn run_reports_phase_aware_source_disappearance() {
         )
         .await
         .err()
-        .expect("an initially unknown pane is caller input");
+        .expect("an initially unknown pane is caller input")
+        .into_error_data();
     assert_eq!(initial_error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     assert_eq!(
         initial_error.data.expect("caller detail")["kind"],
@@ -2272,7 +2453,7 @@ async fn assert_terminal_control_route_is_preflight_failure(
     assert_eq!(client_count(&bootstrap).await, baseline_clients);
     assert_eq!(
         bootstrap
-            .get_global_option("@mcp-route-watcher")
+            .typed_global_option("@mcp-route-watcher")
             .await
             .expect("watcher record is read"),
         None,
@@ -2280,7 +2461,7 @@ async fn assert_terminal_control_route_is_preflight_failure(
     );
     assert_eq!(
         bootstrap
-            .get_global_option("@mcp-route-display")
+            .typed_global_option("@mcp-route-display")
             .await
             .expect("display record is read"),
         None,
@@ -2315,7 +2496,8 @@ async fn pane_input_rejects_terminal_control_in_the_socket_route() {
         })))
         .await
         .err()
-        .expect("pane input rejects a terminal-control socket");
+        .expect("pane input rejects a terminal-control socket")
+        .into_error_data();
 
     assert_eq!(error.data.expect("typed refusal")["kind"], "decode");
     assert_eq!(pane_screen(&bootstrap_tools, &pane).await, before);
@@ -2538,7 +2720,10 @@ async fn run_frame_preserves_inherited_error_and_debug_traps() {
         let (guard, tools, pane) = typing_fixture(&format!("run-frame-traps-{shell_name}")).await;
         pane_handle(guard.server(), &pane)
             .await
-            .respawn(Some(&format!("exec {shell} {flags}")), true)
+            .respawn(
+                Some(&format!("exec {shell} {flags}")),
+                libtmux::Respawn::Replacing,
+            )
             .await
             .expect("fixture pane changes shell");
         libtmux::test::retry_until(Duration::from_secs(2), async || {
@@ -2758,6 +2943,342 @@ async fn wait_and_cursor_tools_observe_live_output() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// `list_sessions` must not read a session as attached while this server's
+/// own `wait_for_text` is the only client there.
+///
+/// tmux really does count the wait's control connection as an attached
+/// client, so the test waits for that raw count to prove the wait is
+/// attached before asserting `list_sessions` excludes it -- the property
+/// under test is the exclusion, not a delay long enough for a client to
+/// show up.
+#[tokio::test]
+async fn list_sessions_excludes_this_processs_own_observation_client() {
+    let (guard, tools, pane) = typing_fixture("watch-excludes-own-client").await;
+    let name = "watch-excludes-own-client";
+
+    let listed_before = json(tools.list_sessions().await.expect("sessions"));
+    assert_eq!(listed_before["sessions"][0]["attached"], false);
+
+    let waiting = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .wait_for_text(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "patterns": ["mcp-rs2-11-never-matches"],
+                        "seconds": 5
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+
+    let raw_attached = libtmux::test::retry_until(Duration::from_secs(3), async || {
+        guard
+            .server()
+            .session(name)
+            .await
+            .is_ok_and(|session| session.is_some_and(|found| found.is_attached()))
+    })
+    .await;
+    assert!(
+        raw_attached.is_ok(),
+        "the wait's own control client attaches, which is what tmux itself counts",
+    );
+
+    let listed_during = json(tools.list_sessions().await.expect("sessions"));
+    assert_eq!(
+        listed_during["sessions"][0]["attached"], false,
+        "this server's own observation client is not an attached client: {listed_during}",
+    );
+
+    waiting
+        .await
+        .expect("the wait task joins")
+        .expect("wait_for_text answers");
+
+    // The other half of D2: excluding this server's own clients must not
+    // widen into excluding every client. A foreign control connection this
+    // test spawns directly, outside TmuxTools, still reads as attached.
+    let executable = guard
+        .server()
+        .resolved_tmux_executable()
+        .expect("fixture tmux resolves");
+    let mut foreign = std::process::Command::new(executable)
+        .arg("-S")
+        .arg(guard.server().socket_path())
+        .arg("-C")
+        .arg("attach")
+        .arg("-t")
+        .arg(name)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("a foreign control client starts");
+
+    let listed_with_foreign = libtmux::test::retry_until(Duration::from_secs(5), async || {
+        json(
+            tools
+                .list_sessions()
+                .await
+                .expect("sessions answers while a foreign client is attached"),
+        )["sessions"][0]["attached"]
+            == true
+    })
+    .await;
+    let _ = foreign.kill();
+    let _ = foreign.wait();
+    assert!(
+        listed_with_foreign.is_ok(),
+        "a genuinely foreign client is not excluded",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// `send_keys` then `wait_for_text` for a pattern the typed line's own echo
+/// already shows must not report `matched`.
+///
+/// The line is typed without Enter and the wait begins only once the echo is
+/// on screen, so the pattern sits on the row still being typed into on every
+/// run rather than on whichever runs the shell happened to echo first, and
+/// is reported `pending` rather than `present_at_entry`: nothing has
+/// run yet.
+#[tokio::test]
+async fn send_then_wait_does_not_match_the_commands_own_echo() {
+    let (guard, tools, pane) = typing_fixture("send-then-wait").await;
+
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent");
+    let server = guard.server();
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        server
+            .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
+            .await
+            .is_ok_and(|captured| captured.stdout_lossy().contains("MCPMARKER"))
+    })
+    .await
+    .expect("the shell echoes the typed line");
+
+    let waited = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "patterns": ["MCPMARKER"],
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait answers"),
+    );
+    assert_eq!(
+        waited["outcome"], "pending",
+        "a pattern only on the row still being typed into is not a match: {waited}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Waiting again for the same marker after submitting it reports the
+/// command's own output, not the same `pending` answer as before it ran.
+///
+/// `echo MCPMARKER2` puts the marker in both the typed line and the line's
+/// own output, which is exactly the shape that used to make both waits
+/// answer identically: `present_at_entry`/`pending` is a screen-snapshot
+/// check with no notion of a row still being typed into, so it could not
+/// tell "only the unsubmitted echo" apart from "the command's own output,
+/// already printed."
+#[tokio::test]
+async fn waiting_again_after_submitting_reports_the_output_not_the_echo() {
+    let (guard, tools, pane) = typing_fixture("send-then-wait-again").await;
+
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER2",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent");
+    let waited = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "patterns": ["MCPMARKER2"],
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait answers"),
+    );
+    assert_eq!(waited["outcome"], "pending", "{waited}");
+
+    tools
+        .send_keys(args(serde_json::json!({"pane": pane, "enter": true})))
+        .await
+        .expect("the line is submitted");
+
+    let waited_again = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane,
+                    "patterns": ["MCPMARKER2"],
+                    "seconds": 5
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("wait answers"),
+    );
+    assert_eq!(
+        waited_again["outcome"], "present_at_entry",
+        "the command genuinely ran, so this is its output, not the unsubmitted echo: {waited_again}",
+    );
+    let text = waited_again["text"].as_str().expect("text field");
+    assert!(
+        text.matches("MCPMARKER2").count() >= 2,
+        "the report includes both the echoed command line and its own printed output: {text:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pattern that arrives genuinely after the wait attached is still
+/// reported `matched`, even though the same text sat unsubmitted on the
+/// pending line moments earlier: a later confirmed match must not be
+/// swallowed by the earlier pending one.
+#[tokio::test]
+async fn a_match_after_the_wait_attaches_is_still_reported() {
+    let (guard, tools, pane) = typing_fixture("wait-then-submit").await;
+
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER3",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent");
+    libtmux::test::retry_until(Duration::from_secs(5), async || {
+        guard
+            .server()
+            .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
+            .await
+            .is_ok_and(|captured| captured.stdout_lossy().contains("MCPMARKER3"))
+    })
+    .await
+    .expect("the shell echoes the typed line");
+
+    let waiting = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .wait_for_text(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "patterns": ["submitted-MCPMARKER3"],
+                        "seconds": 10
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    tools
+        .send_keys(args(serde_json::json!({"pane": pane, "enter": true})))
+        .await
+        .expect("the line is submitted");
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo submitted-MCPMARKER3",
+            "enter": true
+        })))
+        .await
+        .expect("a second command runs and prints the awaited marker");
+
+    let waited = json(waiting.await.expect("wait joins").expect("wait answers"));
+    assert_eq!(waited["outcome"], "matched", "{waited}");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Typing a marker without submitting it while a wait is already attached
+/// must not report `matched`, even though the kernel's echo of the typed
+/// keys is genuinely new output on this connection.
+///
+/// This is the same trap `send_then_wait_does_not_match_the_commands_own_echo`
+/// closes at attach time, reproduced against the stream-reading loop
+/// instead of the entry screen: `patterns.first_match` on the accumulated
+/// stream bytes alone cannot tell "the pane's own not-yet-submitted line"
+/// apart from real output, only a check against the current screen's row
+/// still being typed into can.
+#[tokio::test]
+async fn typing_a_marker_without_submitting_while_a_wait_is_open_is_not_matched() {
+    let (guard, tools, pane) = typing_fixture("type-while-waiting").await;
+
+    let waiting = tokio::spawn({
+        let tools = tools.clone();
+        let pane = pane.clone();
+        async move {
+            tools
+                .wait_for_text(
+                    args(serde_json::json!({
+                        "pane": pane,
+                        "patterns": ["MCPMARKER4"],
+                        "seconds": 3
+                    })),
+                    CancellationToken::new(),
+                    tmux_mcp::Reporter::none(),
+                )
+                .await
+        }
+    });
+    // The wait must be attached before the marker is typed: the point is a
+    // pattern arriving as fresh stream output, not one already on the
+    // screen `read_present_at_entry` reads before this task even starts.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane,
+            "text": "echo MCPMARKER4",
+            "enter": false
+        })))
+        .await
+        .expect("input is sent, not submitted");
+
+    let waited = json(waiting.await.expect("wait joins").expect("wait answers"));
+    assert_eq!(
+        waited["outcome"], "deadline",
+        "typed but never submitted text must not be reported matched: {waited}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn search_snapshot_and_configuration_reads_are_structured() {
     let (guard, tools, pane) = typing_fixture("inspect").await;
@@ -2830,7 +3351,162 @@ async fn search_snapshot_and_configuration_reads_are_structured() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| { entry["name"] == "TMUX_MCP_PROBE" && entry["value"] == "secret-like" })
+            .any(|entry| { entry["name"] == "TMUX_MCP_PROBE" && entry["withheld"] == true })
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+const PLANTED_SECRET: &str = "planted-secret-9c41";
+
+/// Plant a server secret, a session secret, an allowed value, and a removal.
+async fn plant_environment(server: &Server) {
+    let session = server
+        .new_session("withheld")
+        .await
+        .expect("session starts");
+    server
+        .set_environment("PLANTED_API_KEY", PLANTED_SECRET)
+        .await
+        .expect("server secret is planted");
+    session
+        .set_environment("PLANTED_SESSION_TOKEN", PLANTED_SECRET)
+        .await
+        .expect("session secret is planted");
+    server
+        .set_environment("PLANTED_ALLOWED", "allowed-value")
+        .await
+        .expect("allowed value is planted");
+    server
+        .hide_environment("PLANTED_REMOVED")
+        .await
+        .expect("removal is planted");
+}
+
+/// Find one entry without printing the listing, which may hold real tokens.
+fn environment_entry(listing: &Value, name: &str) -> Value {
+    listing["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["name"] == name)
+        .cloned()
+        .unwrap_or_else(|| panic!("{name} is not listed"))
+}
+
+/// A tmux server holds the environment of the shell that started it, so the
+/// default answer names each variable and returns no value, and a format
+/// that falls back to the environment is refused the same way.
+///
+/// The fixture daemon inherits this test's own environment, so no failure
+/// message here prints a listing: a regression would print real tokens.
+#[tokio::test]
+async fn environment_values_are_withheld_by_default() {
+    const SECRET: &str = PLANTED_SECRET;
+    let logged = LoggedTmux::new();
+    let guard = TestServer::builder()
+        .tmux_executable(&logged.executable)
+        .start()
+        .await
+        .expect("logging tmux starts");
+    let server = guard.server();
+    plant_environment(server).await;
+    let entry = environment_entry;
+
+    let tools = bare_tools(server);
+    logged.clear();
+    let listing = call_tool(tools.clone(), "show_environment", serde_json::json!({})).await;
+    let dispatches = logged.command_dispatches("show-environment");
+    let wire = serde_json::to_string(&listing).expect("result serializes");
+    assert!(
+        !wire.contains(SECRET),
+        "a withheld value reached the client"
+    );
+    assert_eq!(dispatches, 1, "the listing is one tmux command");
+    let listing = listing.structured_content.expect("structured listing");
+    assert!(
+        listing["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .all(|entry| entry["value"].is_null()),
+        "a value was returned for a name nobody allowed"
+    );
+    let secret = entry(&listing, "PLANTED_API_KEY");
+    assert_eq!(secret["state"], "set");
+    assert_eq!(secret["withheld"], true);
+    let removed = entry(&listing, "PLANTED_REMOVED");
+    assert_eq!(removed["state"], "removed");
+    assert_eq!(removed["withheld"], false);
+
+    let session_listing = call_tool(
+        tools.clone(),
+        "show_environment",
+        serde_json::json!({"session": "withheld"}),
+    )
+    .await;
+    let wire = serde_json::to_string(&session_listing).expect("result serializes");
+    assert!(!wire.contains(SECRET), "a session value reached the client");
+
+    for name in ["PLANTED_API_KEY", "PLANTED_SESSION_TOKEN"] {
+        let refused = call_tool(
+            tools.clone(),
+            "get_tmux_variables",
+            serde_json::json!({"names": ["session_name", name]}),
+        )
+        .await;
+        let wire = serde_json::to_string(&refused).expect("result serializes");
+        assert!(
+            !wire.contains(SECRET),
+            "{name} reached the client as a format"
+        );
+        assert_eq!(refused.is_error, Some(true), "{name} was not refused");
+        assert!(wire.contains("invalid_input"), "{name} was refused untyped");
+    }
+    let formats = call_tool(
+        tools.clone(),
+        "get_tmux_variables",
+        serde_json::json!({"names": ["session_name"]}),
+    )
+    .await;
+    assert_eq!(
+        formats.structured_content.expect("variables")["values"]["session_name"],
+        "withheld"
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The operator's allowance releases the names it lists and no others.
+#[tokio::test]
+async fn an_allowed_environment_name_returns_its_value() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    plant_environment(server).await;
+
+    let allowed = TmuxTools::builder(server.clone())
+        .caller(None)
+        .environment_values(BTreeSet::from(["PLANTED_ALLOWED".to_owned()]))
+        .build();
+    let listing = call_tool(allowed.clone(), "show_environment", serde_json::json!({})).await;
+    let wire = serde_json::to_string(&listing).expect("result serializes");
+    assert!(
+        !wire.contains(PLANTED_SECRET),
+        "allowing one name released another"
+    );
+    let listing = listing.structured_content.expect("structured listing");
+    let named = environment_entry(&listing, "PLANTED_ALLOWED");
+    assert_eq!(named["value"], "allowed-value");
+    assert_eq!(named["withheld"], false);
+    let variables = call_tool(
+        allowed,
+        "get_tmux_variables",
+        serde_json::json!({"names": ["PLANTED_ALLOWED"]}),
+    )
+    .await;
+    assert_eq!(
+        variables.structured_content.expect("variables")["values"]["PLANTED_ALLOWED"],
+        "allowed-value"
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -2951,6 +3627,7 @@ async fn mcp_flag_shaped_metadata_operands_stay_literal() {
     else {
         panic!("a flag-shaped invalid layout was executed as an option");
     };
+    let layout_error = layout_error.into_error_data();
     assert!(
         !layout_error.message.contains("unknown flag"),
         "the layout reached tmux as an operand: {layout_error:?}"
@@ -3061,6 +3738,86 @@ async fn window_selection_uses_core_fixture_setup() {
             .iter()
             .any(|window| window["id"] == second && window["active"] == true)
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The server's instructions tell an agent to prefer ids, so every tool that
+/// names a session takes the id `list_sessions` returned, not only its name.
+#[tokio::test]
+async fn every_session_input_accepts_the_listed_id() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let tools = TmuxTools::builder(server.clone())
+        .caller(None)
+        .selection(
+            Selection::parse(Some("inspect,manage,execute,teardown"), None, None)
+                .expect("every toolset"),
+        )
+        .build();
+    server.new_session("by-id").await.expect("session starts");
+    let donor = server.new_session("donor").await.expect("donor starts");
+    let moving = donor
+        .new_window(NewWindowOptions::new("moving"))
+        .await
+        .expect("donor gains a second window")
+        .id()
+        .to_string();
+    let listed = call_tool(tools.clone(), "list_sessions", serde_json::json!({})).await;
+    let id = listed.structured_content.expect("session listing")["sessions"]
+        .as_array()
+        .expect("sessions")
+        .iter()
+        .find(|session| session["name"] == "by-id")
+        .expect("the session is listed")["id"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+
+    for (tool, arguments) in [
+        ("get_session_info", serde_json::json!({"session": id})),
+        ("show_environment", serde_json::json!({"session": id})),
+        ("show_hooks", serde_json::json!({"session": id})),
+        (
+            "search_panes",
+            serde_json::json!({"pattern": "unmatched", "session": id}),
+        ),
+        (
+            "show_option",
+            serde_json::json!({"name": "status", "scope": "session", "target": id}),
+        ),
+        (
+            "set_history_limit",
+            serde_json::json!({"session": id, "limit": 5000}),
+        ),
+        (
+            "set_mouse_enabled",
+            serde_json::json!({"session": id, "enabled": true}),
+        ),
+        ("create_window", serde_json::json!({"session": id})),
+        (
+            "move_window",
+            serde_json::json!({"window": moving, "destination_session": id, "destination_index": 7}),
+        ),
+        (
+            "rename_session",
+            serde_json::json!({"session": id, "name": "renamed"}),
+        ),
+        ("kill_session", serde_json::json!({"session": id})),
+    ] {
+        let result = call_tool(tools.clone(), tool, arguments).await;
+        assert_ne!(result.is_error, Some(true), "{tool}: {result:?}");
+    }
+
+    let malformed = call_tool(
+        tools,
+        "get_session_info",
+        serde_json::json!({"session": "$not-an-id"}),
+    )
+    .await;
+    let wire = serde_json::to_string(&malformed).expect("result serializes");
+    assert_eq!(malformed.is_error, Some(true), "{wire}");
+    assert!(wire.contains("invalid_input"), "{wire}");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

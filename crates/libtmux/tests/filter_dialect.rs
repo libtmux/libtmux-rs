@@ -29,7 +29,7 @@ use serde_json::Value;
 
 /// A single text field, which is all these cases need.
 #[derive(Filterable)]
-#[filterable(target = "subject", crate = "libtmux")]
+#[filterable(target = "subject")]
 struct Subject {
     text: String,
 }

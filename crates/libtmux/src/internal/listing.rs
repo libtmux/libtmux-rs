@@ -136,34 +136,6 @@ fn decode_error(list_command: &'static str) -> impl Fn(FormatCodecError) -> Erro
     }
 }
 
-/// Record that a lenient listing threw a failure away.
-///
-/// The lenient forms return an empty vector for "nothing there" and for "the
-/// listing failed", which is the trade they exist for. A caller who chose them
-/// has said the reason does not change what they do -- but somebody reading a
-/// log later still needs to be able to tell the two apart, and an empty vector
-/// cannot.
-///
-/// This lives here rather than beside any one caller because all eleven of
-/// them need it. As a private associated function on `Server` it was reachable
-/// only from that file, so five listings recorded their discard and six did
-/// not, split by nothing but where the helper happened to sit.
-#[cfg_attr(
-    not(feature = "tracing"),
-    expect(
-        unused_variables,
-        reason = "the cause has no sink when tracing is disabled"
-    )
-)]
-pub(crate) fn trace_discarded(list_command: &'static str, error: &Error) {
-    #[cfg(feature = "tracing")]
-    tracing::debug!(
-        list_command,
-        error = %error,
-        "a lenient listing discarded a failure and returned empty",
-    );
-}
-
 /// List sessions.
 pub(crate) async fn sessions(core: &Core, filter: Option<&str>) -> Result<Vec<SessionInfo>, Error> {
     const LIST_COMMAND: &str = "list-sessions";
@@ -395,6 +367,23 @@ async fn create_one<T>(
             target.as_deref(),
         ));
     }
+    // tmux can exit 0 having done nothing: `-S <dir>/missing/sock` prints
+    // `error creating ... (No such file or directory)` on stderr and exits
+    // 0 with empty stdout, though not every build writes that line -- an
+    // empty stdout alone already means nothing was created. Either way this
+    // is a plain refusal, not a partial effect, and tmux's own reason (when
+    // it gave one) is worth more than the generic message below.
+    if result.stdout().is_empty() {
+        let stderr = result.stderr_lossy();
+        return Err(Error::NoEffect {
+            command: command_name,
+            stderr: if stderr.trim().is_empty() {
+                "tmux gave no reason".to_owned()
+            } else {
+                stderr.into_owned()
+            },
+        });
+    }
 
     hydrate(result.stdout())
         .map_err(|error| error.after_effect(command_name))?
@@ -474,7 +463,7 @@ pub(crate) async fn mutate(
     Err(mutation_failure(command_name, &result, target.as_deref()))
 }
 
-fn mutation_failure(
+pub(crate) fn mutation_failure(
     command_name: &'static str,
     result: &crate::CommandResult,
     target: Option<&OsStr>,
@@ -667,26 +656,52 @@ mod tests {
 
     #[tokio::test]
     async fn successful_creation_marks_decode_and_missing_object_failures() {
-        for stdout in [b"malformed\n".as_slice(), b"".as_slice()] {
-            let executor = Arc::new(CreationExecutor {
-                calls: AtomicUsize::new(0),
-                stdout,
-            });
-            let core = Core::from_executor_for_test(executor.clone());
+        let executor = Arc::new(CreationExecutor {
+            calls: AtomicUsize::new(0),
+            stdout: b"malformed\n".as_slice(),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
 
-            let error = create_session(&core, |_format| Command::new("new-session"))
-                .await
-                .expect_err("tmux succeeded but did not describe the created session");
+        let error = create_session(&core, |_format| Command::new("new-session"))
+            .await
+            .expect_err("tmux succeeded but did not describe the created session");
 
-            assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
-            assert_eq!(error.kind(), ErrorKind::PartialEffect);
-            assert!(matches!(
-                error,
-                Error::AfterEffect {
-                    operation: "new-session",
-                    ..
-                }
-            ));
-        }
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
+        assert!(matches!(
+            error,
+            Error::AfterEffect {
+                operation: "new-session",
+                ..
+            }
+        ));
+    }
+
+    /// Output tmux could not decode is a partial effect: something was made and
+    /// this cannot say what. No output at all is not, and the difference is not
+    /// cosmetic -- a caller told an effect may be outstanding cannot safely
+    /// retry. A creating command that worked always prints the object it made,
+    /// so nothing printed means nothing made, which is what every tmux does for
+    /// a socket path under a directory that does not exist.
+    #[tokio::test]
+    async fn creation_that_printed_nothing_is_a_refusal_not_a_partial_effect() {
+        let executor = Arc::new(CreationExecutor {
+            calls: AtomicUsize::new(0),
+            stdout: b"".as_slice(),
+        });
+        let core = Core::from_executor_for_test(executor.clone());
+
+        let error = create_session(&core, |_format| Command::new("new-session"))
+            .await
+            .expect_err("tmux succeeded but described no session");
+
+        assert_ne!(error.kind(), ErrorKind::PartialEffect);
+        assert!(matches!(
+            error,
+            Error::NoEffect {
+                command: "new-session",
+                ..
+            }
+        ));
     }
 }

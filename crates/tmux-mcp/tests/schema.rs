@@ -44,7 +44,6 @@ const MANAGE: &[&str] = &[
     "wait_for_channel",
     "signal_channel",
     "set_mouse_enabled",
-    "set_history_limit",
 ];
 const EXECUTE: &[&str] = &[
     "create_session",
@@ -59,6 +58,7 @@ const EXECUTE: &[&str] = &[
 ];
 const TEARDOWN: &[&str] = &[
     "clear_pane_scrollback",
+    "set_history_limit",
     "kill_pane",
     "kill_window",
     "kill_session",
@@ -115,6 +115,131 @@ fn every_advertised_schema_is_valid_and_closed() -> TestResult {
             let output = serde_json::Value::Object((*output).clone());
             jsonschema::draft202012::meta::validate(&output)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+/// The hand-kept lists above, not the capability rows the hints derive from,
+/// say which tools must never look read-only or harmless to a client, and
+/// that every inspect tool looks read-only. The observer client that
+/// `wait_for_text` or `capture_since` attaches only reads.
+#[test]
+fn listed_mutating_tools_carry_mutating_hints() -> TestResult {
+    for tool in tools("inspect,manage,execute,teardown")?.offered() {
+        let name = tool.name.as_ref();
+        let hints = tool.annotations.as_ref().expect("annotations");
+        if INSPECT.contains(&name) {
+            assert_eq!(hints.read_only_hint, Some(true), "{name} readOnlyHint");
+        }
+        if [MANAGE, EXECUTE, TEARDOWN]
+            .iter()
+            .any(|names| names.contains(&name))
+        {
+            assert_eq!(hints.read_only_hint, Some(false), "{name} readOnlyHint");
+        }
+        if TEARDOWN.contains(&name) {
+            assert_eq!(hints.destructive_hint, Some(true), "{name} destructiveHint");
+        }
+    }
+    Ok(())
+}
+
+/// Collect every property below `schema` that has no description.
+///
+/// A `const` property is exempt: its one legal value says all there is.
+fn undocumented(schema: &serde_json::Value, path: &str, missing: &mut Vec<String>) {
+    match schema {
+        serde_json::Value::Object(object) => {
+            if let Some(properties) = object
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+            {
+                for (name, property) in properties {
+                    let described = property
+                        .get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty());
+                    if !described && property.get("const").is_none() {
+                        missing.push(format!("{path}.{name}"));
+                    }
+                }
+            }
+            for (key, value) in object {
+                undocumented(value, &format!("{path}/{key}"), missing);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                undocumented(item, &format!("{path}/{index}"), missing);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn every_input_property_carries_a_description() -> TestResult {
+    let mut missing = Vec::new();
+    for tool in tools("inspect,manage,execute,teardown")?.offered() {
+        let input = serde_json::Value::Object((*tool.input_schema).clone());
+        undocumented(&input, &tool.name, &mut missing);
+    }
+
+    assert!(
+        missing.is_empty(),
+        "{} undocumented input properties: {missing:#?}",
+        missing.len()
+    );
+    Ok(())
+}
+
+/// A client downloads `tools/list` before its first call, and a copy of
+/// every tool in `_meta` once nearly doubled it unnoticed.
+///
+/// The ceiling leaves room for new descriptions, not for a second copy of
+/// any schema.
+#[test]
+fn default_tool_list_stays_under_its_byte_ceiling() -> TestResult {
+    const CEILING: usize = 120_000;
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(Selection::parse_for_socket(None, None, None, true)?)
+        .build();
+    let bytes = serde_json::to_string(&tools.offered())?.len();
+
+    assert!(
+        bytes <= CEILING,
+        "tools/list carries {bytes} bytes of tools, over its {CEILING}-byte ceiling"
+    );
+    Ok(())
+}
+
+/// Streamed text repeats every redraw a line editor makes, so an agent
+/// reading it has to know the screen is elsewhere.
+#[test]
+fn streamed_text_says_it_is_not_the_screen() -> TestResult {
+    let offered = tools("inspect,execute")?.offered();
+    for (name, field) in [
+        ("wait_for_text", "text"),
+        ("capture_since", "text"),
+        ("run_shell_command", "output"),
+    ] {
+        let tool = offered
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("streaming tool");
+        let description = tool.description.as_deref().expect("description");
+        let output =
+            serde_json::Value::Object((**tool.output_schema.as_ref().expect("output")).clone());
+        let field = output["properties"][field]["description"]
+            .as_str()
+            .expect("field description");
+
+        for text in [description, field] {
+            // Rustdoc line breaks reach the wire inside a field description.
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(text.contains("not the rendered screen"), "{name}: {text}");
+            assert!(text.contains("capture_pane"), "{name}: {text}");
         }
     }
     Ok(())

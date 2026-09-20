@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
 
+use crate::escape_format;
 use crate::formats::TmuxText;
 use crate::hooks::IndexedHooks;
 use crate::hooks::ReplaceMode;
@@ -82,7 +83,7 @@ pub(crate) async fn get(
         .apply(Command::new("show-options"))
         .arg("-v")
         .arg("--")
-        .arg(OsString::from(name));
+        .arg(escape_format(name));
     let result = core.execute(command).await?;
 
     if !result.success() {
@@ -118,6 +119,17 @@ pub(crate) async fn get(
     }
 
     Ok(Some(TmuxText::from(value.to_vec())))
+}
+
+/// Read one option, decoded by its declared kind.
+pub(crate) async fn get_typed(
+    core: &Core,
+    scope: Scope<'_>,
+    name: &str,
+) -> Result<Option<OptionValue>, Error> {
+    Ok(get(core, scope, name)
+        .await?
+        .map(|value| OptionValue::decode(name, value)))
 }
 
 /// List the option names present at one scope.
@@ -163,8 +175,40 @@ pub(crate) async fn set(
         Some(name),
         command
             .arg("--")
-            .arg(OsString::from(name))
+            .arg(escape_format(name))
             .sensitive_arg(value.into()),
+    )
+    .await
+}
+
+/// Check a typed value against tmux's option table, then set it.
+///
+/// Checked before `set` runs `ensure_scope`, which may ask tmux for its
+/// version, so a refused value costs no tmux command.
+pub(crate) async fn set_typed(
+    core: &Core,
+    scope: Scope<'_>,
+    name: &str,
+    value: OptionValue,
+) -> Result<(), Error> {
+    // A user option has no entry in the table, and neither has a name newer
+    // than it; both go to tmux as written.
+    if let Some(schema) = crate::option_schema(name) {
+        schema
+            .check(&value)
+            .map_err(|reason| Error::OptionValueRefused {
+                option: schema.name(),
+                reason,
+            })?;
+    }
+
+    let text = TmuxText::from(value);
+    set(
+        core,
+        scope,
+        name,
+        OsString::from_vec(text.as_bytes().to_vec()),
+        false,
     )
     .await
 }
@@ -181,7 +225,7 @@ pub(crate) async fn unset(core: &Core, scope: Scope<'_>, name: &str) -> Result<(
             .apply(Command::new("set-option"))
             .arg("-u")
             .arg("--")
-            .arg(OsString::from(name)),
+            .arg(escape_format(name)),
     )
     .await
 }
@@ -206,10 +250,12 @@ pub(crate) async fn set_hook(
 ) -> Result<(), Error> {
     ensure_scope(core, scope, name).await?;
 
+    // Every valid hook name is `[a-z-]+`, so escaping is a no-op on one and
+    // protection if tmux ever expands here as it does for an option name.
     let slot = if name.contains('[') {
-        OsString::from(name)
+        escape_format(name)
     } else {
-        OsString::from(format!("{name}[0]"))
+        escape_format(format!("{name}[0]"))
     };
 
     run(
@@ -237,7 +283,7 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
             .apply(Command::new("set-hook"))
             .arg("-u")
             .arg("--")
-            .arg(OsString::from(name)),
+            .arg(escape_format(name)),
     )
     .await
 }
@@ -300,7 +346,7 @@ async fn ensure_scope(core: &Core, scope: Scope<'_>, name: &str) -> Result<(), E
     for (option, late, needs) in LATE_SCOPES {
         if *option == schema.name() && *late == requested {
             let found = core.capabilities().await?.tmux_version();
-            if !found.meets(needs) {
+            if !found.has_behavior(needs) {
                 return Err(Error::UnsupportedCapability {
                     capability: option,
                     needs: *needs,
@@ -450,7 +496,7 @@ async fn slots_of(core: &Core, scope: Scope<'_>, name: &str) -> Result<Vec<Strin
             scope
                 .apply(Command::new("show-options"))
                 .arg("--")
-                .arg(OsString::from(name)),
+                .arg(escape_format(name)),
         )
         .await?;
     if !result.success() {
@@ -536,7 +582,7 @@ pub(crate) async fn set_hooks(
                 .apply(Command::new("set-hook"))
                 .arg("-u")
                 .arg("--")
-                .arg(OsString::from(name)),
+                .arg(escape_format(name)),
         );
     }
     for (index, value) in hooks {
@@ -544,7 +590,7 @@ pub(crate) async fn set_hooks(
             scope
                 .apply(Command::new("set-hook"))
                 .arg("--")
-                .arg(OsString::from(format!("{name}[{index}]")))
+                .arg(escape_format(format!("{name}[{index}]")))
                 // A hook command is bytes, as everything tmux stores is. The
                 // single-hook path forwards them; going through a `String`
                 // here would replace whatever is not UTF-8 before tmux ever
@@ -561,18 +607,25 @@ pub(crate) async fn set_hooks(
         return run(core, "set-hook", None, first).await;
     };
 
-    run(core, "set-hook", None, first).await?;
-    let result = match commands.next() {
-        None => core.execute(second).await,
-        Some(third) => {
-            let mut chain = CommandChain::new(second).then(third);
-            for command in commands {
-                chain = chain.then(command);
-            }
-            core.execute_chain(chain).await
-        }
+    // Under `Replace` the clear travels with the entries rather than ahead of
+    // them: sent on its own, a caller who dropped this future between the two
+    // left the hook cleared and unwritten, the one state nobody asked for.
+    // The cost is attribution, so `Merge`, whose first command is an entry
+    // rather than a clear, still sends it alone and can name it when tmux
+    // refuses it.
+    let mut chain = if replace == ReplaceMode::Replace {
+        CommandChain::new(first).then(second)
+    } else {
+        run(core, "set-hook", None, first).await?;
+        CommandChain::new(second)
     };
-    let result = result.map_err(|error| error.after_effect("set-hooks"))?;
+    for command in commands {
+        chain = chain.then(command);
+    }
+    let result = core
+        .execute_chain(chain)
+        .await
+        .map_err(|error| error.after_effect("set-hooks"))?;
     if result.success() {
         return Ok(());
     }

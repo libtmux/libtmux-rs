@@ -81,6 +81,7 @@ workspace_crate_files=(
     "$workspace_crate_root"/LICENSE-MIT
     "$workspace_crate_root"/README.md
     "$workspace_crate_root"/libtmux-macros-README.md
+    "$workspace_crate_root"/tests/fixtures/tmuxp/*
 )
 
 # nullglob is on, so an empty list would make every check below vacuous.

@@ -230,6 +230,10 @@ pub struct Since {
     /// The pane that was read.
     pub pane: String,
     /// The text, with escape sequences removed.
+    ///
+    /// After the first answer this is the raw output stream, not the rendered
+    /// screen: a line redrawn in place repeats. `capture_pane` shows the
+    /// screen.
     pub text: String,
     /// The cursor to pass back next time.
     pub cursor: String,
@@ -297,13 +301,29 @@ pub struct Killed {
     pub id: String,
 }
 
+/// What tmux holds under one environment name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvironmentState {
+    /// tmux holds a value and hands it to processes it starts.
+    Set,
+    /// tmux removes the name from the environment of processes it starts.
+    Removed,
+}
+
 /// One tmux environment entry.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct EnvironmentEntry {
     /// The variable name.
     pub name: String,
-    /// Its value, absent when the variable is marked for removal.
+    /// Whether the name holds a value or is marked for removal.
+    pub state: EnvironmentState,
+    /// The value, only for a set variable whose name the operator allowed in
+    /// `LIBTMUX_ENVIRONMENT_VALUES` at startup.
     pub value: Option<String>,
+    /// True for a set variable whose value was not returned because the
+    /// operator did not allow its name.
+    pub withheld: bool,
 }
 
 /// A tmux environment, server-wide or for one session.

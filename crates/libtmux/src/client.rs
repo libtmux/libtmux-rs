@@ -5,15 +5,16 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::os::unix::ffi::OsStringExt as _;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::formats::TmuxText;
 use crate::internal::core::Core;
 use crate::internal::listing;
 #[cfg(feature = "query")]
-use crate::query::{FilterSchema, Filterable};
+use crate::query::{FilterSchema, Filterable, ReadField};
 #[cfg(feature = "query")]
-use crate::snapshot::ClientFields;
-use crate::snapshot::ClientInfo;
+use crate::snapshot::{Availability, ClientFields, FieldRef};
+use crate::snapshot::{ClientInfo, stored_time};
 use crate::target::ServerIdentity;
 use crate::{Command, Error, ObjectKind};
 
@@ -89,10 +90,14 @@ impl Client {
         self.info.client_height().copied().available()
     }
 
-    /// Return when the client connected, as a Unix timestamp.
+    /// Return when the client connected.
+    ///
+    /// tmux keeps whole seconds. `ClientFields::client_created` filters and
+    /// reads the same field as the `i64` of Unix seconds tmux reports, because
+    /// the query grammar compares integers.
     #[must_use]
-    pub fn created(&self) -> i64 {
-        *self.info.client_created()
+    pub fn created(&self) -> SystemTime {
+        stored_time(*self.info.client_created())
     }
 
     /// Report whether the client is attached read-only.
@@ -108,6 +113,38 @@ impl Client {
     #[must_use]
     pub fn is_control_mode(&self) -> bool {
         *self.info.client_control_mode()
+    }
+
+    /// Report whether this process opened this client itself.
+    ///
+    /// tmux counts a control connection as an attached client, and this crate
+    /// opens them: [`crate::Pane::stream_output`],
+    /// [`crate::control::ControlMode::attach`] and the waits built on them all
+    /// show up in a client listing beside a human's terminal. A caller asking
+    /// "is anybody watching this session" means anybody *else*, so this is the
+    /// question to ask before counting.
+    ///
+    /// `false` for every client once this process ends, since the answer is
+    /// about connections this `Server` is still holding open.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn watchers(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// let others = server
+    ///     .clients()
+    ///     .await?
+    ///     .into_iter()
+    ///     .filter(|client| !client.is_own())
+    ///     .count();
+    /// # let _ = others;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "control-mode")]
+    #[must_use]
+    pub fn is_own(&self) -> bool {
+        self.core.owns_control_client(self.pid())
     }
 
     /// Return the identity of the server this client is attached to.
@@ -466,6 +503,44 @@ impl Hash for Client {
 impl fmt::Debug for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("Client").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "query")]
+impl Client {
+    /// Read one field of this client's snapshot, named by the handle that
+    /// filters it.
+    ///
+    /// Every field in [`ClientFields`] reads this way, including those with no
+    /// getter of their own. Nothing is sent to tmux, so the value is as old as
+    /// the snapshot. The result says why a field holds no value: see
+    /// [`Availability`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// use libtmux::Client;
+    /// use libtmux::query::Filterable as _;
+    ///
+    /// let fields = Client::filter_fields();
+    /// for client in server.clients().await? {
+    ///     // The key table a client is in: `prefix` right after the prefix key.
+    ///     if let Some(table) = client.get(fields.client_key_table).available() {
+    ///         println!("{client}: {}", table.to_string_lossy());
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn get<F: ReadField<Self>>(&self, field: F) -> Availability<F::Value<'_>> {
+        field.__read(self).unwrap_or(Availability::Absent)
+    }
+
+    /// Return the stored field tmux names `name`.
+    pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+        self.info.stored(name)
     }
 }
 

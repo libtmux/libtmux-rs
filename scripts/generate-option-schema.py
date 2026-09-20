@@ -34,6 +34,28 @@ ENTRY = re.compile(
     r'(?P<body>.*?)(?=\n\t\{\s*\.name|\n\t\{\s*\{|\Z)',
     re.S,
 )
+CHOICE_LIST = re.compile(r"static const char \*(\w+)\[\] = \{(.*?)\};", re.S)
+DEFINE = re.compile(r"^#define\s+(\w+)\s+(\d+)\s*$", re.M)
+
+# The limits tmux's table spells as <limits.h> names. The rest are defined in
+# tmux.h beside the table and read from there.
+LIMITS = {
+    "INT_MAX": 2**31 - 1,
+    "SHRT_MAX": 2**15 - 1,
+    "UINT_MAX": 2**32 - 1,
+    "USHRT_MAX": 2**16 - 1,
+}
+
+
+def bound(text: str, defines: dict[str, int]) -> int:
+    text = text.strip()
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    if text in LIMITS:
+        return LIMITS[text]
+    if text in defines:
+        return defines[text]
+    raise SystemExit(f"cannot resolve the bound {text!r}")
 
 
 def main() -> int:
@@ -41,8 +63,19 @@ def main() -> int:
         print("usage: generate-option-schema.py <path to options-table.c>", file=sys.stderr)
         return 2
 
-    source = pathlib.Path(sys.argv[1]).read_text()
-    rows: list[tuple[str, str, tuple[str, ...]]] = []
+    table = pathlib.Path(sys.argv[1])
+    source = table.read_text()
+    header = table.with_name("tmux.h")
+    defines = {
+        name: int(value)
+        for name, value in DEFINE.findall(header.read_text() if header.exists() else "")
+    }
+    choice_lists = {
+        name: tuple(re.findall(r'"([^"]*)"', body))
+        for name, body in CHOICE_LIST.findall(source)
+    }
+
+    rows: list[tuple[str, str, tuple[str, ...], tuple[str, ...], tuple[int, int] | None]] = []
     for match in ENTRY.finditer(source):
         body = match.group("body")
         kind = re.search(r"\.type\s*=\s*(OPTIONS_TABLE_[A-Z]+)", body)
@@ -55,7 +88,31 @@ def main() -> int:
         scopes = [] if scope is None else [
             SCOPES[part] for part in scope.group(1).split("|") if part in SCOPES
         ]
-        rows.append((match.group("name"), TYPES[kind.group(1)], tuple(scopes or ["Server"])))
+
+        choices: tuple[str, ...] = ()
+        if kind.group(1) == "OPTIONS_TABLE_CHOICE":
+            listed = re.search(r"\.choices\s*=\s*(\w+)", body)
+            if listed is None or listed.group(1) not in choice_lists:
+                raise SystemExit(f"{match.group('name')}: a choice with no list")
+            choices = choice_lists[listed.group(1)]
+
+        # tmux checks a number with strtonum(value, minimum, maximum), and an
+        # absent bound is zero, so a number without both would take only 0.
+        limits = None
+        if kind.group(1) == "OPTIONS_TABLE_NUMBER":
+            low = re.search(r"\.minimum\s*=\s*([^,\n]+)", body)
+            high = re.search(r"\.maximum\s*=\s*([^,\n]+)", body)
+            if low is None or high is None:
+                raise SystemExit(f"{match.group('name')}: a number with no range")
+            limits = (bound(low.group(1), defines), bound(high.group(1), defines))
+
+        rows.append((
+            match.group("name"),
+            TYPES[kind.group(1)],
+            tuple(scopes or ["Server"]),
+            choices,
+            limits,
+        ))
 
     # Hooks are declared through macros rather than the struct form. Both
     # expand to a command-typed option. The pane variant declares
@@ -66,7 +123,7 @@ def main() -> int:
         ("OPTIONS_TABLE_PANE_HOOK", ("Window", "Pane")),
     ):
         for hook in re.finditer(rf'\n\t{macro}\("([a-z0-9-]+)"', source):
-            rows.append((hook.group(1), "Command", scopes))
+            rows.append((hook.group(1), "Command", scopes, (), None))
 
     # tmux resolves a handful of legacy spellings before it looks a name up,
     # so a caller reaching an option through one reaches the same option.
@@ -84,11 +141,15 @@ def main() -> int:
     print()
     print(f"/// Every option tmux's table declares, sorted by name.")
     print(f"pub(crate) static OPTION_SCHEMA: [OptionSchema; {len(rows)}] = [")
-    for name, kind, scopes in rows:
+    for name, kind, scopes, choices, limits in rows:
         rendered = ", ".join(f"OptionScope::{scope}" for scope in scopes)
-        print(
-            f'    OptionSchema::new("{name}", OptionKind::{kind}, &[{rendered}]),'
-        )
+        entry = f'OptionSchema::new("{name}", OptionKind::{kind}, &[{rendered}])'
+        if choices:
+            words = ", ".join(f'"{choice}"' for choice in choices)
+            entry += f".with_choices(&[{words}])"
+        if limits is not None:
+            entry += f".with_range({limits[0]:_}, {limits[1]:_})"
+        print(f"    {entry},")
     print("];")
     print()
     print("/// The spellings tmux maps to another option before looking it up.")
@@ -103,7 +164,7 @@ def main() -> int:
     print("/// begins with `@`, has no constant because tmux does not declare one.")
     print("pub mod names {")
     seen: set[str] = set()
-    for name, _, _ in rows:
+    for name, *_ in rows:
         ident = name.upper().replace("-", "_")
         if ident in seen:
             continue

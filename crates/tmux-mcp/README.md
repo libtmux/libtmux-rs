@@ -216,18 +216,19 @@ directly from that registry.
 | Toolset | Intent | Tools |
 |---|---|---|
 | `inspect` (18) | Read bounded tmux state and terminal output | `call_read_tools_batch`, `capture_pane`, `capture_since`, `find_pane_by_position`, `get_pane_info`, `get_server_info`, `get_session_info`, `get_tmux_variables`, `get_window_info`, `list_panes`, `list_sessions`, `list_windows`, `search_panes`, `show_environment`, `show_hooks`, `show_option`, `snapshot_pane`, `wait_for_text` |
-| `manage` (14) | Change tmux objects without starting a process | `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_history_limit`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
+| `manage` (13) | Change tmux objects without starting a process | `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
 | `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
-| `teardown` (4) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window` |
+| `teardown` (5) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window`, `set_history_limit` |
 
 `set_synchronize_panes` changes the window default; individual pane overrides
 determine the effective configured recipient cohort. `send_keys` observes that
 cohort immediately before input and refuses the whole call if any configured
 pane is dead, input-disabled, in a tmux mode, attended by a non-control client,
 reserved by an active MCP run, or may be the inherited caller. Malformed state
-fails closed. Caller context is detached only when both `TMUX` and `TMUX_PANE`
-are absent; partial, empty, noncanonical, stale, or unresolved selected-daemon
-context refuses input. `send_keys_batch` repeats the complete check for each
+fails closed. Caller context is detached when `TMUX` and `TMUX_PANE` are both
+absent or empty; partial, noncanonical, stale, or unresolved selected-daemon
+context refuses input, and a context that cannot be parsed is also reported
+once in the startup log. `send_keys_batch` repeats the complete check for each
 executed row.
 Returned pane IDs describe configured membership and do not prove delivery.
 `paste_text` applies the same refusals to its named target before buffer
@@ -236,8 +237,9 @@ without Enter stays buffer-free. The tool repeats the target check immediately
 before target-only paste and deletes the buffer after refusal or delivery.
 Synchronized input never expands paste.
 `run_shell_command` requires a single configured recipient and reserves its
-resolved server and pane process-wide until completion or pane closure is
-proved. Every MCP pane-input route observes that reservation.
+resolved server and pane process-wide until completion, pane closure, or a
+respawn is proved. Every MCP pane-input route observes that reservation except
+`send_keys` with only `C-c` or `C-\` keys, which interrupts the command.
 `call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
 the complete JSON-RPC response line, including its request ID and newline, at
 1,000,000 bytes. Truncated payloads and omitted bytes are explicit, and every
@@ -247,12 +249,14 @@ invalid-request response before tool dispatch.
 `on_error` is either `stop` or `continue`. Its one client approval covers every
 nested name in its schema; inner tools do not receive separate approval.
 
-The capability row is not a second hand-maintained catalog. The same row a
-client receives under `_meta["com.git-pull.libtmux-mcp/capability"]` carries the
-native input and output schemas, process reach, effect and output sets,
-schema-keyed input literalization, annotations, and any nested authority. The
-native definition also classifies every input sink, but that validation detail
-is not duplicated on the wire. For example, `get_tmux_variables.names` is
+The capability row is not a second hand-maintained catalog. A client receives
+it under `_meta["com.git-pull.libtmux-mcp/capability"]`, holding only what the
+tool does not already carry: toolset, process reach, effect and output sets,
+the secret and untrusted-content flags, schema-keyed input literalization, any
+nested authority, and future-input amplification. Name, title, description,
+annotations, and schemas stay on the tool, and `tmux://capabilities` reports
+them all together. The native definition also classifies every input sink, but
+that validation detail is not duplicated on the wire. For example, `get_tmux_variables.names` is
 reported as `validated-variable-name`; it is not falsely described as escaped
 literal text.
 
@@ -362,6 +366,7 @@ now run in the client. Update existing client calls with this mapping:
 | `clear_pane` | Use teardown tool `clear_pane_scrollback`. |
 | `set_option` | Use constrained tools such as `set_mouse_enabled`, `set_history_limit`, or `set_synchronize_panes`. |
 | `set_environment` | No generic caller-controlled environment route remains. |
+| `show_environment` values | Values are withheld by default; allow names with `LIBTMUX_ENVIRONMENT_VALUES`. |
 | `run_plan` | Use `call_read_tools_batch` for inspect-only batches; issue typed state-changing calls separately. |
 | `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
 | `tmux://server` | Use `get_server_info`; `tmux://capabilities` adds the frozen connection and selection boundary. |
@@ -371,7 +376,7 @@ now run in the client. Update existing client calls with this mapping:
 | `tmux://panes/{id}/content` | Use `capture_pane` or continue from a cursor with `capture_since`. |
 | `enter_copy_mode`, `exit_copy_mode` | Read with capture, snapshot, search, or cursor tools. The attached person owns pane modes. |
 | Prompt `run_and_wait` | Use one `run_shell_command`; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
-| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`, then observe with `capture_since` or `wait_for_text`. `keys: ["C-\\"]` is stronger; do not turn pane recovery into teardown. |
+| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`, then observe with `capture_since` or `wait_for_text`. `keys: ["C-\\"]` is stronger. Either, sent alone, reaches a command an active `run_shell_command` still reserves; `respawn_pane` with `kill_first: true` replaces a program that ignores both. Do not turn pane recovery into teardown. |
 | Prompt `diagnose_pane` | Start with `snapshot_pane`; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with `capture_since`, and use `search_panes` if the target is uncertain. |
 
 ### Asking first
@@ -381,14 +386,26 @@ Clients can use each tool's four MCP annotations to decide whether to ask a
 person before a whole call. Tool selection shapes the advertised interface; it
 does not reduce the tmux user's authority.
 
+The annotations derive from each tool's capability row. A tool that only
+observes tmux is `readOnlyHint: true`. Deleting tmux state or sending pane
+input is `destructiveHint: true`, because the receiving shell runs whatever
+arrives. Reads, teardown, and changes that set a named value, such as a
+rename, are `idempotentHint: true`. Starting or driving a process, or
+returning terminal text, is `openWorldHint: true`. Every `inspect` tool is
+read-only: the observer client that `wait_for_text` or `capture_since` attaches
+only reads, and changes no session, window, pane, or option.
+`set_history_limit` is destructive: from tmux 3.7 a lower limit discards
+existing panes' scrollback past it, so it is in `teardown` beside
+`clear_pane_scrollback`.
+
 When launched from tmux, the process inherits a pane ID, session number, server
 PID, and socket. Pane listings mark that pane `caller: "self"` only when the
-socket matches the selected server. Pane-input and teardown tools additionally
-resolve the complete identity against a fresh selected-daemon snapshot before
-acting. A complete identity on another physical socket is foreign; malformed or
-inconsistent context on the selected socket fails closed. The comparison weighs
-the socket as well as the pane ID because `%1` names a different pane on every
-tmux server.
+socket matches the selected server. Pane-input tools and the three kill tools
+additionally resolve the complete identity against a fresh selected-daemon
+snapshot before acting. A complete identity on another physical socket is
+foreign; malformed or inconsistent context on the selected socket fails closed.
+The comparison weighs the socket as well as the pane ID because `%1` names a
+different pane on every tmux server.
 
 Pane input also refuses a configured pane visible to a non-control tmux client.
 In an unzoomed window every visible pane is attended; in a zoomed window only
@@ -399,10 +416,18 @@ refusal, not a consent signal.
 
 Without arguments the server selects the `libtmux-mcp` socket, starts it with
 the shipped minimal configuration, and authenticates that this launch created
-the daemon before enabling teardown by default. The owning process stops that
-daemon at shutdown. An already-running daemon keeps its configuration and gets
-conservative provenance. The server does not follow `$TMUX`. Select another
-socket by path or name:
+the daemon before enabling teardown by default. An already-running daemon
+keeps its configuration and gets conservative provenance. The server does not
+follow `$TMUX`.
+
+Several `tmux-mcp` processes without arguments share that one daemon. Each
+holds a shared lock on `libtmux-mcp.lease` beside the socket, and the process
+that started the daemon stops it at shutdown only when no other process holds
+one. No process stops a daemon it did not start, so when the owner exits
+first the daemon outlives every process using it, and the next launch finds
+it already running. Stop it with `tmux -L libtmux-mcp kill-server`.
+
+Select another socket by path or name:
 
 ```console
 $ tmux-mcp --socket /tmp/tmux-1000/work
@@ -415,7 +440,7 @@ $ tmux-mcp --socket-name work
 `-S` and `-L` work too. `LIBTMUX_SOCKET_PATH` and `LIBTMUX_SOCKET` provide the
 same startup choices. Set `LIBTMUX_TMUX_CONFIG` to use an explicit tmux
 configuration at an absolute path. Socket names and paths are mutually
-exclusive. `tmux-mcp --help` lists every flag.
+exclusive. `tmux-mcp --help` lists every flag and environment variable.
 
 ## Trust boundary
 
@@ -439,11 +464,27 @@ configuration, not a sandbox boundary. Valid inherited Bash and zsh `ERR` and
 `DEBUG` traps remain visible to the authored command; parent-shell traps and
 the `errexit`, `xtrace`, and `noglob` options remain unchanged.
 
-Pane output and tmux metadata may contain sensitive or untrusted text.
-Environment values may contain secrets. Hooks may contain executable
-configuration. Existing aliases, hooks, plugins, status jobs, and pane
-processes can add effects to any call. Standard MCP annotations describe the
-whole call for client consent; they do not enforce authority.
+Pane output and tmux metadata may contain sensitive or untrusted text. Hooks
+may contain executable configuration. Existing aliases, hooks, plugins, status
+jobs, and pane processes can add effects to any call. Standard MCP annotations
+describe the whole call for client consent; they do not enforce authority.
+
+A tmux server holds the environment of the shell that started it, tokens and
+keys included. No tool returns an environment value by default.
+`show_environment` lists each name and whether it is set or marked for
+removal, and withholds the value. `get_tmux_variables` refuses a name the
+server or session environment holds, because tmux expands a name it does not
+know as a format from the environment. `LIBTMUX_ENVIRONMENT_VALUES` names, at
+startup, the variables whose values both tools may return; a named value
+reaches the client in clear. It takes up to 32 comma-separated names, matched
+exactly:
+
+```console
+$ LIBTMUX_ENVIRONMENT_VALUES=TERM,LANG tmux-mcp
+```
+
+This covers what tmux holds, not what a pane's program can print: a command
+sent through an execute tool runs with the tmux user's environment.
 
 ## What it feels like
 
@@ -492,7 +533,10 @@ relation, foreground shell, route, and active-run ownership at exactly two
 checkpoints: before watcher setup and immediately before its single dispatch.
 Invalid syntax completes with a nonzero shell status. The process-wide
 reservation blocks other MCP pane input until completion is proved, but does
-not lock tmux against an external client changing the pane.
+not lock tmux against an external client changing the pane. `C-c` or `C-\`
+sent alone passes the reservation, and the interrupted command still reports
+completion, which releases the pane; `respawn_pane` with `kill_first: true`
+releases it from a program that ignores both.
 
 **Waiting for something you did not start.** `wait_for_text` watches the
 pane's output stream for a pattern, with stop patterns for the failures you
@@ -502,6 +546,11 @@ line that scrolls past between looks is still seen.
 **Following a pane over several turns.** `capture_since` returns only what is
 new since the cursor it gave you last time, and says `missed: true` if
 anything was dropped.
+
+`run_shell_command`, `wait_for_text`, and `capture_since` return the output
+stream with escape sequences removed, not the rendered screen. A line redrawn in place -- a line editor's
+echo, a progress bar -- repeats once per redraw. `capture_pane` shows what the
+screen displays.
 
 **Finding where something is.** `search_panes` matches across every pane at
 once and reports the pane and line. The listing tools will not: they read
@@ -518,7 +567,9 @@ is excluded.
 **Reading tmux variables.** `get_tmux_variables` accepts one to 32 validated
 variable names and constructs bounded `#{variable}` references itself. The
 manifest records `validated-variable-name` under `inputLiteralization`. It
-does not accept arbitrary or shell-command formats.
+does not accept arbitrary or shell-command formats, and refuses a name the
+tmux environment holds unless the operator allowed it (see
+[Trust boundary](#trust-boundary)).
 
 ## Answers are typed
 
@@ -531,7 +582,9 @@ an agent reads fields rather than parsing text:
 ```
 
 Failures are typed too. Every error carries the same three fields, so an agent
-decides what to do next without reading prose:
+decides what to do next without reading prose. That includes arguments that
+do not match a tool's schema, and a call to a tool the startup selection left
+out, whose message names the settings that offer it:
 
 ```json
 {"kind": "object_gone", "retryable": false, "stale": true}

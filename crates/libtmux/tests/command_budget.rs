@@ -217,3 +217,137 @@ async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
     control.shutdown().await.expect("control shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
+
+/// What it costs to read a field a pane listing already carries.
+///
+/// These four arrive with every pane listing, so reading them sends nothing,
+/// and each agrees with what `display-message` reports for the same pane: an
+/// empty expansion where the read says `Absent`.
+#[cfg(feature = "query")]
+#[tokio::test]
+async fn reading_a_listed_pane_field_costs_no_command() {
+    use libtmux::query::Filterable as _;
+    use libtmux::{Availability, Command, NewSessionOptions, Pane, PaneWait};
+
+    let counter = CommandCounter::default();
+    let subscriber = tracing_subscriber::registry().with(counter.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    // History to scroll back through, then a cursor off the origin, then a
+    // reader that prints nothing more, so the cursor holds still.
+    let session = server
+        .new_session(NewSessionOptions::new("read").command("seq 1 200; printf abc; exec cat"))
+        .await
+        .expect("session");
+    let mut pane = session.panes().await.expect("panes").remove(0);
+    let arrived = pane
+        .wait_for_text("abc", std::time::Duration::from_secs(10))
+        .await
+        .expect("wait");
+    assert_eq!(arrived, PaneWait::Arrived);
+    let fields = Pane::filter_fields();
+
+    for scrolled in [None, Some(5)] {
+        if let Some(lines) = scrolled {
+            pane.copy_mode().await.expect("copy mode");
+            pane.cmd(
+                Command::new("send-keys")
+                    .arg("-X")
+                    .arg("-N")
+                    .arg(lines.to_string())
+                    .arg("scroll-up"),
+            )
+            .await
+            .expect("scroll");
+        }
+        pane.refresh().await.expect("listing");
+
+        counter.reset();
+        let cursor_x = pane.get(fields.cursor_x);
+        let cursor_y = pane.get(fields.cursor_y);
+        let pane_mode = pane.get(fields.pane_mode);
+        let scroll_position = pane.get(fields.scroll_position);
+        assert_eq!(counter.commands(), 0, "a read sends tmux nothing");
+
+        assert_eq!(cursor_x, Availability::Available(3), "after `abc`");
+        if let Some(lines) = scrolled {
+            assert!(pane_mode.is_available());
+            assert_eq!(scroll_position, Availability::Available(lines));
+        } else {
+            assert_eq!(pane_mode, Availability::Absent);
+            assert_eq!(scroll_position, Availability::Absent);
+        }
+
+        let reads = [
+            ("#{cursor_x}", cursor_x.available().map(|x| x.to_string())),
+            ("#{cursor_y}", cursor_y.available().map(|y| y.to_string())),
+            (
+                "#{pane_mode}",
+                pane_mode
+                    .available()
+                    .map(|mode| mode.to_string_lossy().into_owned()),
+            ),
+            (
+                "#{scroll_position}",
+                scroll_position.available().map(|lines| lines.to_string()),
+            ),
+        ];
+        for (format, read) in reads {
+            let asked = pane.format(format).await.expect("display-message");
+            assert_eq!(
+                asked.to_string_lossy(),
+                read.unwrap_or_default(),
+                "{format} with scroll {scrolled:?}",
+            );
+        }
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A replacing hook write is one invocation, so no drop can land between the
+/// clear and the entries and leave the hook empty.
+#[tokio::test]
+async fn replacing_hooks_clears_and_writes_in_one_command() {
+    use libtmux::{IndexedHooks, ReplaceMode, TmuxText};
+
+    let counter = CommandCounter::default();
+    let subscriber = tracing_subscriber::registry().with(counter.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("hooks")
+        .await
+        .expect("the session is created");
+    let mut entries = std::collections::BTreeMap::new();
+    entries.insert(0, TmuxText::from(b"display-message one".to_vec()));
+    entries.insert(1, TmuxText::from(b"display-message two".to_vec()));
+    let written = IndexedHooks::from(entries);
+    // The scope check reads before writing; count only the write.
+    session
+        .set_hooks("alert-bell", &written, ReplaceMode::Replace)
+        .await
+        .expect("the hooks are written");
+
+    counter.reset();
+    session
+        .set_hooks("alert-bell", &written, ReplaceMode::Replace)
+        .await
+        .expect("the hooks are written");
+
+    assert_eq!(
+        counter.commands(),
+        1,
+        "the clear and both entries travel together",
+    );
+    let read = session
+        .hook("alert-bell")
+        .await
+        .expect("the hook reads")
+        .expect("the hook is set");
+    assert_eq!(read.len(), 2);
+}

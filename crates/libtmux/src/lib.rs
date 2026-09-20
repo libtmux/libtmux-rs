@@ -7,9 +7,15 @@
 //! [`query::QueryIteratorExt::matching`] for a portable expression or a named
 //! [`query::Matcher`]. Exact cardinality inspects at most two items.
 //!
-//! If another iterator extension trait, such as `itertools::Itertools`, adds
-//! the same method name, use universal function call syntax to select this
-//! crate's method:
+//! `matching` and `matching_owned` are this trait's own; `exactly_one` and
+//! `one_or_none` deliberately overlap with `itertools::Itertools`, which has
+//! `exactly_one` and `at_most_one`. The overlap is kept rather than renamed
+//! around: the names are the obvious ones, and the shapes differ where it
+//! matters. [`query::ExactlyOneError`] is a plain `NoItems`/`MultipleItems`
+//! enum that is `Eq` and cheap to match, where itertools' error owns the
+//! iterator so it can replay it. With both traits imported a call is
+//! ambiguous, which is a compile error naming both candidates rather than a
+//! silent choice; universal function call syntax picks one:
 //!
 //! ```
 //! use libtmux::query::QueryIteratorExt;
@@ -39,14 +45,14 @@
 //! # }
 //! ```
 //!
-//! Listings come in pairs. The `_or_empty` form returns an empty `Vec` when
-//! the underlying tmux command fails, which suits a status line; the plain
-//! form keeps the reason, which suits anything that must not guess:
+//! A listing keeps the reason it failed. A caller that would rather show
+//! nothing than an error says so at the call site, where it reads as the
+//! choice it is:
 //!
 //! ```no_run
 //! # async fn both(server: &libtmux::Server) -> Result<(), libtmux::Error> {
-//! let quiet = server.sessions_or_empty().await; // empty on failure
-//! let loud = server.sessions().await?;          // Err on failure
+//! let loud = server.sessions().await?;                     // Err on failure
+//! let quiet = server.sessions().await.unwrap_or_default(); // empty on failure
 //! # let _ = (quiet, loud);
 //! # Ok(())
 //! # }
@@ -60,7 +66,7 @@
 //! `Drop` is deliberately non-destructive.
 //!
 //! ```no_run
-//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! # async fn scoped(server: &libtmux::Server) -> Result<(), libtmux::ScopeError<String, libtmux::Error>> {
 //! let id = server
 //!     .with_session("throwaway", async |session| {
 //!         session.new_window("build").await?;
@@ -72,16 +78,18 @@
 //! # }
 //! ```
 //!
-//! Setup and teardown failures convert into the operation's own error type,
-//! so there is one `?` rather than two. Once creation succeeds, a cleanup
-//! failure is returned as an after-effect; it owns the replay guidance even
-//! when the operation also failed.
+//! [`ScopeError`] distinguishes creation, operation and cleanup failures.
+//! When both operation and cleanup fail, it retains both errors without
+//! converting the operation's error type. Cleanup errors carry
+//! [`Error::AfterEffect`] because creation already succeeded.
 //!
 //! ## Options carry types
 //!
 //! tmux reports no type over the command line, so the crate generates the
 //! schema from tmux's own table. That matters more than it sounds: `status`
 //! holds `"on"` but is a choice, because tmux also accepts `2` through `5`.
+//! A typed write is checked against the same table before it is sent;
+//! [`OptionValue`] says how reads and writes fit together.
 //!
 //! ```no_run
 //! # async fn options(server: &libtmux::Server) -> Result<(), libtmux::Error> {
@@ -90,25 +98,46 @@
 //! // Names are constants, so a typo does not compile.
 //! let mouse = server.typed_global_option(option_names::MOUSE).await?;
 //! assert!(matches!(mouse, Some(OptionValue::Flag(_))));
+//!
+//! // A write takes the type a read returns, and a value outside what the
+//! // table declares is refused before tmux sees it.
+//! server.set_typed_global_option(option_names::HISTORY_LIMIT, 50_000).await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ## A name reaches tmux as a format
+//! ## A name reaches tmux as text
 //!
 //! tmux expands a name through its format machinery before it checks it, so
-//! `#{session_id}` in a name becomes the id and `#(command)` runs `command` in
-//! a shell and becomes its output. That holds for `new_session`,
-//! `Session::rename`, `Window::rename`, and every other name tmux takes from
-//! a command. tmux is consistent here: whoever can run `tmux new-session` can
-//! already run commands, so a name given on a command line is trusted by
-//! construction.
+//! `#{session_id}` in a name would become the id and `#(command)` would run
+//! `command` in a shell. That holds for a session and window name, a pane
+//! title, an option name, and the `-c` start directory alike. tmux is
+//! consistent here: whoever can run `tmux new-session` can already run
+//! commands, so a name given on a command line is trusted by construction.
 //!
 //! A library moves that boundary. tmux's caller is a person at a shell; this
 //! crate's caller is a program, and the name it passes may have come from an
-//! argument, a request field, or a configuration file. Passing untrusted text
-//! as a name gives whoever wrote it a shell, so escape `#` as `##` before it
-//! reaches tmux, or refuse the name.
+//! argument, a request field, or a configuration file. So every argument tmux
+//! would expand is typed [`TmuxArg`], and every conversion into it escapes:
+//! what a caller passes is what tmux stores.
+//!
+//! ```no_run
+//! # async fn names(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+//! use libtmux::{NewSessionOptions, TmuxArg};
+//!
+//! // Text is text, whatever is in it.
+//! server.new_session("release#1").await?;
+//!
+//! // Expansion is opt-in, and reads as such. Only for a template the
+//! // program itself wrote.
+//! server
+//!     .new_session(NewSessionOptions::new("build").start_directory(
+//!         TmuxArg::format("#{pane_current_path}"),
+//!     ))
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! Expansion is not the only way the name you asked for is not the name you
 //! get. tmux releases through 3.6b rewrite `:` and `.` in a session name to
@@ -128,7 +157,7 @@
 //! sent, output waited for rather than slept on, and a scope that kills the
 //! session whether the body succeeded or not. `watch` reacts to what a server
 //! does over one control-mode connection while driving it down the same one.
-//! `matrix` runs one workload five ways, so the cost of each execution mode is
+//! `matrix` runs one workload six ways, so the cost of each execution mode is
 //! visible side by side. `sweep` reaps servers that abandoned fixtures left
 //! behind, which is maintenance rather than orchestration.
 //!
@@ -195,13 +224,49 @@
 //! # }
 //! ```
 //!
-//! Query extensions intentionally apply only to borrowed iterators:
+//! Use `matching_owned` to move selected items out of their collection:
 //!
-//! ```compile_fail
+//! ```
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let values = vec![1, 2, 3];
+//! let selected = values
+//!     .into_iter()
+//!     .matching_owned(|candidate: &i32| *candidate > 1)
+//!     .collect::<Vec<_>>();
+//! assert_eq!(selected, [2, 3]);
+//! ```
+//!
+//! `matching` still needs a borrowed iterator; `into_iter()` does not satisfy
+//! it:
+//!
+//! ```compile_fail,E0271
 //! use libtmux::query::QueryIteratorExt;
 //!
 //! let values = vec![1, 2, 3];
 //! let _ = values.into_iter().matching(|candidate: &i32| *candidate > 1);
+//! ```
+//!
+//! Borrowed results cannot outlive their collection:
+//!
+//! ```compile_fail,E0597
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let selected = {
+//!     let values = vec![String::from("only")];
+//!     values.iter().exactly_one().unwrap()
+//! };
+//! println!("{selected}");
+//! ```
+//!
+//! Consuming a collection transfers ownership:
+//!
+//! ```compile_fail,E0382
+//! use libtmux::query::QueryIteratorExt;
+//!
+//! let values = vec![String::from("only")];
+//! let selected = values.into_iter().one_or_none().unwrap();
+//! println!("{values:?} {selected:?}");
 //! ```
 #![cfg_attr(
     feature = "control-mode",
@@ -262,6 +327,12 @@ println!("{} sessions", sessions.len());
 #[cfg(not(unix))]
 compile_error!("libtmux requires a Unix target with tmux available");
 
+// The derive names this crate `::libtmux` wherever it expands inside the
+// `libtmux` package; this alias makes that path resolve here as well as in the
+// package's tests and doctests.
+#[cfg(feature = "derive")]
+extern crate self as libtmux;
+
 #[cfg(feature = "blocking")]
 pub mod blocking;
 mod capabilities;
@@ -296,35 +367,45 @@ pub use command::{Command, CommandChain, CommandResult, CommandSummary};
 #[cfg(feature = "control-mode")]
 pub use error::ControlModeErrorKind;
 pub use error::{
-    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind,
+    Error, ErrorKind, IdParseError, ListingDecodeError, ObjectKind, OptionErrorKind, ScopeError,
     ServerConfigurationErrorKind, ServerGoneKind,
 };
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use formats::__fuzz_format_rows;
 pub use formats::TmuxText;
 pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use internal::environment::__fuzz_environment_listing;
 #[cfg(feature = "control-mode")]
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};
 pub use options::{
-    OptionKind, OptionSchema, OptionScope, OptionValue, names as option_names, option_schema,
+    OptionKind, OptionSchema, OptionScope, OptionValue, OptionValueRefusal, names as option_names,
+    option_schema,
 };
 pub use pane::{CaptureOptions, CapturedLine, Pane, PaneWait};
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use server::__fuzz_parse_key_bindings;
 pub use server::{
-    AccessMode, AccessRule, ChannelWait, Chooser, NewSessionOptions, PromptKind, Server,
-    ServerBuilder, SessionTree, WindowTree,
+    AccessMode, AccessRule, ChannelWait, Chooser, KeyBinding, MenuItem, NewSessionOptions,
+    Principal, PromptKind, Server, ServerBuilder, SessionTree, WindowTree,
 };
 #[cfg(feature = "query")]
 pub use server::{SessionTreeFields, WindowTreeFields};
 pub use session::{EnvironmentEntry, NewWindowOptions, Session, WindowPlacement};
-pub use snapshot::PaneProgressState;
+pub use snapshot::{Availability, PaneProgressState};
 #[cfg(feature = "query")]
 pub use snapshot::{ClientFields, PaneFields, SessionFields, WindowFields};
 pub use target::{
     PaneId, PaneTarget, ServerGeneration, ServerIdentity, SessionId, SessionName, SessionNameError,
-    SessionTarget, WindowId, WindowTarget, escape_format,
+    SessionTarget, TmuxArg, WindowId, WindowTarget, escape_format,
 };
 pub use version::{ReleaseSuffix, ReleaseVersion, TmuxVersion, since};
 pub use window::{
-    JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Rotation,
+    JoinOptions, Layout, LayoutSpec, PaneDirection, PaneSize, ResizeDirection, Respawn, Rotation,
     SplitDirection, SplitOptions, Window,
 };
 
@@ -355,7 +436,6 @@ pub struct DesignNotes;
 ///
 /// #[derive(libtmux::Filterable)]
 /// #[filterable(target = "task")]
-/// # #[filterable(crate = "libtmux")]
 /// struct Task {
 ///     name: String,
 ///     done: bool,
@@ -384,3 +464,7 @@ pub use libtmux_macros::Filterable;
 #[cfg(doctest)]
 #[doc = include_str!("../../../README.md")]
 pub struct WorkspaceReadme;
+
+#[cfg(all(doctest, feature = "query", feature = "control-mode"))]
+#[doc = include_str!("../docs/migration.md")]
+pub struct MigrationGuide;

@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use libtmux::plan::{
     Attribution, CapturePane, KillPane, KillWindow, NewSession, NewWindow, OperationKind,
-    OperationReport, OperationValue, Outcome, PaneTarget, Plan, PlanResult,
-    PlanValidationErrorKind, Planner, SelectPane, SelectWindow, SendKeys, SetEnvironment,
-    SetOption, SplitWindow, StepReason, WindowTarget,
+    OperationReport, OperationValue, Outcome, PaneTarget, Pause, Plan, PlanResult,
+    PlanValidationErrorKind, Planner, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SetEnvironment, SetOption, SplitWindow, StepReason, WindowTarget,
 };
 use libtmux::test::TestServer;
 use libtmux::{
@@ -277,7 +277,7 @@ async fn an_invalid_plan_refuses_before_its_first_mutation() {
         .await
         .expect_err("the plan is invalid");
     assert!(
-        server.sessions_or_empty().await.is_empty(),
+        server.sessions().await.unwrap_or_default().is_empty(),
         "validation happened after a mutation",
     );
     assert_eq!(failure.kind(), libtmux::ErrorKind::InvalidInput);
@@ -518,6 +518,78 @@ async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A pause holds the plan where it stands, folded or not: inside a shared
+/// invocation the wait happens in tmux, between its neighbours.
+#[tokio::test]
+async fn a_pause_holds_the_plan_on_every_planner() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    server
+        .new_session("paused")
+        .await
+        .expect("session is created");
+    let pane = server.panes().await.expect("panes list").remove(0);
+    let pause = Duration::from_millis(300);
+
+    let mut plan = Plan::new();
+    plan.add(SelectPane::new(pane.id().clone()));
+    plan.add(Pause::new(pause));
+    plan.add(SelectPane::new(pane.id().clone()));
+    assert_eq!(Planner::Folding.steps(&plan).len(), 1, "one invocation");
+
+    for planner in [Planner::Sequential, Planner::Folding] {
+        let started = std::time::Instant::now();
+        let result = plan.run(server, planner).await.expect("the plan runs");
+        let elapsed = started.elapsed();
+
+        assert!(result.is_complete(), "{planner:?}: {result:?}");
+        assert!(elapsed >= pause, "{planner:?} returned after {elapsed:?}");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// tmux answers a delayed `run-shell` on a connection before the delay ends,
+/// so both control-mode routes refuse a pause rather than report it done.
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn a_pause_is_refused_over_control_mode() {
+    use libtmux::control::ControlMode;
+    use libtmux::{ControlModeErrorKind, Error};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("paused-control")
+        .await
+        .expect("session is created");
+    let (sender, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+    let routed = server
+        .over_control_mode(&sender)
+        .await
+        .expect("the connection reaches this server");
+
+    let mut plan = Plan::new();
+    plan.add(Pause::new(Duration::from_millis(50)));
+    let blocking = |outcome: Result<PlanResult, Error>| {
+        matches!(
+            outcome,
+            Err(Error::ControlMode {
+                kind: ControlModeErrorKind::BlockingCommand,
+                ..
+            })
+        )
+    };
+    assert!(blocking(plan.run_over_control_mode(&sender).await));
+    assert!(blocking(plan.run(&routed, Planner::Sequential).await));
+
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[cfg(feature = "control-mode")]
 #[tokio::test]
 async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
@@ -604,10 +676,13 @@ fn a_plan_survives_a_round_trip_through_json() {
     // An argument tmux accepts but a text format cannot carry as text.
     plan.add(SendKeys::new(window.pane()).text(OsString::from_vec(vec![0xff, b'x'])));
     plan.add(SetOption::window(window, "synchronize-panes", "on"));
+    plan.add(Pause::new(Duration::from_millis(1500)));
 
     let json = serde_json::to_string(&plan).expect("a plan serialises");
     // The common case stays readable rather than becoming an array of bytes.
     assert!(json.contains("\"cargo test\""), "{json}");
+    // A pause is seconds, as tmuxp writes one.
+    assert!(json.contains(r#"{"Pause":{"seconds":1.5}}"#), "{json}");
 
     let restored: Plan = serde_json::from_str(&json).expect("a plan deserialises");
     assert_eq!(restored.len(), plan.len());
@@ -645,6 +720,18 @@ fn deserialization_rejects_a_slot_with_the_wrong_scope() {
 
     let failure = serde_json::from_value::<Plan>(wire).expect_err("window is not a session");
     assert!(failure.to_string().contains("not Session"), "{failure}");
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn deserialization_rejects_a_pause_no_duration_can_hold() {
+    for seconds in [-1.0, f64::MAX] {
+        let wire = serde_json::json!([{ "Pause": { "seconds": seconds } }]);
+        assert!(
+            serde_json::from_value::<Plan>(wire).is_err(),
+            "{seconds} seconds was accepted",
+        );
+    }
 }
 
 #[tokio::test]
@@ -723,6 +810,111 @@ async fn a_plan_will_not_write_an_option_where_tmux_keeps_another() {
         "validation happens before the first command",
     );
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A plan refuses a `select-layout` value `select-layout` itself cannot
+/// parse, before its first command.
+///
+/// A plan renders its own commands, so `SelectLayout` reached tmux without
+/// the check the direct `Window::select_layout` path makes: tmux 3.3 and
+/// 3.3a exit on a layout value they cannot parse, taking every session on
+/// the socket with them.
+#[tokio::test]
+async fn a_plan_refuses_a_layout_value_select_layout_cannot_parse() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    for value in ["-o", "garbage", ""] {
+        let mut plan = Plan::new();
+        let session = plan.add(NewSession::new("layout-guard"));
+        plan.add(SelectLayout::new(session.window(), value));
+
+        let error = plan
+            .run(server, Planner::Sequential)
+            .await
+            .map(|_| ())
+            .expect_err("select-layout cannot parse this value");
+        assert_eq!(
+            error.kind(),
+            libtmux::ErrorKind::InvalidInput,
+            "{value:?}: {error:?}",
+        );
+        assert!(
+            server.sessions().await.expect("sessions").is_empty(),
+            "{value:?}: validation happens before the first command",
+        );
+    }
+
+    assert!(
+        server.is_alive().await,
+        "the server survives every refused value",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("layout-control")
+        .await
+        .expect("session is created");
+    let (sender, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let mut invalid = vec![
+        ("-o", libtmux::ErrorKind::InvalidInput),
+        ("garbage", libtmux::ErrorKind::InvalidInput),
+        ("", libtmux::ErrorKind::InvalidInput),
+    ];
+    if !server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .has_behavior(&libtmux::since::JSON_LAYOUTS)
+    {
+        invalid.push((r#"{"V":2,"L":[]}"#, libtmux::ErrorKind::UnsupportedVersion));
+    }
+    for (value, expected) in invalid {
+        let mut plan = Plan::new();
+        let created = plan.add(NewSession::new("layout-effect"));
+        plan.add(SelectLayout::new(created.window(), value));
+
+        let result = plan.run_over_control_mode(&sender).await;
+        assert!(server.is_alive().await, "{value:?}: the server survives");
+        assert_eq!(
+            result.expect_err("invalid layout is refused").kind(),
+            expected,
+            "{value:?}",
+        );
+        assert_eq!(
+            server.sessions().await.expect("sessions").len(),
+            1,
+            "{value:?}: validation happens before creating a session",
+        );
+    }
+
+    let window = session.windows().await.expect("windows").remove(0);
+    for value in ["tiled", "tile"] {
+        let mut plan = Plan::new();
+        plan.add(SelectLayout::new(window.id().clone(), value));
+        let result = plan
+            .run_over_control_mode(&sender)
+            .await
+            .expect("valid layouts are accepted");
+        assert!(result.is_complete(), "{value:?}: {result:?}");
+    }
+
+    events.shutdown().await.expect("control mode shuts down");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

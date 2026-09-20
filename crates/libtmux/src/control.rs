@@ -23,14 +23,14 @@
 //! // is waiting on the connection it stopped reading.
 //! let watcher = tokio::spawn(async move {
 //!     while let Some(event) = events.next_event().await {
-//!         match event {
+//!         match event? {
 //!             Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
 //!             Event::Exit { .. } => break,
 //!             other => println!("{other:?}"),
 //!         }
 //!     }
 //!
-//!     // The stream ending says the connection is over; this says why.
+//!     // Explicit shutdown also closes a connection before stream exhaustion.
 //!     events.shutdown().await
 //! });
 //!
@@ -46,6 +46,7 @@
 //! `examples/watch.rs` is this as a program that runs, against a server it
 //! starts and cleans up.
 
+use std::future::{Future as _, poll_fn};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -61,6 +62,8 @@ use crate::version::since::CONTROL_PANE_OFF;
 use crate::{Command, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId};
 
 mod actor;
+#[cfg(feature = "unstable-fuzzing")]
+mod fuzz;
 mod protocol;
 
 #[cfg(test)]
@@ -355,6 +358,9 @@ pub struct BlockResult {
     succeeded: bool,
     output: Vec<TmuxText>,
     sensitive_input: bool,
+    /// Leading lines of `output` printed by earlier commands of the same
+    /// chain, each of which succeeded.
+    chained: usize,
 }
 
 impl BlockResult {
@@ -378,6 +384,32 @@ impl BlockResult {
     #[must_use]
     pub fn output(&self) -> &[TmuxText] {
         &self.output
+    }
+
+    /// Split the output into what succeeded and what the failing command
+    /// printed, the way a process separates stdout from stderr.
+    pub(crate) fn split_by_outcome(&self) -> (&[TmuxText], &[TmuxText]) {
+        if self.succeeded {
+            (&self.output, &[])
+        } else {
+            self.output.split_at(self.chained.min(self.output.len()))
+        }
+    }
+
+    /// Append the block tmux sent for the next command of the same chain.
+    ///
+    /// Only called while every block so far has succeeded: tmux runs nothing
+    /// after the first command in a chain that fails.
+    pub(super) fn followed_by(mut self, next: Self) -> Self {
+        let chained = self.output.len();
+        self.output.extend(next.output);
+        Self {
+            number: next.number,
+            succeeded: next.succeeded,
+            output: self.output,
+            sensitive_input: next.sensitive_input,
+            chained,
+        }
     }
 
     /// Classify an error block as a refusal for a named operation.
@@ -447,6 +479,11 @@ impl ControlMode {
     /// Returns an error when tmux cannot be started, does not give the crate
     /// the pipes it asked for, exits before attaching, or does not finish its
     /// opening block before the server deadline.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held: a dropped attach kills and reaps the tmux client
+    /// it started.
     pub async fn attach(server: &Server, session: &SessionId) -> Result<Self, Error> {
         Self::attach_with_limits(server, session, ControlLimits::default()).await
     }
@@ -462,6 +499,10 @@ impl ControlMode {
     /// Returns an error when the connection cannot be opened, as
     /// [`Self::attach`] does. [`Server::shutdown`] cancels an attach in
     /// progress and refuses later attempts.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left held, as for [`Self::attach`].
     pub async fn attach_with_limits(
         server: &Server,
         session: &SessionId,
@@ -473,7 +514,7 @@ impl ControlMode {
         let pane_off_is_safe = server
             .capabilities()
             .await
-            .is_ok_and(|capabilities| capabilities.tmux_version().meets(&CONTROL_PANE_OFF));
+            .is_ok_and(|capabilities| capabilities.tmux_version().has_behavior(&CONTROL_PANE_OFF));
 
         let timeout = server.default_timeout();
         let actor::OpenedConnection {
@@ -483,18 +524,31 @@ impl ControlMode {
             connection,
         } = actor::open(server.spawn_control(session).await?, limits, timeout).await?;
 
-        Ok(Self {
-            sender: ControlSender {
-                commands,
-                timeout,
-                pane_off_is_safe,
-            },
-            events: ControlEvents {
-                events,
-                stop,
-                connection,
-            },
-        })
+        let sender = ControlSender {
+            commands,
+            timeout,
+            pane_off_is_safe,
+            identity: server.identity().clone(),
+        };
+        let events = ControlEvents {
+            events,
+            stop,
+            connection: Some(connection),
+        };
+
+        // Without this, tmux 3.8+ hands a control client the classic
+        // `window_layout` string instead of JSON, disagreeing with a plain
+        // client's snapshot; a release below 3.8 ignores the unknown flag.
+        if let Err(error) = sender
+            .send(Command::new("refresh-client").arg("-f").arg("new-layouts"))
+            .await
+            .and_then(|reply| reply.require_success("refresh-client"))
+        {
+            drop(sender);
+            return Err(events.shutdown_after_error(error).await);
+        }
+
+        Ok(Self { sender, events })
     }
 
     /// Separate the two halves so they can be used at the same time.
@@ -522,14 +576,24 @@ impl ControlMode {
     ///
     /// Returns an error when the command cannot be written as a control-mode
     /// line, the connection has closed, or its deadline elapses while queued,
-    /// being written, or awaiting a response. Cancellation has the same write
-    /// boundary as [`ControlSender::send`].
+    /// being written, or awaiting a response.
+    ///
+    /// # Cancel safety
+    ///
+    /// As for [`ControlSender::send`]: a command dropped while queued is never
+    /// written, and one already committed may run.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
         self.sender.send(command).await
     }
 
-    /// Return the next notification, or `None` once the connection closes.
-    pub async fn next_event(&mut self) -> Option<Event> {
+    /// Return the next notification or terminal error, then `None`.
+    ///
+    /// See [`ControlEvents::next_event`] for termination.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a dropped call consumes no event.
+    pub async fn next_event(&mut self) -> Option<Result<Event, Error>> {
         self.events.next_event().await
     }
 
@@ -537,7 +601,8 @@ impl ControlMode {
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection failed before it was closed.
+    /// Returns a connection error that was not already delivered by
+    /// [`Self::next_event`].
     pub async fn shutdown(self) -> Result<(), Error> {
         drop(self.sender);
         self.events.shutdown().await
@@ -615,6 +680,12 @@ pub struct ControlSender {
     /// Read once at attach rather than per call: the server cannot change
     /// release under a connection.
     pane_off_is_safe: bool,
+    /// Which server this connection reaches.
+    ///
+    /// A sender says nothing about where it points, so routing one onto a
+    /// handle for a different server would silently talk to this one.
+    /// [`crate::Server::over_control_mode`] compares it and refuses.
+    identity: crate::ServerIdentity,
 }
 
 impl ControlSender {
@@ -651,17 +722,24 @@ impl ControlSender {
     /// [`crate::Server::cmd`], where the wait costs one process rather than
     /// the connection everything else on it is sharing.
     ///
-    /// Dropping this future while it is queued prevents the command from being
-    /// written. Once the connection commits it for writing, tmux may execute
-    /// it; its reply position stays reserved so later replies remain aligned.
-    ///
     /// # Errors
     ///
     /// Returns an error when the command cannot be written as a control-mode
     /// line, the connection has closed, or its deadline elapses while queued,
     /// being written, or awaiting a response.
+    ///
+    /// # Cancel safety
+    ///
+    /// A command dropped while queued is never written. Once the connection has
+    /// committed it, tmux may run it, and its reply is still read and
+    /// discarded, so later replies stay aligned.
     pub async fn send(&self, command: Command) -> Result<BlockResult, Error> {
         self.send_ordered(command, None).await
+    }
+
+    /// Return the server this connection reaches.
+    pub(crate) const fn identity(&self) -> &crate::ServerIdentity {
+        &self.identity
     }
 
     /// Send a command whose completed block marks one point in event order.
@@ -670,11 +748,38 @@ impl ControlSender {
         command: Command,
         boundary: Option<Boundary>,
     ) -> Result<BlockResult, Error> {
-        let deadline = Instant::now().checked_add(self.timeout);
         let sensitive_input = command.summary().sensitive_argument_count() > 0;
         let line = command
             .control_mode_line()
             .ok_or_else(Error::control_mode_unrepresentable)?;
+        self.dispatch_line(line, sensitive_input, boundary, 1).await
+    }
+
+    /// Send one already-rendered control-mode line holding `commands`
+    /// commands.
+    ///
+    /// The typed API routes through here: a request built for dispatch carries
+    /// its own rendering, so re-deriving one from the argv is neither needed
+    /// nor correct. tmux answers each command of a chain with its own block,
+    /// and they come back as one result.
+    pub(crate) async fn send_line(
+        &self,
+        line: String,
+        sensitive_input: bool,
+        commands: usize,
+    ) -> Result<BlockResult, Error> {
+        self.dispatch_line(line, sensitive_input, None, commands)
+            .await
+    }
+
+    async fn dispatch_line(
+        &self,
+        line: String,
+        sensitive_input: bool,
+        boundary: Option<Boundary>,
+        commands: usize,
+    ) -> Result<BlockResult, Error> {
+        let deadline = Instant::now().checked_add(self.timeout);
         let (result, mut answer) = oneshot::channel();
         let (commit, mut commitment) = oneshot::channel();
         let finish = |answer: Result<Result<BlockResult, Error>, oneshot::error::RecvError>| {
@@ -701,6 +806,7 @@ impl ControlSender {
             result,
             commit,
             boundary,
+            blocks: commands.max(1),
         });
 
         tokio::select! {
@@ -738,10 +844,19 @@ impl ControlSender {
     ///
     /// Below [`crate::since::CONTROL_PANE_OFF`] this pauses the pane rather
     /// than taking it out of the stream, because taking it out crashes the
-    /// server. tmux reports a paused pane, so a caller reading
-    /// [`ControlEvents`] sees [`Event::Paused`] for it there and not on a
-    /// newer tmux. The pane stops arriving either way; what a paused pane
-    /// costs is the back-pressure, since tmux keeps draining its terminal.
+    /// server. tmux keeps reading the pane's pty either way, discarding what
+    /// this connection does not want; a paused pane costs only that
+    /// connection's own back-pressure, and [`ControlEvents`] sees
+    /// [`Event::Paused`] for it.
+    ///
+    /// At or above that release, taking the pane out of the stream also stops
+    /// tmux reading its pty at all -- for every attached client, not only this
+    /// connection, and for a one-shot reader such as `capture-pane` too --
+    /// until [`Self::unmute_pane`] or [`Self::resume_pane`] turns it back on.
+    /// A human attached to the same pane sees it stop updating, and the pane's
+    /// own program can block on `write` once the kernel's pty buffer fills.
+    /// What arrives once resumed is therefore a backlog, not a gap: see
+    /// [`Self::unmute_pane`].
     ///
     /// # Errors
     ///
@@ -761,39 +876,64 @@ impl ControlSender {
 
     /// Resume sending what a pane writes, after [`Self::mute_pane`].
     ///
+    /// Below [`crate::since::CONTROL_PANE_OFF`], [`Self::mute_pane`] paused the
+    /// pane rather than taking it out of the stream, and this continues it:
     /// tmux resumes from the pane's current output rather than replaying what
-    /// was skipped, so a caller unmuting a pane has a gap, not a backlog.
+    /// was skipped, so the caller sees a gap, not a backlog.
     ///
-    /// Below [`crate::since::CONTROL_PANE_OFF`] this continues the pane that
-    /// [`Self::mute_pane`] paused, which is the same gap by another name.
+    /// At or above that release, [`Self::mute_pane`] took the pane out of the
+    /// stream instead, which also stopped tmux reading its pty; this turns
+    /// that back on, and everything written while muted arrives at once, as a
+    /// backlog rather than a gap.
+    ///
+    /// This sends both tmux commands in one dispatch rather than choosing
+    /// between them, so it is exactly [`Self::resume_pane`] -- either name
+    /// undoes [`Self::mute_pane`] correctly regardless of which mechanism the
+    /// running tmux used.
     ///
     /// # Errors
     ///
     /// Returns an error when the connection has closed or tmux refuses the
     /// stream change.
     pub async fn unmute_pane(&self, pane: &PaneId) -> Result<(), Error> {
-        self.set_pane_stream(
-            pane,
-            if self.pane_off_is_safe {
-                "on"
-            } else {
-                "continue"
-            },
-        )
-        .await
+        self.recover_pane(pane).await
     }
 
-    /// Resume a pane tmux paused because this connection fell behind.
+    /// Resume a pane tmux paused because this connection fell behind, or one
+    /// [`Self::mute_pane`] muted.
     ///
-    /// Pairs with [`Event::Paused`], which only arrives once a caller has
-    /// asked for pausing with [`Self::pause_after`].
+    /// Pairs with [`Event::Paused`], which arrives once a caller has asked for
+    /// pausing with [`Self::pause_after`]. It is also exactly
+    /// [`Self::unmute_pane`]: both send the same two commands, so calling
+    /// either after [`Self::mute_pane`] recovers the pane on every version,
+    /// rather than only the one whose mechanism happens to match.
     ///
     /// # Errors
     ///
     /// Returns an error when the connection has closed or tmux refuses the
     /// stream change.
     pub async fn resume_pane(&self, pane: &PaneId) -> Result<(), Error> {
-        self.set_pane_stream(pane, "continue").await
+        self.recover_pane(pane).await
+    }
+
+    /// Undo whichever of `off` or `pause` a pane is under, in one dispatch.
+    ///
+    /// `refresh-client -A` accepts more than one `pane:state` pair, so `on`
+    /// and `continue` travel together. tmux's `control_set_pane_on` and
+    /// `control_continue_pane` are each a no-op when their own flag is not
+    /// set, so sending both is correct whether the pane was taken out of the
+    /// stream, paused, both, or neither.
+    async fn recover_pane(&self, pane: &PaneId) -> Result<(), Error> {
+        self.send(
+            Command::new("refresh-client")
+                .arg("-A")
+                .arg(format!("{pane}:on"))
+                .arg("-A")
+                .arg(format!("{pane}:continue")),
+        )
+        .await?
+        .require_success("refresh-client")
+        .map(|_| ())
     }
 
     /// Ask tmux to report a format whenever it changes.
@@ -831,7 +971,7 @@ impl ControlSender {
     /// // The first report arrives without anything having changed, which is
     /// // what makes a subscription usable for reading the value as well.
     /// while let Some(event) = events.next_event().await {
-    ///     if let Event::SubscriptionChanged { name, value, .. } = event {
+    ///     if let Event::SubscriptionChanged { name, value, .. } = event? {
     ///         assert_eq!(name.as_str()?, "title");
     ///         assert_eq!(value.as_str()?, "watched");
     ///         break;
@@ -906,9 +1046,15 @@ impl ControlSender {
 
     /// Receive output from these panes and no others.
     ///
-    /// Lists panes over this same connection, so the answer cannot disagree
-    /// with the connection it configures, then mutes every pane not named.
-    /// See [`Self::mute_pane`] for why this beats filtering what arrives.
+    /// Lists panes in the session this connection attached to -- over this
+    /// same connection, so the answer cannot disagree with it -- then mutes
+    /// every one not named. See [`Self::mute_pane`] for why this beats
+    /// filtering what arrives, and why the listing must not reach past this
+    /// connection's own session: `off` stops tmux reading a muted pane's pty
+    /// for every client, not just this connection, so muting a pane outside
+    /// this session would widen the change to whatever else is watching it,
+    /// and a control client is sent only its attached session's output in
+    /// the first place, so panes outside it were never part of this stream.
     ///
     /// A pane created after this call is not muted, because tmux publishes no
     /// notification for a pane appearing. Repeat this whenever
@@ -919,11 +1065,17 @@ impl ControlSender {
     /// Returns an error when the connection has closed, tmux would not list a
     /// pane, returned an unreadable pane ID, or a later mute fails. A failure
     /// after an accepted mute is [`Error::AfterEffect`].
+    ///
+    /// # Cancel safety
+    ///
+    /// The effect can be partial: panes are muted one at a time, so a dropped
+    /// call can leave some muted and others not. Muting is idempotent, so
+    /// calling again finishes the job.
     pub async fn watch_only(&self, panes: &[PaneId]) -> Result<(), Error> {
         let listed = self
             .send(
                 Command::new("list-panes")
-                    .arg("-a")
+                    .arg("-s")
                     .arg("-F")
                     .arg("#{pane_id}"),
             )
@@ -952,6 +1104,30 @@ impl ControlSender {
         }
 
         Ok(())
+    }
+
+    /// Report whether tmux still lists this pane, anywhere on the server.
+    ///
+    /// Used to tell a pane's death from an unrelated listing change: an event
+    /// that may mean a pane appeared can equally mean one left, and tmux
+    /// publishes no notification that names which.
+    pub(crate) async fn pane_exists(&self, pane: &PaneId) -> Result<bool, Error> {
+        let listed = self
+            .send(
+                Command::new("list-panes")
+                    .arg("-a")
+                    .arg("-F")
+                    .arg("#{pane_id}"),
+            )
+            .await?
+            .require_success("list-panes")?;
+
+        for line in listed.output() {
+            if decode_watched_pane_id(line)? == *pane {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn set_pane_stream(&self, pane: &PaneId, state: &str) -> Result<(), Error> {
@@ -992,21 +1168,30 @@ enum Delivery {
     Boundary(Boundary),
 }
 
-/// Receives what tmux reports without being asked.
+/// Receives tmux notifications and terminal connection errors.
 ///
-/// This is a [`Stream`], so it composes with `select!`, timeouts, and the rest
-/// of the async ecosystem rather than demanding a loop of its own.
+/// This is a [`Stream<Item = Result<Event, Error>>`](Stream). Notifications
+/// arrive in order. A connection failure follows all buffered notifications
+/// as one `Err`; subsequent polls return `None`. A normal tmux `%exit` arrives
+/// as [`Event::Exit`] and is followed by `None` after cleanup succeeds. EOF
+/// without `%exit` is [`crate::ControlModeErrorKind::Closed`].
+/// [`Server::shutdown`] may discard notifications still waiting for delivery
+/// so an unread stream cannot prevent executor shutdown.
+///
+/// Exhaustion waits for connection cleanup. [`Self::shutdown`] closes early
+/// and returns any terminal error the stream has not already delivered.
 ///
 /// Events are buffered, and a consumer that stops reading eventually stops the
 /// connection reading from tmux, which is the backpressure tmux already
-/// expects from a slow client. Nothing is dropped; commands wait instead. Drop
-/// this handle to opt out of events entirely and the connection runs on.
+/// expects from a slow client. During normal operation nothing is dropped;
+/// commands wait instead. Drop this handle to opt out of events entirely and
+/// the connection runs on.
 #[derive(Debug)]
 pub struct ControlEvents {
     events: mpsc::Receiver<Delivery>,
-    /// Ends the connection when this handle asks, or when it is dropped.
+    /// Requests closure; dropping it leaves remaining senders working.
     stop: watch::Sender<()>,
-    connection: tokio::task::JoinHandle<Result<(), Error>>,
+    connection: Option<tokio::task::JoinHandle<Result<(), Error>>>,
 }
 
 impl ControlEvents {
@@ -1014,27 +1199,56 @@ impl ControlEvents {
         self.events.recv().await
     }
 
-    /// Return the next notification, or `None` once the connection closes.
-    pub async fn next_event(&mut self) -> Option<Event> {
-        loop {
-            match self.next_delivery().await? {
-                Delivery::Event(event) => return Some(event),
-                Delivery::Boundary(_) => {}
+    pub(crate) async fn shutdown_after_error(self, mut primary: Error) -> Error {
+        if let Err(terminal) = self.shutdown().await {
+            let mut cause = &mut primary;
+            while let Error::AfterEffect { source, .. } = cause {
+                cause = source.as_mut();
+            }
+            if matches!(
+                cause,
+                Error::ControlMode {
+                    kind: crate::ControlModeErrorKind::Closed,
+                    ..
+                }
+            ) {
+                *cause = terminal;
             }
         }
+        primary
+    }
+
+    /// Return the next notification or terminal error, then `None`.
+    ///
+    /// Once `None` is returned, subsequent calls also return `None`. See
+    /// [`ControlEvents`] for the EOF and cleanup contract.
+    ///
+    /// # Errors
+    ///
+    /// Yields one terminal error for transport failure, unexpected EOF, a
+    /// frame budget or command deadline being exceeded, executor shutdown,
+    /// or failed connection cleanup. A panic in the connection task resumes
+    /// here instead, since nothing else would report it.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a dropped call consumes neither an event nor the
+    /// terminal error.
+    pub async fn next_event(&mut self) -> Option<Result<Event, Error>> {
+        poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
 
     /// End the connection and report how it went.
     ///
-    /// The stream running out says only that the connection is over. This says
-    /// why, which is the difference between a session that ended and a pipe
-    /// that broke. It ends the connection outright rather than waiting for the
-    /// senders, so it is the same call whether the connection is still healthy
-    /// or tmux hung up an hour ago.
+    /// Stops the connection even while command senders remain alive. Unread
+    /// notifications are discarded so cleanup cannot wait on a full buffer.
+    /// If the stream already delivered its terminal error, this succeeds;
+    /// that error is not delivered twice.
     ///
     /// # Errors
     ///
-    /// Returns an error when the connection failed before it was closed.
+    /// Returns a connection or cleanup error not already delivered by the
+    /// stream. Caller-requested closure succeeds when cleanup succeeds.
     pub async fn shutdown(mut self) -> Result<(), Error> {
         let _ = self.stop.send(());
         // Draining releases a connection that is parked handing over an event,
@@ -1043,23 +1257,44 @@ impl ControlEvents {
         self.events.close();
         while self.events.recv().await.is_some() {}
 
-        self.connection
-            .await
-            .map_err(|_| Error::control_mode_closed())?
+        match self.connection.take() {
+            Some(connection) => match connection.await {
+                Ok(outcome) => outcome,
+                // Nothing aborts this task, so a join failure is a panic in
+                // the connection, not a cancellation. Resuming it here, in
+                // the caller's own task, keeps the panic visible instead of
+                // reporting the actor's crash as an ordinary closed
+                // connection a supervisor would retry into a repeat panic.
+                Err(error) => std::panic::resume_unwind(error.into_panic()),
+            },
+            None => Ok(()),
+        }
     }
 }
 
 impl Stream for ControlEvents {
-    type Item = Event;
+    type Item = Result<Event, Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Event>> {
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             match std::task::ready!(self.events.poll_recv(context)) {
-                Some(Delivery::Event(event)) => return Poll::Ready(Some(event)),
+                Some(Delivery::Event(event)) => return Poll::Ready(Some(Ok(event))),
                 Some(Delivery::Boundary(_)) => {}
-                None => return Poll::Ready(None),
+                None => break,
             }
         }
+        let Some(connection) = self.connection.as_mut() else {
+            return Poll::Ready(None);
+        };
+        let outcome = std::task::ready!(Pin::new(connection).poll(context));
+        self.connection = None;
+        Poll::Ready(match outcome {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(Err(error)),
+            // As in `Self::shutdown`: a join failure here can only be a
+            // panic, so it resumes rather than reading as an ordinary close.
+            Err(error) => std::panic::resume_unwind(error.into_panic()),
+        })
     }
 }
 
@@ -1071,6 +1306,12 @@ const NARROW_DIRTY: u8 = 2;
 ///
 /// Built by [`crate::Pane::stream_output`]. This is a [`Stream`] of the bytes
 /// that pane produced, in order.
+/// Its infallible items combine normal termination, connection failure, and
+/// the watched pane being killed into `None`, once whatever was already
+/// buffered has drained. Call [`Self::shutdown`] to observe a connection
+/// error, or use [`ControlEvents`] to receive errors during iteration; a
+/// killed pane is not an error either way, since ending is the correct answer
+/// once nothing more will arrive.
 ///
 /// tmux is told to send this connection nothing but the watched pane. A
 /// neighbouring pane running `yes` otherwise moves tens of megabytes a second
@@ -1085,7 +1326,8 @@ pub struct PaneOutput {
     events: ControlEvents,
     boundary: u64,
     closed: bool,
-    /// Kept to re-narrow the subscription, not to send a caller's commands.
+    /// Kept to re-narrow the subscription and to check the watched pane still
+    /// exists, not to send a caller's commands.
     ///
     /// tmux has no notification for a pane being created, so a pane that
     /// appears after the attach arrives unmuted; the event loop below repairs
@@ -1095,6 +1337,9 @@ pub struct PaneOutput {
     ///
     /// Each pass costs a `list-panes` round trip, so a burst coalesces.
     narrowing: Arc<AtomicU8>,
+    /// The re-narrowing pass in flight, if any, polled for whether it found
+    /// the watched pane still listed.
+    narrow_handle: Option<tokio::task::JoinHandle<bool>>,
 }
 
 impl PaneOutput {
@@ -1106,16 +1351,22 @@ impl PaneOutput {
             closed: false,
             sender,
             narrowing: Arc::new(AtomicU8::new(NARROW_IDLE)),
+            narrow_handle: None,
         }
     }
 
-    /// Tell tmux again to send only this pane.
+    /// Tell tmux again to send only this pane, and check it is still there.
     ///
-    /// Detached rather than awaited so [`Stream::poll_next`], which cannot
-    /// await, repairs the subscription the same way [`Self::next_chunk`] does.
-    /// A failure leaves the caller its own pane alongside noise, so it does
-    /// not end the stream.
-    fn narrow(&self) {
+    /// Spawned rather than awaited so [`Stream::poll_next`], which cannot
+    /// await, repairs the subscription the same way [`Self::next_chunk`]
+    /// does. tmux publishes no notification naming a pane that left the
+    /// server -- only ones consistent with a pane having *appeared* -- so a
+    /// pane's death is read from the same re-listing this already does to
+    /// repair the mute set, rather than from a second round trip. A failure
+    /// checking or re-narrowing leaves the caller its own pane alongside
+    /// noise, so it does not end the stream by itself; only a listing that
+    /// completes without the watched pane in it does.
+    fn narrow(&mut self) {
         let transition =
             self.narrowing
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| match state {
@@ -1130,7 +1381,7 @@ impl PaneOutput {
         let sender = self.sender.clone();
         let pane = self.pane.clone();
         let narrowing = Arc::clone(&self.narrowing);
-        tokio::spawn(async move {
+        self.narrow_handle = Some(tokio::spawn(async move {
             loop {
                 let _ = sender.watch_only(std::slice::from_ref(&pane)).await;
                 match narrowing.compare_exchange(
@@ -1146,13 +1397,29 @@ impl PaneOutput {
                     }
                 }
             }
-        });
+            // Settled on the final pass's view, so a pane that reappeared
+            // mid-burst under the same id is not reported gone. An error here
+            // -- the connection closing under us -- is not evidence of
+            // anything about the pane, so it counts as still there.
+            sender.pane_exists(&pane).await.unwrap_or(true)
+        }));
     }
 
     /// Return the pane being watched.
     #[must_use]
     pub const fn pane(&self) -> &PaneId {
         &self.pane
+    }
+
+    /// Return the connection this stream reads, to mute or resume panes on it.
+    ///
+    /// The watched pane's own stream cannot be muted through [`Self`] alone:
+    /// [`ControlSender::mute_pane`], [`ControlSender::unmute_pane`], and
+    /// [`ControlSender::resume_pane`] all take a target, and [`Self::pane`]
+    /// names this one.
+    #[must_use]
+    pub const fn sender(&self) -> &ControlSender {
+        &self.sender
     }
 
     /// Capture the pane's visible screen at an ordered point in this stream.
@@ -1162,9 +1429,7 @@ impl PaneOutput {
     /// retain those chunks. It runs synchronously and should return promptly.
     ///
     /// Each chunk passed to `on_output` is consumed from this stream and is
-    /// not repeated by [`Self::next_chunk`]. That remains true when this
-    /// future is cancelled or returns an error: caller-owned storage keeps
-    /// the prefix it already accepted.
+    /// not repeated by [`Self::next_chunk`], even when this returns an error.
     ///
     /// The visible screen and preceding output may overlap: the screen is
     /// tmux's rendered grid, while the callback receives the raw terminal
@@ -1189,6 +1454,11 @@ impl PaneOutput {
     ///
     /// Returns an error when the connection closes, the command deadline
     /// elapses, or tmux refuses the capture, including when the pane vanished.
+    ///
+    /// # Cancel safety
+    ///
+    /// Partly happened: chunks already passed to `on_output` stay consumed, so
+    /// what the callback kept is the only copy. The stream stays usable.
     pub async fn snapshot(
         &mut self,
         mut on_output: impl FnMut(&[u8]),
@@ -1255,26 +1525,12 @@ impl PaneOutput {
     ///
     /// A chunk is what tmux chose to report at once, which is not a line and
     /// not a fixed size. Callers wanting lines should buffer.
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing happened: a dropped call consumes no chunk.
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
-        if self.closed {
-            return None;
-        }
-        loop {
-            let delivery = self.events.next_delivery().await;
-            match delivery {
-                Some(Delivery::Event(
-                    Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. },
-                )) if pane == self.pane => {
-                    return Some(bytes);
-                }
-                Some(Delivery::Event(Event::Exit { .. })) | None => {
-                    self.closed = true;
-                    return None;
-                }
-                Some(Delivery::Event(event)) if event.may_have_added_a_pane() => self.narrow(),
-                _ => {}
-            }
-        }
+        poll_fn(|context| Pin::new(&mut *self).poll_next(context)).await
     }
 
     /// End the connection and report how it went.
@@ -1291,24 +1547,57 @@ impl PaneOutput {
 impl Stream for PaneOutput {
     type Item = Vec<u8>;
 
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
-        if self.closed {
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Vec<u8>>> {
+        // `PaneOutput` holds nothing self-referential, so projecting to a
+        // plain `&mut Self` is sound and lets the rest of this read like an
+        // ordinary method body.
+        let this = self.get_mut();
+        if this.closed {
             return Poll::Ready(None);
         }
+
+        // A re-narrow already in flight is polled for its answer before
+        // reading more events, so a pane confirmed gone ends the stream even
+        // when nothing further arrives to wake this on the event channel
+        // alone.
+        if let Some(mut handle) = this.narrow_handle.take() {
+            match Pin::new(&mut handle).poll(context) {
+                Poll::Pending => this.narrow_handle = Some(handle),
+                Poll::Ready(Ok(true)) => {}
+                Poll::Ready(Ok(false)) => {
+                    this.closed = true;
+                    return Poll::Ready(None);
+                }
+                // Nothing aborts this task, so a join failure is a panic in
+                // the check, not a cancellation; resuming it here keeps it
+                // visible rather than reporting a bug as a dead pane.
+                Poll::Ready(Err(error)) => std::panic::resume_unwind(error.into_panic()),
+            }
+        }
+
         loop {
-            match std::task::ready!(self.events.events.poll_recv(context)) {
+            match std::task::ready!(this.events.events.poll_recv(context)) {
                 Some(Delivery::Event(
                     Event::Output { pane, bytes } | Event::ExtendedOutput { pane, bytes, .. },
-                )) if pane == self.pane => {
+                )) if pane == this.pane => {
                     return Poll::Ready(Some(bytes));
                 }
                 Some(Delivery::Event(Event::Exit { .. })) | None => {
-                    self.closed = true;
+                    this.closed = true;
                     return Poll::Ready(None);
                 }
+                // A layout change can mean a pane appeared; a window close
+                // means the watched pane's own window died -- `Unlinked`
+                // when it was not the session's active window. All three
+                // re-list and end the stream if the watched pane is gone.
                 Some(Delivery::Event(event)) => {
-                    if event.may_have_added_a_pane() {
-                        self.narrow();
+                    if event.may_have_added_a_pane()
+                        || matches!(
+                            event,
+                            Event::WindowClosed { .. } | Event::UnlinkedWindowClosed { .. }
+                        )
+                    {
+                        this.narrow();
                     }
                 }
                 Some(Delivery::Boundary(_)) => {}
@@ -1329,6 +1618,10 @@ impl Stream for PaneOutput {
 pub fn __fuzz_parse_control_line(line: &[u8]) {
     let _ = Line::parse(line);
 }
+
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use fuzz::__fuzz_control_blocks;
 
 #[cfg(test)]
 mod tests;

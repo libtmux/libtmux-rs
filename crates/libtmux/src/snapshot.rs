@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use crate::formats::{DecoderKind, decode_ascii};
@@ -19,30 +20,67 @@ use crate::query::{
 use crate::target::WindowLinkIdentity;
 use crate::{PaneId, ServerIdentity, SessionId, TmuxVersion, WindowId};
 
-/// Availability evidence retained for a modeled snapshot field.
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Availability<T> {
-    /// The detected numbered release predates the field.
+/// A snapshot field's value, or the reason the snapshot holds none.
+///
+/// A listing asks tmux for every field its snapshot models, except one the
+/// running tmux cannot have: a release older than the field gives
+/// [`Unsupported`](Self::Unsupported), and a development build, which names no
+/// release to compare, gives [`Unproven`](Self::Unproven) for any field newer
+/// than the oldest supported release. Neither is fetched.
+///
+/// [`Absent`](Self::Absent) means tmux was asked and answered with nothing,
+/// which for some fields is the ordinary state: a pane outside copy mode has
+/// no `scroll_position`, and a pane straight from
+/// [`Pane::split`](crate::Pane::split) can report no `pane_current_path` until
+/// its process has started. tmux prints the same empty string for "no value"
+/// and "not yet", so re-reading is the only way to tell them apart.
+///
+/// Every snapshot fetches every field it models, so no variant means "this
+/// snapshot did not ask".
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::Availability;
+///
+/// fn describe(scroll: Availability<i32>) -> String {
+///     match scroll {
+///         Availability::Available(lines) => format!("{lines} lines up"),
+///         Availability::Absent => String::from("not in copy mode"),
+///         _ => String::from("this tmux cannot say"),
+///     }
+/// }
+///
+/// assert_eq!(describe(Availability::Available(3)), "3 lines up");
+/// assert_eq!(Availability::Available(3).available(), Some(3));
+/// assert_eq!(Availability::<i32>::Absent.available(), None);
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Availability<T> {
+    /// The running tmux release predates the field, so it was not fetched.
     Unsupported,
-    /// A development build provides no numbered availability proof.
+    /// A development build names no release to prove the field exists, so it
+    /// was not fetched.
     Unproven,
-    /// Tmux emitted an empty value for a conditionally available field.
+    /// tmux was asked and reported nothing.
     Absent,
-    /// Tmux emitted a decoded value, including preserved empty text.
+    /// tmux reported a value, which for text may be empty.
     Available(T),
 }
 
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 impl<T> Availability<T> {
-    /// Borrow the contained value without cloning the evidence.
-    pub(crate) const fn as_ref(&self) -> Availability<&T> {
+    /// Borrow the value, keeping the reason when there is none.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::{Availability, TmuxText};
+    ///
+    /// let owned = Availability::Available(TmuxText::from("copy-mode"));
+    /// assert_eq!(owned.as_ref().available(), Some(&TmuxText::from("copy-mode")));
+    /// ```
+    pub const fn as_ref(&self) -> Availability<&T> {
         match self {
             Self::Unsupported => Availability::Unsupported,
             Self::Unproven => Availability::Unproven,
@@ -51,28 +89,49 @@ impl<T> Availability<T> {
         }
     }
 
-    /// Discard the reason a value is missing and keep only the value.
+    /// Return the value, discarding the reason when there is none.
     ///
-    /// Callers that treat every unavailable state alike use this. Callers that
-    /// must distinguish an unsupported release from a genuinely absent value
-    /// match on the evidence instead.
-    pub(crate) fn available(self) -> Option<T> {
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::Availability;
+    ///
+    /// assert_eq!(Availability::Available(7_u32).available(), Some(7));
+    /// assert_eq!(Availability::<u32>::Unsupported.available(), None);
+    /// ```
+    pub fn available(self) -> Option<T> {
         match self {
             Self::Available(value) => Some(value),
             Self::Unsupported | Self::Unproven | Self::Absent => None,
         }
     }
 
-    /// Report whether tmux emitted a decoded value.
-    pub(crate) const fn is_available(&self) -> bool {
+    /// Report whether tmux reported a value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::Availability;
+    ///
+    /// assert!(Availability::Available(false).is_available());
+    /// assert!(!Availability::<bool>::Absent.is_available());
+    /// ```
+    pub const fn is_available(&self) -> bool {
         matches!(self, Self::Available(_))
+    }
+
+    /// Transform the value, keeping the reason when there is none.
+    #[cfg(feature = "query")]
+    pub(crate) fn map<U>(self, transform: impl FnOnce(T) -> U) -> Availability<U> {
+        match self {
+            Self::Unsupported => Availability::Unsupported,
+            Self::Unproven => Availability::Unproven,
+            Self::Absent => Availability::Absent,
+            Self::Available(value) => Availability::Available(transform(value)),
+        }
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "modelled and tested; only a projection of it is hydrated today"
-)]
 impl<T: Copy> Availability<&T> {
     /// Copy a borrowed scalar out of its evidence.
     pub(crate) const fn copied(self) -> Availability<T> {
@@ -136,6 +195,153 @@ impl FilterEnum for PaneProgressState {
         }
     }
 }
+
+/// One stored field value, borrowed for a typed read.
+#[cfg(feature = "query")]
+#[derive(Clone, Copy)]
+pub(crate) enum FieldRef<'a> {
+    Text(&'a TmuxText),
+    SessionId(&'a SessionId),
+    WindowId(&'a WindowId),
+    PaneId(&'a PaneId),
+    Bool(bool),
+    U8(u8),
+    U32(u32),
+    U64(u64),
+    I32(i32),
+    I64(i64),
+    ProgressState(PaneProgressState),
+}
+
+#[cfg(feature = "query")]
+mod sealed {
+    /// Keeps [`super::ReadField`] implemented by this crate's handles only.
+    pub trait Sealed {}
+}
+
+/// A field handle whose value a `Target` snapshot holds.
+///
+/// Every handle in [`PaneFields`], [`WindowFields`], [`SessionFields`] and
+/// [`ClientFields`] implements it for the handle type it filters, so the name
+/// that filters a field also reads it: pass the handle to
+/// [`Pane::get`](crate::Pane::get), [`Window::get`](crate::Window::get),
+/// [`Session::get`](crate::Session::get) or
+/// [`Client::get`](crate::Client::get). A read never asks tmux. The trait is
+/// sealed.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::query::{Filterable as _, ReadField};
+/// use libtmux::{Availability, Pane};
+///
+/// // Any field of a pane, read the same way.
+/// fn read<F: ReadField<Pane>>(pane: &Pane, field: F) -> Availability<F::Value<'_>> {
+///     pane.get(field)
+/// }
+///
+/// let fields = Pane::filter_fields();
+/// # let _ = |pane: &Pane| {
+/// let column: Availability<u32> = read(pane, fields.cursor_x);
+/// # let _ = column;
+/// # };
+/// ```
+#[cfg(feature = "query")]
+pub trait ReadField<Target>: Copy + sealed::Sealed {
+    /// What a read yields: `&TmuxText` or a borrowed typed ID for a text
+    /// field, the value itself for any other.
+    type Value<'a>
+    where
+        Target: 'a;
+
+    /// Read this field from `target`; `None` when `target` stores no field of
+    /// this name and type, which only a hand-built handle can ask for.
+    #[doc(hidden)]
+    fn __read(self, target: &Target) -> Option<Availability<Self::Value<'_>>>;
+}
+
+/// Keep a stored value only when it has the type the handle promises.
+#[cfg(feature = "query")]
+fn narrow<'a, V>(
+    stored: Availability<FieldRef<'a>>,
+    pick: impl FnOnce(FieldRef<'a>) -> Option<V>,
+) -> Option<Availability<V>> {
+    match stored {
+        Availability::Available(value) => pick(value).map(Availability::Available),
+        Availability::Unsupported => Some(Availability::Unsupported),
+        Availability::Unproven => Some(Availability::Unproven),
+        Availability::Absent => Some(Availability::Absent),
+    }
+}
+
+/// Implement [`ReadField`] for each handle type a target's fields use.
+///
+/// Each entry names a handle kind, its value type and the stored variant it
+/// reads. `unread` in the generated field sets fails to compile when a handle
+/// type is missing here.
+#[cfg(feature = "query")]
+macro_rules! read_field_impls {
+    ([$($target:ty),+ $(,)?] $entries:tt) => {
+        $(read_field_impls!(@target $target, $entries);)+
+    };
+    (@target $target:ty, [$($kind:ident $(<$param:ty>)? => $value:ty, $variant:ident;)*]) => {
+        $(
+            impl sealed::Sealed for $kind<$target $(, $param)?> {}
+
+            impl ReadField<$target> for $kind<$target $(, $param)?> {
+                type Value<'a> = $value;
+
+                fn __read(self, target: &$target) -> Option<Availability<Self::Value<'_>>> {
+                    narrow(target.stored(self.field_name())?, |value| match value {
+                        FieldRef::$variant(value) => Some(value),
+                        _ => None,
+                    })
+                }
+            }
+        )*
+    };
+}
+
+// The info types read too, so the gate can run on fixtures without a server.
+#[cfg(feature = "query")]
+read_field_impls!([crate::Pane, PaneInfo] [
+    TextField<TmuxText> => &'a TmuxText, Text;
+    TextField<PaneId> => &'a PaneId, PaneId;
+    BoolField => bool, Bool;
+    IntegerField<u8> => u8, U8;
+    IntegerField<u32> => u32, U32;
+    IntegerField<u64> => u64, U64;
+    IntegerField<i32> => i32, I32;
+    IntegerField<i64> => i64, I64;
+    EnumField<PaneProgressState> => PaneProgressState, ProgressState;
+]);
+
+#[cfg(feature = "query")]
+read_field_impls!([crate::Window, WindowInfo] [
+    TextField<TmuxText> => &'a TmuxText, Text;
+    TextField<WindowId> => &'a WindowId, WindowId;
+    BoolField => bool, Bool;
+    IntegerField<u32> => u32, U32;
+    IntegerField<i64> => i64, I64;
+]);
+
+#[cfg(feature = "query")]
+read_field_impls!([crate::Session, SessionInfo] [
+    TextField<TmuxText> => &'a TmuxText, Text;
+    TextField<SessionId> => &'a SessionId, SessionId;
+    BoolField => bool, Bool;
+    IntegerField<u32> => u32, U32;
+    IntegerField<i64> => i64, I64;
+]);
+
+#[cfg(feature = "query")]
+read_field_impls!([crate::Client, ClientInfo] [
+    TextField<TmuxText> => &'a TmuxText, Text;
+    BoolField => bool, Bool;
+    IntegerField<u32> => u32, U32;
+    IntegerField<u64> => u64, U64;
+    IntegerField<i64> => i64, I64;
+]);
 
 /// Selected slot or retained unavailability for one planned field.
 enum PlannedSlot<'row> {
@@ -360,10 +566,35 @@ fn decode_i32(slot: ParsedSlot<'_>) -> Result<i32, FormatCodecError> {
         .ok_or_else(|| invalid_value(&slot))
 }
 
+/// Decode Unix seconds, refusing a value [`unix_time`] cannot convert.
+///
+/// A stored timestamp is therefore always one [`stored_time`] can read.
 fn decode_timestamp(slot: ParsedSlot<'_>) -> Result<i64, FormatCodecError> {
     signed_text(slot.as_bytes())
         .and_then(|text| text.parse::<i64>().ok())
+        .filter(|seconds| unix_time(*seconds).is_some())
         .ok_or_else(|| invalid_value(&slot))
+}
+
+/// Convert Unix seconds, the unit of every tmux timestamp, to a `SystemTime`.
+///
+/// A negative value is a time before 1970. `None` when this platform's
+/// `SystemTime` cannot hold the value.
+pub(crate) fn unix_time(seconds: i64) -> Option<SystemTime> {
+    let offset = Duration::from_secs(seconds.unsigned_abs());
+    if seconds < 0 {
+        UNIX_EPOCH.checked_sub(offset)
+    } else {
+        UNIX_EPOCH.checked_add(offset)
+    }
+}
+
+/// Read a timestamp that [`decode_timestamp`] or a caller already checked.
+///
+/// The fallback exists so an unrepresentable value is not a panic, not
+/// because it is reachable.
+pub(crate) fn stored_time(seconds: i64) -> SystemTime {
+    unix_time(seconds).unwrap_or(UNIX_EPOCH)
 }
 
 fn decode_identity<T>(slot: ParsedSlot<'_>) -> Result<T, FormatCodecError>
@@ -595,9 +826,9 @@ macro_rules! decode_catalog_field {
 #[cfg(feature = "query")]
 macro_rules! filter_field_type {
     ($info:ident, Text) => { TextField<$info> };
-    ($info:ident, SessionId) => { TextField<$info> };
-    ($info:ident, WindowId) => { TextField<$info> };
-    ($info:ident, PaneId) => { TextField<$info> };
+    ($info:ident, SessionId) => { TextField<$info, SessionId> };
+    ($info:ident, WindowId) => { TextField<$info, WindowId> };
+    ($info:ident, PaneId) => { TextField<$info, PaneId> };
     ($info:ident, Bool) => { BoolField<$info> };
     ($info:ident, U8) => { IntegerField<$info, u8> };
     ($info:ident, U32) => { IntegerField<$info, u32> };
@@ -614,13 +845,13 @@ macro_rules! filter_field_value {
         crate::query::__private::text_field::<$info>($target, $name)
     };
     ($info:ident, $target:expr, $name:expr, SessionId) => {
-        crate::query::__private::text_field::<$info>($target, $name)
+        TextField::<$info, SessionId>::typed($target, $name)
     };
     ($info:ident, $target:expr, $name:expr, WindowId) => {
-        crate::query::__private::text_field::<$info>($target, $name)
+        TextField::<$info, WindowId>::typed($target, $name)
     };
     ($info:ident, $target:expr, $name:expr, PaneId) => {
-        crate::query::__private::text_field::<$info>($target, $name)
+        TextField::<$info, PaneId>::typed($target, $name)
     };
     ($info:ident, $target:expr, $name:expr, Bool) => {
         crate::query::__private::bool_field::<$info>($target, $name)
@@ -833,6 +1064,61 @@ macro_rules! decode_stored {
     };
 }
 
+/// Borrow one stored scalar as the [`FieldRef`] variant its decoder implies.
+#[cfg(feature = "query")]
+macro_rules! field_ref {
+    ($value:expr, Text) => {
+        FieldRef::Text($value)
+    };
+    ($value:expr, SessionId) => {
+        FieldRef::SessionId($value)
+    };
+    ($value:expr, WindowId) => {
+        FieldRef::WindowId($value)
+    };
+    ($value:expr, PaneId) => {
+        FieldRef::PaneId($value)
+    };
+    ($value:expr, Bool) => {
+        FieldRef::Bool(*$value)
+    };
+    ($value:expr, U8) => {
+        FieldRef::U8(*$value)
+    };
+    ($value:expr, U32) => {
+        FieldRef::U32(*$value)
+    };
+    ($value:expr, U64) => {
+        FieldRef::U64(*$value)
+    };
+    ($value:expr, I32) => {
+        FieldRef::I32(*$value)
+    };
+    ($value:expr, Timestamp) => {
+        FieldRef::I64(*$value)
+    };
+    ($value:expr, PaneProgress) => {
+        FieldRef::U8(*$value)
+    };
+    ($value:expr, PaneProgressState) => {
+        FieldRef::ProgressState(*$value)
+    };
+}
+
+/// Read a stored field as evidence, matching [`stored_type`].
+#[cfg(feature = "query")]
+macro_rules! read_stored {
+    ($value:expr, $decoder:ident, V3_2A, Required) => {
+        Availability::Available(field_ref!(&$value, $decoder))
+    };
+    ($value:expr, $decoder:ident, V3_2A, Available) => {
+        Availability::Available(field_ref!(&$value, $decoder))
+    };
+    ($value:expr, $decoder:ident, $floor:ident, $empty:ident) => {
+        $value.as_ref().map(|value| field_ref!(value, $decoder))
+    };
+}
+
 /// Match a predicate against a stored field, matching [`stored_type`].
 #[cfg(feature = "query")]
 macro_rules! match_stored {
@@ -888,6 +1174,20 @@ macro_rules! define_snapshot_info {
                     borrow_stored!(self.$field, $floor, $empty)
                 }
             )*
+
+            /// Return the field tmux names `name`, or `None` for a name this
+            /// snapshot does not model.
+            #[cfg(feature = "query")]
+            pub(crate) fn stored(&self, name: &str) -> Option<Availability<FieldRef<'_>>> {
+                match name {
+                    $baseline_name => Some(Availability::Available(field_ref!(
+                        &self.$baseline_field,
+                        $baseline_decoder
+                    ))),
+                    $($name => Some(read_stored!(self.$field, $decoder, $floor, $empty)),)*
+                    _ => None,
+                }
+            }
         }
 
         #[doc = concat!("Typed filter field handles for a `", $target, "`.")]
@@ -938,6 +1238,27 @@ macro_rules! define_snapshot_info {
         impl<Target> core::fmt::Debug for $fields<Target> {
             fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 formatter.debug_struct(stringify!($fields)).finish_non_exhaustive()
+            }
+        }
+
+        // The gate for "every handle reads": naming this function for a target
+        // fails to compile unless every handle type implements `ReadField` for
+        // it, and calling it names each handle whose read found no field.
+        #[cfg(all(test, feature = "query"))]
+        impl<Target> $fields<Target> {
+            pub(crate) fn unread(&self, target: &Target) -> Vec<&'static str>
+            where
+                filter_field_type!(Target, $baseline_decoder): ReadField<Target>,
+                $(filter_field_type!(Target, $decoder): ReadField<Target>,)*
+            {
+                let mut unread = Vec::new();
+                if self.$baseline_field.__read(target).is_none() {
+                    unread.push($baseline_name);
+                }
+                $(if self.$field.__read(target).is_none() {
+                    unread.push($name);
+                })*
+                unread
             }
         }
 

@@ -16,58 +16,6 @@ use crate::window::Window;
 use crate::{Error, PaneId, SessionId, WindowId};
 
 impl Server {
-    /// List every session on the server, in tmux's own order.
-    ///
-    /// This is the lenient form: a server that is not running, or any other
-    /// failure of the underlying list operation, yields an empty `Vec`. Use
-    /// [`Server::sessions`] when the reason matters.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    ///
-    /// // A fixture starts with no sessions. The lenient form reports that as
-    /// // an empty listing rather than as the failure it also collapses.
-    /// assert!(server.sessions_or_empty().await.is_empty());
-    ///
-    /// guard.session("work").await?;
-    ///
-    /// let sessions = server.sessions_or_empty().await;
-    /// assert_eq!(sessions.len(), 1);
-    /// assert_eq!(sessions[0].name().as_bytes(), b"work");
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn sessions_or_empty(&self) -> Vec<Session> {
-        self.sessions().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-sessions", &error);
-            Vec::new()
-        })
-    }
-
-    /// List every window on the server, in tmux's own order.
-    ///
-    /// A window linked into several sessions appears once per link, so a
-    /// window id can repeat. See [`Window`] for what that means for equality.
-    ///
-    /// This is the lenient form; use [`Server::windows`] when the reason
-    /// for an empty result matters.
-    pub async fn windows_or_empty(&self) -> Vec<Window> {
-        self.windows().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-windows", &error);
-            Vec::new()
-        })
-    }
-
     /// List every window on the server, preserving any failure.
     ///
     /// # Errors
@@ -83,20 +31,6 @@ impl Server {
             .collect())
     }
 
-    /// List every pane on the server, in tmux's own order.
-    ///
-    /// Panes under a linked window appear once per link, matching
-    /// [`Server::windows_or_empty`].
-    ///
-    /// This is the lenient form; use [`Server::panes`] when the reason for
-    /// an empty result matters.
-    pub async fn panes_or_empty(&self) -> Vec<Pane> {
-        self.panes().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-panes", &error);
-            Vec::new()
-        })
-    }
-
     /// List every pane on the server, preserving any failure.
     ///
     /// # Errors
@@ -110,17 +44,6 @@ impl Server {
             .into_iter()
             .map(|projection| Pane::new(Arc::clone(&self.core), projection))
             .collect())
-    }
-
-    /// List every client attached to the server, in tmux's own order.
-    ///
-    /// This is the lenient form; use [`Server::clients`] when the reason for
-    /// an empty result matters.
-    pub async fn clients_or_empty(&self) -> Vec<Client> {
-        self.clients().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-clients", &error);
-            Vec::new()
-        })
     }
 
     /// List every client attached to the server, preserving any failure.
@@ -182,7 +105,7 @@ impl Server {
     /// Find the window with this id, through the first link that reaches it.
     ///
     /// A window linked into several sessions is returned once. Use
-    /// [`Server::windows_or_empty`] when the link matters.
+    /// [`Server::windows`] when the link matters.
     ///
     /// # Errors
     ///
@@ -247,7 +170,7 @@ impl Server {
 
     /// Fetch the whole hierarchy in three commands.
     ///
-    /// Walking down with [`Server::sessions_or_empty`], then each session's windows,
+    /// Walking down with [`Server::sessions`], then each session's windows,
     /// then each window's panes costs one command per object. tmux can answer
     /// the same question with `list-sessions`, `list-windows -a`, and
     /// `list-panes -a`, so this issues three regardless of how much is

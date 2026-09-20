@@ -1745,6 +1745,7 @@ dependencies = [
  "libtmux",
  "regex",
  "rmcp",
+ "rustix",
  "schemars",
  "serde",
  "serde_json",

@@ -192,8 +192,9 @@ output remain tool results. Because one process is pinned to one socket, no
 resource URI can select another server.
 
 That resource is also the check against registration drift. Every advertised
-tool carries the same complete capability row in its `_meta`, including its
-native input and output schemas. Listing, calling, documentation generation,
+tool carries its capability row in its `_meta`, less the name, title,
+description, annotations, and schemas the tool already carries; the resource
+reports all of them together. Listing, calling, documentation generation,
 and reporting therefore cannot disagree without a registry test failing.
 
 Selection is frozen before the first tmux command. The four toolsets are an

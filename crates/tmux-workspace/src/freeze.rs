@@ -13,7 +13,7 @@
 
 use libtmux::{Error, Session};
 
-use crate::config::{PaneConfig, WindowConfig, Workspace};
+use crate::config::{PaneConfig, ShellCommand, WindowConfig, Workspace};
 
 /// Describe a live session as a workspace.
 ///
@@ -21,10 +21,11 @@ use crate::config::{PaneConfig, WindowConfig, Workspace};
 /// [`Workspace::to_yaml`] or handed straight back to
 /// [`crate::WorkspaceBuilder`] to make another like it.
 ///
-/// A pane is described by the command tmux says it is running. For a pane
-/// sitting at a shell that is the shell itself, which would restart as an
-/// empty pane -- correct, and rarely what was meant. Panes running something
-/// are the ones worth freezing.
+/// A pane is described by the command tmux says it is running, by name and
+/// without its arguments. A pane at its shell's prompt freezes to a pane
+/// with no command: tmux reports the shell itself, and recording it would
+/// start a shell inside a shell when the file is built. A shell is the
+/// session's `default-shell`, or a common interactive shell by name.
 ///
 /// # Errors
 ///
@@ -61,24 +62,29 @@ use crate::config::{PaneConfig, WindowConfig, Workspace};
 /// # }
 /// ```
 pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
+    // A format, not `Session::get_option`: that answers only an override set
+    // on this session, and `default-shell` is rarely set there.
+    let default_shell = session.format("#{default-shell}").await?;
+    let default_shell = basename(&default_shell.to_string_lossy()).to_owned();
     let mut windows = Vec::new();
 
     for window in session.windows().await? {
         let mut panes = Vec::new();
         for pane in window.panes().await? {
+            let command = pane
+                .current_command()
+                .map(|command| command.to_string_lossy().into_owned())
+                .filter(|command| {
+                    let name = basename(command);
+                    name != default_shell && !SHELLS.contains(&name)
+                });
             panes.push(PaneConfig {
-                shell_commands: pane
-                    .current_command()
-                    .map(|command| vec![command.to_string_lossy().into_owned()])
-                    .unwrap_or_default(),
-                environment: Vec::new(),
+                shell_commands: command.map(ShellCommand::new).into_iter().collect(),
                 start_directory: pane
                     .current_path()
                     .map(|path| path.to_string_lossy().into_owned().into()),
                 focus: pane.is_active(),
-                enter: true,
-                suppress_history: None,
-                unsupported_keys: Vec::new(),
+                ..PaneConfig::default()
             });
         }
 
@@ -107,8 +113,19 @@ pub async fn freeze(session: &Session) -> Result<Workspace, Error> {
         options: Vec::new(),
         global_options: Vec::new(),
         shell_command_before: Vec::new(),
-        suppress_history: false,
+        suppress_history: true,
         windows,
         unsupported_keys: Vec::new(),
     })
 }
+
+/// The last path component, which is how tmux reports a pane's command.
+fn basename(text: &str) -> &str {
+    text.rsplit('/').next().unwrap_or(text)
+}
+
+/// Shells common enough that a pane running one is at its prompt, whatever
+/// `default-shell` is: on macOS `/bin/sh` runs as `bash`.
+const SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ash", "ksh", "mksh", "fish", "csh", "tcsh",
+];

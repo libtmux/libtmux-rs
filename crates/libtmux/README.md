@@ -18,6 +18,8 @@ and panes.**
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
+See the [migration notes](docs/migration.md) when upgrading from alpha.11.
+
 ```rust
 use libtmux::test::TestServer;
 
@@ -86,7 +88,7 @@ below, so a caller who wants them all does not have to list them.
 | `derive` | `#[derive(Filterable)]`, for filtering your own structs with the same expressions |
 | `serde` | Versioned serialization for `FilterExpr<T>`, for sending expressions over a wire |
 | `schema` | JSON Schema for serialized plans and portable filter expressions |
-| `tracing` | Sanitized command instrumentation |
+| `tracing` | Sanitized command instrumentation: a `tmux_command` span per dispatch |
 | `test-support` | The real-tmux test guard, for your own tests |
 | `full` | Every capability above, but not `test-support` |
 
@@ -146,8 +148,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 tmux keeps a signal nobody is waiting on, so the job finishing first does not
-lose the race, and nothing polls. `examples/orchestrate.rs` runs three jobs
-this way.
+lose the race, and nothing polls. A wait that runs out of time keeps its
+client on the channel rather than killing it, so the signal is still there for
+this process's next wait: tmux cannot take a waiter back out, and a killed one
+would eat the signal instead. `examples/orchestrate.rs` runs three jobs this
+way.
 
 For a pane that was *not* written to announce itself, `Pane::wait_for_text`
 does the same job without a channel:
@@ -229,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // subscription reads the value as well as watching it.
     let mut reports = 0;
     while let Some(event) = events.next_event().await {
-        if let Event::SubscriptionChanged { name, value, .. } = event {
+        if let Event::SubscriptionChanged { name, value, .. } = event? {
             println!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
             reports += 1;
             if reports == 1 {
@@ -292,7 +297,25 @@ table on your own machine.
 
 Control mode is never the default transport, and turning the feature on does
 not make it one: normal commands stay one process per command until you attach
-a connection and use it.
+a connection and use it. `Server::over_control_mode` is how you use it for
+everything rather than command by command -- it returns a handle whose ordinary
+typed calls travel down the connection, and handles reached through it inherit
+the route:
+
+```text
+let (commands, events) = ControlMode::attach(&server, session.id()).await?.split();
+let routed = server.over_control_mode(&commands).await?;
+
+// One connection, no processes: the whole typed API, not a plan's worth of it.
+for pane in routed.panes().await? {
+    pane.send_line("echo hello").await?;
+}
+```
+
+Keep the original server for the two things a connection is wrong for: a
+command that parks the client's queue, such as `wait-for` or a foreground
+`run-shell`, and arguments that are not valid UTF-8, which a text protocol
+cannot carry. See `Server::over_control_mode` for the runnable version.
 
 ## When the typed API does not cover it
 
@@ -392,11 +415,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Listings come in pairs, and the short name is the honest one. `sessions()`
-returns `Result<Vec<Session>>`, so an unreachable tmux is an error rather than
-an empty list. `sessions_or_empty()` collapses failure into no rows, which
-suits a status line and nothing that reconciles state -- a reconciler reading
-"no sessions" from an outage will happily delete everything.
+A listing keeps the reason it failed. `sessions()` returns
+`Result<Vec<Session>>`, so an unreachable tmux is an error rather than an empty
+list. A caller that would rather show nothing writes
+`sessions().await.unwrap_or_default()`, which suits a status line and nothing
+that reconciles state -- a reconciler reading "no sessions" from an outage will
+happily delete everything, and now has to say so at the call site.
 
 ## Filtering
 
@@ -541,11 +565,45 @@ deadline, 30 seconds by default and configurable through
 for dispatch capacity.
 Dropping the command future, reaching its timeout, or shutting the server down
 signals the group and waits for the direct child while the runtime is alive.
+The signal reaches the tmux client, not the server: a command the server has
+already received still runs, so a dropped mutation may or may not have
+happened, and a retry can repeat it.
 
 A control-mode connection has its own isolated process group. Its attach
 handshake and each command response use the same default timeout; a response's
 deadline starts before its line is written and ends with the complete block.
 Dropping both handles terminates and reaps the connection.
+
+A caller that wants a shorter deadline for one command does not need an API
+for it. Dropping the future is what signals the group, so wrapping the call is
+a per-call deadline with the cleanup already attached:
+
+```rust
+use libtmux::Command;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let guard = libtmux::test::TestServer::new().await?;
+    let server = guard.server();
+
+    // Ends at 400ms rather than the server's 30-second default, and the
+    // client's process group is signalled and reaped on the way out. The
+    // `sleep` runs under the tmux server, so it finishes regardless.
+    let bounded = tokio::time::timeout(
+        Duration::from_millis(400),
+        server.cmd(Command::new("run-shell").arg("sleep 3")),
+    )
+    .await;
+    assert!(bounded.is_err());
+
+    // The server is still usable: a bounded call is not a broken connection.
+    server.sessions().await?;
+
+    guard.shutdown().await?;
+    Ok(())
+}
+```
 
 `Server::shutdown()` is shared by all clones: it cancels active subprocess
 work and persistent control connections, rejects later commands and attaches,
@@ -564,11 +622,25 @@ libtmux = { version = "0.1.0-alpha.11", features = ["test-support"] }
 ```
 
 Each guard owns a tmux child on a private socket with an empty config, so tests
-cannot reach your real server or each other. `shutdown().await` closes escaped
+cannot reach your real server or each other, and it is given only the
+environment tmux and a pane's shell need -- `PATH`, `HOME`, `USER`, `LOGNAME`,
+`SHELL`, the locale variables and `TMUX_TMPDIR` -- so a test that reads the
+environment cannot read yours. `shutdown().await` closes escaped
 clients, waits the daemon, and reports cleanup failures; `Drop` forces
 best-effort cleanup even after the runtime has ended. On Linux, cleanup also
 sweeps processes by an exact environment marker through pidfds, so PID reuse
 cannot redirect a signal.
+
+There is no mock and no replay mode: a test here talks to tmux, because what
+tmux answers is the thing under test. CI needs tmux installed, which on a
+GitHub Actions Ubuntu runner is one step:
+
+```yaml
+- run: sudo apt-get install -y --no-install-recommends tmux
+```
+
+`LIBTMUX_TEST_TMUX` points the guard at a specific build when one release
+matters.
 
 The guarantees and their limits are set out in `docs/design.md`, which ships
 with the crate.

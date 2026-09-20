@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 
 use super::{Chooser, Server};
 use crate::client::Client;
@@ -41,8 +41,7 @@ impl Server {
 
     /// Show a menu over a client.
     ///
-    /// Items are `(label, key, command)` triples in the order tmux should show
-    /// them. This needs a client with a terminal.
+    /// Items appear in the order given. This needs a client with a terminal.
     ///
     /// Like [`Self::command_prompt`], this waits for the person: tmux holds the
     /// invocation until an item is chosen or the menu is dismissed, and the
@@ -57,7 +56,7 @@ impl Server {
         &self,
         client: Option<&Client>,
         title: &str,
-        items: impl IntoIterator<Item = (String, String, String)>,
+        items: impl IntoIterator<Item = MenuItem>,
     ) -> Result<(), Error> {
         let mut menu = Command::new("display-menu")
             .arg("-T")
@@ -69,11 +68,8 @@ impl Server {
                 .arg("-t")
                 .arg(client.name().to_string_lossy().into_owned());
         }
-        for (label, key, command) in items {
-            menu = menu
-                .arg(OsString::from(label))
-                .arg(OsString::from(key))
-                .arg(OsString::from(command));
+        for item in items {
+            menu = menu.arg(item.label).arg(item.key).arg(item.command);
         }
 
         listing::mutate(&self.core, "display-menu", menu).await
@@ -199,5 +195,81 @@ impl Server {
         }
 
         listing::mutate(&self.core, "display-panes", request).await
+    }
+}
+
+/// One line of a [`Server::display_menu`] menu.
+///
+/// The three parts were a `(String, String, String)` triple, which reads the
+/// same whichever order they are in and compiles whichever order they are in.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn menu(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+/// use libtmux::MenuItem;
+///
+/// server
+///     .display_menu(
+///         None,
+///         "session",
+///         [
+///             MenuItem::new("Detach", "d", "detach-client"),
+///             MenuItem::new("Kill", "k", "kill-session"),
+///         ],
+///     )
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MenuItem {
+    label: OsString,
+    key: OsString,
+    command: OsString,
+}
+
+impl MenuItem {
+    /// Show `label`, and run `command` when the person presses `key`.
+    ///
+    /// `key` is a tmux key name, or `-` for a line that cannot be chosen.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::MenuItem;
+    ///
+    /// let item = MenuItem::new("Kill the session", "k", "kill-session");
+    /// assert_eq!(item.label(), "Kill the session");
+    /// ```
+    #[must_use]
+    pub fn new(
+        label: impl Into<OsString>,
+        key: impl Into<OsString>,
+        command: impl Into<OsString>,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            key: key.into(),
+            command: command.into(),
+        }
+    }
+
+    /// The text tmux shows.
+    #[must_use]
+    pub fn label(&self) -> &OsStr {
+        &self.label
+    }
+
+    /// The key that chooses this line.
+    #[must_use]
+    pub fn key(&self) -> &OsStr {
+        &self.key
+    }
+
+    /// The tmux command this line runs.
+    #[must_use]
+    pub fn command(&self) -> &OsStr {
+        &self.command
     }
 }

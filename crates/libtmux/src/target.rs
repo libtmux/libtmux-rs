@@ -6,6 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::SystemTime;
 
 use crate::error::IdParseError;
 
@@ -18,10 +19,9 @@ use crate::error::IdParseError;
 /// itself -- which also makes a directory whose name really contains `#`
 /// reachable, where passing it through unescaped does not.
 ///
-/// This is not applied for you, because such text is sometimes meant as a
-/// format. Use it for what a program did not write: an argument, a request
-/// field, a configuration file. Passing that through unescaped gives whoever
-/// wrote it a shell.
+/// Every typed argument that tmux expands takes [`TmuxArg`], which applies
+/// this on conversion, so a caller reaches for this directly only when
+/// building a raw [`crate::Command`] of their own.
 ///
 /// # Examples
 ///
@@ -295,10 +295,13 @@ impl ServerGeneration {
         self.pid
     }
 
-    /// When that server started, as tmux reports it.
+    /// When that server started, to the whole second tmux keeps.
+    ///
+    /// [`Display`](fmt::Display) prints the same moment as the Unix seconds
+    /// tmux reports.
     #[must_use]
-    pub const fn start_time(self) -> i64 {
-        self.start_time
+    pub fn start_time(self) -> SystemTime {
+        crate::snapshot::stored_time(self.start_time)
     }
 }
 
@@ -361,7 +364,7 @@ impl Hash for ServerIdentity {
 }
 
 impl ServerIdentity {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "unstable-fuzzing"))]
     pub(crate) fn from_socket_path(socket_path: PathBuf) -> Self {
         Self { socket_path }
     }
@@ -763,4 +766,82 @@ pub enum SessionNameError {
         /// The separator found.
         separator: char,
     },
+}
+
+/// Text bound for a tmux argument that tmux expands as a format.
+///
+/// tmux runs its format machinery over a session or window name, a pane
+/// title, and a `-c` start directory before it uses them, so `#(command)` in
+/// caller text runs a shell. Every such argument in this crate takes this
+/// type, and every conversion into it escapes: text a program did not write
+/// arrives as itself, and asking for expansion is a visible call to
+/// [`TmuxArg::format`].
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::TmuxArg;
+///
+/// // The ordinary path. `From` escapes, so tmux stores what was asked.
+/// let literal = TmuxArg::from("release#1");
+/// assert_eq!(literal.as_os_str(), "release##1");
+///
+/// // Expansion is opt-in and reads as such.
+/// let expanded = TmuxArg::format("#{pane_current_path}");
+/// assert_eq!(expanded.as_os_str(), "#{pane_current_path}");
+/// ```
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TmuxArg(OsString);
+
+impl TmuxArg {
+    /// Send `text` literally, escaping what tmux would otherwise expand.
+    #[must_use]
+    pub fn literal(text: impl AsRef<OsStr>) -> Self {
+        Self(escape_format(text))
+    }
+
+    /// Send `template` for tmux to expand as a format.
+    ///
+    /// Only for a template the program itself wrote. A template built from an
+    /// argument, a request field, or a configuration file hands whoever wrote
+    /// it a shell.
+    #[must_use]
+    pub fn format(template: impl Into<OsString>) -> Self {
+        Self(template.into())
+    }
+
+    /// Borrow the bytes as they will reach tmux, escaped or not.
+    #[must_use]
+    pub fn as_os_str(&self) -> &OsStr {
+        &self.0
+    }
+
+    pub(crate) fn into_os_string(self) -> OsString {
+        self.0
+    }
+}
+
+macro_rules! tmux_arg_from {
+    ($($type:ty),* $(,)?) => {
+        $(
+            impl From<$type> for TmuxArg {
+                fn from(text: $type) -> Self {
+                    Self::literal(text)
+                }
+            }
+        )*
+    };
+}
+
+// One impl per source type rather than a blanket `impl<T: AsRef<OsStr>>`,
+// which would collide with the reflexive `From<TmuxArg>` in core and take
+// `TmuxArg::format`'s result back through the escaper.
+tmux_arg_from!(
+    &str, String, &String, OsString, &OsString, &OsStr, PathBuf, &PathBuf, &Path
+);
+
+impl From<&crate::formats::TmuxText> for TmuxArg {
+    fn from(text: &crate::formats::TmuxText) -> Self {
+        Self::literal(OsStr::from_bytes(text.as_bytes()))
+    }
 }

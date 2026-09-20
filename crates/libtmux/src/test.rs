@@ -323,6 +323,22 @@ pub struct TestServerBuilder {
     control_client_limits: ControlClientLimits,
 }
 
+/// What the fixture's tmux keeps of the test process's environment.
+///
+/// `TMUX` and `TMUX_PANE` are deliberately absent: a fixture started from
+/// inside tmux must not read as nested. `TERM` is set rather than inherited.
+const INHERITED_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMUX_TMPDIR",
+];
+
 /// The tmux to run, unless a caller names one.
 ///
 /// `LIBTMUX_TEST_TMUX` first, then `tmux` resolved through `PATH`. The
@@ -423,10 +439,7 @@ impl TestServerBuilder {
     /// or rollback cleanup cannot be completed safely.
     ///
     /// Startup creates a private explicit socket and owned empty config without
-    /// creating an initial session. Cancelling this future before ownership
-    /// transfers to the returned guard triggers synchronous forced best-effort
-    /// rollback, whose cleanup failures cannot be reported to the cancelled
-    /// caller.
+    /// creating an initial session.
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -438,6 +451,12 @@ impl TestServerBuilder {
     /// # })
     /// # }
     /// ```
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind, on a best-effort basis: a start dropped before
+    /// it returns the guard forces its daemon down and removes its files at
+    /// once, and a failure doing so goes unreported.
     pub async fn start(self) -> Result<TestServer, TestServerError> {
         self.start_with_leader_observer(leader_exited_unreaped, platform_fallback_grace_ceiling())
             .await
@@ -480,10 +499,20 @@ impl TestServerBuilder {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .env_remove("TMUX")
-            .env_remove("TMUX_PANE")
-            .env("TERM", TERM)
             .process_group(0);
+        // tmux hands its own environment to every session and every pane, and
+        // `show-environment` reads it back, so a fixture that isolates the
+        // socket and the config and not the environment is isolated only
+        // halfway: a test that lists the environment prints whatever the
+        // developer exported, secrets included. Only what tmux and a pane's
+        // shell need is passed through.
+        command.env_clear();
+        for name in INHERITED_ENVIRONMENT {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command.env("TERM", TERM);
         files.containment.configure(&mut command);
         let child = match command.spawn() {
             Ok(child) => child,
@@ -854,12 +883,6 @@ impl TestServer {
     /// terminates the retained foreground daemon. Escaped [`Server`] clones
     /// cannot issue later commands.
     ///
-    /// Cancelling this future before lifecycle ownership transfers leaves the
-    /// guard responsible for synchronous forced best-effort cleanup. Once this
-    /// future transfers ownership to its blocking waiter, that waiter completes
-    /// cleanup even if this future is cancelled; later cleanup failures are
-    /// unobservable to the cancelled caller.
-    ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -870,6 +893,12 @@ impl TestServer {
     /// # })
     /// # }
     /// ```
+    ///
+    /// # Cancel safety
+    ///
+    /// Nothing is left behind, on a best-effort basis: dropped early, the
+    /// guard's own forced cleanup runs; dropped once cleanup has started, a
+    /// blocking task finishes it. Either way a failure goes unreported.
     pub async fn shutdown(mut self) -> Result<(), TestServerError> {
         let executor_failed = self.server.shutdown().await.is_err();
         let Some(mut lifecycle) = self.lifecycle.take() else {

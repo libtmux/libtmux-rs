@@ -1,10 +1,11 @@
 mod contract;
 mod control;
-mod error;
+pub(crate) mod error;
 mod inspect;
 mod observe;
 mod pane_input;
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use crate::{
     Capture, Marks, PaneView, Panes, SessionView, Sessions, TmuxTools, WindowView, Windows,
 };
 
-use error::{bad_input, object_gone, tmux_error};
+use error::{ToolError, bad_input, object_gone, tmux_error};
 
 /// Render tmux bytes for a protocol that requires valid UTF-8.
 ///
@@ -62,18 +63,73 @@ pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<TmuxTo
 impl TmuxTools {
     /// Describe sessions, shared by the tool and the `tmux://` resource so the
     /// two cannot drift into different accounts of the same session.
-    pub(super) fn render_sessions(sessions: &[libtmux::Session]) -> Sessions {
+    ///
+    /// `foreign_attached` overrides `Session::is_attached` when it is
+    /// `Some`: see [`Self::foreign_attached_sessions`].
+    pub(super) fn render_sessions(
+        sessions: &[libtmux::Session],
+        foreign_attached: Option<&BTreeSet<String>>,
+    ) -> Sessions {
         Sessions {
             sessions: sessions
                 .iter()
-                .map(|session| SessionView {
-                    id: session.id().to_string(),
-                    name: lossy(session.name()),
-                    windows: session.window_count(),
-                    attached: session.is_attached(),
+                .map(|session| {
+                    let id = session.id().to_string();
+                    let attached = foreign_attached
+                        .map_or_else(|| session.is_attached(), |set| set.contains(&id));
+                    SessionView {
+                        id,
+                        name: lossy(session.name()),
+                        windows: session.window_count(),
+                        attached,
+                    }
                 })
                 .collect(),
         }
+    }
+
+    /// The sessions with a client attached that this process did not open
+    /// for its own observation.
+    ///
+    /// While `wait_for_text`, `stream_output`, or any other control
+    /// connection this server opens is live, tmux counts it as an attached
+    /// client the same as a human's terminal: `Session::is_attached` alone
+    /// cannot tell the two apart. `Server::owns_control_client` resolves
+    /// each client this reads from `list-clients` by pid, so a session
+    /// reads as attached only when something else is there too.
+    ///
+    /// `None` when the listing itself could not be read: an empty server
+    /// reports `no current target` for a server-wide listing, and every
+    /// caller here falls back to `Session::is_attached` rather than
+    /// answering `false` for a session that may well be attached.
+    pub(super) async fn foreign_attached_sessions(&self) -> Option<BTreeSet<String>> {
+        let result = self
+            .server
+            .cmd(
+                libtmux::Command::new("list-clients")
+                    .arg("-F")
+                    .arg("#{session_id} #{client_pid}"),
+            )
+            .await
+            .ok()?;
+        if !result.success() {
+            return None;
+        }
+
+        let mut sessions = BTreeSet::new();
+        for line in result.stdout_lossy().lines() {
+            let mut fields = line.split(' ');
+            let (Some(session), Some(pid)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            let Ok(pid) = pid.parse::<u32>() else {
+                continue;
+            };
+            if !self.server.owns_control_client(pid) {
+                sessions.insert(session.to_owned());
+            }
+        }
+        Some(sessions)
     }
 
     /// Read what the last command in a pane printed.
@@ -86,12 +142,12 @@ impl TmuxTools {
     pub(super) async fn capture_last_command(
         &self,
         pane: &str,
-    ) -> Result<Json<Capture>, ErrorData> {
+    ) -> Result<Json<Capture>, ToolError> {
         let target = self.find_pane(pane).await?;
         let supported = self.server.capabilities().await.is_ok_and(|capabilities| {
             capabilities
                 .tmux_version()
-                .meets(&libtmux::since::CAPTURE_LINE_FLAGS)
+                .has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS)
         });
 
         let (rendered, marks) = if supported {
@@ -182,27 +238,17 @@ impl TmuxTools {
         &self,
         scope: Option<&str>,
         target: Option<&str>,
-    ) -> Result<OptionScope, ErrorData> {
+    ) -> Result<OptionScope, ToolError> {
         let needs = |what: &str| bad_input(format!("scope {what} needs a target id"));
 
         match scope {
             Some("server") => Ok(OptionScope::Server),
             None | Some("global-session") => Ok(OptionScope::GlobalSession),
             Some("global-window") => Ok(OptionScope::GlobalWindow),
-            Some("session") => {
-                let target = target.ok_or_else(|| needs("session"))?;
-                let session = self
-                    .server
-                    .sessions()
-                    .await
-                    .map_err(|e| tmux_error(&e))?
-                    .into_iter()
-                    .find(|session| {
-                        session.id().to_string() == target || session.name() == target.as_bytes()
-                    })
-                    .ok_or_else(|| bad_input(format!("no session {target}")))?;
-                Ok(OptionScope::Session(Box::new(session)))
-            }
+            Some("session") => Ok(OptionScope::Session(Box::new(
+                self.find_session(target.ok_or_else(|| needs("session"))?)
+                    .await?,
+            ))),
             Some("window") => Ok(OptionScope::Window(Box::new(
                 self.find_window(target.ok_or_else(|| needs("window"))?)
                     .await?,
@@ -275,7 +321,7 @@ impl TmuxTools {
     ///
     /// A returned pane has been resolved in the caller's claimed session on
     /// the selected daemon. Malformed or stale context refuses the operation.
-    pub(super) async fn protected_pane(&self) -> Result<Option<&str>, ErrorData> {
+    pub(super) async fn protected_pane(&self) -> Result<Option<&str>, ToolError> {
         if self.caller.is_none() {
             return Ok(None);
         }
@@ -296,7 +342,7 @@ impl TmuxTools {
         socket: &Path,
         generation: libtmux::ServerGeneration,
         panes: &[libtmux::Pane],
-    ) -> Result<Option<&'a str>, ErrorData> {
+    ) -> Result<Option<&'a str>, ToolError> {
         let Some(caller) = self.caller.as_deref() else {
             return Ok(None);
         };
@@ -322,8 +368,17 @@ impl TmuxTools {
         self.caller.as_ref().and_then(|caller| caller.pane_id())
     }
 
+    /// Whether the inherited caller context is set but malformed, which makes
+    /// pane-input and teardown tools refuse every call.
+    #[must_use]
+    pub fn caller_is_malformed(&self) -> bool {
+        self.caller
+            .as_ref()
+            .is_some_and(|caller| caller.is_malformed())
+    }
+
     /// Classify a refusal that protects the pane this process talks through.
-    pub(super) fn self_protection(message: String) -> ErrorData {
+    pub(super) fn self_protection(message: String) -> ToolError {
         ErrorData::invalid_params(
             message,
             // Its own kind, because this is the server declining rather than
@@ -335,16 +390,17 @@ impl TmuxTools {
                 "stale": false,
             })),
         )
+        .into()
     }
 
-    fn caller_context_refusal(detail: &str) -> ErrorData {
+    fn caller_context_refusal(detail: &str) -> ToolError {
         Self::self_protection(format!(
             "refusing this operation because {detail}; restart the MCP outside tmux or with a complete current TMUX and TMUX_PANE context"
         ))
     }
 
     /// Refuse a command that may destroy the pane this process talks through.
-    pub(super) fn self_harm(what: &str, own: &str) -> ErrorData {
+    pub(super) fn self_harm(what: &str, own: &str) -> ToolError {
         Self::self_protection(format!(
             "refusing to kill this {what}: pane {own} matches this MCP server's inherited \
              caller context, so killing it may end this conversation. Run the command in \
@@ -361,7 +417,7 @@ impl TmuxTools {
     /// again" will look again and `not-a-window` will still not be a window.
     /// And `@01` resolves, where a string comparison against the canonical
     /// `@1` called it missing.
-    pub(super) async fn find_window(&self, id: &str) -> Result<libtmux::Window, ErrorData> {
+    pub(super) async fn find_window(&self, id: &str) -> Result<libtmux::Window, ToolError> {
         let window: libtmux::WindowId = id.parse().map_err(|error: libtmux::IdParseError| {
             let sigil = error.expected_sigil();
             bad_input(format!(
@@ -379,7 +435,7 @@ impl TmuxTools {
     /// Resolve a pane id, reporting an unknown one as invalid input.
     ///
     /// Shares the reasoning on [`Self::find_window`].
-    pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux::Pane, ErrorData> {
+    pub(super) async fn find_pane(&self, id: &str) -> Result<libtmux::Pane, ToolError> {
         let pane: libtmux::PaneId = id.parse().map_err(|error: libtmux::IdParseError| {
             let sigil = error.expected_sigil();
             bad_input(format!(
@@ -394,14 +450,35 @@ impl TmuxTools {
             .ok_or_else(|| object_gone("pane", id))
     }
 
-    /// Resolve a session by name, reporting an unknown one as invalid input.
-    pub(super) async fn find_session(&self, name: &str) -> Result<libtmux::Session, ErrorData> {
-        self.server
+    /// Resolve a session by `$`-prefixed id or by name.
+    ///
+    /// An id is looked up as one, because the server's instructions tell an
+    /// agent to prefer ids. Text that starts with `$` and is neither an id
+    /// nor a session's name is invalid input, not a session that went away.
+    pub(super) async fn find_session(&self, target: &str) -> Result<libtmux::Session, ToolError> {
+        if target.starts_with('$')
+            && let Ok(id) = target.parse::<libtmux::SessionId>()
+        {
+            return self
+                .server
+                .session_by_id(&id)
+                .await
+                .map_err(|e| tmux_error(&e))?
+                .ok_or_else(|| object_gone("session", target));
+        }
+        let named = self
+            .server
             .sessions()
             .await
             .map_err(|e| tmux_error(&e))?
             .into_iter()
-            .find(|session| session.name() == name.as_bytes())
-            .ok_or_else(|| object_gone("session", name))
+            .find(|session| session.name() == target.as_bytes());
+        match named {
+            Some(session) => Ok(session),
+            None if target.starts_with('$') => Err(bad_input(format!(
+                "{target} is not a session id or name: an id is $ followed by digits, as in $1"
+            ))),
+            None => Err(object_gone("session", target)),
+        }
     }
 }

@@ -21,7 +21,9 @@ use crate::formats::{
 #[cfg(all(feature = "query", feature = "serde"))]
 use crate::query::FilterExpr;
 #[cfg(feature = "query")]
-use crate::query::{BoolField, EnumField, FilterEnum, Filterable, IntegerField, TextField};
+use crate::query::{
+    BoolField, EnumField, FilterEnum, Filterable, IntegerField, ReadField, TextField,
+};
 use crate::target::WindowLinkIdentity;
 #[cfg(feature = "test-support")]
 use crate::test::TestServer;
@@ -365,6 +367,30 @@ macro_rules! assert_stored_fields {
 #[cfg(feature = "query")]
 macro_rules! assert_text_handles {
     (
+        @typed $text:ty,
+        $value:expr,
+        $info:ty,
+        $fixture:ident,
+        $raw:expr,
+        $expected:expr,
+        [$($field:ident),+ $(,)?]
+    ) => {
+        $(
+            let handle: &TextField<$info, $text> = &$value.$field;
+            assert_eq!(
+                *handle,
+                TextField::<$info, $text>::typed(
+                    <$info as Filterable>::FILTER_TARGET,
+                    stringify!($field),
+                )
+            );
+            let candidate = $fixture(b"tmux 3.7\n", &[(stringify!($field), $raw)])
+                .ok()
+                .expect(concat!("distinct ", stringify!($field), " fixture hydrates"));
+            assert!((*handle).eq($expected).matches(&candidate));
+        )+
+    };
+    (
         $value:expr,
         $info:ty,
         $fixture:ident,
@@ -594,7 +620,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
         flat,
         [pane_bottom, pane_left, pane_right, pane_top]
     );
-    assert_stored_fields!(pane, i32, evidence, [pane_x, pane_y]);
+    assert_stored_fields!(pane, i32, evidence, [pane_x, pane_y, scroll_position]);
     assert_stored_fields!(pane, u8, evidence, [pane_dead_status, pane_pb_progress]);
     assert_stored_fields!(
         pane,
@@ -610,13 +636,12 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
             pane_height,
             pane_in_mode,
             pane_index,
-            pane_pid,
             pane_width,
             scroll_region_lower,
             scroll_region_upper
         ]
     );
-    assert_stored_fields!(pane, u32, evidence, [pane_pipe_pid, pane_z]);
+    assert_stored_fields!(pane, u32, evidence, [pane_pid, pane_pipe_pid, pane_z]);
     assert_stored_fields!(pane, u64, flat, [history_bytes]);
     assert_stored_fields!(pane, i64, evidence, [pane_dead_time]);
     assert_stored_fields!(
@@ -848,6 +873,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
             pane_y,
             pane_z,
             pane_zoomed_flag,
+            scroll_position,
             scroll_region_lower,
             scroll_region_upper,
             synchronized_output_flag,
@@ -886,6 +912,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
     );
 
     assert_text_handles!(
+        @typed SessionId,
         session_fields,
         SessionInfo,
         session_fixture,
@@ -927,6 +954,7 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
     );
 
     assert_text_handles!(
+        @typed WindowId,
         window_fields,
         WindowInfo,
         window_fixture,
@@ -973,7 +1001,15 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
         [window_zoomed_flag]
     );
 
-    assert_text_handles!(pane_fields, PaneInfo, pane_fixture, b"%7", "%7", [pane_id]);
+    assert_text_handles!(
+        @typed PaneId,
+        pane_fields,
+        PaneInfo,
+        pane_fixture,
+        b"%7",
+        "%7",
+        [pane_id]
+    );
     assert_text_handles!(
         pane_fields,
         PaneInfo,
@@ -1005,7 +1041,15 @@ fn snapshot_catalog_info_and_scalar_handle_shapes_are_exact() {
         i32,
         b"-7",
         -7_i32,
-        [pane_bottom, pane_left, pane_right, pane_top, pane_x, pane_y]
+        [
+            pane_bottom,
+            pane_left,
+            pane_right,
+            pane_top,
+            pane_x,
+            pane_y,
+            scroll_position
+        ]
     );
     assert_integer_handles!(
         pane_fields,
@@ -1212,6 +1256,30 @@ fn snapshot_catalog_empty_policy_distinguishes_all_three_states() {
         .expect("empty optional numeric hydrates");
     assert_eq!(optional_numeric.pane_pipe_pid, Availability::Absent);
 
+    // tmux 3.8 reports `#{pane_pid}` as an empty string once a pane with
+    // `remain-on-exit` set has no process left; every release before it
+    // keeps reporting that process's own (by then possibly reused) pid
+    // rather than clearing the field. Unlike `pane_pipe_pid`, `pane_pid`'s
+    // floor is the crate's own minimum supported release, so it is never
+    // `Unsupported` or `Unproven`: every supported and development build can
+    // only report it present or absent.
+    let dead_pane_pid = pane_fixture(b"tmux 3.7\n", &[("pane_pid", b"")])
+        .ok()
+        .expect("empty pane_pid hydrates rather than failing RequiredFieldEmpty");
+    assert_eq!(dead_pane_pid.pane_pid, Availability::Absent);
+
+    let running_pane_pid = pane_fixture(b"tmux 3.7\n", &[("pane_pid", b"4242")])
+        .ok()
+        .expect("a numeric pane_pid still hydrates");
+    assert_eq!(running_pane_pid.pane_pid, Availability::Available(4242));
+
+    for output in [b"tmux 3.2a\n".as_slice(), b"tmux master\n".as_slice()] {
+        let never_unsupported = pane_fixture(output, &[("pane_pid", b"")])
+            .ok()
+            .expect("pane_pid hydrates at the floor and on development builds");
+        assert_eq!(never_unsupported.pane_pid, Availability::Absent);
+    }
+
     let optional_text = pane_fixture(b"tmux 3.7\n", &[("pane_mode", b"")])
         .ok()
         .expect("empty optional text hydrates");
@@ -1254,6 +1322,84 @@ fn snapshot_catalog_empty_policy_distinguishes_all_three_states() {
     assert_eq!(error.offset(), offsets.get("pane_width").copied());
     assert_eq!(error.profile(), None);
     assert_safe_diagnostic(&error);
+}
+
+/// Every filter handle reads the field it filters.
+///
+/// Naming `unread` for a public target compiles only when every handle type
+/// in its field set implements `ReadField` for it. Calling it on a complete
+/// fixture names any handle whose name or type finds no stored field.
+#[test]
+#[cfg(feature = "query")]
+fn every_filter_handle_reads_its_field() {
+    let _ = SessionFields::<crate::Session>::unread;
+    let _ = WindowFields::<crate::Window>::unread;
+    let _ = PaneFields::<crate::Pane>::unread;
+    let _ = ClientFields::<crate::Client>::unread;
+
+    let none: Vec<&str> = Vec::new();
+    let session = session_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete SessionInfo hydrates");
+    assert_eq!(generated_fields::<SessionInfo>().unread(&session), none);
+    let window = window_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete WindowInfo hydrates");
+    assert_eq!(generated_fields::<WindowInfo>().unread(&window), none);
+    let pane = pane_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete PaneInfo hydrates");
+    assert_eq!(generated_fields::<PaneInfo>().unread(&pane), none);
+    let client = client_fixture(b"tmux 3.7\n", &[])
+        .ok()
+        .expect("complete ClientInfo hydrates");
+    assert_eq!(generated_fields::<ClientInfo>().unread(&client), none);
+}
+
+/// A read keeps the reason a field has no value.
+#[test]
+#[cfg(feature = "query")]
+fn a_read_through_a_handle_keeps_the_reason_a_value_is_missing() {
+    fn read<F: ReadField<PaneInfo>>(pane: &PaneInfo, field: F) -> Availability<F::Value<'_>> {
+        field
+            .__read(pane)
+            .expect("a generated handle names a stored field")
+    }
+
+    let fields = generated_fields::<PaneInfo>();
+    let current = pane_fixture(b"tmux 3.7\n", &[("pane_current_path", b"")])
+        .ok()
+        .expect("3.7 pane hydrates");
+    assert_eq!(
+        read(&current, fields.pane_current_path),
+        Availability::Absent
+    );
+    assert_eq!(
+        read(&current, fields.pane_pb_state),
+        Availability::Available(PaneProgressState::Normal)
+    );
+    assert_eq!(read(&current, fields.cursor_x), Availability::Available(0));
+    assert_eq!(
+        read(&current, fields.pane_id),
+        Availability::Available(&"%1".parse::<PaneId>().expect("a pane id"))
+    );
+
+    let old = pane_fixture(b"tmux 3.2a\n", &[])
+        .ok()
+        .expect("3.2a pane hydrates");
+    assert_eq!(read(&old, fields.pane_pb_state), Availability::Unsupported);
+    assert_eq!(
+        read(&old, fields.scroll_position),
+        Availability::Available(0)
+    );
+
+    let development = pane_fixture(b"tmux master\n", &[])
+        .ok()
+        .expect("development pane hydrates");
+    assert_eq!(
+        read(&development, fields.pane_pb_state),
+        Availability::Unproven
+    );
 }
 
 #[test]
@@ -1437,6 +1583,22 @@ fn snapshot_catalog_typed_decoders_reject_noncanonical_or_overflowing_values() {
     }
     for input in [b"Hidden".as_slice(), b"NORMAL", b"unknown", b"\xc3\xa9"] {
         assert_pane_invalid("pane_pb_state", input, DecoderKind::PaneProgressState);
+    }
+}
+
+/// Every Unix second tmux can print converts, before 1970 included, and none
+/// panics on the way: `UNIX_EPOCH + offset` would for a negative value.
+#[test]
+fn unix_time_converts_every_second_an_i64_holds() {
+    use std::time::UNIX_EPOCH;
+
+    for seconds in [i64::MIN, -1, 0, 1, i64::MAX] {
+        let time = super::unix_time(seconds).expect("a Unix SystemTime holds any i64 of seconds");
+        let back = match time.duration_since(UNIX_EPOCH) {
+            Ok(after) => i128::from(after.as_secs()),
+            Err(before) => -i128::from(before.duration().as_secs()),
+        };
+        assert_eq!(back, i128::from(seconds), "{seconds} round-trips");
     }
 }
 
@@ -2354,12 +2516,12 @@ fn snapshot_projection_value_shapes_accessors_and_traits_are_exact() {
 #[test]
 fn snapshot_projection_plans_have_exact_order_state_and_templates() {
     let cases = [
-        (b"tmux 3.2a\n".as_slice(), 57, 15, 0),
-        (b"tmux 3.3\n".as_slice(), 60, 12, 0),
-        (b"tmux 3.6\n".as_slice(), 61, 11, 0),
-        (b"tmux 3.7\n".as_slice(), 72, 0, 0),
-        (b"tmux master\n".as_slice(), 57, 0, 15),
-        (b"tmux next-3.8\n".as_slice(), 57, 0, 15),
+        (b"tmux 3.2a\n".as_slice(), 58, 15, 0),
+        (b"tmux 3.3\n".as_slice(), 61, 12, 0),
+        (b"tmux 3.6\n".as_slice(), 62, 11, 0),
+        (b"tmux 3.7\n".as_slice(), 73, 0, 0),
+        (b"tmux master\n".as_slice(), 58, 0, 15),
+        (b"tmux next-3.8\n".as_slice(), 58, 0, 15),
     ];
     let expected_window: Vec<_> = WINDOW_INFO_DESCRIPTORS
         .iter()
@@ -2403,7 +2565,7 @@ fn snapshot_projection_plans_have_exact_order_state_and_templates() {
             .collect();
         assert_eq!(pane_plan.profile(), ListProfile::Panes);
         assert_eq!(pane_plan.purpose(), PlanPurpose::Projection);
-        assert_eq!(pane_plan.planned().len(), 72);
+        assert_eq!(pane_plan.planned().len(), 73);
         assert_eq!(pane_plan.descriptors_for_test().len(), pane_selected);
         assert_descriptor_sequence(pane_plan.descriptors_for_test(), &expected_selected);
         assert_eq!(
@@ -3015,12 +3177,12 @@ fn snapshot_projection_pane_trailing_descriptor_requires_finish() {
         &row,
     ));
 
-    assert_eq!(trailing.planned().len(), 73);
-    assert_eq!(trailing.descriptors_for_test().len(), 73);
+    assert_eq!(trailing.planned().len(), 74);
+    assert_eq!(trailing.descriptors_for_test().len(), 74);
     assert_eq!(error.kind(), FormatCodecErrorKind::PlanRowMismatch);
     assert_eq!(error.phase(), FormatCodecPhase::Decode);
     assert_eq!(error.row(), Some(0));
-    assert_eq!(error.field(), Some(72));
+    assert_eq!(error.field(), Some(73));
     assert_eq!(error.field_name(), Some("client_mode_format"));
     assert_eq!(error.expected(), None);
     assert_eq!(error.offset(), None);

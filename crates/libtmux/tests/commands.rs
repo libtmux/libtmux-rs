@@ -9,6 +9,49 @@ use libtmux::test::{TestServer, retry_until};
 use libtmux::{ChannelWait, Command, NewWindowOptions, SplitDirection, SplitOptions};
 
 #[tokio::test]
+async fn a_listed_buffer_name_passes_back_unchanged() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    // `=` ends a field in the framed listing and a space is shell-quoted;
+    // neither may split or alter a name.
+    let mut expected = vec![libtmux::TmuxText::from("a=b c")];
+    server
+        .set_buffer(Some("a=b c"), "framed")
+        .await
+        .expect("buffer is stored");
+    // tmux before 3.7 stores a newline in a name; 3.7 refuses one.
+    let multiline = server
+        .cmd(
+            Command::new("set-buffer")
+                .arg("-b")
+                .arg("two\nlines")
+                .arg("--")
+                .arg("x"),
+        )
+        .await
+        .expect("tmux answers");
+    if multiline.success() {
+        expected.push(libtmux::TmuxText::from("two\nlines"));
+    }
+
+    let mut names = server.buffer_names().await.expect("names");
+    names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    assert_eq!(names, expected);
+
+    for name in &names {
+        assert!(
+            server.buffer(name).await.expect("read").is_some(),
+            "{name:?}"
+        );
+        server.delete_buffer(name).await.expect("buffer is deleted");
+    }
+    assert!(server.buffer_names().await.expect("names").is_empty());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
 async fn buffers_hold_exact_bytes_and_report_absence() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
@@ -117,6 +160,112 @@ async fn key_bindings_can_be_added_and_removed() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Each field reads back as tmux holds it, for the shapes the `bind-key` lines
+/// get wrong: a table name with a space, a key tmux quotes, a note with a
+/// newline, the repeat flag, and a command holding the field separator.
+///
+/// `solo` holds one binding, the listing tmux 3.7 through 3.7c print nowhere
+/// when asked for with `-T`.
+#[tokio::test]
+async fn real_tmux_compat_key_bindings_read_as_fields() {
+    use libtmux::{Error, since};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let version = server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .clone();
+    if !version.has_behavior(&since::LIST_KEYS_FORMAT) {
+        let refused = server
+            .typed_key_bindings(None)
+            .await
+            .expect_err("list-keys -F is 3.7 and later");
+        assert!(
+            matches!(refused, Error::UnsupportedCapability { .. }),
+            "{refused:?}"
+        );
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    }
+
+    for command in [
+        Command::new("bind-key")
+            .arg("-r")
+            .arg("-N")
+            .arg("a\nnote")
+            .arg("-T")
+            .arg("sp ace")
+            .arg("\"")
+            .arg("display-message 'two words'"),
+        Command::new("bind-key")
+            .arg("-T")
+            .arg("solo")
+            .arg("M-'")
+            .arg("display-message a=b ; display-message c"),
+    ] {
+        let bound = server.cmd(command).await.expect("bind-key runs");
+        assert!(bound.success(), "{:?}", bound.stderr_lossy());
+    }
+
+    let spaced = server
+        .typed_key_bindings(Some("sp ace"))
+        .await
+        .expect("bindings decode");
+    assert_eq!(spaced.len(), 1);
+    assert_eq!(spaced[0].table(), "sp ace");
+    assert_eq!(spaced[0].key(), "\"");
+    assert_eq!(spaced[0].command(), "display-message \"two words\"");
+    assert_eq!(
+        spaced[0].note().map(libtmux::TmuxText::as_bytes),
+        Some(b"a\nnote".as_slice())
+    );
+    assert!(spaced[0].repeats());
+
+    let solo = server
+        .typed_key_bindings(Some("solo"))
+        .await
+        .expect("bindings decode");
+    assert_eq!(solo.len(), 1, "a one-binding table is listed");
+    assert_eq!(solo[0].key(), "M-'");
+    assert_eq!(
+        solo[0].command(),
+        r"display-message a=b \; display-message c"
+    );
+    assert_eq!(solo[0].note(), None);
+    assert!(!solo[0].repeats());
+
+    // Nothing tmux printed was dropped: one binding per `bind-key` line, and
+    // the command is the text that line ends with.
+    let all = server
+        .typed_key_bindings(None)
+        .await
+        .expect("bindings decode");
+    let lines = server
+        .key_bindings(None)
+        .await
+        .expect("bindings are listed");
+    assert_eq!(all.len(), lines.len());
+    let command = solo[0].command().as_str().expect("the command is UTF-8");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("-T solo") && line.ends_with(command)),
+        "{lines:?}",
+    );
+    assert!(
+        server
+            .typed_key_bindings(Some("no-such-table"))
+            .await
+            .expect("bindings decode")
+            .is_empty()
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn formats_expand_against_a_target() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -159,32 +308,18 @@ async fn sourcing_a_file_applies_its_commands() {
 
     server.source_file(&config).await.expect("file is sourced");
     assert_eq!(
-        server
-            .get_option("@sourced")
-            .await
-            .expect("read")
-            .expect("the sourced option is set")
-            .as_bytes(),
-        b"yes",
+        server.typed_option("@sourced").await.expect("read"),
+        Some(libtmux::OptionValue::from("yes")),
+        "the sourced option is set",
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
-/// A caller's own error type, carrying `From<libtmux::Error>`.
-///
-/// That conversion is what lets a scope's setup and teardown failures join
-/// the same channel as the operation's own.
+/// A caller's own error type, without a libtmux conversion.
 #[derive(Debug, PartialEq)]
 enum Failure {
     Deliberate,
-    Tmux(String),
-}
-
-impl From<libtmux::Error> for Failure {
-    fn from(error: libtmux::Error) -> Self {
-        Self::Tmux(error.to_string())
-    }
 }
 
 #[tokio::test]
@@ -202,14 +337,15 @@ async fn scoped_operations_clean_up_after_success_and_failure() {
     assert!(seen.starts_with('$'));
     assert!(server.sessions().await.expect("sessions").is_empty());
 
-    // Failure: the operation's error comes back, and cleanup still ran.
-    // The operation's error comes back directly: one `?`, not two.
     let outcome = server
         .with_session("failing", async |_session| {
             Err::<(), Failure>(Failure::Deliberate)
         })
         .await;
-    assert_eq!(outcome, Err(Failure::Deliberate));
+    assert!(matches!(
+        outcome,
+        Err(libtmux::ScopeError::Operation(Failure::Deliberate))
+    ));
     assert!(
         server.sessions().await.expect("sessions").is_empty(),
         "cleanup runs even when the operation failed",
@@ -415,6 +551,57 @@ async fn wait_for_channels_lock_and_release() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Cancelling a queued `lock_channel` wedges the channel for every later
+/// locker: a tmux defect, not something this crate can protect against. See
+/// [`Server::lock_channel`]'s hazard note.
+///
+/// `cmd_wait_for_unlock` hands a channel to the next queued locker with no
+/// mechanism to skip one whose client already disconnected, so killing a
+/// locker while it is queued -- not while it holds the lock -- corrupts the
+/// channel for everyone behind it, even though nobody ever unlocked it
+/// explicitly. Pinned with a tight bound so this fails loudly, not
+/// silently, if a tmux release ever fixes the defect.
+#[tokio::test]
+async fn real_tmux_compat_cancelling_a_queued_lock_wedges_the_channel() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    // Uncontested: takes the lock and returns at once. Never unlocked.
+    server
+        .lock_channel("wedge")
+        .await
+        .expect("the first lock is uncontested");
+
+    // Contested: queues behind the holder above, then is cancelled while
+    // still queued -- what `kill_on_drop` is for, killing the underlying
+    // `tmux wait-for -L` subprocess rather than leaving it running.
+    let cancelled = tokio::time::timeout(
+        libtmux::test::scaled(Duration::from_secs(2)),
+        server.lock_channel("wedge"),
+    )
+    .await;
+    assert!(
+        cancelled.is_err(),
+        "the second lock is genuinely contested and queues",
+    );
+
+    // A third locker has nothing ahead of it but the first holder -- the
+    // second never acquired the channel, only queued -- yet tmux hands it
+    // to the dead second locker anyway and never notices it is gone, so
+    // this wedges rather than resolving at a sensible bound.
+    let wedged = tokio::time::timeout(
+        libtmux::test::scaled(Duration::from_millis(800)),
+        server.lock_channel("wedge"),
+    )
+    .await;
+    assert!(
+        wedged.is_err(),
+        "cancelling the queued locker corrupts the channel for good, per the defect this pins",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// Waiting blocks until something signals, rather than returning at once.
 ///
 /// The latch makes the easy case indistinguishable from a broken one: a wait
@@ -579,7 +766,7 @@ async fn server_operations_reject_foreign_handles() {
         error_kind!(left.display_menu(
             Some(&foreign_client),
             "menu",
-            [("Item".into(), "i".into(), "display-message item".into())],
+            [libtmux::MenuItem::new("Item", "i", "display-message item")],
         )),
         error_kind!(left.command_prompt(
             Some(&foreign_client),
@@ -743,13 +930,12 @@ async fn a_global_window_option_is_read_globally() {
         .expect("the window takes a value of its own");
 
     let read = server
-        .get_global_window_option("main-pane-width")
+        .typed_global_window_option("main-pane-width")
         .await
-        .expect("the option is readable")
-        .expect("the option is set");
+        .expect("the option is readable");
     assert_eq!(
-        read.as_str().expect("the width is text"),
-        "123",
+        read,
+        Some(libtmux::OptionValue::from("123")),
         "the global read is not answered by the window's own value"
     );
 
@@ -952,8 +1138,9 @@ async fn searching_a_window_finds_the_pane_that_matches() {
 
     let fields = libtmux::Pane::filter_fields();
     let found = window
-        .search_panes_or_empty(fields.pane_id.eq(wanted.as_str()))
-        .await;
+        .search_panes(fields.pane_id.eq(wanted.as_str()))
+        .await
+        .unwrap_or_default();
 
     assert_eq!(found.len(), 1, "the pane that matches is returned");
     assert_eq!(found[0].id().to_string(), wanted);
@@ -1043,6 +1230,106 @@ async fn a_client_reports_its_own_terminal_and_type() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// Every timestamp accessor is a `SystemTime` inside the test's own window,
+/// and names the moment its filter handle reads as Unix seconds.
+///
+/// A unit error -- milliseconds for seconds, or an offset -- lands outside the
+/// window, which a check for "positive" did not catch.
+#[cfg(all(feature = "control-mode", feature = "query"))]
+#[tokio::test]
+async fn timestamps_are_system_times_that_agree_with_their_handles() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use libtmux::control::ControlMode;
+    use libtmux::query::Filterable as _;
+    use libtmux::{Availability, Client, Session, Window};
+
+    // tmux keeps whole seconds, so the window opens on the second it started.
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is past 1970");
+    let before = UNIX_EPOCH + Duration::from_secs(since_epoch.as_secs());
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let mut session = server.new_session("clock").await.expect("session");
+    let control = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches");
+    retry_until(Duration::from_secs(10), async || {
+        server
+            .clients()
+            .await
+            .is_ok_and(|clients| !clients.is_empty())
+    })
+    .await
+    .expect("the attached client is listed");
+
+    session.refresh().await.expect("session refreshes");
+    let window = session
+        .active_window()
+        .await
+        .expect("window lookup")
+        .expect("a window");
+    let client = server.clients().await.expect("clients").remove(0);
+    let generation = server.generation().await.expect("generation");
+    let after = SystemTime::now();
+
+    let seconds = |time: SystemTime| {
+        let offset = time.duration_since(UNIX_EPOCH).expect("after 1970");
+        i64::try_from(offset.as_secs()).expect("fits tmux's seconds")
+    };
+    let sessions = Session::filter_fields();
+    let last_attached = session.last_attached().expect("a client attached");
+    for (label, time, handle) in [
+        (
+            "session_created",
+            session.created(),
+            session.get(sessions.session_created),
+        ),
+        (
+            "session_last_attached",
+            last_attached,
+            session.get(sessions.session_last_attached),
+        ),
+        (
+            "window_activity",
+            window.last_activity(),
+            window.get(Window::filter_fields().window_activity),
+        ),
+        (
+            "client_created",
+            client.created(),
+            client.get(Client::filter_fields().client_created),
+        ),
+    ] {
+        assert!(
+            before <= time && time <= after,
+            "{label} is {time:?}, outside {before:?}..={after:?}",
+        );
+        assert_eq!(
+            handle,
+            Availability::Available(seconds(time)),
+            "{label}'s handle reads the same moment as Unix seconds",
+        );
+    }
+
+    let started = generation.start_time();
+    assert!(
+        before <= started && started <= after,
+        "start_time is {started:?}, outside {before:?}..={after:?}",
+    );
+    assert!(
+        generation
+            .to_string()
+            .ends_with(&format!(" started {}", seconds(started))),
+        "Display prints the same moment as Unix seconds",
+    );
+
+    let _ = control.shutdown().await;
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// The remaining dispatch-only commands must reach tmux and be accepted.
 ///
 /// These change something a headless server cannot show back -- a prefix key
@@ -1069,7 +1356,7 @@ async fn dispatch_only_commands_are_accepted() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::PROMPT_HISTORY)
+        .has_behavior(&since::PROMPT_HISTORY)
     {
         cleared.expect("the prompt history is cleared");
     } else {
@@ -1263,7 +1550,7 @@ async fn a_chooser_opens_in_a_pane_and_a_popup_needs_a_client() {
 /// tmux has two vocabularies for it. `cmd-find.c` resolves a target and says
 /// "can't find pane"; `options.c` resolves its own and says "no such pane".
 /// Matching only the first meant `is_object_gone` answered `true` from
-/// `capture` and `false` from `get_option` about the same dead pane.
+/// `capture` and `false` from `typed_option` about the same dead pane.
 ///
 /// The `@` branch made it worse than inconsistent. A user option that is not
 /// set is unknown to tmux, so that failure is the answer `None` -- but the
@@ -1299,14 +1586,8 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
         .await
         .expect("the user option is set");
     assert_eq!(
-        doomed
-            .get_option("@marker")
-            .await
-            .expect("readable")
-            .expect("set")
-            .as_str()
-            .expect("text"),
-        "here"
+        doomed.typed_option("@marker").await.expect("readable"),
+        Some(libtmux::OptionValue::from("here")),
     );
 
     // `kill` consumes the handle, so the questions afterwards are asked
@@ -1329,7 +1610,7 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
     );
 
     let by_option = doomed
-        .get_option("remain-on-exit")
+        .typed_option("remain-on-exit")
         .await
         .expect_err("the pane is gone");
     assert!(
@@ -1338,7 +1619,7 @@ async fn a_dead_pane_says_so_however_the_question_is_asked() {
     );
 
     let by_user_option = doomed
-        .get_option("@marker")
+        .typed_option("@marker")
         .await
         .expect_err("the pane is gone, not the option unset");
     assert!(
@@ -1421,7 +1702,7 @@ async fn interactive_commands_need_a_client() {
             .display_menu(
                 None,
                 "menu",
-                [("Item".into(), "i".into(), "kill-pane".into())]
+                [libtmux::MenuItem::new("Item", "i", "kill-pane")]
             )
             .await
             .is_err(),
@@ -1683,11 +1964,12 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
     let owner = rules.first().expect("the owner is listed");
     assert_eq!(rules.len(), 1);
     assert_eq!(owner.mode(), libtmux::AccessMode::Write);
-    assert!(!owner.user().is_empty());
+    assert_eq!(owner.principal(), libtmux::Principal::User);
+    assert!(!owner.name().is_empty());
 
     // tmux refuses to change the owner's own entry, so a caller cannot lock
     // itself out of the server it just started.
-    let user = owner.user().to_owned();
+    let user = owner.name().to_owned();
     for attempt in [
         server
             .grant_access(&user, libtmux::AccessMode::ReadOnly)
@@ -1724,7 +2006,7 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CAPTURE_LINE_FLAGS);
+        .has_behavior(&since::CAPTURE_LINE_FLAGS);
 
     if !supported {
         // Below 3.7 tmux accepts no `-F`, and saying so beats an empty answer.
@@ -1819,7 +2101,7 @@ async fn a_suspended_client_is_not_reported_gone() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CLIENTS_HIDE_STOPPED);
+        .has_behavior(&since::CLIENTS_HIDE_STOPPED);
 
     let child = process::Command::new("tmux")
         .arg("-S")
@@ -1979,7 +2261,7 @@ async fn trimming_blank_cells_is_refused_below_the_release_that_has_it() {
         .await
         .expect("capabilities")
         .tmux_version()
-        .meets(&since::CAPTURE_TRIM_BLANK_CELLS);
+        .has_behavior(&since::CAPTURE_TRIM_BLANK_CELLS);
 
     let asked = pane
         .capture_with(CaptureOptions::visible().trim_blank_cells())
@@ -2106,6 +2388,128 @@ async fn waiting_ends_when_the_pane_dies_rather_than_at_the_deadline() {
         "a dead pane ends the wait early rather than at the deadline: {waited:?}",
     );
 
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A predicate wait sees whole lines, answers when they satisfy it, and holds
+/// an unmet one to the deadline rather than past or short of it.
+#[tokio::test]
+async fn a_predicate_wait_arrives_or_runs_to_its_deadline() {
+    use libtmux::PaneWait;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("predicate").await.expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+
+    // Wider than the pane, so equality holds only if the wrap is joined; and
+    // the echoed command contains the text without being equal to it.
+    let wide = "P".repeat(300);
+    pane.send_line(format!("printf '%s\\n' {wide} {wide}"))
+        .await
+        .expect("keys are sent");
+    let outcome = pane
+        .wait_until(Duration::from_secs(10), |lines| {
+            lines.iter().filter(|line| **line == *wide).count() == 2
+        })
+        .await
+        .expect("waiting is not an error");
+    assert_eq!(outcome, PaneWait::Arrived, "both printed lines were seen");
+
+    let within = Duration::from_millis(400);
+    let started = std::time::Instant::now();
+    let outcome = tokio::time::timeout(
+        within * 10,
+        pane.wait_until(within, |lines| lines.iter().any(|line| *line == "absent")),
+    )
+    .await
+    .expect("an unmet wait ends near its deadline, not long after it")
+    .expect("a deadline is not an error");
+    let waited = started.elapsed();
+
+    assert_eq!(outcome, PaneWait::TimedOut);
+    assert!(
+        waited >= within,
+        "an unmet wait answers at its deadline, not before: {waited:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A predicate wait on a dead pane ends early, as `wait_for_text` does.
+#[tokio::test]
+async fn a_predicate_wait_ends_when_the_pane_dies() {
+    use libtmux::PaneWait;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("dying").await.expect("session");
+    server
+        .cmd(
+            Command::new("set-option")
+                .arg("-g")
+                .arg("remain-on-exit")
+                .arg("on"),
+        )
+        .await
+        .expect("panes remain after exit");
+    let window = session
+        .new_window(NewWindowOptions::new("shortlived").command("true"))
+        .await
+        .expect("window");
+    let pane = window.panes().await.expect("panes").remove(0);
+
+    let started = std::time::Instant::now();
+    let outcome = pane
+        .wait_until(Duration::from_secs(20), |_| false)
+        .await
+        .expect("waiting is not an error");
+    let waited = started.elapsed();
+
+    assert_eq!(outcome, PaneWait::Dead);
+    assert!(
+        waited < Duration::from_secs(15),
+        "a dead pane ends the wait early rather than at the deadline: {waited:?}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane reached over a control connection waits over that connection.
+///
+/// A look is a two-command chain, so this is the path where it has to travel
+/// as one control-mode line and come back as one block.
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn a_predicate_wait_runs_over_a_control_connection() {
+    use libtmux::PaneWait;
+    use libtmux::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard.server().new_session("routed").await.expect("session");
+    let (sender, events) = ControlMode::attach(guard.server(), session.id())
+        .await
+        .expect("a control connection")
+        .split();
+    let routed = guard
+        .server()
+        .over_control_mode(&sender)
+        .await
+        .expect("a routed handle");
+    let pane = routed.panes().await.expect("panes").remove(0);
+
+    pane.send_line("printf 'ROUTED-%s\\n' 1")
+        .await
+        .expect("keys are sent");
+    let outcome = pane
+        .wait_until(Duration::from_secs(10), |lines| {
+            lines.iter().any(|line| *line == "ROUTED-1")
+        })
+        .await
+        .expect("waiting is not an error");
+    assert_eq!(outcome, PaneWait::Arrived);
+
+    events.shutdown().await.expect("the connection closes");
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 

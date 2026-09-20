@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{PaneView, SessionView, TmuxTools, WindowView};
 
-use super::error::{bad_input, object_gone, tmux_error};
+use super::error::{ToolError, bad_input, object_gone, tmux_error};
 use super::lossy;
 
 const READ_BATCH_MAX_OPERATIONS: usize = 16;
@@ -28,62 +28,81 @@ const READ_BATCH_TRUNCATED_ERROR: &str =
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RenameSessionArgs {
+    /// The session to rename, by `$`-prefixed id or name.
     pub(crate) session: String,
+    /// The new name. tmux refuses one another session has.
     pub(crate) name: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RenameWindowArgs {
+    /// The `@`-prefixed window id.
     pub(crate) window: String,
+    /// The new name. tmux then stops renaming the window automatically.
     pub(crate) name: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WindowSizeArgs {
+    /// The `@`-prefixed window id.
     pub(crate) window: String,
+    /// Width in columns.
     pub(crate) width: u32,
+    /// Height in rows.
     pub(crate) height: u32,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MoveWindowArgs {
+    /// The `@`-prefixed window id to move.
     pub(crate) window: String,
+    /// The session to move the window into, by `$`-prefixed id or name.
     pub(crate) destination_session: String,
+    /// The window index there. tmux refuses one already in use.
     pub(crate) destination_index: i32,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SwapPaneArgs {
+    /// The `%`-prefixed pane id to move; the result describes it.
     pub(crate) source_pane: String,
+    /// The `%`-prefixed pane id it trades places with.
     pub(crate) target_pane: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PaneTitleArgs {
+    /// The `%`-prefixed pane id.
     pub(crate) pane: String,
+    /// The new title, stored as given.
     pub(crate) title: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PositionArgs {
+    /// The `@`-prefixed window id.
     pub(crate) window: String,
+    /// `top-left`, `top-right`, `bottom-left`, or `bottom-right`.
     pub(crate) corner: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VariablesArgs {
+    /// tmux format variable names, such as `pane_current_path`.
     #[schemars(
         length(min = 1, max = 32),
         inner(regex(pattern = "^[A-Za-z][A-Za-z0-9_]*$"))
     )]
     pub names: Vec<String>,
+    /// The `%`-prefixed pane to read them against. Omit to let tmux pick
+    /// its current pane.
     pub pane: Option<String>,
 }
 
@@ -95,21 +114,29 @@ pub struct VariablesValue {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionFlagArgs {
+    /// The session to change, by `$`-prefixed id or name. Omit to change the
+    /// global default.
     pub(crate) session: Option<String>,
+    /// `true` turns mouse handling on; `false` turns it off.
     pub(crate) enabled: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HistoryLimitArgs {
+    /// The session to change, by `$`-prefixed id or name. Omit to change the
+    /// global default.
     pub(crate) session: Option<String>,
+    /// Lines of scrollback to keep per pane.
     pub(crate) limit: u32,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WindowFlagArgs {
+    /// The `@`-prefixed window id.
     pub(crate) window: String,
+    /// `true` turns synchronized input on; `false` turns it off.
     pub(crate) enabled: bool,
 }
 
@@ -123,41 +150,64 @@ pub(crate) struct SettingChanged {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateWindowArgs {
+    /// The session to create the window in, by `$`-prefixed id or name.
     pub(crate) session: String,
+    /// The window name. Omit to let tmux name it after its running command.
     pub(crate) name: Option<String>,
+    /// The window's working directory. Omit for the directory this MCP
+    /// server started in.
     pub(crate) start_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SplitWindowArgs {
+    /// The `%`-prefixed pane to split.
     pub(crate) pane: String,
+    /// Where the new pane goes relative to `pane`. Defaults to `below`.
     #[schemars(with = "Option<crate::schema::SplitDirectionSchema>")]
     pub(crate) direction: Option<String>,
+    /// The new pane's share of the split, 1 to 100. Defaults to half.
     pub(crate) percent: Option<u32>,
+    /// The new pane's working directory. Omit for the directory this MCP
+    /// server started in, not `pane`'s current directory.
     pub(crate) start_directory: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RespawnArgs {
+    /// The `%`-prefixed pane id.
     pub(crate) pane: String,
+    /// Kill a running process first. Defaults to `false`, which respawns
+    /// only a dead pane.
+    #[serde(default)]
     pub(crate) kill_first: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SendOperation {
+    /// The `%`-prefixed pane id.
     pub(crate) pane: String,
+    /// Text typed literally. Key names are not interpreted. Omit to type
+    /// none.
     pub(crate) text: Option<String>,
+    /// tmux key names to press, in order, after any text, such as `C-c`. Omit
+    /// to press none.
     pub(crate) keys: Option<Vec<String>>,
+    /// Whether to press Enter afterwards.
+    #[serde(default)]
     pub(crate) enter: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SendBatchArgs {
+    /// The rows to send, in order, 1 to 64.
     pub(crate) operations: Vec<SendOperation>,
+    /// `stop`, the default, ends at the first refused row; `continue` sends
+    /// the rest.
     #[serde(default)]
     pub(crate) on_error: OnError,
 }
@@ -413,8 +463,11 @@ pub(crate) struct ReadOperation {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ReadBatchArgs {
+    /// The inspect calls to make, in order.
     #[schemars(length(min = 1, max = 16))]
     pub(crate) operations: Vec<ReadOperation>,
+    /// `stop`, the default, ends at the first failed call; `continue` makes
+    /// the rest.
     #[serde(default)]
     pub(crate) on_error: OnError,
 }
@@ -425,10 +478,82 @@ fn is_variable_name(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+/// Separates `#{session_id}` from the variable in one `get_tmux_variables`
+/// expansion. U+241E, as `snapshot_pane` uses, because a `%` would be read
+/// as a time conversion.
+const VARIABLE_SEPARATOR: &str = "\u{241e}";
+
+fn decode_error(message: String) -> ToolError {
+    ErrorData::internal_error(
+        message,
+        Some(serde_json::json!({
+            "kind": "decode",
+            "retryable": false,
+            "stale": false,
+        })),
+    )
+    .into()
+}
+
+impl TmuxTools {
+    /// Refuse a variable name the environment holds, unless the operator
+    /// allowed it.
+    ///
+    /// tmux expands a name that is neither an option nor a format from the
+    /// target session's environment and then the server's, so `#{NAME}` reads
+    /// every value `show_environment` withholds.
+    async fn withhold_environment_values(
+        &self,
+        names: impl Iterator<Item = &String>,
+        sessions: &BTreeSet<String>,
+    ) -> Result<(), ToolError> {
+        let guarded: Vec<&String> = names
+            .filter(|name| !self.environment_values.contains(*name))
+            .collect();
+        if guarded.is_empty() {
+            return Ok(());
+        }
+        let mut held: BTreeSet<String> = self
+            .server
+            .environment_all()
+            .await
+            .map_err(|error| tmux_error(&error))?
+            .into_keys()
+            .collect();
+        for session in sessions.iter().filter(|session| !session.is_empty()) {
+            let id: libtmux::SessionId = session
+                .parse()
+                .map_err(|_| decode_error(format!("tmux expanded session_id as {session:?}")))?;
+            let Some(session) = self
+                .server
+                .session_by_id(&id)
+                .await
+                .map_err(|error| tmux_error(&error))?
+            else {
+                return Err(object_gone("session", session));
+            };
+            held.extend(
+                session
+                    .environment_all()
+                    .await
+                    .map_err(|error| tmux_error(&error))?
+                    .into_keys(),
+            );
+        }
+        match guarded.into_iter().find(|name| held.contains(*name)) {
+            Some(name) => Err(bad_input(format!(
+                "{name} is a tmux environment variable, and its value is withheld; the \
+                 operator can allow it with LIBTMUX_ENVIRONMENT_VALUES at startup"
+            ))),
+            None => Ok(()),
+        }
+    }
+}
+
 #[tool_router(router = contract_router, vis = "pub(super)")]
 impl TmuxTools {
     #[tool(
-        description = "Return metadata for one session",
+        description = "Return metadata for one session.",
         title = "Get Session Info",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup]
@@ -437,18 +562,22 @@ impl TmuxTools {
     pub async fn get_session_info(
         &self,
         Parameters(crate::SessionArgs { session }): Parameters<crate::SessionArgs>,
-    ) -> Result<Json<SessionView>, ErrorData> {
+    ) -> Result<Json<SessionView>, ToolError> {
         let session = self.find_session(&session).await?;
+        let foreign_attached = self.foreign_attached_sessions().await;
         Ok(Json(SessionView {
             id: session.id().to_string(),
             name: lossy(session.name()),
             windows: session.window_count(),
-            attached: session.is_attached(),
+            attached: foreign_attached.as_ref().map_or_else(
+                || session.is_attached(),
+                |set| set.contains(&session.id().to_string()),
+            ),
         }))
     }
 
     #[tool(
-        description = "Return metadata for one window",
+        description = "Return metadata for one window.",
         title = "Get Window Info",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup]
@@ -457,12 +586,12 @@ impl TmuxTools {
     pub async fn get_window_info(
         &self,
         Parameters(crate::WindowArgs { window }): Parameters<crate::WindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         Ok(Json(Self::one_window(&self.find_window(&window).await?)))
     }
 
     #[tool(
-        description = "Return metadata for one pane",
+        description = "Return metadata for one pane.",
         title = "Get Pane Info",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup]
@@ -471,14 +600,14 @@ impl TmuxTools {
     pub async fn get_pane_info(
         &self,
         Parameters(crate::PaneArgs { pane }): Parameters<crate::PaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let pane = self.find_pane(&pane).await?;
         let socket = self.socket();
         Ok(Json(self.pane_view(&pane, socket)))
     }
 
     #[tool(
-        description = "Find the pane touching a named window corner",
+        description = "Find the pane touching a named window corner.",
         title = "Find Pane By Position",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup],
@@ -488,7 +617,7 @@ impl TmuxTools {
     pub async fn find_pane_by_position(
         &self,
         Parameters(PositionArgs { window, corner }): Parameters<PositionArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let panes = self
             .find_window(&window)
             .await?
@@ -521,7 +650,10 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Read a bounded set of tmux variables against one pane",
+        description = "Read a bounded set of tmux variables against one pane. tmux reads a \
+                       name it does not know as a format from its environment, so a name the \
+                       server or session environment holds is refused unless the operator \
+                       listed it in LIBTMUX_ENVIRONMENT_VALUES at startup.",
         title = "Get tmux Variables",
         meta = crate::capability_meta!(
             Inspect, None,
@@ -540,7 +672,7 @@ impl TmuxTools {
     pub async fn get_tmux_variables(
         &self,
         Parameters(VariablesArgs { names, pane }): Parameters<VariablesArgs>,
-    ) -> Result<Json<VariablesValue>, ErrorData> {
+    ) -> Result<Json<VariablesValue>, ToolError> {
         if !(1..=32).contains(&names.len()) {
             return Err(bad_input(
                 "names must contain between one and 32 tmux variables".to_owned(),
@@ -551,80 +683,94 @@ impl TmuxTools {
             None => None,
         };
         let mut values = BTreeMap::new();
+        let mut sessions = BTreeSet::new();
         for name in names {
             if !is_variable_name(&name) {
                 return Err(bad_input(format!(
                     "{name:?} is not a tmux variable name; use letters, digits, and underscores"
                 )));
             }
-            let format = format!("#{{{name}}}");
+            // The session rides along so the environment tmux consulted for
+            // this very expansion is known.
+            let format = format!("#{{session_id}}{VARIABLE_SEPARATOR}#{{{name}}}");
             let value = self
                 .server
                 .format(pane.as_ref(), &format)
                 .await
                 .map_err(|error| tmux_error(&error))?;
-            values.insert(name, lossy(&value));
+            let value = lossy(&value);
+            let (session, value) = value.split_once(VARIABLE_SEPARATOR).ok_or_else(|| {
+                decode_error(format!("tmux did not expand {name} with its session"))
+            })?;
+            sessions.insert(session.to_owned());
+            values.insert(name, value.to_owned());
         }
+        self.withhold_environment_values(values.keys(), &sessions)
+            .await?;
         Ok(Json(VariablesValue { values }))
     }
 
     #[tool(
-        description = "Rename one session",
+        description = "Rename one session.",
         title = "Rename Session",
         meta = crate::capability_meta!(
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {"session" => [TmuxLookup], "name" => [TmuxState, TmuxFormat]},
-            literalized = ["name"], nested = [], self_bounded = false,
+            literalized = ["name"], nested = [], idempotent = true, self_bounded = false,
             always_load = false,
         )
     )]
     pub async fn rename_session(
         &self,
         Parameters(RenameSessionArgs { session, name }): Parameters<RenameSessionArgs>,
-    ) -> Result<Json<SessionView>, ErrorData> {
+    ) -> Result<Json<SessionView>, ToolError> {
         let mut session = self.find_session(&session).await?;
         session
-            .rename(libtmux::escape_format(name))
+            .rename(name)
             .await
             .map_err(|error| tmux_error(&error))?;
+        let foreign_attached = self.foreign_attached_sessions().await;
         Ok(Json(SessionView {
             id: session.id().to_string(),
             name: lossy(session.name()),
             windows: session.window_count(),
-            attached: session.is_attached(),
+            attached: foreign_attached.as_ref().map_or_else(
+                || session.is_attached(),
+                |set| set.contains(&session.id().to_string()),
+            ),
         }))
     }
 
     #[tool(
-        description = "Rename one window",
+        description = "Rename one window.",
         title = "Rename Window",
         meta = crate::capability_meta!(
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {"window" => [TmuxLookup], "name" => [TmuxState, TmuxFormat]},
-            literalized = ["name"], nested = [], self_bounded = false,
+            literalized = ["name"], nested = [], idempotent = true, self_bounded = false,
             always_load = false,
         )
     )]
     pub async fn rename_window(
         &self,
         Parameters(RenameWindowArgs { window, name }): Parameters<RenameWindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let mut window = self.find_window(&window).await?;
         window
-            .rename(libtmux::escape_format(name))
+            .rename(name)
             .await
             .map_err(|error| tmux_error(&error))?;
         Ok(Json(Self::one_window(&window)))
     }
 
     #[tool(
-        description = "Resize one window to exact cell dimensions",
+        description = "Resize one window to exact cell dimensions.",
         title = "Resize Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup], "width" => [TmuxState], "height" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn resize_window(
         &self,
@@ -633,7 +779,7 @@ impl TmuxTools {
             width,
             height,
         }): Parameters<WindowSizeArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let mut window = self.find_window(&window).await?;
         window
             .resize(width, height)
@@ -643,7 +789,7 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Move one window to a session and index",
+        description = "Move one window to a session and index.",
         title = "Move Window",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "window" => [TmuxLookup],
@@ -658,7 +804,7 @@ impl TmuxTools {
             destination_session,
             destination_index,
         }): Parameters<MoveWindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&destination_session).await?;
         let mut window = self.find_window(&window).await?;
         window
@@ -669,7 +815,7 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Swap the positions of two panes",
+        description = "Swap the positions of two panes.",
         title = "Swap Panes",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "source_pane" => [TmuxLookup], "target_pane" => [TmuxLookup]
@@ -681,7 +827,7 @@ impl TmuxTools {
             source_pane,
             target_pane,
         }): Parameters<SwapPaneArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let target = self.find_pane(&target_pane).await?;
         let mut source = self.find_pane(&source_pane).await?;
         source
@@ -693,22 +839,22 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Set one pane's title",
+        description = "Set one pane's title.",
         title = "Set Pane Title",
         meta = crate::capability_meta!(
             Manage, None,
             effects = [Change], outputs = [TmuxMetadata], secrets = true, untrusted = true,
             sinks = {"pane" => [TmuxLookup], "title" => [TmuxState, TmuxFormat]},
-            literalized = ["title"], nested = [], self_bounded = false,
+            literalized = ["title"], nested = [], idempotent = true, self_bounded = false,
             always_load = false,
         )
     )]
     pub async fn set_pane_title(
         &self,
         Parameters(PaneTitleArgs { pane, title }): Parameters<PaneTitleArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
-        pane.set_title(libtmux::escape_format(title))
+        pane.set_title(title)
             .await
             .map_err(|error| tmux_error(&error))?;
         let socket = self.socket();
@@ -716,26 +862,26 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Set mouse handling for a session or the global session default",
+        description = "Set mouse handling for a session or the global session default.",
         title = "Set Mouse Enabled",
         meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup], "enabled" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn set_mouse_enabled(
         &self,
         Parameters(SessionFlagArgs { session, enabled }): Parameters<SessionFlagArgs>,
-    ) -> Result<Json<SettingChanged>, ErrorData> {
+    ) -> Result<Json<SettingChanged>, ToolError> {
         let value = if enabled { "on" } else { "off" };
         if let Some(name) = session.as_deref() {
             self.find_session(name)
                 .await?
-                .set_option("mouse", value)
+                .set_typed_option("mouse", enabled)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         } else {
             self.server
-                .set_global_option("mouse", value)
+                .set_typed_global_option("mouse", enabled)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         }
@@ -747,25 +893,27 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Set the scrollback history limit for a session or its global default",
+        description = "Set the scrollback history limit for a session or its global default. \
+                       From tmux 3.7 existing panes take it too, and lowering it discards \
+                       their scrollback past the new limit.",
         title = "Set History Limit",
-        meta = crate::capability_meta!(Manage, None, [Change], [TmuxMetadata], true, true, {
+        meta = crate::capability_meta!(Teardown, None, [Change, Delete], [TmuxMetadata], true, true, {
             "session" => [TmuxLookup], "limit" => [TmuxState]
-        })
+        }; idempotent)
     )]
     pub async fn set_history_limit(
         &self,
         Parameters(HistoryLimitArgs { session, limit }): Parameters<HistoryLimitArgs>,
-    ) -> Result<Json<SettingChanged>, ErrorData> {
+    ) -> Result<Json<SettingChanged>, ToolError> {
         if let Some(name) = session.as_deref() {
             self.find_session(name)
                 .await?
-                .set_option("history-limit", limit.to_string())
+                .set_typed_option("history-limit", limit)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         } else {
             self.server
-                .set_global_option("history-limit", limit.to_string())
+                .set_typed_global_option("history-limit", limit)
                 .await
                 .map_err(|error| tmux_error(&error))?;
         }
@@ -777,7 +925,7 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Create a window running its configured process",
+        description = "Create a window running its configured process.",
         title = "Create Window",
         meta = crate::capability_meta!(
             Execute, ConfiguredProcess,
@@ -797,14 +945,14 @@ impl TmuxTools {
             name,
             start_directory,
         }): Parameters<CreateWindowArgs>,
-    ) -> Result<Json<WindowView>, ErrorData> {
+    ) -> Result<Json<WindowView>, ToolError> {
         let session = self.find_session(&session).await?;
-        let mut options = name.map(libtmux::escape_format).map_or_else(
+        let mut options = name.map(libtmux::TmuxArg::from).map_or_else(
             libtmux::NewWindowOptions::unnamed,
             libtmux::NewWindowOptions::new,
         );
         if let Some(directory) = start_directory {
-            options = options.start_directory(libtmux::escape_format(directory));
+            options = options.start_directory(directory);
         }
         let window = session
             .new_window(options)
@@ -814,7 +962,7 @@ impl TmuxTools {
     }
 
     #[tool(
-        description = "Split a window and start the configured process with no command payload",
+        description = "Split a window and start the configured process with no command payload.",
         title = "Split Window",
         meta = crate::capability_meta!(
             Execute, ConfiguredProcess,
@@ -835,7 +983,7 @@ impl TmuxTools {
             percent,
             start_directory,
         }): Parameters<SplitWindowArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         // Parsed from the same table the advertised schema is checked against,
         // so a word a client is offered is a word this accepts.
         let direction = match direction.as_deref() {
@@ -857,7 +1005,7 @@ impl TmuxTools {
             options = options.size(PaneSize::Percent(percent));
         }
         if let Some(directory) = start_directory {
-            options = options.start_directory(libtmux::escape_format(directory));
+            options = options.start_directory(directory);
         }
         let created = self
             .find_pane(&pane)
@@ -871,7 +1019,7 @@ impl TmuxTools {
 
     #[tool(
         name = "respawn_pane",
-        description = "Restart a pane's configured process with no command payload",
+        description = "Restart a pane's configured process with no command payload.",
         title = "Respawn Pane",
         meta = crate::capability_meta!(Execute, ConfiguredProcess, [Change, Delete], [TmuxMetadata], true, true, {
             "pane" => [TmuxLookup], "kill_first" => [None]
@@ -880,9 +1028,14 @@ impl TmuxTools {
     pub async fn respawn_pane_configured(
         &self,
         Parameters(RespawnArgs { pane, kill_first }): Parameters<RespawnArgs>,
-    ) -> Result<Json<PaneView>, ErrorData> {
+    ) -> Result<Json<PaneView>, ToolError> {
         let mut pane = self.find_pane(&pane).await?;
-        pane.respawn(None::<String>, kill_first)
+        let mode = if kill_first {
+            libtmux::Respawn::Replacing
+        } else {
+            libtmux::Respawn::OnlyIfDead
+        };
+        pane.respawn(None::<String>, mode)
             .await
             .map_err(|error| tmux_error(&error))?;
         let socket = self.socket();
@@ -901,17 +1054,18 @@ impl TmuxTools {
             sinks = {"window" => [TmuxLookup], "enabled" => [TmuxState]},
             literalized = [], nested = [],
             amplifies_future_input = true,
+            idempotent = true,
             self_bounded = false, always_load = false,
         )
     )]
     pub async fn set_synchronize_panes(
         &self,
         Parameters(WindowFlagArgs { window, enabled }): Parameters<WindowFlagArgs>,
-    ) -> Result<Json<SettingChanged>, ErrorData> {
+    ) -> Result<Json<SettingChanged>, ToolError> {
         let value = if enabled { "on" } else { "off" };
         self.find_window(&window)
             .await?
-            .set_option("synchronize-panes", value)
+            .set_typed_option("synchronize-panes", enabled)
             .await
             .map_err(|error| tmux_error(&error))?;
         Ok(Json(SettingChanged {
@@ -938,7 +1092,7 @@ impl TmuxTools {
             operations,
             on_error,
         }): Parameters<SendBatchArgs>,
-    ) -> Result<Json<BatchResult>, ErrorData> {
+    ) -> Result<Json<BatchResult>, ToolError> {
         if operations.is_empty() || operations.len() > 64 {
             return Err(bad_input(
                 "operations must contain 1 through 64 items".to_owned(),
@@ -971,7 +1125,7 @@ impl TmuxTools {
                         success: false,
                         result: None,
                         result_truncated: false,
-                        error: Some(error),
+                        error: Some(error.into_error_data()),
                     });
                     if on_error.stops() {
                         break;
@@ -1020,7 +1174,7 @@ impl TmuxTools {
             on_error,
         }): Parameters<ReadBatchArgs>,
         context: RequestContext<rmcp::RoleServer>,
-    ) -> Result<Json<BatchResult>, ErrorData> {
+    ) -> Result<Json<BatchResult>, ToolError> {
         if operations.is_empty() || operations.len() > READ_BATCH_MAX_OPERATIONS {
             return Err(bad_input(format!(
                 "operations must contain 1 through {READ_BATCH_MAX_OPERATIONS} items"
@@ -1041,7 +1195,10 @@ impl TmuxTools {
             if !allowed.contains(tool.as_str()) {
                 if !batch.push(BatchItem {
                     index,
-                    error: Some(bad_input(format!("{tool} is not an enabled inspect tool"))),
+                    error: Some(
+                        bad_input(format!("{tool} is not an enabled inspect tool"))
+                            .into_error_data(),
+                    ),
                     tool,
                     success: false,
                     result: None,
@@ -1063,6 +1220,7 @@ impl TmuxTools {
                 .await
             {
                 Ok(rmcp::model::CallToolResponse::Complete(result)) => {
+                    let result = super::error::typed_result(result);
                     let failed = result.is_error == Some(true);
                     if !batch.push(BatchItem {
                         index,
@@ -1105,11 +1263,11 @@ impl TmuxTools {
                 Err(error) => {
                     if !batch.push(BatchItem {
                         index,
+                        error: Some(super::error::typed_protocol_error(error)),
                         tool,
                         success: false,
                         result: None,
                         result_truncated: false,
-                        error: Some(error),
                     }) {
                         break;
                     }

@@ -77,6 +77,7 @@ impl Error {
             Self::ClientSuspended { .. } => ErrorKind::Refused,
             Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
+            | Self::NoEffect { .. }
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
             | Self::SessionExists { .. }
@@ -87,13 +88,16 @@ impl Error {
             | Self::RuntimeUnavailable { .. } => ErrorKind::Unreachable,
             // The call is wrong, not the environment: the same future awaited
             // directly would work.
-            Self::RuntimeNested => ErrorKind::InvalidInput,
+            Self::RuntimeNested | Self::UnrecognizedLayout | Self::AmbiguousLayout { .. } => {
+                ErrorKind::InvalidInput
+            }
             Self::UnsupportedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
             Self::InvalidCommandInput { .. }
             | Self::ServerMismatch { .. }
-            | Self::OptionScopeMismatch { .. } => ErrorKind::InvalidInput,
+            | Self::OptionScopeMismatch { .. }
+            | Self::OptionValueRefused { .. } => ErrorKind::InvalidInput,
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => ErrorKind::InvalidInput,
             Self::Spawn { .. }
@@ -105,13 +109,15 @@ impl Error {
             | Self::SupervisorLost { .. } => ErrorKind::Transport,
             Self::InvalidVersionOutput { .. }
             | Self::DecodeListing { .. }
-            | Self::UnreadableFormatValue { .. } => ErrorKind::Decode,
+            | Self::UnreadableFormatValue { .. }
+            | Self::UnreadableAccessRule { .. } => ErrorKind::Decode,
             #[cfg(feature = "control-mode")]
             Self::ControlModeFrameTooLarge { .. } => ErrorKind::Decode,
             #[cfg(feature = "control-mode")]
             Self::ControlMode { kind, .. } => match kind {
                 ControlModeErrorKind::UnrepresentableCommand
-                | ControlModeErrorKind::InvalidSubscriptionName => ErrorKind::InvalidInput,
+                | ControlModeErrorKind::InvalidSubscriptionName
+                | ControlModeErrorKind::BlockingCommand => ErrorKind::InvalidInput,
                 // A limit was reached and the command was not carried out,
                 // which is what `Refused` says. The connection is fine.
                 ControlModeErrorKind::Unread => ErrorKind::Refused,
@@ -178,6 +184,7 @@ impl Error {
             | Self::VersionProbeFailed { .. }
             | Self::InvalidCommandInput { .. }
             | Self::OptionScopeMismatch { .. }
+            | Self::OptionValueRefused { .. }
             | Self::ServerMismatch { .. }
             | Self::ExecutableNotFound { .. }
             | Self::ExecutorShutdown { .. }
@@ -190,12 +197,16 @@ impl Error {
             | Self::LinkGone { .. }
             | Self::RuntimeUnavailable { .. }
             | Self::RuntimeNested
+            | Self::UnrecognizedLayout
+            | Self::AmbiguousLayout { .. }
             | Self::ServerGone {
                 kind: ServerGoneKind::Lost | ServerGoneKind::Stopped,
                 ..
             }
             | Self::CommandFailed { .. }
-            | Self::DecodeListing { .. } => false,
+            | Self::NoEffect { .. }
+            | Self::DecodeListing { .. }
+            | Self::UnreadableAccessRule { .. } => false,
             #[cfg(feature = "plan")]
             Self::InvalidPlan { .. } => false,
             #[cfg(feature = "control-mode")]

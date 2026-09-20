@@ -71,13 +71,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the only session, so tmux exited with it, and the loud form reports that
     // as the failure it is rather than as the empty listing this is asking for.
     assert!(
-        server.sessions_or_empty().await.is_empty(),
+        server.sessions().await.unwrap_or_default().is_empty(),
         "the scope cleaned up",
     );
 
     println!(
         "sessions left behind: {}",
-        server.sessions_or_empty().await.len()
+        server.sessions().await.unwrap_or_default().len()
     );
 
     server.shutdown().await?;

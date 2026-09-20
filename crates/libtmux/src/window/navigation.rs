@@ -9,17 +9,6 @@ use crate::session::Session;
 use crate::{Command, Error, ObjectKind};
 
 impl Window {
-    /// List this window's panes, in tmux's own order.
-    ///
-    /// This is the lenient form; use [`Window::panes`] when the reason for
-    /// an empty result matters.
-    pub async fn panes_or_empty(&self) -> Vec<Pane> {
-        self.panes().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-panes", &error);
-            Vec::new()
-        })
-    }
-
     /// List this window's panes, preserving any failure.
     ///
     /// Panes are addressed by window id rather than by session and index, so
@@ -37,26 +26,6 @@ impl Window {
             .into_iter()
             .map(|projection| Pane::new(Arc::clone(&self.core), projection))
             .collect())
-    }
-
-    /// The panes under this window that a matcher accepts.
-    ///
-    /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::search_panes`] when the difference matters.
-    ///
-    /// Filtering happens here rather than in tmux. A [`crate::query::FilterExpr`]
-    /// is built to stay compilable to a tmux `-f` predicate, so pushing one
-    /// down later would change what this costs and not what it answers.
-    #[cfg(feature = "query")]
-    #[must_use]
-    pub async fn search_panes_or_empty<M: crate::query::Matcher<Pane>>(
-        &self,
-        matcher: M,
-    ) -> Vec<Pane> {
-        self.search_panes(matcher).await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-panes", &error);
-            Vec::new()
-        })
     }
 
     /// The panes under this window that a matcher accepts, reporting why
@@ -245,54 +214,8 @@ impl Window {
             .map(Some)
     }
 
-    /// The sessions this window is linked into, in the order tmux lists them.
-    ///
-    /// A window can be linked into several sessions at once, and every one of
-    /// them holds the same window rather than a copy. This reports the
-    /// sessions reaching it, including the one this handle was found through.
-    ///
-    /// The sessions are read from tmux's winlink rows rather than from
-    /// `#{window_linked_sessions_list}`, which is a comma-separated list of
-    /// *names* and so cannot be taken apart: a session named `has,comma`
-    /// makes the list `a,has,comma`, which reads exactly like three sessions.
-    ///
-    /// Empty when the listing fails, which suits a status line. Use
-    /// [`Self::linked_sessions`] when the difference matters.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    /// # runtime.block_on(async {
-    /// let guard = libtmux::test::TestServer::new().await?;
-    /// let server = guard.server();
-    /// let first = server.new_session("first").await?;
-    /// let second = server.new_session("second").await?;
-    /// let window = first.active_window().await?.expect("a window");
-    ///
-    /// assert_eq!(window.linked_sessions_or_empty().await.len(), 1);
-    ///
-    /// window.link_to(&second, None).await?;
-    /// let linked = window.linked_sessions_or_empty().await;
-    /// assert_eq!(linked.len(), 2, "the same window, reached two ways");
-    ///
-    /// guard.shutdown().await?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// # })?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn linked_sessions_or_empty(&self) -> Vec<Session> {
-        self.linked_sessions().await.unwrap_or_else(|error| {
-            listing::trace_discarded("list-sessions", &error);
-            Vec::new()
-        })
-    }
-
     /// The sessions this window is linked into, reporting why if it cannot.
     ///
-    /// The loud form of [`Self::linked_sessions_or_empty`].
     ///
     /// # Errors
     ///

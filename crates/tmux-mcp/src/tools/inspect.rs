@@ -1,18 +1,18 @@
 use std::time::{Duration, Instant};
 
-use libtmux::{CaptureOptions, Command};
+use libtmux::{CaptureOptions, Command, TmuxText};
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::model::ErrorData;
 use rmcp::{tool, tool_router};
 
 use crate::exec::Patterns;
 use crate::{
     Branch, BranchPane, BranchWindow, Capture, CapturePaneArgs, Environment, EnvironmentEntry,
-    Hook, Hooks, Marks, MatchView, Matches, OptionArgs, OptionValue, Panes, SearchPanesArgs,
-    Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs, TmuxTools, Tree, Windows,
+    EnvironmentState, Hook, Hooks, Marks, MatchView, Matches, OptionArgs, OptionValue, Panes,
+    SearchPanesArgs, Sessions, ShowEnvironmentArgs, ShowHooksArgs, Snapshot, SnapshotArgs,
+    TmuxTools, Tree, Windows,
 };
 
-use super::error::{bad_input, tmux_error};
+use super::error::{ToolError, bad_input, tmux_error};
 use super::{OptionScope, lossy, lossy_optional};
 
 /// Separates the fields of a `snapshot_pane` format query.
@@ -108,13 +108,17 @@ impl SearchBudget {
 impl TmuxTools {
     /// List every session on the server.
     #[tool(
-        description = "List every tmux session on the server",
+        description = "List every tmux session on the server.",
         title = "List Sessions",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
-    pub async fn list_sessions(&self) -> Result<Json<Sessions>, ErrorData> {
+    pub async fn list_sessions(&self) -> Result<Json<Sessions>, ToolError> {
         let sessions = self.server.sessions().await.map_err(|e| tmux_error(&e))?;
-        Ok(Json(Self::render_sessions(&sessions)))
+        let foreign_attached = self.foreign_attached_sessions().await;
+        Ok(Json(Self::render_sessions(
+            &sessions,
+            foreign_attached.as_ref(),
+        )))
     }
 
     /// List every window on the server, one row per session link.
@@ -124,18 +128,18 @@ impl TmuxTools {
         title = "List Windows",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {})
     )]
-    pub async fn list_windows(&self) -> Result<Json<Windows>, ErrorData> {
+    pub async fn list_windows(&self) -> Result<Json<Windows>, ToolError> {
         let windows = self.server.windows().await.map_err(|e| tmux_error(&e))?;
         Ok(Json(Self::render_windows(&windows)))
     }
 
     /// List every pane on the server.
     #[tool(
-        description = "List every pane on the server",
+        description = "List every pane on the server.",
         title = "List Panes",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
-    pub async fn list_panes(&self) -> Result<Json<Panes>, ErrorData> {
+    pub async fn list_panes(&self) -> Result<Json<Panes>, ToolError> {
         let panes = self.server.panes().await.map_err(|e| tmux_error(&e))?;
 
         Ok(Json(self.render_panes(&panes)))
@@ -146,18 +150,22 @@ impl TmuxTools {
         name = "get_server_info",
         description = "Report every session with its windows and panes, in one call. \
                        Prefer this over calling the three listing tools separately: \
-                       it costs tmux three commands rather than one per object.",
+                       it costs tmux four commands rather than one per object.",
         title = "Describe Server",
         meta = crate::capability_meta!(Inspect, None, [Observe], [TmuxMetadata], true, true, {}; always_load)
     )]
-    pub async fn describe(&self) -> Result<Json<Tree>, ErrorData> {
+    pub async fn describe(&self) -> Result<Json<Tree>, ToolError> {
         let tree = self.server.hierarchy().await.map_err(|e| tmux_error(&e))?;
+        let foreign_attached = self.foreign_attached_sessions().await;
         let sessions: Vec<_> = tree
             .iter()
             .map(|branch| Branch {
                 id: branch.session.id().to_string(),
                 name: lossy(branch.session.name()),
-                attached: branch.session.is_attached(),
+                attached: foreign_attached.as_ref().map_or_else(
+                    || branch.session.is_attached(),
+                    |set| set.contains(&branch.session.id().to_string()),
+                ),
                 windows: branch
                     .windows
                     .iter()
@@ -209,7 +217,7 @@ impl TmuxTools {
             start,
             end,
         }): Parameters<CapturePaneArgs>,
-    ) -> Result<Json<Capture>, ErrorData> {
+    ) -> Result<Json<Capture>, ToolError> {
         if last_command {
             return self.capture_last_command(&pane).await;
         }
@@ -268,7 +276,7 @@ impl TmuxTools {
             max_lines,
             history,
         }): Parameters<SnapshotArgs>,
-    ) -> Result<Json<Snapshot>, ErrorData> {
+    ) -> Result<Json<Snapshot>, ToolError> {
         let target = self.find_pane(&pane).await?;
 
         // One format query for the state a listing does not carry.
@@ -362,7 +370,7 @@ impl TmuxTools {
             session,
             window,
         }): Parameters<SearchPanesArgs>,
-    ) -> Result<Json<Matches>, ErrorData> {
+    ) -> Result<Json<Matches>, ToolError> {
         let patterns = Patterns::compile(std::slice::from_ref(&pattern), regex, match_case)
             .map_err(|(source, reason)| {
                 bad_input(format!("pattern {source} is invalid: {reason}"))
@@ -476,18 +484,17 @@ impl TmuxTools {
             target,
             ..
         }): Parameters<OptionArgs>,
-    ) -> Result<Json<OptionValue>, ErrorData> {
+    ) -> Result<Json<OptionValue>, ToolError> {
         let scope = self
             .option_scope(scope.as_deref(), target.as_deref())
             .await?;
-        let literal_name = libtmux::escape_format(&name).to_string_lossy().into_owned();
         let value = match scope {
-            OptionScope::Server => self.server.get_option(&literal_name).await,
-            OptionScope::GlobalSession => self.server.get_global_option(&literal_name).await,
-            OptionScope::GlobalWindow => self.server.get_global_window_option(&literal_name).await,
-            OptionScope::Session(session) => session.get_option(&literal_name).await,
-            OptionScope::Window(window) => window.get_option(&literal_name).await,
-            OptionScope::Pane(pane) => pane.get_option(&literal_name).await,
+            OptionScope::Server => self.server.typed_option(&name).await,
+            OptionScope::GlobalSession => self.server.typed_global_option(&name).await,
+            OptionScope::GlobalWindow => self.server.typed_global_window_option(&name).await,
+            OptionScope::Session(session) => session.typed_option(&name).await,
+            OptionScope::Window(window) => window.typed_option(&name).await,
+            OptionScope::Pane(pane) => pane.typed_option(&name).await,
         }
         .map_err(|e| tmux_error(&e))?;
 
@@ -495,15 +502,20 @@ impl TmuxTools {
             name,
             // Absent and empty are different answers: tmux reports no value
             // for an option that has never been set at that scope.
-            value: value.as_ref().map(lossy),
+            value: value.map(TmuxText::from).as_ref().map(lossy),
         }))
     }
 
-    /// Read a tmux environment.
+    /// Read the names in a tmux environment, and the values the operator allowed.
     #[tool(
-        description = "Read the environment tmux hands to processes it starts, for the server \
-                       or for one session. This is not the environment of anything already \
-                       running: a pane started before a change keeps what it was given.",
+        description = "List the variables tmux hands to processes it starts, for the server \
+                       or for one session, and whether each is set or marked for removal. \
+                       Values are withheld: a tmux server inherits the environment of the \
+                       shell that started it, tokens and keys included. A value is returned \
+                       only for a name the operator listed in LIBTMUX_ENVIRONMENT_VALUES at \
+                       startup, and is then returned in clear. This is not the environment of \
+                       anything already running: a pane started before a change keeps what it \
+                       was given.",
         title = "Show tmux Environment",
         meta = crate::capability_meta!(Inspect, None, [Observe], [ProcessEnvironment], true, true, {
             "session" => [TmuxLookup]
@@ -512,7 +524,7 @@ impl TmuxTools {
     pub async fn show_environment(
         &self,
         Parameters(ShowEnvironmentArgs { session }): Parameters<ShowEnvironmentArgs>,
-    ) -> Result<Json<Environment>, ErrorData> {
+    ) -> Result<Json<Environment>, ToolError> {
         let entries = match session.as_deref() {
             Some(name) => self.find_session(name).await?.environment_all().await,
             None => self.server.environment_all().await,
@@ -522,11 +534,21 @@ impl TmuxTools {
         Ok(Json(Environment {
             entries: entries
                 .into_iter()
-                .map(|(name, entry)| EnvironmentEntry {
-                    name,
-                    value: match entry {
-                        libtmux::EnvironmentEntry::Set(value) => Some(lossy(&value)),
-                        libtmux::EnvironmentEntry::Removed => None,
+                .map(|(name, entry)| match entry {
+                    libtmux::EnvironmentEntry::Set(value) => {
+                        let allowed = self.environment_values.contains(&name);
+                        EnvironmentEntry {
+                            name,
+                            state: EnvironmentState::Set,
+                            value: allowed.then(|| lossy(&value)),
+                            withheld: !allowed,
+                        }
+                    }
+                    libtmux::EnvironmentEntry::Removed => EnvironmentEntry {
+                        name,
+                        state: EnvironmentState::Removed,
+                        value: None,
+                        withheld: false,
                     },
                 })
                 .collect(),
@@ -549,7 +571,7 @@ impl TmuxTools {
     pub async fn show_hooks(
         &self,
         Parameters(ShowHooksArgs { session }): Parameters<ShowHooksArgs>,
-    ) -> Result<Json<Hooks>, ErrorData> {
+    ) -> Result<Json<Hooks>, ToolError> {
         let found = match session.as_deref() {
             Some(name) => self.find_session(name).await?.hooks().await,
             None => self.server.hooks().await,

@@ -4,6 +4,7 @@
 //! a window but the object it produces, and everything that follows it in a
 //! plan, is a pane.
 
+use crate::escape_format;
 use std::ffi::OsString;
 use std::fmt;
 
@@ -177,13 +178,13 @@ impl SplitWindow {
             command = command.arg("-d");
         }
         if let Some(directory) = &self.start_directory {
-            command = command.arg("-c").arg(directory.clone());
+            command = command.arg("-c").arg(escape_format(directory));
         }
         for (name, value) in &self.environment {
             command = command.arg("-e").sensitive_arg(assignment(name, value));
         }
         if let Some(shell_command) = &self.command {
-            command = command.sensitive_arg(shell_command.clone());
+            command = command.arg("--").sensitive_arg(shell_command.clone());
         }
         Some(command)
     }

@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use libtmux::{Pane, ServerGeneration};
-use rmcp::model::ErrorData;
 use tokio_util::sync::CancellationToken;
 
+use crate::ToolError;
 use crate::exec::{self, RunOutcome, RunView};
 use crate::retained::RetainedBytes;
 use crate::text::{TextFilter, readable_from};
@@ -25,12 +25,12 @@ struct RunKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct EndpointIdentity {
+pub(crate) struct EndpointIdentity {
     device: u64,
     inode: u64,
 }
 
-fn endpoint_identity(path: &Path) -> std::io::Result<EndpointIdentity> {
+pub(crate) fn endpoint_identity(path: &Path) -> std::io::Result<EndpointIdentity> {
     let metadata = std::fs::metadata(path)?;
     Ok(EndpointIdentity {
         device: metadata.dev(),
@@ -190,6 +190,7 @@ pub(crate) struct RunTransport<'a> {
     pub(crate) endpoint: &'a Path,
     pub(crate) shell: &'a [u8],
     pub(crate) lease: PaneReservation,
+    pub(crate) echoes: &'a crate::echo::PaneEchoes,
 }
 
 /// Why a request-owned pane command could not establish a result.
@@ -200,7 +201,7 @@ pub(crate) enum RunError {
     /// Pane input may have reached tmux, but delivery was not acknowledged.
     DispatchUnknown(Box<libtmux::Error>),
     /// Pane state changed after watcher setup and before dispatch.
-    Guard(ErrorData),
+    Guard(ToolError),
     /// Completion framing failed before the pane watcher was attached.
     Frame,
 }
@@ -294,7 +295,7 @@ pub(crate) async fn run(
     suppress_history: bool,
     cancelled: &CancellationToken,
     transport: RunTransport<'_>,
-    final_check: impl Future<Output = Result<(), ErrorData>>,
+    final_check: impl Future<Output = Result<(), ToolError>>,
 ) -> Result<RunView, RunError> {
     let RunTransport {
         server,
@@ -303,6 +304,7 @@ pub(crate) async fn run(
         endpoint,
         shell,
         lease,
+        echoes,
     } = transport;
     let prepared =
         exec::prepare_run(pane, command, suppress_history, executable, endpoint, shell).await?;
@@ -310,10 +312,35 @@ pub(crate) async fn run(
         let _ = prepared.shutdown().await;
         return Err(RunError::Guard(error));
     }
+
+    // Recorded before dispatch, the same as send_keys: the terminal's echo
+    // of this loader line can reach a waiting `wait_for_text` client before
+    // tmux even confirms whether it accepted the input.
+    let pane_id = pane.id().to_string();
+    let typed_line = prepared.typed_line().to_str().map(str::to_owned);
+    let echo_update = echoes.apply(
+        generation,
+        endpoint,
+        std::slice::from_ref(&pane_id),
+        typed_line.as_deref(),
+        &[String::from("Enter")],
+    );
+
     let run = match prepared.dispatch().await {
-        exec::RunDispatch::Confirmed(run) => run,
-        exec::RunDispatch::NotDispatched(error) => return Err(RunError::Tmux(error)),
+        exec::RunDispatch::Confirmed(run) => {
+            echoes.commit(echo_update);
+            run
+        }
+        exec::RunDispatch::NotDispatched(error) => {
+            // Proven never to have reached the pane: nothing to discount.
+            echoes.abandon(echo_update);
+            return Err(RunError::Tmux(error));
+        }
         exec::RunDispatch::Unknown { run, error } => {
+            // Delivery is unproven either way, so this is kept rather than
+            // abandoned: a false match on a real echo is worse than masking
+            // one that never reached the pane.
+            echoes.commit(echo_update);
             let proof = run.proof(server.clone(), generation);
             let server = server.clone();
             retain_lease_until(
@@ -332,7 +359,6 @@ pub(crate) async fn run(
         }
     };
 
-    let pane_id = pane.id().to_string();
     let progress = Arc::new(Mutex::new(Progress::new()));
     let update = Arc::clone(&progress);
     let proof = run.proof(server.clone(), generation);
@@ -414,7 +440,7 @@ mod tests {
             .server()
             .resolved_tmux_executable()
             .expect("fixture tmux resolves");
-        let refusal = ErrorData::invalid_params("refused".to_owned(), None);
+        let refusal: ToolError = ErrorData::invalid_params("refused".to_owned(), None).into();
         let generation = guard
             .server()
             .generation()
@@ -423,6 +449,7 @@ mod tests {
         let panes = vec![pane.id().to_string()];
         let lease = reserve(generation, guard.server().socket_path(), &panes)
             .expect("the fixture pane is unreserved");
+        let echoes = crate::echo::PaneEchoes::new();
 
         // The count is read after `run` returns, so a shutdown that had not
         // completed first would report zero.
@@ -439,6 +466,7 @@ mod tests {
                 endpoint: guard.server().socket_path(),
                 shell: b"sh",
                 lease,
+                echoes: &echoes,
             },
             async { Err(refusal) },
         ))

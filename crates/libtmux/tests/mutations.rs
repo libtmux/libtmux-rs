@@ -5,8 +5,10 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use libtmux::test::TestServer;
-use libtmux::{Layout, NewSessionOptions, NewWindowOptions};
+use std::time::Duration;
+
+use libtmux::test::{TestServer, retry_until, scaled};
+use libtmux::{ErrorKind, Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
 fn text(value: Option<&TmuxText>) -> Vec<u8> {
@@ -22,7 +24,7 @@ async fn wait_for_prompt(pane: &libtmux::Pane) {
         {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
     panic!("the pane never drew a prompt");
 }
@@ -40,7 +42,7 @@ async fn creating_an_object_returns_it_hydrated_in_one_command() {
     assert_eq!(session.name().as_bytes().to_vec(), b"work".to_vec());
     assert_eq!(session.window_count(), 1);
     // The handle came back populated, so no follow-up listing was needed.
-    assert!(session.created() > 0);
+    assert!(session.created() > std::time::UNIX_EPOCH);
 
     let window = session
         .new_window(NewWindowOptions::new("editor").command("sleep 300"))
@@ -55,7 +57,7 @@ async fn creating_an_object_returns_it_hydrated_in_one_command() {
         .await
         .expect("pane is created");
     assert_eq!(pane.window_id(), window.id());
-    assert!(pane.pid() > 0);
+    assert!(pane.pid().expect("a running pane reports a pid") > 0);
 
     // The server agrees with what the creating commands reported.
     assert_eq!(server.sessions().await.expect("sessions").len(), 1);
@@ -92,13 +94,9 @@ async fn creation_options_reach_tmux() {
     // 3.6 uses the default. Asserting the rendered size would be asserting
     // tmux's behaviour rather than the crate's.
     assert_eq!(
-        session
-            .get_option("default-size")
-            .await
-            .expect("read")
-            .expect("new-session -x -y sets it")
-            .as_bytes(),
-        b"120x40",
+        session.typed_option("default-size").await.expect("read"),
+        Some(libtmux::OptionValue::from("120x40")),
+        "new-session -x -y sets it",
     );
 
     let panes = session.panes().await.expect("panes list");
@@ -238,7 +236,7 @@ async fn flag_shaped_names_layouts_and_keys_stay_literal() {
         .await
         .expect("a flag-shaped line stays literal");
 
-    libtmux::test::retry_until(std::time::Duration::from_secs(5), async || {
+    retry_until(Duration::from_secs(5), async || {
         pane.capture().await.is_ok_and(|lines| {
             let screen = lines
                 .iter()
@@ -308,11 +306,16 @@ async fn flag_shaped_commands_and_paths_stay_literal() {
     );
     stayed_literal(
         "respawn-pane",
-        pane.respawn(Some("-zzz-respawn"), true).await.err(),
+        pane.respawn(Some("-zzz-respawn"), libtmux::Respawn::Replacing)
+            .await
+            .err(),
     );
     stayed_literal(
         "respawn-window",
-        window.respawn(Some("-zzz-respawn"), true).await.err(),
+        window
+            .respawn(Some("-zzz-respawn"), libtmux::Respawn::Replacing)
+            .await
+            .err(),
     );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -438,7 +441,7 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
         .expect("keys are sent");
 
     // Wait for the shell to produce the output rather than sleeping.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let captured = loop {
         let lines = pane.capture().await.expect("capture succeeds");
         if lines.iter().any(|line| {
@@ -510,7 +513,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
     });
     assert_eq!(
         server
-            .wait_for_channel(accepted, std::time::Duration::from_secs(5))
+            .wait_for_channel(accepted, scaled(Duration::from_secs(5)))
             .await
             .expect("the send can signal"),
         libtmux::ChannelWait::Signalled,
@@ -531,7 +534,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
 
     assert_eq!(
         server
-            .wait_for_channel(ran, std::time::Duration::from_secs(1))
+            .wait_for_channel(ran, scaled(Duration::from_secs(1)))
             .await
             .expect("the command signal can be read"),
         libtmux::ChannelWait::Signalled,
@@ -561,7 +564,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         .await
         .expect("the reader is started");
     assert_eq!(
-        pane.wait_for_text("reader-ready", std::time::Duration::from_secs(5))
+        pane.wait_for_text("reader-ready", Duration::from_secs(5))
             .await
             .expect("the reader can be watched"),
         libtmux::PaneWait::Arrived,
@@ -575,7 +578,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         pane.send_line(payload).await.expect("the line is sent");
         let expected = format!("got:<{payload}>");
         assert_eq!(
-            pane.wait_for_text(&expected, std::time::Duration::from_secs(5))
+            pane.wait_for_text(&expected, Duration::from_secs(5))
                 .await
                 .expect("the reader can be watched"),
             libtmux::PaneWait::Arrived,
@@ -616,7 +619,7 @@ async fn a_line_send_redacts_input_and_classifies_a_gone_pane() {
     let secret = "sentinel-line-secret";
     let error = stale.send_line(secret).await.expect_err("the pane is gone");
 
-    assert_eq!(error.kind(), libtmux::ErrorKind::ObjectGone);
+    assert_eq!(error.kind(), ErrorKind::ObjectGone);
     let diagnostic = format!("{error:?} {error}");
     assert!(!diagnostic.contains(secret), "{diagnostic}");
 
@@ -1242,7 +1245,7 @@ async fn a_taken_session_name_is_classified_rather_than_a_bare_refusal() {
         matches!(&error, libtmux::Error::SessionExists { name } if name == "taken"),
         "the refusal names what was taken: {error:?}",
     );
-    assert_eq!(error.kind(), libtmux::ErrorKind::Refused);
+    assert_eq!(error.kind(), ErrorKind::Refused);
 
     // The first session is untouched by the refusal.
     assert_eq!(server.sessions().await.expect("sessions").len(), 1);
@@ -1414,6 +1417,290 @@ async fn a_layout_is_named_saved_or_stepped_through() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A saved layout with more than two panes restores each pane's own position
+/// only where tmux reports the layout as JSON.
+///
+/// `LayoutSpec::Saved`'s doc says a saved string restores "the exact
+/// arrangement, including which process ended up where" only from
+/// `since::JSON_LAYOUTS` (3.8) onward; below it, the classic checksum-prefixed
+/// string reconstructs the shape but can hand two same-sized cells to each
+/// other's panes. This is tmux's own limitation, matching what the Python
+/// and Go ports found for a saved layout's pane identity, pinned here
+/// per-version rather than asserted as always true or always false.
+#[tokio::test]
+async fn real_tmux_compat_saved_layout_pane_identity_needs_json() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("layout-identity")
+        .await
+        .expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    for _ in 0..3 {
+        window
+            .split(SplitOptions::new(SplitDirection::Below))
+            .await
+            .expect("a pane is added");
+    }
+    // Mirrored presets arrived in 3.5; the unmirrored one is asymmetric too.
+    let asymmetric = if server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::MIRRORED_LAYOUTS)
+    {
+        Layout::MainVerticalMirrored
+    } else {
+        Layout::MainVertical
+    };
+    window
+        .select_layout(asymmetric)
+        .await
+        .expect("tmux arranges four panes asymmetrically");
+
+    let saved = window.layout().to_owned();
+    let before: Vec<(i32, i32, String)> = window
+        .panes()
+        .await
+        .expect("panes list")
+        .iter()
+        .map(|pane| (pane.left(), pane.top(), pane.id().to_string()))
+        .collect();
+
+    window
+        .select_layout(Layout::Tiled)
+        .await
+        .expect("tmux rearranges the panes");
+    window
+        .select_layout(&saved)
+        .await
+        .expect("tmux restores the saved layout");
+
+    let after: Vec<(i32, i32, String)> = window
+        .panes()
+        .await
+        .expect("panes list")
+        .iter()
+        .map(|pane| (pane.left(), pane.top(), pane.id().to_string()))
+        .collect();
+
+    let json_capable = server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::JSON_LAYOUTS);
+
+    if json_capable {
+        assert_eq!(
+            window.layout().as_bytes(),
+            saved.as_bytes(),
+            "a JSON layout restores byte-exact, pane ids included",
+        );
+        assert_eq!(
+            after, before,
+            "each pane returns to the exact cell it saved",
+        );
+    } else {
+        // Below 3.8 the shape always comes back; whether each pane's own id
+        // returns to its own cell depends on whether the live pane-list order
+        // happens to match the saved cell order, which this does not assert
+        // either way -- only that the crate does not overclaim it for this
+        // arrangement, which mirrored layouts are chosen to stress. Compared
+        // as a multiset, since which pane reports which coordinate first is
+        // exactly what is not being asserted here.
+        let mut before_shape: Vec<(i32, i32)> =
+            before.iter().map(|(left, top, _)| (*left, *top)).collect();
+        let mut after_shape: Vec<(i32, i32)> =
+            after.iter().map(|(left, top, _)| (*left, *top)).collect();
+        before_shape.sort_unstable();
+        after_shape.sort_unstable();
+        assert_eq!(
+            after_shape, before_shape,
+            "the geometry is restored either way"
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A value that is not a layout is refused before it reaches tmux.
+///
+/// tmux 3.3 and 3.3a exit on a layout `select-layout` cannot parse, taking
+/// every session on the socket with them, and `--` alone turns `-o` from the
+/// undo flag into exactly such a value. The session surviving is what fails
+/// there without the refusal.
+#[tokio::test]
+async fn a_value_that_is_not_a_layout_is_refused_before_dispatch() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("not-a-layout").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    for value in ["-o", "garbage", "", "next", "0000", "zzzz,80x24,0,0,0"] {
+        let error = window
+            .select_layout(value)
+            .await
+            .expect_err("a value that is not a layout is refused");
+        assert_eq!(error.kind(), ErrorKind::InvalidInput, "{value:?}: {error}");
+    }
+    assert!(
+        server
+            .has_session("not-a-layout")
+            .await
+            .expect("tmux still answers"),
+        "the session survives every refused value",
+    );
+    window
+        .select_layout("tiled")
+        .await
+        .expect("a preset name passed as text still applies");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A unique preset prefix applies; a prefix naming more than one preset is
+/// refused, naming the candidates.
+///
+/// tmux's own `layout_set_lookup` is a prefix match, so `tile` and `even-h`
+/// apply on every release and never reach the 3.3a crash path -- an
+/// exact-match-only guard refuses a spelling tmux itself accepts.
+#[tokio::test]
+async fn a_unique_layout_prefix_applies_an_ambiguous_one_names_its_candidates() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("layout-prefix").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+    window
+        .split(SplitOptions::new(SplitDirection::Right))
+        .await
+        .expect("a second pane to lay out");
+
+    window
+        .select_layout("tile")
+        .await
+        .expect("a unique prefix of `tiled` applies");
+    window
+        .select_layout("even-h")
+        .await
+        .expect("a unique prefix of `even-horizontal` applies");
+
+    let error = window
+        .select_layout("even-")
+        .await
+        .expect_err("a prefix naming two presets is ambiguous");
+    assert_eq!(error.kind(), ErrorKind::InvalidInput, "{error}");
+    let message = error.to_string();
+    assert!(message.contains("even-horizontal"), "{message}");
+    assert!(message.contains("even-vertical"), "{message}");
+
+    // Empty is not a prefix of "every preset": it stays the same refusal as
+    // every other unrecognized value, not "ambiguous among all seven".
+    let empty_error = window
+        .select_layout("")
+        .await
+        .expect_err("empty is refused, not ambiguous");
+    assert!(
+        !empty_error.to_string().contains("more than one preset"),
+        "{empty_error}",
+    );
+
+    // `main-h` is unique among the presets tmux 3.2a knows (five) and
+    // ambiguous once the mirrored pair exists (3.5+) -- the candidate set is
+    // the running release's, not every preset this crate can name.
+    let mirrored_capable = server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::MIRRORED_LAYOUTS);
+    let main_h = window.select_layout("main-h").await;
+    if mirrored_capable {
+        let error = main_h.expect_err("main-h is ambiguous once the mirrored pair exists");
+        assert_eq!(error.kind(), ErrorKind::InvalidInput, "{error}");
+    } else {
+        main_h.expect("main-h is unique without the mirrored pair");
+    }
+
+    assert!(
+        server
+            .has_session("layout-prefix")
+            .await
+            .expect("tmux still answers"),
+        "the session survives every prefix, unique or ambiguous",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A JSON-looking saved layout on an old tmux is refused with a version
+/// hint, not just tmux's generic "invalid layout".
+#[tokio::test]
+async fn a_json_layout_on_an_old_tmux_names_the_version_it_needs() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("json-layout").await.expect("session");
+    let mut window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+
+    let json_capable = server
+        .capabilities()
+        .await
+        .expect("capabilities read")
+        .tmux_version()
+        .has_behavior(&libtmux::since::JSON_LAYOUTS);
+
+    let error = window
+        .select_layout(r#"{"V":2,"L":[]}"#)
+        .await
+        .expect_err("a bare JSON skeleton is not a real layout either way");
+    let message = error.to_string();
+    if json_capable {
+        // This tmux understands the form; whatever refuses it is tmux's own
+        // validation of the content, not a version gate.
+        assert!(
+            !message.contains("needs tmux"),
+            "a JSON-capable tmux is not refused for its version: {message}",
+        );
+    } else {
+        assert!(
+            message.contains("needs tmux") && message.contains("3.8"),
+            "an old tmux names the release a JSON layout needs: {message}",
+        );
+    }
+
+    // A classic-looking garbage string never mentions a version: it is
+    // refused for its content on every release, the same way named layouts
+    // and other malformed strings already are.
+    let classic_error = window
+        .select_layout("not-a-real-layout")
+        .await
+        .expect_err("garbage is refused");
+    assert!(
+        !classic_error.to_string().contains("needs tmux"),
+        "a non-JSON refusal never claims a version floor: {classic_error}",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// A pane broken out into its own window can be put back.
 ///
 /// `break_out` moves a pane away and `join_into` moves one back, so between
@@ -1496,7 +1783,7 @@ async fn respawning_and_locking_reach_every_level_tmux_offers() {
     assert_eq!(window.panes().await.expect("panes").len(), 2);
 
     window
-        .respawn(Some("sh"), true)
+        .respawn(Some("sh"), libtmux::Respawn::Replacing)
         .await
         .expect("the window restarts");
     assert_eq!(
@@ -1509,8 +1796,66 @@ async fn respawning_and_locking_reach_every_level_tmux_offers() {
     // every level rather than reporting it as a failure.
     server.lock_all().await.expect("the server locks");
     session.lock().await.expect("the session locks");
-    for client in server.clients_or_empty().await {
+    for client in server.clients().await.unwrap_or_default() {
         client.lock().await.expect("the client locks");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane `remain-on-exit` keeps after its process ends still decodes.
+///
+/// tmux 3.8 reports `#{pane_pid}` as an empty string once a pane's process
+/// is gone; every release before it keeps reporting that process's own pid
+/// rather than clearing the field. Before this fix, an empty value there was
+/// `RequiredFieldEmpty`, which failed the whole listing outright rather than
+/// reporting an absent pid -- reproduced against the real daemon rather than
+/// a synthetic fixture, because this is the same shape `tmux-mcp`'s dead-pane
+/// tests hit: `respawn(Some("exit 0"), true)` leaves a pane whose listing
+/// used to fail this way. Which of the two shapes the running tmux actually
+/// reports is asserted rather than assumed, so this passes identically on
+/// every release from 3.2a through the `next-3.9` tmux-matrix probe.
+#[tokio::test]
+async fn a_dead_panes_pid_is_absent_rather_than_a_decode_failure() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server.new_session("dead-pid").await.expect("session");
+    let window = session
+        .active_window()
+        .await
+        .expect("windows")
+        .expect("a window");
+    let mut pane = window.active_pane().await.expect("panes").expect("a pane");
+
+    let running_pid = pane.pid().expect("a running pane reports a pid");
+    assert!(running_pid > 0);
+
+    pane.set_option("remain-on-exit", "on")
+        .await
+        .expect("the dead pane is kept rather than closed");
+    pane.respawn(Some("exit 0"), libtmux::Respawn::Replacing)
+        .await
+        .expect("the command runs and exits");
+
+    retry_until(Duration::from_secs(5), async || {
+        pane.refreshed()
+            .await
+            .is_ok_and(|refreshed| refreshed.is_dead())
+    })
+    .await
+    .expect("the pane becomes dead");
+    // The listing this refresh runs is exactly where `RequiredFieldEmpty`
+    // used to surface: reaching the assertions below at all is most of what
+    // this test proves.
+    pane.refresh().await.expect("the pane refreshes once dead");
+
+    assert!(pane.is_dead(), "the pane is kept, not closed");
+    // Every release through 3.7c retains the exited process's own pid, so
+    // this arm runs there. tmux 3.8 and later clears it instead, and the
+    // `None` that leaves unchecked -- reaching it at all, rather than the
+    // `refresh` above returning `Err(RequiredFieldEmpty)`, is the fix.
+    if let Some(pid) = pane.pid() {
+        assert!(pid > 0, "a reported pid is never zero");
     }
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -1738,6 +2083,54 @@ async fn a_rendered_window_target_survives_a_renumber() {
         identity,
         "{rendered} reaches the window it was taken from",
     );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_new_session_carries_environment_to_its_first_process() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+
+    let session = guard
+        .server()
+        .new_session(NewSessionOptions::new("env").environment("LIBTMUX_RS", "set-here"))
+        .await
+        .expect("the session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    wait_for_prompt(&pane).await;
+    pane.send_line("printf 'seen=%s\\n' \"$LIBTMUX_RS\"")
+        .await
+        .expect("the pane accepts the line");
+
+    assert_eq!(
+        pane.wait_for_text("seen=set-here", Duration::from_secs(10))
+            .await
+            .expect("the pane is readable"),
+        libtmux::PaneWait::Arrived,
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_pane_reaches_the_session_it_was_found_through() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let session = guard
+        .server()
+        .new_session("reach")
+        .await
+        .expect("the session is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+
+    let reached = pane
+        .session()
+        .await
+        .expect("the session listing is readable")
+        .expect("the session still exists");
+
+    assert_eq!(reached.id(), session.id());
+    assert_eq!(text(Some(reached.name())), b"reach".to_vec());
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
