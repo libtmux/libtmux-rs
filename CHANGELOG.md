@@ -16,6 +16,20 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.12 - 2026-09-19
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.12;
+`tmux-mcp` is 0.1.0-alpha.13, because it was already at alpha.12.
+
+Take this one if you pass names, titles or start directories you did not write
+yourself: they reach tmux as literal text now, so a value holding `#{...}` is a
+value rather than a format, and text beginning with `-` is not read as a flag.
+Failures that used to vanish now arrive -- a control stream reports its errors,
+a scoped operation keeps its own failure alongside its cleanup's, and a setup
+failure names the frame limit it hit instead of an ordinary close. Options have
+one reader and checked writes, and the lenient `*_or_empty` listing twins are
+gone.
+
 ### Fixed
 
 - Creation commands and plans, shell commands, messages, key bindings and

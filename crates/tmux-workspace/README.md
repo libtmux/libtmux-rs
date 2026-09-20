@@ -171,7 +171,7 @@ along with any key tmuxp does not have: `before_script`, `plugins`,
 ## Install
 
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.11
+$ cargo add tmux-workspace@0.1.0-alpha.12
 ```
 
 <details>
@@ -179,7 +179,7 @@ $ cargo add tmux-workspace@0.1.0-alpha.11
 
 ```toml
 [dependencies]
-tmux-workspace = "0.1.0-alpha.11"
+tmux-workspace = "0.1.0-alpha.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
