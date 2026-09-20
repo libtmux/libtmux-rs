@@ -456,7 +456,7 @@ Search what panes are displaying with Rust's linear-time regex engine. Accept at
 
 ## `select_layout`
 
-Change tmux state; no client-supplied executable input. Rearrange a window's panes using a saved tmux layout or a named layout and its unique abbreviation. Names follow the running daemon's version; mirrored main layouts require tmux 3.5. Invalid syntax is refused before window lookup. Return the saved layout tmux actually applied.
+Rearrange a window's panes using a saved tmux layout or a named layout and its unique abbreviation. Names follow the running daemon's version; mirrored main layouts require tmux 3.5. Invalid syntax is refused before window lookup. Return the saved layout tmux actually applied. Change tmux state; no client-supplied executable input.
 
 - Toolset: `manage`
 - Process reach: `none`
