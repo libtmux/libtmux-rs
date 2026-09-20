@@ -164,9 +164,15 @@ async fn a_start_directory_reaches_tmux_literally() {
         .expect("the pane is read")
         .expect("a window has a pane");
 
+    // tmux reports the directory the pane resolved to. On macOS the
+    // temporary root arrives as `/var/...` and resolves to
+    // `/private/var/...`, so the expectation has to be canonical too or
+    // it is only testing Linux.
+    let expected = directory.canonicalize().expect("the directory resolves");
+
     assert_eq!(
         pane.current_path().map(|path| path.to_string_lossy()),
-        Some(directory.to_string_lossy()),
+        Some(expected.to_string_lossy()),
     );
 
     guard.shutdown().await.expect("the fixture shuts down");
@@ -194,9 +200,15 @@ async fn a_split_start_directory_reaches_tmux_literally() {
         .await
         .expect("the pane is read back");
 
+    // tmux reports the directory the pane resolved to. On macOS the
+    // temporary root arrives as `/var/...` and resolves to
+    // `/private/var/...`, so the expectation has to be canonical too or
+    // it is only testing Linux.
+    let expected = directory.canonicalize().expect("the directory resolves");
+
     assert_eq!(
         split.current_path().map(|path| path.to_string_lossy()),
-        Some(directory.to_string_lossy()),
+        Some(expected.to_string_lossy()),
     );
 
     guard.shutdown().await.expect("the fixture shuts down");
