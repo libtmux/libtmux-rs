@@ -18,7 +18,7 @@ async fn layout_preflight_rejects_unsafe_saved_input_before_dispatch() {
     let mut window = session.active_window().await.unwrap().unwrap();
     let before = window.layout().to_owned();
     let error = window.select_layout("not-a-layout").await.unwrap_err();
-    assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+    assert_eq!(error.kind(), ErrorKind::InvalidInput);
     window.refresh().await.unwrap();
     assert_eq!(window.layout(), &before);
     assert_eq!(guard.server().sessions().await.unwrap().len(), 1);
@@ -43,7 +43,7 @@ async fn layout_preflight_static_inputs_need_no_executable() {
         ])
         .await
         .unwrap_err();
-    assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
+    assert_eq!(error.kind(), ErrorKind::InvalidInput);
     server.shutdown().await.unwrap();
 }
 
@@ -75,17 +75,11 @@ async fn real_tmux_compat_layout_preflight_uses_daemon_version() {
         .validate_layouts([(OsStr::new("main-horizontal-mirrored"), 1)])
         .await;
     if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
-        assert_eq!(
-            abbreviated.unwrap_err().kind(),
-            libtmux::ErrorKind::InvalidInput
-        );
+        assert_eq!(abbreviated.unwrap_err().kind(), ErrorKind::InvalidInput);
         mirrored.unwrap();
     } else {
         abbreviated.unwrap();
-        assert_eq!(
-            mirrored.unwrap_err().kind(),
-            libtmux::ErrorKind::UnsupportedVersion
-        );
+        assert_eq!(mirrored.unwrap_err().kind(), ErrorKind::UnsupportedVersion);
     }
     assert_eq!(selected.sessions().await.unwrap()[0].id(), keeper.id());
     selected.shutdown().await.unwrap();

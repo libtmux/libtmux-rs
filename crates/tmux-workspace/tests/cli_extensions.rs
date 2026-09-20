@@ -78,7 +78,7 @@ async fn assert_keeper(guard: &TestServer, keeper: &libtmux::Session, pane: &str
     assert_eq!(keeper_pane(keeper).await, pane);
     assert!(
         keeper
-            .get_option("@extension-changed")
+            .typed_option("@extension-changed")
             .await
             .unwrap()
             .is_none()
@@ -116,12 +116,11 @@ async fn neutral_extensions_load_natively_without_python() {
         assert_eq!(loaded.panes().await.unwrap().len(), 1);
         assert_eq!(
             loaded
-                .get_option("@extension-changed")
+                .typed_option("@extension-changed")
                 .await
                 .unwrap()
-                .unwrap()
-                .to_string_lossy(),
-            "yes"
+                .unwrap(),
+            libtmux::OptionValue::from("yes")
         );
         loaded.kill().await.unwrap();
         assert_keeper(&guard, &keeper, &pane).await;

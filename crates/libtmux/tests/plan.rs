@@ -35,17 +35,14 @@ async fn layout_preflight_precedes_every_planner_mutation() {
         "@layout-changed",
         "yes",
     ));
-    plan.add(libtmux::plan::SelectLayout::new(
-        window.id().clone(),
-        "not-a-layout",
-    ));
+    plan.add(SelectLayout::new(window.id().clone(), "not-a-layout"));
     assert_eq!(plan.preview().len(), 2);
     for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
         let error = plan.run(guard.server(), planner).await.unwrap_err();
         assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
         assert!(
             session
-                .get_option("@layout-changed")
+                .typed_option("@layout-changed")
                 .await
                 .unwrap()
                 .is_none()
@@ -67,7 +64,7 @@ async fn layout_preflight_counts_the_panes_a_plan_creates() {
     let window = plan.add(NewWindow::new(session.id().clone()));
     plan.add(SplitWindow::new(window));
     plan.add(SplitWindow::new(window));
-    plan.add(libtmux::plan::SelectLayout::new(window, TWO_CELL_LAYOUT));
+    plan.add(SelectLayout::new(window, TWO_CELL_LAYOUT));
     for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
         let error = plan.run(guard.server(), planner).await.unwrap_err();
         assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
@@ -78,7 +75,7 @@ async fn layout_preflight_counts_the_panes_a_plan_creates() {
     let window = plan.add(NewWindow::new(session.id().clone()));
     plan.add(SplitWindow::new(window));
     plan.add(SplitWindow::new(window));
-    plan.add(libtmux::plan::SelectLayout::new(window, THREE_CELL_LAYOUT));
+    plan.add(SelectLayout::new(window, THREE_CELL_LAYOUT));
     assert!(
         plan.run(guard.server(), Planner::Sequential)
             .await
@@ -104,15 +101,12 @@ async fn layout_preflight_precedes_control_plan_mutation() {
         "@layout-changed",
         "yes",
     ));
-    plan.add(libtmux::plan::SelectLayout::new(
-        window.id().clone(),
-        "not-a-layout",
-    ));
+    plan.add(SelectLayout::new(window.id().clone(), "not-a-layout"));
     let error = plan.run_over_control_mode(&sender).await.unwrap_err();
     assert_eq!(error.kind(), libtmux::ErrorKind::InvalidInput);
     assert!(
         session
-            .get_option("@layout-changed")
+            .typed_option("@layout-changed")
             .await
             .unwrap()
             .is_none()
@@ -139,10 +133,7 @@ async fn real_tmux_compat_layout_preflight_control_version() {
         let option = format!("@layout-control-{index}");
         let mut plan = Plan::new();
         plan.add(SetOption::session(session.id().clone(), &option, "yes"));
-        plan.add(libtmux::plan::SelectLayout::new(
-            window.id().clone(),
-            layout,
-        ));
+        plan.add(SelectLayout::new(window.id().clone(), layout));
         let result = plan.run_over_control_mode(&sender).await;
         if valid {
             let result = result.unwrap();
@@ -152,7 +143,7 @@ async fn real_tmux_compat_layout_preflight_control_version() {
                 2,
                 "metadata is not a recorded operation"
             );
-            assert!(session.get_option(&option).await.unwrap().is_some());
+            assert!(session.typed_option(&option).await.unwrap().is_some());
         } else {
             assert_eq!(
                 result.unwrap_err().kind(),
@@ -162,7 +153,7 @@ async fn real_tmux_compat_layout_preflight_control_version() {
                     libtmux::ErrorKind::UnsupportedVersion
                 }
             );
-            assert!(session.get_option(&option).await.unwrap().is_none());
+            assert!(session.typed_option(&option).await.unwrap().is_none());
         }
     }
     guard.shutdown().await.unwrap();

@@ -203,6 +203,16 @@ fn stop_daemon(socket: &Path) {
         .status();
 }
 
+fn tool_error(response: &Value) -> Value {
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    serde_json::from_str(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool error text"),
+    )
+    .expect("structured tool error")
+}
+
 fn layout_process(guard: &TestServer) -> Process {
     let executable = guard
         .server()
@@ -256,9 +266,10 @@ fn mcp_layout_invalid_syntax_precedes_target_lookup() {
     );
     process.finish();
     runtime.block_on(guard.shutdown()).expect("tmux stops");
-    assert_eq!(response["error"]["code"], -32602, "{response}");
+    let error = tool_error(&response);
+    assert!(response.get("error").is_none(), "{response}");
     assert_eq!(
-        response["error"]["data"],
+        error["data"],
         json!({"kind": "invalid_input", "retryable": false, "stale": false}),
         "{response}",
     );
@@ -366,15 +377,17 @@ fn real_tmux_compat_mcp_layout_wire_preserves_keeper_and_native_errors() {
     assert_eq!(sessions[0].id(), window.session_id());
     assert_eq!(panes.len(), 2);
     assert_eq!(pid.to_string_lossy(), expected_pid.to_string());
-    assert_eq!(missing["error"]["data"]["kind"], "object_gone", "{missing}");
+    assert_eq!(
+        tool_error(&missing)["data"]["kind"],
+        "object_gone",
+        "{missing}"
+    );
     for (layout, error, response, before, after) in observed {
         if let Some(kind) = error {
-            assert_eq!(
-                response["error"]["data"]["kind"], kind,
-                "{layout}: {response}"
-            );
-            assert_eq!(response["error"]["data"]["retryable"], false, "{response}");
-            assert_eq!(response["error"]["data"]["stale"], false, "{response}");
+            let error = tool_error(&response);
+            assert_eq!(error["data"]["kind"], kind, "{layout}: {response}");
+            assert_eq!(error["data"]["retryable"], false, "{response}");
+            assert_eq!(error["data"]["stale"], false, "{response}");
             assert_eq!(before, after, "{layout} changed a refused layout");
         } else {
             assert_eq!(

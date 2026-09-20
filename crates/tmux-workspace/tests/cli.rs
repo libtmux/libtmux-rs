@@ -527,7 +527,7 @@ async fn layout_preflight_checks_all_inputs_before_scripts_or_append() {
         assert_eq!(sessions[0].id(), keeper.id());
         assert!(
             keeper
-                .get_option("@layout-changed")
+                .typed_option("@layout-changed")
                 .await
                 .unwrap()
                 .is_none()
@@ -1753,13 +1753,14 @@ async fn imported_state(guard: &libtmux::test::TestServer, kind: &str) -> serde_
     // want of one in the source.
     let expected_focus = panes[usize::from(kind == "teamocil")].id().to_string();
     let option = windows[1]
-        .get_option(if kind == "tmuxinator" {
+        .typed_option(if kind == "tmuxinator" {
             "synchronize-panes"
         } else {
             "@import-option"
         })
         .await
         .unwrap()
+        .map(libtmux::TmuxText::from)
         .unwrap()
         .to_string_lossy()
         .into_owned();
@@ -3953,13 +3954,10 @@ async fn global_options_use_tmuxs_global_session_scope() {
     // as `-g` rather than the session or server tables.
     let value = guard
         .server()
-        .get_global_option("history-limit")
+        .typed_global_option("history-limit")
         .await
         .unwrap();
-    assert_eq!(
-        value.map(|v| v.to_string_lossy().into_owned()),
-        Some("4242".to_owned())
-    );
+    assert_eq!(value, Some(libtmux::OptionValue::Number(4242)));
     guard.shutdown().await.unwrap();
 }
 
@@ -4019,11 +4017,11 @@ async fn load_accepts_both_options_and_options_after_spellings() {
         .unwrap()
         .expect("session was created");
     let windows = session.windows().await.unwrap();
-    for (window, expected) in windows.iter().zip(["42", "43"]) {
-        let value = window.get_option("main-pane-width").await.unwrap();
+    for (window, expected) in windows.iter().zip([42, 43]) {
+        let value = window.typed_option("main-pane-width").await.unwrap();
         assert_eq!(
-            value.map(|v| v.to_string_lossy().into_owned()),
-            Some(expected.to_owned()),
+            value,
+            Some(libtmux::OptionValue::Number(expected)),
             "window {:?}",
             window.name().to_string_lossy()
         );

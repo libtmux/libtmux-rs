@@ -121,7 +121,7 @@ fn a_session_name_tmux_could_not_address_is_rejected() {
         let error = Workspace::from_yaml(&format!("session_name: {name:?}\nwindows: []"))
             .expect_err("an unaddressable session_name should be refused");
         assert!(
-            matches!(error, tmux_workspace::ConfigError::Invalid { .. }),
+            matches!(error, ConfigError::Invalid { .. }),
             "{name}: {error:?}"
         );
     }
@@ -1547,7 +1547,7 @@ async fn freeze_omits_shell_command_for_the_default_shell_and_lists_others() {
     // pane_current_command is the command name only, not its arguments.
     assert_eq!(
         frozen.windows[0].panes[1].shell_commands,
-        [tmux_workspace::ShellCommand::new("sleep")]
+        [ShellCommand::new("sleep")]
     );
 
     let yaml = frozen.to_yaml();
