@@ -26,6 +26,103 @@ fn reply(number: u64) -> BlockResult {
 }
 
 #[tokio::test]
+async fn bootstrap_cleanup_drains_events_and_preserves_error_priority() {
+    let mut failed = reply(2);
+    failed.succeeded = false;
+    let refusal = || {
+        failed
+            .refusal_for("refresh-client")
+            .expect("command refused")
+    };
+    for (primary, recover_terminal) in [
+        (Error::control_mode_closed(), true),
+        (
+            Error::control_mode_closed().after_effect("watch-only"),
+            true,
+        ),
+        (refusal(), false),
+        (refusal().after_effect("watch-only"), false),
+    ] {
+        let original = format!("{primary:?}");
+        let after_effect = matches!(primary, Error::AfterEffect { .. });
+        let (deliveries, received) = mpsc::channel(1);
+        deliveries
+            .send(Delivery::Boundary(super::Boundary(1)))
+            .await
+            .expect("queue has room");
+        let (stop, _stopped) = watch::channel(());
+        let connection = tokio::spawn(async move {
+            deliveries.closed().await;
+            Err(Error::control_mode_frame_too_large("line", 64))
+        });
+        let events = ControlEvents {
+            events: received,
+            stop,
+            connection: Some(connection),
+        };
+        let error =
+            tokio::time::timeout(Duration::from_secs(1), events.shutdown_after_error(primary))
+                .await
+                .expect("cleanup closes the unread event queue before joining");
+        if !recover_terminal {
+            assert_eq!(format!("{error:?}"), original);
+            continue;
+        }
+        let cause = match error {
+            Error::AfterEffect { operation, source } => {
+                assert!(after_effect);
+                assert_eq!(operation, "watch-only");
+                *source
+            }
+            error => {
+                assert!(!after_effect);
+                error
+            }
+        };
+        assert!(matches!(
+            cause,
+            Error::ControlModeFrameTooLarge {
+                frame: "line",
+                limit: 64
+            }
+        ));
+    }
+}
+
+#[tokio::test]
+async fn cancelling_bootstrap_cleanup_still_stops_the_connection() {
+    let (deliveries, received) = mpsc::channel(1);
+    let (stop, mut stopped) = watch::channel(());
+    let (release, released) = oneshot::channel();
+    let (finished, complete) = oneshot::channel();
+    let connection = tokio::spawn(async move {
+        stopped.changed().await.expect("cleanup requested closure");
+        drop(deliveries);
+        released.await.expect("cleanup is released");
+        finished.send(()).expect("completion is observed");
+        Ok(())
+    });
+    let events = ControlEvents {
+        events: received,
+        stop,
+        connection: Some(connection),
+    };
+    {
+        let cleanup = events.shutdown_after_error(Error::control_mode_closed());
+        tokio::select! {
+            biased;
+            _ = cleanup => panic!("the connection has not finished cleanup"),
+            () = std::future::ready(()) => {}
+        }
+    }
+    release.send(()).expect("the connection still owns cleanup");
+    tokio::time::timeout(Duration::from_secs(1), complete)
+        .await
+        .expect("cancelled cleanup still stops the connection")
+        .expect("connection finished");
+}
+
+#[tokio::test]
 async fn cancelling_a_pending_next_preserves_the_terminal_error() {
     let (deliveries, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());

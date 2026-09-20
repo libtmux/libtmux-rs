@@ -530,23 +530,25 @@ impl ControlMode {
             pane_off_is_safe,
             identity: server.identity().clone(),
         };
+        let events = ControlEvents {
+            events,
+            stop,
+            connection: Some(connection),
+        };
 
         // Without this, tmux 3.8+ hands a control client the classic
         // `window_layout` string instead of JSON, disagreeing with a plain
         // client's snapshot; a release below 3.8 ignores the unknown flag.
-        sender
+        if let Err(error) = sender
             .send(Command::new("refresh-client").arg("-f").arg("new-layouts"))
-            .await?
-            .require_success("refresh-client")?;
+            .await
+            .and_then(|reply| reply.require_success("refresh-client"))
+        {
+            drop(sender);
+            return Err(events.shutdown_after_error(error).await);
+        }
 
-        Ok(Self {
-            sender,
-            events: ControlEvents {
-                events,
-                stop,
-                connection: Some(connection),
-            },
-        })
+        Ok(Self { sender, events })
     }
 
     /// Separate the two halves so they can be used at the same time.
@@ -1195,6 +1197,25 @@ pub struct ControlEvents {
 impl ControlEvents {
     async fn next_delivery(&mut self) -> Option<Delivery> {
         self.events.recv().await
+    }
+
+    pub(crate) async fn shutdown_after_error(self, mut primary: Error) -> Error {
+        if let Err(terminal) = self.shutdown().await {
+            let mut cause = &mut primary;
+            while let Error::AfterEffect { source, .. } = cause {
+                cause = source.as_mut();
+            }
+            if matches!(
+                cause,
+                Error::ControlMode {
+                    kind: crate::ControlModeErrorKind::Closed,
+                    ..
+                }
+            ) {
+                *cause = terminal;
+            }
+        }
+        primary
     }
 
     /// Return the next notification or terminal error, then `None`.

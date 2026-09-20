@@ -97,7 +97,10 @@ impl Pane {
 
         // One session can hold many panes, and the connection carries all of
         // them, so narrowing happens before the caller reads.
-        sender.watch_only(std::slice::from_ref(self.id())).await?;
+        if let Err(error) = sender.watch_only(std::slice::from_ref(self.id())).await {
+            drop(sender);
+            return Err(events.shutdown_after_error(error).await);
+        }
 
         Ok(crate::control::PaneOutput::new(
             self.id().clone(),
