@@ -217,22 +217,22 @@ library; the `tmux-workspace` binary has its own parser and its own builder
 and does not call either. A file that loads through one is not guaranteed to
 mean the same thing through the other.
 
-The library is the smaller language, aimed at driving `libtmux` from a
-program. The command is a drop-in for tmuxp and reads everything a tmuxp file
-can hold. Where they disagree on the same file:
+The library provides typed configuration and plans. The command adds file
+discovery, imports, interactive loading and Python extensions. Both support
+command mappings, per-command Enter and delays, history suppression and
+variable expansion. Differences include:
 
 | | Library | `tmux-workspace` command |
 | --- | --- | --- |
 | An unknown key | recorded in `unsupported_keys`, the file still loads | refused, unless it starts with `x-` |
-| `suppress_history` default | `false` | `true` |
 | No `windows`, or an empty list | keeps the window tmux made | refused |
 | A pane's `environment` | merged with the window's | replaces the window's |
 | `window_shell` | the window's creation command only | the default shell for every pane in the window |
-| `~` and `$VAR` in values | left alone | expanded |
+| `~` and `$VAR` in shell commands | retained for the shell | expanded against the loader environment |
 | YAML merge keys (`<<:`) | not resolved | resolved |
-| `sleep_before`, `sleep_after`, `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |
+| `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |
 
-Pick one. If you want what the command does, run the command.
+Use the command when the workspace needs its file services or extensions.
 
 ## Compatibility with tmuxp
 

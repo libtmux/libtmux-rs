@@ -6,12 +6,9 @@
 //! way a real consumer would. It reads the parts of a tmuxp workspace file a
 //! builder needs and reproduces them with tmux.
 //!
-//! The `tmux-workspace` command in this same package does not use any of
-//! this: it has its own parser and its own builder, and reads a larger
-//! document language with different defaults. A file that loads through both
-//! does not necessarily mean the same thing through both. The README's "The
-//! library and the `tmux-workspace` command read different documents" names
-//! every place they disagree.
+//! The `tmux-workspace` command adds file services and an interactive loader.
+//! Its reader and builder handle extensions and progress reporting separately;
+//! the README lists the configuration differences from this library.
 //!
 //! ```no_run
 //! use tmux_workspace::{Workspace, WorkspaceBuilder};
