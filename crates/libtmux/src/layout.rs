@@ -61,6 +61,10 @@ pub(crate) fn prepare<'a>(
     let mut pending = Vec::new();
     for (layout, panes) in layouts {
         let bytes = layout.as_encoded_bytes();
+        if bytes.starts_with(b"{") {
+            pending.push((layout, panes));
+            continue;
+        }
         let before = accepts(bytes, panes, false);
         let after = accepts(bytes, panes, true);
         if !before && !after {
@@ -81,6 +85,10 @@ pub(crate) fn resolve(pending: &[(&OsStr, usize)], version: &TmuxVersion) -> Res
         .is_none_or(|release| release >= crate::since::MIRRORED_LAYOUTS);
     for (layout, panes) in pending {
         let bytes = layout.as_encoded_bytes();
+        if bytes.starts_with(b"{") {
+            version.require("a JSON layout string", crate::since::JSON_LAYOUTS)?;
+            continue;
+        }
         if !accepts(bytes, *panes, mirrored) {
             if let Some(layout) = named(bytes, true) {
                 version.require(layout.as_str(), layout.minimum_release())?;
@@ -114,6 +122,7 @@ fn is_cold(stderr: &[u8]) -> bool {
 pub(crate) fn version_command() -> Command {
     Command::new("display-message")
         .arg("-p")
+        .arg("--")
         .arg("tmux #{version}")
 }
 
@@ -273,6 +282,14 @@ mod tests {
     fn layout_preflight_retains_native_version_and_error_semantics() {
         let old = TmuxVersion::parse_output(b"tmux 3.2a\n").unwrap();
         let new = TmuxVersion::parse_output(b"tmux 3.7c\n").unwrap();
+        let json = [(OsStr::new(r#"{"V":2,"L":[]}"#), 1)];
+        let pending = prepare(json).unwrap();
+        assert_eq!(
+            resolve(&pending, &new).unwrap_err().kind(),
+            crate::ErrorKind::UnsupportedVersion
+        );
+        let json_capable = TmuxVersion::parse_output(b"tmux 3.8\n").unwrap();
+        resolve(&pending, &json_capable).unwrap();
         let mirrored = [(OsStr::new("main-horizontal-mirrored"), 1)];
         assert_eq!(
             resolve(&prepare(mirrored).unwrap(), &old)

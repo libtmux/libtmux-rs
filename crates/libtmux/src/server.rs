@@ -681,10 +681,11 @@ impl Server {
 
     /// Validate every planned layout before scripts or tmux mutations.
     ///
-    /// Each item pairs layout bytes with the required pane count. Checksums,
-    /// nonempty trees, unsigned fields and depth up to 256 nested groups are
-    /// checked locally. tmux owns geometry correction and pruning.
-    /// Version-sensitive names query the daemon; only a cold endpoint uses
+    /// Each item pairs layout bytes with the required pane count. Classic
+    /// layouts are checked for checksums, nonempty trees, unsigned fields and
+    /// depth up to 256 nested groups. tmux owns geometry correction and pruning.
+    /// JSON layouts require tmux 3.8; tmux validates their contents.
+    /// Version-sensitive layouts query the daemon; only a cold endpoint uses
     /// the selected client version. Unique name abbreviations are accepted.
     ///
     /// # Errors

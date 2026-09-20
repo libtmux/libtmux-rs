@@ -17,8 +17,7 @@ use super::{Op, OperationKind, Part, Plan, Scope, SplitTarget, Step, WindowTarge
 use crate::error::ListingDecodeError;
 use crate::formats::FormatCodecError;
 use crate::{
-    Command, CommandChain, Error, IdParseError, PaneId, Server, SessionId, TmuxText, Window,
-    WindowId,
+    Command, CommandChain, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId,
 };
 
 /// How an operation ended.
@@ -291,10 +290,9 @@ impl PlanResult {
 /// not build may already hold more panes than the plan can see.
 fn layouts(steps: &[Op]) -> impl Iterator<Item = (&OsStr, usize)> {
     steps.iter().enumerate().filter_map(|(step, op)| match op {
-        Op::SelectLayout(layout) => Some((
-            layout.layout.as_os_str(),
-            panes_in(&steps[..step], &layout.target),
-        )),
+        Op::SelectLayout(layout) => {
+            Some((layout.layout(), panes_in(&steps[..step], &layout.target)))
+        }
         _ => None,
     })
 }
@@ -367,7 +365,6 @@ impl Plan {
         }
         self.validate_option_scopes()?;
         self.validate_layouts(server).await?;
-        server.validate_layouts(layouts(self.steps())).await?;
         let steps = planner.steps(self);
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
@@ -510,21 +507,13 @@ impl Plan {
     ///
     /// A plan renders its own commands, so a recorded
     /// [`super::ops::SelectLayout`] reaches tmux without passing
-    /// [`Window::select_layout`]'s guard: 3.3 and 3.3a exit on a layout
+    /// [`crate::Window::select_layout`]'s guard: 3.3 and 3.3a exit on a layout
     /// value they cannot parse, taking every session on the socket with
     /// them. Checked here, alongside `validate_option_scopes`, rather than
     /// in `render`, which has no server to check a preset's version floor
     /// against. Before the first command either way.
     async fn validate_layouts(&self, server: &Server) -> Result<(), Error> {
-        for operation in self.steps() {
-            if let Op::SelectLayout(select) = operation {
-                Window::validate_saved_layout(
-                    server.capabilities().await?.tmux_version(),
-                    select.layout(),
-                )?;
-            }
-        }
-        Ok(())
+        server.validate_layouts(layouts(self.steps())).await
     }
 
     /// Lower one invocation's operations into commands.
@@ -792,34 +781,23 @@ impl Plan {
         &self,
         sender: &crate::control::ControlSender,
     ) -> Result<(), Error> {
-        if !self
-            .steps()
-            .iter()
-            .any(|op| matches!(op, Op::SelectLayout(_)))
-        {
-            return Ok(());
-        }
-        let block = sender
-            .send(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("--")
-                    .arg("tmux #{version}"),
-            )
-            .await?;
-        if let Some(error) = block.refusal_for("display-message") {
-            return Err(error);
-        }
-        let mut output = Vec::new();
-        for line in block.output() {
-            output.extend_from_slice(line.as_bytes());
-            output.push(b'\n');
-        }
-        let version = crate::TmuxVersion::parse_output(&output)?;
-        for operation in self.steps() {
-            if let Op::SelectLayout(select) = operation {
-                Window::validate_saved_layout(&version, select.layout())?;
+        let pending = crate::layout::prepare(layouts(self.steps()))?;
+        if !pending.is_empty() {
+            let block = sender.send(crate::layout::version_command()).await?;
+            if let Some(error) = block.refusal_for("display-message") {
+                return Err(error);
             }
+            let output = block
+                .output()
+                .iter()
+                .flat_map(|line| {
+                    line.as_bytes()
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(b'\n'))
+                })
+                .collect::<Vec<_>>();
+            crate::layout::resolve(&pending, &crate::TmuxVersion::parse_output(&output)?)?;
         }
         Ok(())
     }
@@ -845,8 +823,8 @@ impl Plan {
     /// tmux refuses is reported in the [`PlanResult`].
     ///
     /// Layouts are checked against the connected daemon's version before
-    /// any operation runs. Invalid or unsupported layouts return the same
-    /// errors as [`Window::select_layout`].
+    /// any operation runs. Classic layouts also require enough cells for
+    /// the panes created by preceding operations.
     ///
     /// A plan holding a [`super::ops::Pause`] fails with
     /// [`crate::ControlModeErrorKind::BlockingCommand`] before anything is
@@ -866,24 +844,6 @@ impl Plan {
             .map_err(|source| Error::InvalidPlan { source })?;
         self.refuse_pause_over_control_mode()?;
         self.validate_control_layouts(sender).await?;
-        let pending = crate::layout::prepare(layouts(self.steps()))?;
-        if !pending.is_empty() {
-            let block = sender.send(crate::layout::version_command()).await?;
-            if let Some(error) = block.refusal_for("display-message") {
-                return Err(error);
-            }
-            let output = block
-                .output()
-                .iter()
-                .flat_map(|line| {
-                    line.as_bytes()
-                        .iter()
-                        .copied()
-                        .chain(std::iter::once(b'\n'))
-                })
-                .collect::<Vec<_>>();
-            crate::layout::resolve(&pending, &crate::TmuxVersion::parse_output(&output)?)?;
-        }
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());
