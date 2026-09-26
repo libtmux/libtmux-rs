@@ -67,6 +67,13 @@ Keep workspaces in `~/.config/tmuxp/` and load them by name from anywhere:
 $ tmux-workspace load dev
 ```
 
+See what one would build -- sessions, windows, panes, directories and
+commands -- without touching tmux or running its `before_script`:
+
+```console
+$ tmux-workspace load --dry-run dev
+```
+
 Load several, attaching to the last:
 
 ```console

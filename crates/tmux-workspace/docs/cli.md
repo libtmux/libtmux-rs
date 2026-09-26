@@ -44,6 +44,12 @@ names the last session. `-a` adds the windows to the session of the pane
 `load` runs in instead of creating one, and moves the client only to a window
 that sets `focus: true`; `-d` wins over `-a`.
 
+`--dry-run` prints what `load` would build, read from the same normalized
+workspace it builds from: each session, window, layout, pane directory and
+command, and each environment variable by name only, since a pane's can hold
+the loader's own values. It asks tmux nothing and runs no `before_script`;
+under `--json` it is one document with `"status": "dry_run"`.
+
 With stdin a terminal and no `-y`, `load` asks before it switches or attaches.
 Inside tmux, for a session the document would create, it asks
 `Already inside tmux: switch (y), load detached (n), or append (a)?`; for a

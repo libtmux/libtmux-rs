@@ -40,6 +40,10 @@ const LOAD_EXAMPLES: &[Example] = &[
         "Build dev.yaml from ~/.config/tmuxp",
     ),
     example(
+        "tmux-workspace load --dry-run dev",
+        "Show the windows, panes and commands, build nothing",
+    ),
+    example(
         "tmux-workspace load -d api web",
         "Build two sessions without attaching",
     ),
@@ -665,6 +669,11 @@ fn load(declarations: &mut Declarations) -> Command {
             "no-progress",
             None,
             "Disable terminal progress; TMUXP_PROGRESS=0 also disables it",
+        ))
+        .arg(flag(
+            "dry-run",
+            None,
+            "Show what would be built, without tmux or before_script",
         ));
     if declarations.visible_only {
         return load;

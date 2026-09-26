@@ -3805,6 +3805,48 @@ async fn load_places_panes_after_the_first_in_config_order() {
     guard.shutdown().await.unwrap();
 }
 
+#[test]
+fn a_dry_run_describes_the_build_and_touches_nothing() {
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"planned", "before_script":"touch script-ran",
+            "windows":[{"window_name":"edit","layout":"main-vertical",
+                "panes":["echo $WS_SECRET","blank"]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let socket = directory.path().join("never.sock");
+    let socket = socket.to_str().unwrap();
+    let run = |mode: &[&str]| {
+        let mut arguments = mode.to_vec();
+        arguments.extend(["load", "--dry-run", "-S", socket, "workspace.json"]);
+        command_at(&arguments, directory.path())
+            .env("WS_SECRET", "hunter2")
+            .output()
+            .unwrap()
+    };
+    let human = run(&[]);
+    let machine = run(&["--json"]);
+
+    for output in [&human, &machine] {
+        assert!(output.status.success(), "{output:?}");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("hunter2"));
+    }
+    assert!(!directory.path().join("script-ran").exists());
+    assert!(!directory.path().join("never.sock").exists());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("planned"));
+    let plan: serde_json::Value = serde_json::from_slice(&machine.stdout).unwrap();
+    assert_eq!(plan["status"], "dry_run");
+    let window = &plan["sessions"][0]["windows"][0];
+    assert_eq!(window["layout"], "main-vertical");
+    assert_eq!(window["panes"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        window["panes"][0]["environment"],
+        serde_json::json!(["WS_SECRET"])
+    );
+}
+
 #[tokio::test]
 async fn a_loader_variable_reaches_the_pane_as_data_not_code() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
