@@ -29,7 +29,7 @@ include = [
 [dependencies]
 libtmux = { workspace = true, features = ["plan"] }
 thiserror.workspace = true
-yaml-rust2 = "0.11.0"
+yaml-rust2 = "0.13.0"
 clap = { version = "4.6.6", optional = true, features = ["env", "string"] }
 clap_complete = { version = "4.6.9", optional = true }
 clap_mangen = { version = "0.3.3", optional = true }
