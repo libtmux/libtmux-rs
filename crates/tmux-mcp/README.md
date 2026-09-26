@@ -618,13 +618,20 @@ choosing another action.
 ## Using it from Rust
 
 The tool surface is a type, so a program can freeze a `Selection` in code or
-serve it over a transport other than stdio, or call a tool directly. Four
+serve it over a transport other than stdio, or call a tool directly. Five
 runnable examples ship with the crate. `run_and_wait` runs a command and reads
 its real exit status, then waits for a line a background job prints, through
 the same tools a client calls:
 
 ```console
 $ cargo run --example run_and_wait
+```
+
+`follow` pushes 200 lines through a 24-row pane between two `capture_since`
+calls, and the second call returns all 200:
+
+```console
+$ cargo run --example follow
 ```
 
 ```console

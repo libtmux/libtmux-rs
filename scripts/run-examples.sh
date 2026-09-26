@@ -49,6 +49,7 @@ tmux-mcp | budget   |                                               |    |      
 tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
 tmux-mcp | run_and_wait |                                           |    |               | waited: Matched
+tmux-mcp | follow   |                                               |    |               | saw 200 of 200 lines, missed: false
 "
 
 rows() {
