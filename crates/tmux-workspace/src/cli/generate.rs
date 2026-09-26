@@ -156,6 +156,7 @@ fn render(
         let shell = format
             .parse::<clap_complete::Shell>()
             .map_err(CliError::usage)?;
+        let command = &mut args::completion_command();
         if shell == clap_complete::Shell::Bash {
             let mut buffer = Vec::new();
             clap_complete::generate(shell, command, "tmux-workspace", &mut buffer);

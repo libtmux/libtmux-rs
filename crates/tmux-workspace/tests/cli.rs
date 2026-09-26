@@ -1295,6 +1295,8 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
             .unwrap()
             .contains("Reject legacy 88-color mode")
     );
+    // Accepted only to be refused, so offered nowhere a user picks from.
+    assert_eq!(colors["hidden"], true);
     assert_eq!(
         commands.iter().find(|c| c["name"] == "import").unwrap()["subcommands"]
             .as_array()
@@ -1306,9 +1308,7 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
         let output = cli(&["--generate", format]);
         assert!(output.status.success(), "{format}: {output:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("tmux-workspace"));
-        if format != "man" {
-            assert!(String::from_utf8_lossy(&output.stdout).contains("88-colors"));
-        }
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("88-colors"));
     }
 }
 
