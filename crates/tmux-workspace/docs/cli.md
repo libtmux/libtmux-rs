@@ -34,7 +34,11 @@ values.
 `search` matches regular expressions against those same files. A term written
 `FIELD:PATTERN` is limited to one field -- `name`, `session` (`s`), `path`
 (`p`), `window` (`w`) or `pane` -- and terms combine with AND unless `--any`
-is given.
+is given. Both workspaces whose session is `api` and has a `logs` window:
+
+```console
+$ tmux-workspace search session:api window:logs
+```
 
 ## Loading
 
@@ -48,7 +52,11 @@ that sets `focus: true`; `-d` wins over `-a`.
 workspace it builds from: each session, window, layout, pane directory and
 command, and each environment variable by name only, since a pane's can hold
 the loader's own values. It asks tmux nothing and runs no `before_script`;
-under `--json` it is one document with `"status": "dry_run"`.
+under `--json` it is one document with `"status": "dry_run"`:
+
+```console
+$ tmux-workspace --json load --dry-run dev
+```
 
 With stdin a terminal and no `-y`, `load` asks before it switches or attaches.
 Inside tmux, for a session the document would create, it asks
@@ -187,7 +195,12 @@ stays empty:
 `script-completed`. An interrupted load reports the inputs it completed and
 the session, window and pane IDs tmux acknowledged; it does not roll them
 back, and after a mutation has begun `outcome_unknown: true` warns that more
-may have applied.
+may have applied. A script that builds sessions reads the events as they
+happen:
+
+```console
+$ tmux-workspace --ndjson load -d api web
+```
 
 ## Logging
 
@@ -196,6 +209,10 @@ owner-only; symlinks and other invalid destinations are refused before tmux
 runs. `--log-level info` adds load events and `debug` adds child output, up
 to 1 MiB per stream. The default is `warning`, and the level never changes an
 exit status.
+
+```console
+$ tmux-workspace load -d --log-file load.log --log-level debug dev
+```
 
 ## Generating completions and the manual
 
