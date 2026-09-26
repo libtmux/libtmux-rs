@@ -337,6 +337,14 @@ example-tables:
     python3 -m unittest scripts/test_check_example_tables.py
     python3 scripts/check-example-tables.py README.md
 
+# A Contents list is a copy of a document's headings, and a copy drifts: a
+# renamed section leaves the list rendering a link to an anchor that is gone.
+#
+# Report Contents lists that disagree with their document's sections
+[group: 'docs']
+doc-contents:
+    python3 scripts/check-contents.py crates/libtmux/docs/design.md crates/libtmux/docs/parity.md
+
 # rustdoc supplies a doctest's `fn main`, so a block whose body is only a
 # hidden function definition compiles it and then runs an empty main. Every
 # assertion inside is dead, and nothing says so: it renders like any other
@@ -400,7 +408,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test doctest examples example-tables fixture-root docs doc-blocks doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test doctest examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

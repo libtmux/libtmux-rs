@@ -228,9 +228,10 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `doctest`, `examples`, `fixture-root`, `docs`,
-`doc-blocks`, `parity-claims`, `format-coverage-check`, `features`, `deny`,
-`msrv`, `package`.
+`compat-supervisor-test`, `doctest`, `examples`, `example-tables`,
+`fixture-root`, `docs`, `doc-blocks`, `doc-contents`, `doctests-run`,
+`parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`,
+`package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.
@@ -308,6 +309,10 @@ elsewhere does not fail somebody else's gate.
 comment opens mid-sentence or sits below a non-doc attribute — the shape a
 split leaves when it lands on a sentence boundary. See
 [`WRITING.md`](WRITING.md) for the rule this enforces.
+
+**A Contents list matches its document.** `design.md` and `parity.md` open
+with one, and `just doc-contents` fails when it and the `##` sections
+disagree in title, order or anchor.
 
 **The format catalog is measured against tmux's own source.**
 `crates/libtmux/docs/format-coverage.txt` records every format name tmux

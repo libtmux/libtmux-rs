@@ -1,19 +1,42 @@
 # libtmux Rust crate design
 
+## Contents
+
+- [Outcome](#outcome)
+- [Goals](#goals)
+- [Non-goals](#non-goals)
+- [Compatibility contract](#compatibility-contract)
+- [Evaluated architectures](#evaluated-architectures)
+- [Spike findings](#spike-findings)
+- [Architecture](#architecture)
+- [Control mode](#control-mode)
+- [Module and component map](#module-and-component-map)
+- [Test architecture](#test-architecture)
+- [Lint and dependency gates](#lint-and-dependency-gates)
+- [Compatibility lanes](#compatibility-lanes)
+- [What downstream can construct](#what-downstream-can-construct)
+- [Classifying a failure](#classifying-a-failure)
+- [Cost of gathering the hierarchy](#cost-of-gathering-the-hierarchy)
+- [Toolchain and packaging](#toolchain-and-packaging)
+- [Delivery sequence](#delivery-sequence)
+- [Acceptance criteria](#acceptance-criteria)
+
 ## Outcome
 
-`rs/` is a Cargo workspace whose members all live under `rs/crates/`:
+The repository is a Cargo workspace whose members live under `crates/`, and
+all four are published:
 
-| Crate            | Published | What it is                                    |
-| ---------------- | --------- | --------------------------------------------- |
-| `libtmux`        | yes       | The async tmux client and object model         |
-| `libtmux-macros` | yes       | `#[derive(Filterable)]`, for downstream structs |
-| `tmux-mcp`       | no        | A Model Context Protocol server over `libtmux` |
-| `tmux-workspace` | no        | Builds tmux workspaces from tmuxp-style YAML   |
+| Crate            | What it is                                              |
+| ---------------- | ------------------------------------------------------- |
+| `libtmux`        | The async tmux client and object model                  |
+| `libtmux-macros` | `#[derive(Filterable)]`, for downstream structs         |
+| `tmux-mcp`       | A Model Context Protocol server over `libtmux`          |
+| `tmux-workspace` | A tmuxp-compatible command and workspace-building library |
 
-The two unpublished crates exist to exercise the public API from outside, the
-way a real consumer would. The dependency runs one way: `libtmux` knows
-nothing about either.
+`tmux-mcp` and `tmux-workspace` exist to exercise the public API from outside,
+the way a real consumer would, and are published so their dependency
+requirements are proven to resolve. The dependency runs one way: `libtmux`
+knows nothing about either.
 
 `libtmux` presents `Server`, `Session`, `Window`, `Pane`, and `Client`
 handles, hierarchy listings, refresh, options, hooks, buffers, key bindings,
@@ -28,10 +51,10 @@ documentation, and publishing. A `justfile` groups those commands so `just`
 alone lists them; it adds no build step and does not participate in the
 published crate.
 
-The first transport uses Tokio subprocesses. Command, target, result,
-capability, snapshot, and query values do not depend on that transport, so a
-future control-mode or engine-ops crate can reuse them without changing normal
-object APIs.
+The default transport runs each command as a Tokio subprocess; the
+`control-mode` feature adds a persistent control-mode client. Command, target,
+result, capability, snapshot, and query values do not depend on the transport,
+so either serves the same object APIs.
 
 ## Goals
 
