@@ -16,6 +16,21 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.13 - 2026-09-26
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.13;
+`tmux-mcp` is 0.1.0-alpha.14, because it was already at alpha.13.
+
+Take this one if you load tmuxp workspaces: `tmux-workspace` ships a binary
+behind its `cli` feature that loads, freezes and converts them, imports
+tmuxinator and teamocil files, and reports to scripts in JSON or NDJSON. A
+plan's panes now build in the order the workspace gives them -- a four-pane
+window had come out A, D, C, B -- and a window of five or more panes builds at a
+default terminal size. Layout strings are checked before they reach tmux, which
+on 3.3 and 3.3a exits its whole daemon on one it cannot parse. Two changes are
+breaking: `ServerBuilder::colors` refuses `88`, and `Workspace::from_yaml`
+refuses a `session_name` containing `:` or `.`.
+
 ### Added
 
 - `tmux-workspace` is a native binary for tmuxp workspaces: discovery, loading,
