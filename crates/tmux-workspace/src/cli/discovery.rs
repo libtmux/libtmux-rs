@@ -118,10 +118,23 @@ fn candidate(path: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// A name with no directory and no extension. tmuxp looks one up only in the
+/// workspace directory, so `load dev` means the same session from anywhere,
+/// and a `dev.yaml` that happens to sit in the current directory -- or an
+/// earlier import's output beside a tmuxinator project -- cannot stand in.
+fn is_pure_name(name: &str) -> bool {
+    let path = Path::new(name);
+    !matches!(name, "" | "." | "..") && !name.contains('/') && path.extension().is_none()
+}
+
 pub(super) fn resolve(name: &str, importer: Option<&str>) -> Result<PathBuf> {
-    let path = PathBuf::from(expand(name));
-    if let Some(found) = candidate(&path) {
-        return Ok(found.canonicalize()?);
+    let expanded = expand(name);
+    let path = PathBuf::from(&expanded);
+    let pure = is_pure_name(&expanded);
+    if !pure {
+        if let Some(found) = candidate(&path) {
+            return Ok(found.canonicalize()?);
+        }
     }
     if path.components().count() == 1 {
         let directory = match importer {
@@ -135,8 +148,17 @@ pub(super) fn resolve(name: &str, importer: Option<&str>) -> Result<PathBuf> {
                 .find(|p| p.is_dir())
                 .unwrap_or_else(|| home().join(".tmuxp")),
         };
-        if let Some(found) = candidate(&directory.join(path)) {
+        if let Some(found) = candidate(&directory.join(&path)) {
             return Ok(found.canonicalize()?);
+        }
+        if pure && candidate(&path).is_some() {
+            return Err(CliError::new(
+                "workspace_not_found",
+                format!(
+                    "{name:?} is not in {}; to use the one in this directory, write ./{name}",
+                    masked(&directory)
+                ),
+            ));
         }
     }
     Err(CliError::new(

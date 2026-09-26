@@ -585,9 +585,9 @@ fn load(declarations: &mut Declarations) -> Command {
                 "Create, reuse or append workspace sessions, then attach to or switch to \
                  the last one.\n\n\
                  A WORKSPACE is a file, a project directory holding .tmuxp.yaml, \
-                 .tmuxp.yml or .tmuxp.json, or a name looked up in the first of \
-                 $TMUXP_CONFIGDIR, $XDG_CONFIG_HOME/tmuxp (~/.config/tmuxp) and \
-                 ~/.tmuxp that exists.",
+                 .tmuxp.yml or .tmuxp.json, or a bare name looked up only in the \
+                 first of $TMUXP_CONFIGDIR, $XDG_CONFIG_HOME/tmuxp (~/.config/tmuxp) \
+                 and ~/.tmuxp that exists. Write ./dev for a file in this directory.",
             )
             .after_help(examples(LOAD_EXAMPLES)),
     )

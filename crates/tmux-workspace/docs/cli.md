@@ -15,10 +15,15 @@ $ tmux-workspace --generate man > ~/.local/share/man/man1/tmux-workspace.1
 
 - a file: `./dev.yaml`, `dev.yml`, `dev.json`;
 - a project directory holding `.tmuxp.yaml`, `.tmuxp.yml` or `.tmuxp.json`,
-  so `tmux-workspace load .` builds the current project;
-- a bare name, `dev`, looked up in the first of these directories that exists:
-  `$TMUXP_CONFIGDIR`, `$XDG_CONFIG_HOME/tmuxp` (else `~/.config/tmuxp`), and
-  `~/.tmuxp`. The extension is optional.
+  written as a path: `.`, `./api` or `api/`;
+- a bare name, `dev`, looked up only in the first of these directories that
+  exists: `$TMUXP_CONFIGDIR`, `$XDG_CONFIG_HOME/tmuxp` (else
+  `~/.config/tmuxp`), and `~/.tmuxp`.
+
+A bare name is never looked for in the current directory, as in tmuxp, so a
+`dev.yaml` that happens to be there cannot stand in for the configured one.
+Write `./dev` to mean the local file; when only a local one exists, the error
+says so.
 
 `ls` lists the project files from the current directory up to your home
 directory, then the files in that workspace directory. `--tree` groups them by
@@ -123,8 +128,8 @@ child's command line. `shell` also runs tmuxp's Python shell.
 ## Imports
 
 `import tmuxinator` and `import teamocil` convert a project into a workspace
-and validate it before printing or saving. A SOURCE is a file, or a name found
-in `$TMUXINATOR_CONFIG` (else `~/.tmuxinator`) or `~/.teamocil`. Without
+and validate it before printing or saving. A SOURCE is a file, or a bare name
+found only in `$TMUXINATOR_CONFIG` (else `~/.tmuxinator`) or `~/.teamocil`. Without
 `--save-to`, a human import offers to save beside the source; under `--json`
 it prints the document instead.
 

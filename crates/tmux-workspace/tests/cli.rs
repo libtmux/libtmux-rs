@@ -1499,6 +1499,38 @@ fn empty_discovery_has_stable_json_and_ndjson_shapes() {
 }
 
 #[test]
+fn a_bare_name_means_the_workspace_directory_not_the_current_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir_all(root.join(".tmuxp")).unwrap();
+    std::fs::create_dir_all(root.join(".tmuxinator")).unwrap();
+    std::fs::write(root.join(".tmuxp/dev.yaml"), "session_name: configured\n").unwrap();
+    std::fs::write(root.join("dev.yaml"), "session_name: local\n").unwrap();
+    std::fs::write(
+        root.join(".tmuxinator/api.yml"),
+        "name: api\nwindows:\n  - logs: tail -f /dev/null\n",
+    )
+    .unwrap();
+    // An earlier import's output, saved beside where it is run again.
+    std::fs::write(root.join("api.yaml"), "session_name: api\n").unwrap();
+    let session = |arguments: &[&str]| {
+        let output = at(arguments, root);
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["session_name"].clone()
+    };
+
+    assert_eq!(session(&["--json", "convert", "dev"]), "configured");
+    assert_eq!(session(&["--json", "convert", "./dev"]), "local");
+    assert_eq!(session(&["--json", "import", "tmuxinator", "api"]), "api");
+
+    std::fs::remove_file(root.join(".tmuxp/dev.yaml")).unwrap();
+    let output = at(&["--json", "convert", "dev"], root);
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["code"], "workspace_not_found");
+    assert!(error["message"].as_str().unwrap().contains("write ./dev"));
+}
+
+#[test]
 fn conversion_preserves_extension_values_and_protects_existing_files() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("project.yaml"), "session_name: demo\nwindows: []\ncustom:\n  n: 42\n  yes: true\n  values: [null, 'a\\nb', '雪']\n").unwrap();
