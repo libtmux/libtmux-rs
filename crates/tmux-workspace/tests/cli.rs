@@ -1106,6 +1106,38 @@ async fn empty_tmux_context_allows_freezing_an_isolated_default_endpoint() {
 }
 
 #[tokio::test]
+async fn freeze_defaults_to_this_panes_session_only_on_its_own_server() {
+    let here = libtmux::test::TestServer::new().await.unwrap();
+    let elsewhere = libtmux::test::TestServer::new().await.unwrap();
+    let mine = here.session("mine").await.unwrap();
+    let pane = current_pane(&mine).await;
+    // The same pane ID names a pane of another session over there.
+    let decoy = elsewhere.session("decoy").await.unwrap();
+    elsewhere.session("second").await.unwrap();
+    assert_eq!(current_pane(&decoy).await, pane, "the IDs have to collide");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let freeze = |guard: &libtmux::test::TestServer| {
+        let socket = guard.socket_path().to_str().unwrap().to_owned();
+        at_pane(
+            &["freeze", "-S", &socket, "--json"],
+            directory.path(),
+            Some((&here, &pane)),
+        )
+    };
+    let own = freeze(&here);
+    let other = freeze(&elsewhere);
+    here.shutdown().await.unwrap();
+    elsewhere.shutdown().await.unwrap();
+
+    assert!(own.status.success(), "{own:?}");
+    let captured: serde_json::Value = serde_json::from_slice(&own.stdout).unwrap();
+    assert_eq!(captured["session_name"], "mine");
+    assert_eq!(other.status.code(), Some(1), "{other:?}");
+    let error: serde_json::Value = serde_json::from_slice(&other.stderr).unwrap();
+    assert_eq!(error["code"], "session_not_found", "{other:?}");
+}
+
+#[tokio::test]
 async fn freeze_never_derives_a_destination_from_a_session_name() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     // tmux rewrites `.` and `:` in a session name on some releases and keeps

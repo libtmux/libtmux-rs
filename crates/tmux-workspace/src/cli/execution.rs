@@ -176,18 +176,8 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
             )
         });
     }
-    if let Ok(pane) = std::env::var("TMUX_PANE") {
-        let result = server
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("-t")
-                    .arg(pane)
-                    .arg("#{session_name}"),
-            )
-            .await?;
-        let name = result.stdout_lossy().trim().to_owned();
-        if let Some(session) = server.session(name).await? {
+    if let Some(id) = invoking_session(server).await {
+        if let Some(session) = server.session_by_id(&id).await? {
             return Ok(session);
         }
     }
@@ -647,6 +637,27 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
         (pid > 0 && started > 0 && fields.next().is_none()).then_some((pid, started, session))
     })();
     parsed.ok_or_else(|| append_context("target has no live daemon and session identity"))
+}
+
+/// The session of the pane this command runs in, when `server` is that
+/// pane's server.
+///
+/// `TMUX_PANE` is only an ID, and the same ID names some other pane on every
+/// other server, so it counts only once `TMUX` and `server` agree on the
+/// daemon and on the pane's session. Aimed elsewhere, there is no current
+/// session to default to, which is not an error.
+async fn invoking_session(server: &Server) -> Option<libtmux::SessionId> {
+    let pane = std::env::var("TMUX_PANE").ok()?;
+    let context = std::env::var("TMUX").ok()?;
+    let (socket, pid) = tmux_context(&context).ok()?;
+    let inherited_server = Server::builder()
+        .socket_path(socket)
+        .tmux_executable(server.tmux_executable())
+        .build()
+        .ok()?;
+    let inherited = target_context(&inherited_server, &pane).await.ok()?;
+    let selected = target_context(server, &pane).await.ok()?;
+    (inherited.0 == pid && inherited == selected).then_some(selected.2)
 }
 
 async fn append_target(server: &Server) -> Result<AppendTarget> {
