@@ -48,6 +48,7 @@ libtmux  | recover  | test-support                                  |    |      
 tmux-mcp | budget   |                                               |    |               | of it output schemas
 tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
+tmux-mcp | run_and_wait |                                           |    |               | waited: Matched
 "
 
 rows() {

@@ -23,6 +23,16 @@ impl From<ErrorData> for ToolError {
     }
 }
 
+/// The message a model would read, so a direct caller can propagate a tool
+/// failure with `?` like any other error.
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0.message)
+    }
+}
+
+impl std::error::Error for ToolError {}
+
 impl ToolError {
     /// Recover the underlying [`ErrorData`].
     ///
