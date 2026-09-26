@@ -224,8 +224,9 @@ jobs:
       - name: Compare with the previous run
         run: python3 scripts/bench-regressions.py target/criterion
 
+      # Only a run that passed becomes the baseline. Saving a regressed one
+      # would make it next week's normal, and the regression would fail once.
       - name: Keep this run for the next
-        if: always()
         uses: actions/cache/save@v6
         with:
           path: target/criterion
