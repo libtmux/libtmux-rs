@@ -64,6 +64,14 @@ libtmux = { workspace = true, features = ["control-mode", "derive", "test-suppor
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
+# `cargo binstall tmux-workspace` fetches the release's prebuilt archive for the host,
+# built by .github/workflows/binaries.yml, and builds from source when the
+# release carries none.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }@v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

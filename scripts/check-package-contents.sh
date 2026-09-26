@@ -123,7 +123,7 @@ done
 # number there sends every reader of the new release to the old one, and no
 # amount of fixing it afterwards reaches them without another release.
 # Print `crate version` for every version a document tells a reader to use:
-# a manifest line, `cargo add crate@version`, and `cargo install crate
+# a manifest line, `cargo add crate@version`, and `cargo [b]install crate
 # --version version`, the last read across `\` continuations because an
 # install command is the one most often split over lines.
 documented_versions() {
@@ -133,7 +133,7 @@ documented_versions() {
         print "$1 $2\n" while /$crate\s*=\s*(?:\{[^}]*version\s*=\s*)?"([^"]+)"/g;
         my $version = qr/([0-9A-Za-z.+-]+)/;
         print "$1 $2\n" while /cargo add $crate\@$version/g;
-        print "$1 $2\n" while /cargo install $crate[^\n]*?--version[ =]$version/g;
+        print "$1 $2\n" while /cargo b?install $crate[^\n]*?--version[ =]$version/g;
     ' "$1"
 }
 

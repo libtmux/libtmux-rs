@@ -1,0 +1,148 @@
+name: Binaries
+
+# The command, prebuilt, for someone without a Rust toolchain, and what
+# `cargo binstall` fetches through each crate's [package.metadata.binstall].
+#
+# The release workflow calls this for a tmux-workspace or tmux-mcp tag once the
+# crate is on crates.io, and the archives join that tag's GitHub release. A
+# pull request that changes how they are built runs the same builds without
+# uploading, so a target that stopped building shows up before a release does.
+on:
+  workflow_call:
+    inputs:
+      package:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/binaries.yml
+      - Cargo.lock
+      - crates/tmux-mcp/Cargo.toml
+      - crates/tmux-workspace/Cargo.toml
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.package }} ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(inputs.package && format('["{0}"]', inputs.package) || '["tmux-workspace","tmux-mcp"]') }}
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+        include:
+          # musl, so one Linux binary runs on any distribution's libc.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            native: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            native: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            native: true
+          # Cross-built on the arm64 runner, which cannot run it.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            native: false
+    steps:
+      - uses: actions/checkout@v7
+
+      # Inside the checkout, rustup reads rust-toolchain.toml, so the target is
+      # added to the pinned toolchain the gate ran, not to whatever `stable` is.
+      - name: Add the target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup target add "$TARGET"
+
+      - name: Install the musl toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        env:
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --package "$PACKAGE" --target "$TARGET"
+
+      # The archive is named for what binstall asks for:
+      # <name>-<version>-<target>.tar.gz, holding <name>-<version>-<target>/<bin>.
+      - name: Package
+        id: archive
+        env:
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VERSION" ]; then
+            VERSION="$(cargo metadata --format-version 1 --no-deps \
+              | jq -r --arg p "$PACKAGE" '.packages[] | select(.name == $p) | .version')"
+          fi
+          name="$PACKAGE-$VERSION-$TARGET"
+          mkdir "$name"
+          cp "target/$TARGET/release/$PACKAGE" "$name/"
+          cp -L "crates/$PACKAGE/README.md" "crates/$PACKAGE/LICENSE-APACHE" \
+            "crates/$PACKAGE/LICENSE-MIT" "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          printf 'name=%s\n' "$name" >> "$GITHUB_OUTPUT"
+
+      - name: Run it
+        if: matrix.native
+        env:
+          NAME: ${{ steps.archive.outputs.name }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          "$NAME/$PACKAGE" --version
+          if [ "$PACKAGE" = tmux-workspace ]; then "$NAME/$PACKAGE" load --help > /dev/null; fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.archive.outputs.name }}
+          path: ${{ steps.archive.outputs.name }}.tar.gz
+          if-no-files-found: error
+
+  upload:
+    name: attach to the release
+    if: inputs.version != ''
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Attach the archives to the tag's release.
+      contents: write
+      # Mint the OIDC token the attestation is signed with, and persist it.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: archives
+          merge-multiple: true
+
+      - uses: actions/attest@v4
+        with:
+          subject-path: archives/*.tar.gz
+
+      - name: Attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.package }}@v${{ inputs.version }}
+        run: gh release upload "$TAG" archives/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber

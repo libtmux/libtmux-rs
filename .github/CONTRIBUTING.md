@@ -492,6 +492,14 @@ attests it, publishes, and attaches the `.crate` to a GitHub release. It runs
 the gate rather than trusting the tag because a crates.io version is
 immutable: it is the one build that cannot be taken back.
 
+For `tmux-workspace` and `tmux-mcp` it then builds the command for Linux
+(musl, x86_64 and aarch64) and macOS (arm64 and x86_64), attests the archives
+and attaches them to the same release, through `binaries.yml`. `cargo
+binstall` finds them by the `pkg-url` in each crate's
+`[package.metadata.binstall]`, so the archive names and that template change
+together. A pull request touching either manifest, the lockfile or the
+workflow builds all eight without uploading.
+
 **Provenance is attached to the release, not to the registry.** crates.io does
 not host or display build attestations yet, and `cargo` does not verify them,
 so `actions/attest` signs the packaged `.crate` files and the attestation

@@ -65,6 +65,9 @@ jobs:
     name: crates.io
     needs: verify
     runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.target.outputs.package }}
+      version: ${{ steps.target.outputs.version }}
     timeout-minutes: 45
     # Trusted publishing names an environment as well as a workflow, so this is
     # load-bearing rather than decorative: a workflow running outside it cannot
@@ -122,9 +125,11 @@ jobs:
             exit 1
           fi
 
-          printf 'package=%s\n' "$package" >> "$GITHUB_OUTPUT"
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'crate_file=target/package/%s-%s.crate\n' "$package" "$version" >> "$GITHUB_OUTPUT"
+          {
+            printf 'package=%s\n' "$package"
+            printf 'version=%s\n' "$version"
+            printf 'crate_file=target/package/%s-%s.crate\n' "$package" "$version"
+          } >> "$GITHUB_OUTPUT"
 
       # Package first, so the artifact that gets attested is built once and is
       # the one a reader can check.
@@ -177,3 +182,18 @@ jobs:
               --verify-tag \
               "$CRATE_FILE"
           fi
+
+  # The two crates with a command also ship it prebuilt, for anyone without a
+  # Rust toolchain and for `cargo binstall`. After publishing, so a release
+  # never offers a binary for a version crates.io refused.
+  binaries:
+    needs: publish
+    if: contains(fromJSON('["tmux-workspace","tmux-mcp"]'), needs.publish.outputs.package)
+    uses: ./.github/workflows/binaries.yml
+    with:
+      package: ${{ needs.publish.outputs.package }}
+      version: ${{ needs.publish.outputs.version }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write

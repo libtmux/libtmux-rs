@@ -18,6 +18,13 @@ $ cargo install tmux-workspace \
 ```
 
 It needs tmux 3.2a or newer on `PATH`, and Rust 1.85 to build.
+[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
+prebuilt binary for Linux or macOS when the release carries one, and builds
+from source when it does not:
+
+```console
+$ cargo binstall tmux-workspace --version 0.1.0-alpha.13
+```
 
 ## Load a session
 
