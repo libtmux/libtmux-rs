@@ -3806,6 +3806,52 @@ async fn load_places_panes_after_the_first_in_config_order() {
 }
 
 #[tokio::test]
+async fn a_loader_variable_reaches_the_pane_as_data_not_code() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"values","windows":[{"panes":[
+            // Unquoted, as it is usually written: a value pasted into the
+            // text would end the command at its `;`.
+            "echo $WS_VALUE > value; touch done",
+            {"shell_command":["echo $WS_VALUE > document; touch documented"],
+                "environment":{"WS_VALUE":"from the document"}}
+        ]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let socket = guard.socket_path().to_str().unwrap();
+    let output = command_at(
+        &["load", "-d", "-S", socket, "workspace.json"],
+        directory.path(),
+    )
+    .env("WS_VALUE", "safe; touch pwned")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let [done, documented] = ["done", "documented"].map(|name| directory.path().join(name));
+    let ran = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
+        done.exists() && documented.exists()
+    })
+    .await;
+    guard.shutdown().await.unwrap();
+
+    assert!(ran.is_ok(), "the pane command never finished");
+    let value = std::fs::read_to_string(directory.path().join("value")).unwrap();
+    assert_eq!(value, "safe; touch pwned\n");
+    assert!(
+        !directory.path().join("pwned").exists(),
+        "the value ran as a command"
+    );
+    let document = std::fs::read_to_string(directory.path().join("document")).unwrap();
+    assert_eq!(
+        document, "from the document\n",
+        "the document's own value wins"
+    );
+}
+
+#[tokio::test]
 async fn ndjson_load_emits_completion_events_with_tmux_ids() {
     // A streaming consumer needs to know when a pane or window finishes,
     // and pane-created needs ids to correlate without a second lookup.

@@ -11,6 +11,21 @@ pub(super) fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
+/// The variables `text` names as `$NAME` or `${NAME...}`, for a shell to
+/// expand. A braced form counts by its leading name, as in `${NAME:-default}`.
+pub(super) fn referenced(text: &str) -> impl Iterator<Item = &str> {
+    text.match_indices('$').filter_map(|(index, _)| {
+        let tail = &text[index + 1..];
+        let tail = tail.strip_prefix('{').unwrap_or(tail);
+        let end = tail
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .unwrap_or(tail.len());
+        let name = &tail[..end];
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            .then_some(name)
+    })
+}
+
 pub(super) fn expand(text: &str) -> String {
     let mut text = if text == "~" {
         home().to_string_lossy().into_owned()

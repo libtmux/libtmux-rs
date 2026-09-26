@@ -86,6 +86,14 @@ An append that fails names the windows it kept.
   pane separators in a target.
 - `config` and `socket_name` in a document are refused; use `-f`, `-L` or
   `-S`.
+- `~` and `$NAME` expand from the loader's environment in names, start
+  directories, options, environment values and `before_script`. In a command
+  or a `shell` they are left for the pane's shell, and the loader's value of
+  each variable named is added to that pane's environment unless the document
+  sets it. tmuxp pastes the value into the command instead, so a value
+  holding `;` or `$(...)` runs as a command of its own; here it stays data.
+  Two consequences: `'$NAME'` in single quotes stays literal, and `$PWD` is
+  the pane's directory, which the shell sets itself.
 
 ### Pane readiness
 
@@ -216,6 +224,6 @@ guaranteed to mean the same thing through the other.
 | No `windows`, or an empty list | keeps the window tmux made | refused |
 | A pane's `environment` | merged with the window's | replaces the window's |
 | `window_shell` | the window's creation command only | the default shell for every pane in the window |
-| `~` and `$VAR` in shell commands | retained for the shell | expanded against the loader environment |
+| `$VAR` in shell commands | retained for the shell | retained for the shell, with the loader's value in the pane's environment |
 | YAML merge keys (`<<:`) | not resolved | resolved |
 | `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |

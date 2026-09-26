@@ -179,6 +179,9 @@ project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
 - A window that names no `layout` is tiled rather than stacked.
 - A `session_name` containing `:` or `.` is refused: tmux reads those as
   window and pane separators.
+- `$VAR` in a command is expanded by the pane's shell, with your value passed
+  to it, rather than pasted into the command text: a value holding `;` stays
+  a value.
 - `freeze` saves only where `-o` says, or prints with `--json`.
 - `plugins` and custom `workspace_builder`s run through tmuxp itself, so they
   need tmuxp 1.74 installed; everything else is native.
