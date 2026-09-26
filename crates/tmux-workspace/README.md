@@ -111,14 +111,16 @@ Convert between YAML and JSON; it shows the destination and asks first:
 $ tmux-workspace convert dev.yaml
 ```
 
-Import a tmuxinator project, or a teamocil layout:
+Import a tmuxinator project or a teamocil layout. It asks, then saves it
+where `load` finds it by name -- here `~/.config/tmuxp/api.yaml`, so
+`tmux-workspace load api` builds it next:
 
 ```console
-$ tmux-workspace import tmuxinator -y api --save-to ~/.config/tmuxp/api.yaml
+$ tmux-workspace import tmuxinator api
 ```
 
 ```console
-$ tmux-workspace import teamocil -y dev --save-to ~/.config/tmuxp/dev.yaml
+$ tmux-workspace import teamocil dev
 ```
 
 Open a workspace in `$EDITOR`:

@@ -129,9 +129,10 @@ child's command line. `shell` also runs tmuxp's Python shell.
 
 `import tmuxinator` and `import teamocil` convert a project into a workspace
 and validate it before printing or saving. A SOURCE is a file, or a bare name
-found only in `$TMUXINATOR_CONFIG` (else `~/.tmuxinator`) or `~/.teamocil`. Without
-`--save-to`, a human import offers to save beside the source; under `--json`
-it prints the document instead.
+found only in `$TMUXINATOR_CONFIG` (else `~/.tmuxinator`) or `~/.teamocil`.
+Without `--save-to`, a human import asks, then saves `<name>.yaml` in the
+workspace directory, creating it, so `load <name>` finds it next. Under
+`--json` it prints the document instead.
 
 tmuxinator imports keep ordered windows and panes, directories, layouts and
 command arrays. `pre_window` lists keep their `; ` grouping and per-window

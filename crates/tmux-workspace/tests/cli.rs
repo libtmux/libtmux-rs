@@ -1568,6 +1568,30 @@ fn a_bare_name_means_the_workspace_directory_not_the_current_one() {
 }
 
 #[test]
+fn an_import_is_saved_where_load_finds_it_by_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir_all(root.join(".tmuxinator")).unwrap();
+    std::fs::write(
+        root.join(".tmuxinator/api.yml"),
+        "name: api\nwindows:\n  - logs: tail -f /dev/null\n",
+    )
+    .unwrap();
+    assert!(
+        !root.join(".tmuxp").exists(),
+        "the workspace directory is made"
+    );
+
+    let output = at(&["import", "tmuxinator", "-y", "api"], root);
+    assert!(output.status.success(), "{output:?}");
+    assert!(root.join(".tmuxp/api.yaml").is_file());
+    assert!(!root.join(".tmuxinator/api.yaml").exists());
+    let output = at(&["--json", "convert", "api"], root);
+    let loaded: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(loaded["session_name"], "api", "{output:?}");
+}
+
+#[test]
 fn conversion_preserves_extension_values_and_protects_existing_files() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("project.yaml"), "session_name: demo\nwindows: []\ncustom:\n  n: 42\n  yes: true\n  values: [null, 'a\\nb', '雪']\n").unwrap();

@@ -273,10 +273,17 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
         },
         String::as_str,
     );
-    let destination = options
+    let explicit = options
         .get_one::<String>("save-to")
-        .map(std::path::PathBuf::from)
-        .or_else(|| (!report.machine()).then(|| source.with_extension(format)));
+        .map(std::path::PathBuf::from);
+    // An import is a new workspace, so by default it goes where `load <name>`
+    // looks for it; a conversion stays beside its source.
+    let default = || match (importer, source.file_stem()) {
+        (Some(_), Some(stem)) => discovery::workspace_dir().join(stem).with_extension(format),
+        _ => source.with_extension(format),
+    };
+    let defaulted = explicit.is_none() && !report.machine();
+    let destination = explicit.or_else(|| defaulted.then(default));
     if let Some(path) = destination {
         // Declining is not cancellation: it is a normal outcome, exit 0,
         // that changed nothing, the same as answering no to load's "already
@@ -286,6 +293,11 @@ fn convert(options: &clap::ArgMatches, importer: Option<&str>, report: &Reporter
             && !confirm(&format!("Save {}?", path.display()))?
         {
             return report.line("warning", "Not saved", &discovery::masked(&path));
+        }
+        if defaulted {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
         }
         document::save(&path, &value, format, options.get_flag("force"))?;
         if report.machine() {

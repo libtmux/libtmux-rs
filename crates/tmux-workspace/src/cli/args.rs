@@ -90,8 +90,12 @@ const EDIT_EXAMPLES: &[Example] = &[example(
 
 const TMUXINATOR_EXAMPLES: &[Example] = &[
     example(
+        "tmux-workspace import tmuxinator api",
+        "Save ~/.tmuxinator/api.yml into ~/.config/tmuxp, asking first",
+    ),
+    example(
         "tmux-workspace import tmuxinator -y api --save-to api.yaml",
-        "Convert ~/.tmuxinator/api.yml, save api.yaml",
+        "Save it as ./api.yaml without asking",
     ),
     example(
         "tmux-workspace --json import tmuxinator api",
@@ -99,10 +103,16 @@ const TMUXINATOR_EXAMPLES: &[Example] = &[
     ),
 ];
 
-const TEAMOCIL_EXAMPLES: &[Example] = &[example(
-    "tmux-workspace import teamocil -y dev --save-to dev.yaml",
-    "Convert ~/.teamocil/dev.yml and save it",
-)];
+const TEAMOCIL_EXAMPLES: &[Example] = &[
+    example(
+        "tmux-workspace import teamocil dev",
+        "Save ~/.teamocil/dev.yml into ~/.config/tmuxp, asking first",
+    ),
+    example(
+        "tmux-workspace import teamocil -y dev --save-to dev.yaml",
+        "Save it as ./dev.yaml without asking",
+    ),
+];
 
 const LS_EXAMPLES: &[Example] = &[
     example(

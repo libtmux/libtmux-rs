@@ -64,6 +64,18 @@ pub(super) fn masked(path: &Path) -> String {
     )
 }
 
+/// Where a new workspace belongs: the first directory `load <name>` searches
+/// that exists, else `$TMUXP_CONFIGDIR` when set, else
+/// `$XDG_CONFIG_HOME/tmuxp`. Saving there creates it.
+pub(super) fn workspace_dir() -> PathBuf {
+    let dirs = global_dirs();
+    dirs.iter()
+        .find(|path| path.is_dir())
+        .or_else(|| dirs.first())
+        .cloned()
+        .unwrap_or_else(|| home().join(".tmuxp"))
+}
+
 pub(super) fn global_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(path) = std::env::var_os("TMUXP_CONFIGDIR").filter(|v| !v.is_empty()) {
