@@ -560,6 +560,50 @@ async fn liveness_and_session_lookup_answer_over_raw_bytes() {
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// No `-t` target reaches a session named with `:` or `.` the way a bare
+/// name or `-t =name` would reach any other: tmux splits the target on the
+/// separator before `=` narrows anything, so both spellings answer as
+/// though the session were not there (`docs/design.md` has the detail).
+/// `Server::session` and `Server::has_session` never ask tmux to resolve a
+/// target at all -- they list sessions and compare names as bytes -- so
+/// they find such a session regardless.
+///
+/// Only tmux 3.7a and later keeps `new-session -s my.proj` verbatim; older
+/// releases rewrite the separator out of the name and one refuses it at
+/// creation, so this skips itself rather than assume a version where the
+/// live session it needs cannot exist.
+#[tokio::test]
+async fn session_lookup_finds_a_name_no_target_could_address() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let Ok(session) = server.new_session(NewSessionOptions::new("my.proj")).await else {
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    };
+    if session.name().to_string_lossy() != "my.proj" {
+        guard.shutdown().await.expect("tmux fixture shuts down");
+        return;
+    }
+
+    assert!(
+        server
+            .has_session("my.proj")
+            .await
+            .expect("lookup succeeds"),
+        "list-and-compare should find a session no -t target can address by name",
+    );
+    assert!(
+        server
+            .session("my.proj")
+            .await
+            .expect("lookup succeeds")
+            .is_some()
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 #[tokio::test]
 async fn a_dead_server_yields_empty_leniently_and_an_error_loudly() {
     let guard = TestServer::builder().start().await.expect("tmux starts");

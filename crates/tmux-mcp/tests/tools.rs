@@ -191,6 +191,7 @@ async fn layout_input_shaped_like_a_flag_is_not_obeyed() {
         .expect_err("flag-shaped layout is refused before it reaches tmux")
         .into_error_data();
     assert_eq!(error.data.expect("classification")["kind"], "invalid_input");
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
     let after: Vec<Value> = json(tools.list_panes().await.expect("panes"))["panes"]
         .as_array()
         .unwrap()

@@ -6,6 +6,10 @@
 //! way a real consumer would. It reads the parts of a tmuxp workspace file a
 //! builder needs and reproduces them with tmux.
 //!
+//! The `tmux-workspace` command adds file services and an interactive loader.
+//! Its reader and builder handle extensions and progress reporting separately;
+//! the README lists the configuration differences from this library.
+//!
 //! ```no_run
 //! use tmux_workspace::{Workspace, WorkspaceBuilder};
 //!
@@ -174,22 +178,33 @@ impl<'server> WorkspaceBuilder<'server> {
             // A new window arrives holding exactly one pane, so the count is
             // known rather than looked up: the first configured pane is that
             // one, and the rest are splits.
-            let mut panes = vec![window.pane()];
+            //
+            // Each split targets the pane the previous one made
+            // (`SplitWindow::from_pane`): `-t <window>` always divides
+            // the active pane, which a detached split never changes.
+            let mut source = window.pane();
+            let mut panes = vec![source];
             for pane in config.panes.iter().skip(1) {
                 let directory = pane.start_directory.as_deref().or(directory);
-                let mut split = SplitWindow::new(window);
+                let mut split = SplitWindow::from_pane(source);
                 if let Some(directory) = directory {
                     split = split.start_directory(directory);
                 }
                 for (name, value) in config.environment.iter().chain(&pane.environment) {
                     split = split.environment(name.as_str(), value.as_str());
                 }
-                panes.push(plan.add(split));
+                source = plan.add(split);
+                panes.push(source);
+                // Halving each pane in turn runs out of rows before the
+                // fifth at a default terminal size; rebalancing after every
+                // split reclaims them. The window's own layout, below, still
+                // has the last say.
+                plan.add(SelectLayout::new(window, "tiled"));
             }
 
             // Layout is applied once the pane count is final, or tmux would
             // rebalance it away on the next split.
-            if let Some(layout) = config.layout.as_deref() {
+            if let Some(layout) = config.layout.as_deref().filter(|layout| !layout.is_empty()) {
                 plan.add(SelectLayout::new(window, layout));
             }
 
@@ -261,6 +276,15 @@ impl<'server> WorkspaceBuilder<'server> {
     /// Returns an error when a session of the same name exists, or when tmux
     /// refuses any step.
     pub async fn build(&self, workspace: &Workspace) -> Result<Session, BuildError> {
+        self.server
+            .validate_layouts(workspace.windows.iter().filter_map(|window| {
+                window
+                    .layout
+                    .as_deref()
+                    .filter(|layout| !layout.is_empty())
+                    .map(|layout| (std::ffi::OsStr::new(layout), window.panes.len().max(1)))
+            }))
+            .await?;
         let plan = self.plan(workspace);
         // Marked, because a workspace is mostly a creation followed by the
         // typing that decorates it, which is the shape the fold is for.

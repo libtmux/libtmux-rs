@@ -76,12 +76,19 @@ mcp_files=(
 # `docs/libtmux-macros-README.md` is a symlink to the copy that crate owns,
 # and the doctest verifying it reads that path. It has to ship, or
 # `cargo test --doc` fails for anyone using the published crate.
+#
+# `cli/bridge.py` is `include_str!`-ed into the binary at compile time, not
+# read at runtime, so a package missing it fails to build rather than to run:
+# `cargo package`'s own verification build already catches that, but only
+# after compiling most of the dependency graph first. This check fails in
+# the time a file listing takes.
 workspace_crate_files=(
     "$workspace_crate_root"/LICENSE-APACHE
     "$workspace_crate_root"/LICENSE-MIT
     "$workspace_crate_root"/README.md
     "$workspace_crate_root"/libtmux-macros-README.md
     "$workspace_crate_root"/tests/fixtures/tmuxp/*
+    "$workspace_crate_root"/src/cli/bridge.py
 )
 
 # nullglob is on, so an empty list would make every check below vacuous.

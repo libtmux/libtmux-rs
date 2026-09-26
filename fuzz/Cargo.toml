@@ -77,3 +77,10 @@ path = "fuzz_targets/text_filter.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "layout"
+path = "fuzz_targets/layout.rs"
+test = false
+doc = false
+bench = false

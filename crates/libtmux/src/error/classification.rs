@@ -94,7 +94,8 @@ impl Error {
             Self::UnsupportedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
-            Self::InvalidCommandInput { .. }
+            Self::InvalidLayout { .. }
+            | Self::InvalidCommandInput { .. }
             | Self::ServerMismatch { .. }
             | Self::OptionScopeMismatch { .. }
             | Self::OptionValueRefused { .. } => ErrorKind::InvalidInput,
@@ -171,6 +172,7 @@ impl Error {
                 ..
             } => true,
             Self::AfterEffect { .. }
+            | Self::InvalidLayout { .. }
             | Self::InvalidServerConfiguration { .. }
             | Self::InvalidVersionOutput { .. }
             | Self::UnsupportedTmuxVersion { .. }

@@ -11,6 +11,7 @@ use clap::{Args, Parser, Subcommand};
 use mcp_swap::catalog::{Client, Paths, known_clients, select_clients};
 use mcp_swap::config::{Scope, read_server};
 use mcp_swap::fs::{FsError, resolve_config_route};
+use mcp_swap::lock::TransactionLock;
 use mcp_swap::preflight::preflight;
 use mcp_swap::recovery::load_ledger;
 use mcp_swap::source::{Source, SourceOptions, prepare_source, resolve_repo_meta, source_spec};
@@ -263,7 +264,12 @@ fn use_command(paths: &Paths, clients: &[Client], args: UseArgs) -> Result<(), F
         }
         return Ok(());
     }
-    let planned_specs = planned_use_specs(paths, &selected, &request)?;
+    let planned_specs = {
+        let lock = TransactionLock::acquire(&paths.lock_dir())?;
+        let planned = planned_use_specs(paths, &selected, &request)?;
+        lock.verify()?;
+        planned
+    };
     prepare_source(args.source, &options, args.no_build)?;
     if !args.no_preflight {
         let mut checked = Vec::new();

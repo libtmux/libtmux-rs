@@ -136,6 +136,7 @@ jobs:
           - text_filter
           - list_keys
           - workspace_yaml
+          - layout
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1

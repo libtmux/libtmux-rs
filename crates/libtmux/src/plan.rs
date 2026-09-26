@@ -62,7 +62,7 @@ mod wire;
 
 pub use ops::{
     CapturePane, KillPane, KillWindow, NewSession, NewWindow, Pause, RenameWindow, SelectLayout,
-    SelectPane, SelectWindow, SendKeys, SetEnvironment, SetOption, SplitWindow,
+    SelectPane, SelectWindow, SendKeys, SetEnvironment, SetOption, SplitTarget, SplitWindow,
 };
 pub use planner::{Planner, Step, StepReason};
 pub use run::{Attribution, OperationReport, OperationValue, Outcome, PlanResult, StepOutcome};

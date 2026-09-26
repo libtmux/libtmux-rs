@@ -679,6 +679,41 @@ impl Server {
         self.core.execute(command).await
     }
 
+    /// Validate every planned layout before scripts or tmux mutations.
+    ///
+    /// Each item pairs layout bytes with the required pane count. Classic
+    /// layouts are checked for checksums, nonempty trees, unsigned fields and
+    /// depth up to 256 nested groups. tmux owns geometry correction and pruning.
+    /// JSON layouts require tmux 3.8; tmux validates their contents.
+    /// Version-sensitive layouts query the daemon; only a cold endpoint uses
+    /// the selected client version. Unique name abbreviations are accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidLayout`] for invalid syntax, ambiguous names or
+    /// insufficient pane cells, [`Error::UnsupportedCapability`] for layouts
+    /// unavailable on the daemon, or the version probe's transport/decode error.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn validate(server: &libtmux::Server) -> Result<(), libtmux::Error> {
+    /// use std::ffi::OsStr;
+    /// server.validate_layouts([(OsStr::new("even-h"), 2)]).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn validate_layouts<'a>(
+        &self,
+        layouts: impl IntoIterator<Item = (&'a OsStr, usize)>,
+    ) -> Result<(), Error> {
+        let pending = crate::layout::prepare(layouts)?;
+        if !pending.is_empty() {
+            crate::layout::resolve(&pending, &crate::layout::version(self).await?)?;
+        }
+        Ok(())
+    }
+
     /// Dispatch several commands as one `tmux a \; b` invocation.
     ///
     /// One process, one exit status, one merged stdout. tmux runs the chain up
