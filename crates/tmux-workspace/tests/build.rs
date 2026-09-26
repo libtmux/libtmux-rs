@@ -237,7 +237,8 @@ async fn building_over_an_existing_session_is_refused() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
 
-    let workspace = Workspace::from_yaml("session_name: taken").expect("configuration parses");
+    let workspace =
+        Workspace::from_yaml("session_name: taken\nwindows: []").expect("configuration parses");
     let builder = WorkspaceBuilder::new(server);
 
     builder.build(&workspace).await.expect("first build");
@@ -263,7 +264,8 @@ async fn failed_lookup_after_a_completed_build_is_a_partial_effect() {
         .await
         .expect("hook is installed");
 
-    let workspace = Workspace::from_yaml("session_name: committed").expect("configuration parses");
+    let workspace =
+        Workspace::from_yaml("session_name: committed\nwindows: []").expect("configuration parses");
     let error = WorkspaceBuilder::new(server)
         .build(&workspace)
         .await
@@ -295,6 +297,7 @@ async fn refusal_after_session_creation_is_a_partial_effect() {
 session_name: committed-refusal
 options:
   option-that-tmux-does-not-have: on
+windows: []
 ",
     )
     .expect("configuration parses");
@@ -385,6 +388,93 @@ windows:
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// `window_shell` is the default shell for every pane tmuxp's builder adds
+/// to the window, not only the one that comes with it.
+#[tokio::test]
+async fn window_shell_is_the_default_shell_for_every_pane() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: shelled
+windows:
+  - window_shell: exec sleep 300
+    panes:
+      - {}
+      - {}
+",
+    )
+    .expect("the workspace parses");
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+    let window = session.windows().await.expect("windows").remove(0);
+    let panes = window.panes().await.expect("panes");
+    assert_eq!(panes.len(), 2);
+    for (index, pane) in panes.iter().enumerate() {
+        assert_eq!(
+            pane.current_command().map(text).as_deref(),
+            Some("sleep"),
+            "pane {index} should run the window's shell too",
+        );
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The loader's value of a variable a pane's command names reaches that
+/// pane's environment, as with the `tmux-workspace` command, rather than
+/// being pasted into the command text as tmuxp does.
+#[tokio::test]
+async fn a_command_variable_reaches_the_pane_as_environment() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    // `cargo test` sets this in the test process, so it is a variable known
+    // to be inheritable without unsafely planting one of our own.
+    let value = std::env::var("CARGO_MANIFEST_DIR").expect("cargo test sets this");
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: passed-through
+windows:
+  - panes:
+      - echo got:$CARGO_MANIFEST_DIR:end; sleep 300
+",
+    )
+    .expect("the workspace parses");
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+    let window = session.windows().await.expect("windows").remove(0);
+    let pane = window.panes().await.expect("panes").remove(0);
+
+    // Joined rather than searched per line: a value this long soft-wraps
+    // across more than one row of an 80-column pane.
+    let marker = format!("got:{value}:end");
+    let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+        pane.capture().await.is_ok_and(|lines| {
+            lines
+                .iter()
+                .map(|line| line.to_string_lossy())
+                .collect::<String>()
+                .contains(marker.as_str())
+        })
+    })
+    .await;
+    assert!(printed.is_ok(), "the loader's value reached the pane");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane's own `environment` replaces the window's wholesale, as tmuxp's
+/// builder does, rather than adding to it: the first two panes below never
+/// see `WINDOW_MARKER`, and only the third, which sets none of its own,
+/// inherits the window's in full.
 #[tokio::test]
 async fn panes_start_with_the_environment_the_file_gives_them() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
@@ -398,11 +488,11 @@ windows:
     panes:
       - environment:
           PANE_MARKER: first-pane
-        shell_command: echo first:$PANE_MARKER:$WINDOW_MARKER; sleep 300
+        shell_command: echo first:$PANE_MARKER:$WINDOW_MARKER:end; sleep 300
       - environment:
           PANE_MARKER: second-pane
-        shell_command: echo second:$PANE_MARKER:$WINDOW_MARKER; sleep 300
-      - shell_command: echo third:$PANE_MARKER:$WINDOW_MARKER; sleep 300
+        shell_command: echo second:$PANE_MARKER:$WINDOW_MARKER:end; sleep 300
+      - shell_command: echo third:$PANE_MARKER:$WINDOW_MARKER:end; sleep 300
     environment:
       PANE_MARKER: window
       WINDOW_MARKER: inherited
@@ -423,10 +513,13 @@ windows:
     // tmux actually put in the process rather than what was asked for. The
     // search is for the value rather than a whole line, because the pane also
     // echoes a prompt and the command that was typed.
+    //
+    // The trailing `:end` keeps a search for the empty marker from also
+    // matching the filled-in one, since it would otherwise be a prefix of it.
     for marker in [
-        "first:first-pane:inherited",
-        "second:second-pane:inherited",
-        "third:window:inherited",
+        "first:first-pane::end",
+        "second:second-pane::end",
+        "third:window:inherited:end",
     ] {
         let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
             for pane in &panes {
@@ -474,6 +567,69 @@ windows: []
     assert_eq!(workspace.unsupported_keys, ["plugins", "before_script"]);
 }
 
+/// tmuxp refuses a document missing `windows`; a null one crashes its
+/// builder the same way, so both are refused here too.
+#[test]
+fn a_windows_key_that_is_missing_or_null_is_refused() {
+    for source in [
+        "session_name: no-windows\n",
+        "session_name: no-windows\nwindows:\n",
+    ] {
+        let Err(ConfigError::Invalid { path, reason, .. }) = Workspace::from_yaml(source) else {
+            panic!("{source:?} should have been refused");
+        };
+        assert_eq!(path, "windows");
+        assert!(reason.contains("list"), "{reason}");
+    }
+}
+
+#[test]
+fn yaml_merge_keys_resolve_with_explicit_keys_winning() {
+    let workspace = Workspace::from_yaml(
+        "
+session_name: merged
+windows:
+  - &base
+    window_name: a
+    panes: [echo a]
+  - <<: *base
+    window_name: b
+",
+    )
+    .expect("merge keys resolve");
+
+    assert_eq!(workspace.windows[1].window_name.as_deref(), Some("b"));
+    assert_eq!(
+        workspace.windows[1].panes[0].shell_commands,
+        [ShellCommand::new("echo a")],
+    );
+}
+
+/// Two sources disagree on `layout`; the first in the sequence wins, and the
+/// window's own `focus` still overrides both, wherever `<<` sat among its keys.
+#[test]
+fn yaml_merge_keys_take_the_first_source_and_yield_to_the_mappings_own_keys() {
+    let workspace = Workspace::from_yaml(
+        "
+session_name: merged
+x-a: &a
+  layout: only-a
+x-b: &b
+  layout: only-b
+  focus: true
+windows:
+  - <<: [*a, *b]
+    focus: false
+    panes: [echo hi]
+",
+    )
+    .expect("merge keys resolve");
+
+    let window = &workspace.windows[0];
+    assert_eq!(window.layout.as_deref(), Some("only-a"));
+    assert!(!window.focus, "the window's own key overrides both sources");
+}
+
 #[test]
 fn tmuxp_writes_booleans_as_bools_and_as_strings() {
     let workspace = Workspace::from_yaml(
@@ -507,6 +663,7 @@ options:
   status: true
 global_options:
   history-limit: 5000
+windows: []
 ",
     )
     .expect("configuration parses");
@@ -674,8 +831,8 @@ fn a_present_but_invalid_value_is_refused_rather_than_defaulted() {
 
 #[test]
 fn rendered_scalars_round_trip_control_and_line_separator_characters() {
-    let mut workspace =
-        Workspace::from_yaml("session_name: seed\n").expect("the seed workspace parses");
+    let mut workspace = Workspace::from_yaml("session_name: seed\nwindows: []\n")
+        .expect("the seed workspace parses");
     let controls = (0_u8..=31)
         .chain(127..=159)
         .map(char::from)
@@ -1266,7 +1423,7 @@ windows:
         "a command is the pane shell's to expand",
     );
 
-    let top = Workspace::from_yaml("session_name: s\nstart_directory: ./\n")
+    let top = Workspace::from_yaml("session_name: s\nstart_directory: ./\nwindows: []\n")
         .expect("configuration parses");
     assert_eq!(top.start_directory, Some(current));
 

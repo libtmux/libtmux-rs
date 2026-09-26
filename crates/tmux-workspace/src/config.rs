@@ -94,6 +94,44 @@ impl Problem {
     }
 }
 
+/// Resolve `<<: *anchor` and `<<: [*a, *b]` merge keys at every level, as
+/// `PyYAML`'s safe loader does. Merged keys are folded in first-source-wins
+/// order, then keys the mapping wrote itself override whatever the merge
+/// produced, regardless of where `<<` appeared among the document's own keys.
+/// A source that is not itself a mapping contributes nothing.
+fn resolve_merges(value: &Yaml) -> Yaml {
+    match value {
+        Yaml::Hash(entries) => {
+            let mut own = Vec::new();
+            let mut sources = Vec::new();
+            for (key, value) in entries {
+                if key.as_str() == Some("<<") {
+                    match value {
+                        Yaml::Array(items) => sources.extend(items.iter().map(resolve_merges)),
+                        other => sources.push(resolve_merges(other)),
+                    }
+                    continue;
+                }
+                own.push((key.clone(), resolve_merges(value)));
+            }
+            let mut merged = yaml_rust2::yaml::Hash::new();
+            for source in sources {
+                if let Yaml::Hash(fields) = source {
+                    for (key, value) in fields {
+                        merged.entry(key).or_insert(value);
+                    }
+                }
+            }
+            for (key, value) in own {
+                merged.insert(key, value);
+            }
+            Yaml::Hash(merged)
+        }
+        Yaml::Array(items) => Yaml::Array(items.iter().map(resolve_merges).collect()),
+        other => other.clone(),
+    }
+}
+
 /// One workspace: a session and the windows it should contain.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Workspace {
@@ -163,7 +201,11 @@ pub struct PaneConfig {
     /// Commands to run in the pane once it exists.
     pub shell_commands: Vec<ShellCommand>,
     /// Environment variables set for the process this pane starts.
-    pub environment: Vec<(String, String)>,
+    ///
+    /// `None` inherits the window's [`WindowConfig::environment`] wholesale;
+    /// `Some`, even an empty one, replaces it rather than adding to it, as
+    /// tmuxp does.
+    pub environment: Option<Vec<(String, String)>>,
     /// The pane's working directory.
     pub start_directory: Option<PathBuf>,
     /// Whether this pane should end up selected.
@@ -191,7 +233,7 @@ impl Default for PaneConfig {
     fn default() -> Self {
         Self {
             shell_commands: Vec::new(),
-            environment: Vec::new(),
+            environment: None,
             start_directory: None,
             focus: false,
             enter: true,
@@ -331,7 +373,7 @@ impl Workspace {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let project = tempfile::tempdir()?;
     /// let file = project.path().join(".tmuxp.yaml");
-    /// std::fs::write(&file, "session_name: project\nstart_directory: ./\n")?;
+    /// std::fs::write(&file, "session_name: project\nstart_directory: ./\nwindows: []\n")?;
     ///
     /// let workspace = Workspace::from_file(&file)?;
     /// assert_eq!(workspace.start_directory.as_deref(), Some(project.path()));
@@ -359,7 +401,8 @@ impl Workspace {
                 found: documents.len(),
             });
         };
-        Self::from_document(document, &Directories { base })
+        let document = resolve_merges(document);
+        Self::from_document(&document, &Directories { base })
             .map_err(|problem| problem.locate(source))
     }
 
@@ -377,8 +420,10 @@ impl Workspace {
             ));
         }
 
+        // tmuxp refuses a document missing `windows`; a null one would crash
+        // its builder the same way, so both are refused here too. An empty
+        // list is a list, so it keeps the window tmux made, as tmuxp does.
         let windows = match &document["windows"] {
-            Yaml::BadValue | Yaml::Null => Vec::new(),
             Yaml::Array(entries) => entries
                 .iter()
                 .enumerate()
@@ -500,7 +545,12 @@ impl PaneConfig {
 
         Ok(Self {
             shell_commands: commands(&value["shell_command"], &format!("{at}.shell_command"))?,
-            environment: pairs(&value["environment"], &format!("{at}.environment"))?,
+            // tmuxp's builder replaces the window's environment with the
+            // pane's own when the pane sets the key at all, even to an empty
+            // mapping, rather than adding to it; presence is what decides it.
+            environment: has_key(value, "environment")
+                .then(|| pairs(&value["environment"], &format!("{at}.environment")))
+                .transpose()?,
             // tmuxp does not join a pane's relative directory onto the
             // window's; only a `.` path starts from it.
             start_directory: directories.resolve(
@@ -561,6 +611,11 @@ const SESSION_KEYS: &[&str] = &[
     "suppress_history",
     "windows",
 ];
+
+/// Whether a mapping has this key at all, regardless of its value.
+fn has_key(value: &Yaml, key: &str) -> bool {
+    matches!(value, Yaml::Hash(entries) if entries.contains_key(&Yaml::String(key.to_owned())))
+}
 
 /// Collect the keys present in a mapping that this parser does not act on.
 fn unsupported(document: &Yaml, known: &[&str]) -> Vec<String> {
@@ -897,9 +952,15 @@ impl Workspace {
             2,
         );
 
-        out.push_str("windows:\n");
-        for window in &self.windows {
-            window.write_yaml(&mut out);
+        if self.windows.is_empty() {
+            // A bare `windows:` reads back as null, which this crate now
+            // refuses; an explicit empty list is what round-trips.
+            out.push_str("windows: []\n");
+        } else {
+            out.push_str("windows:\n");
+            for window in &self.windows {
+                window.write_yaml(&mut out);
+            }
         }
 
         out
@@ -1008,9 +1069,9 @@ impl PaneConfig {
         if let Some(suppress) = self.suppress_history {
             entry.key(out, &format!("suppress_history: {suppress}"));
         }
-        if !self.environment.is_empty() {
+        if let Some(environment) = &self.environment {
             entry.key(out, "environment:");
-            write_pairs(out, None, &self.environment, 10);
+            write_pairs(out, None, environment, 10);
         }
         if entry.first {
             // Nothing distinguished this pane, so it is the empty mapping a
@@ -1237,5 +1298,27 @@ mod tests {
         assert_eq!(quoted(r#"a "quote""#), r#""a \"quote\"""#);
         assert_eq!(quoted(r"back\slash"), r#""back\\slash""#);
         assert_eq!(quoted("tab\there"), "\"tab\\u0009here\"");
+    }
+
+    use super::{Directories, PaneConfig};
+
+    /// tmuxp's builder replaces the window's environment with the pane's own
+    /// when the pane sets the key at all, even to an empty mapping, rather
+    /// than adding to it: presence, not emptiness, is what decides it.
+    #[test]
+    fn pane_environment_distinguishes_absent_from_explicitly_set() {
+        let directories = Directories { base: None };
+        let pane =
+            |source| PaneConfig::from_yaml(&value(source), "windows[0]", 0, &directories, None);
+
+        assert_eq!(pane("{}").unwrap().environment, None);
+        assert_eq!(
+            pane("{environment: {}}").unwrap().environment,
+            Some(Vec::new())
+        );
+        assert_eq!(
+            pane("{environment: {FOO: bar}}").unwrap().environment,
+            Some(vec![("FOO".into(), "bar".into())]),
+        );
     }
 }

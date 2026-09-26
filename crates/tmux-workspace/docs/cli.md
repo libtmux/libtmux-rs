@@ -244,9 +244,6 @@ guaranteed to mean the same thing through the other.
 | | Library | `tmux-workspace` command |
 | --- | --- | --- |
 | An unknown key | recorded in `unsupported_keys`, the file still loads | refused, unless it starts with `x-` |
-| No `windows`, or an empty list | keeps the window tmux made | refused |
-| A pane's `environment` | merged with the window's | replaces the window's |
-| `window_shell` | the window's creation command only | the default shell for every pane in the window |
-| `$VAR` in shell commands | retained for the shell | retained for the shell, with the loader's value in the pane's environment |
-| YAML merge keys (`<<:`) | not resolved | resolved |
+| A missing or null `windows` | refused | refused |
+| An empty `windows` list | keeps the window tmux made | refused |
 | `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |

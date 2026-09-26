@@ -161,19 +161,27 @@ where tmuxp's behaviour is surprising:
 - A window that names no `layout` is tiled (an even grid). tmuxp stacks it
   instead, halving each split from the last. With no explicit `focus`, the
   last pane a window builds stays active, as tmuxp leaves it.
+- `window_shell` is the default shell for every pane in the window, not only
+  the one it comes with, as tmuxp's own builder does (`get_pane_shell`).
+- A pane's own `environment` replaces its window's, rather than adding to
+  it, as tmuxp's builder does.
+- `<<: *anchor` and `<<: [*a, *b]` merge keys resolve at every level, as
+  `PyYAML`'s safe loader does.
+- A missing or null `windows` key is refused, as tmuxp's own schema
+  validation requires; an empty list is not, and keeps the window tmux made.
 
 It differs where following tmuxp would be unsafe or impossible:
 
-- Commands are typed as written, for the pane's shell to expand. tmuxp
-  expands variables in them first, which reads a variable's value as shell
+- Commands are typed as written, for the pane's shell to expand, and the
+  loader's value of each variable a command or `window_shell` names is added
+  to that pane's environment unless the document sets it. tmuxp pastes the
+  value into the command instead, which reads a variable's value as shell
   code.
 - `~name` in a start directory is refused, not looked up; elsewhere it stays
   as written.
 - A `.` path with nothing to inherit, and a null among commands, crash
   tmuxp. Here the first starts from the file's directory and the second is
   an error naming its line.
-- `window_shell` starts the window's first pane only, and a pane's
-  `environment` adds to its window's rather than replacing it.
 
 Five of tmuxp's keys are not acted on, and are listed in `unsupported_keys`
 along with any key tmuxp does not have: `before_script`, `plugins`,
