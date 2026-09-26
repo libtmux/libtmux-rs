@@ -261,9 +261,12 @@ it under `_meta["com.git-pull.libtmux-mcp/capability"]`, holding only what the
 tool does not already carry: toolset, process reach, effect and output sets,
 the secret and untrusted-content flags, schema-keyed input literalization, any
 nested authority, and future-input amplification. Name, title, description,
-annotations, and schemas stay on the tool, and `tmux://capabilities` reports
-them all together. The native definition also classifies every input sink, but
-that validation detail is not duplicated on the wire. For example, `get_tmux_variables.names` is
+annotations, and schemas stay on the tool. `tmux://capabilities` reports each
+tool's name, title, annotations and capability row, and leaves the description
+and schemas to `tools/list`, which a client already holds: the whole report is
+about 26 KB, read by an agent that wants the socket. The native definition
+also classifies every input sink, but that validation detail is not
+duplicated on the wire. For example, `get_tmux_variables.names` is
 reported as `validated-variable-name`; it is not falsely described as escaped
 literal text.
 

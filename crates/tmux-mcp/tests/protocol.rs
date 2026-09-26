@@ -379,20 +379,22 @@ async fn capabilities_resource_reports_the_effective_surface() {
         let mut hints = serde_json::to_value(tool.annotations.as_ref().expect("hints")).unwrap();
         hints.as_object_mut().unwrap().remove("title");
         assert_eq!(row["annotations"], hints, "{} annotations", tool.name);
-        assert_eq!(row["description"].as_str(), tool.description.as_deref());
-        assert_eq!(
-            row["inputSchema"],
-            Value::Object((*tool.input_schema).clone()),
-            "{} input schema",
-            tool.name,
-        );
-        assert_eq!(
-            row["outputSchema"],
-            Value::Object((**tool.output_schema.as_ref().expect("typed output schema")).clone()),
-            "{} output schema",
-            tool.name,
-        );
+        // The description and schemas are the tool's; the client already has
+        // them from `tools/list`, and the report does not send them twice.
+        for repeated in ["description", "inputSchema", "outputSchema"] {
+            assert!(
+                row.get(repeated).is_none(),
+                "{} repeats {repeated}",
+                tool.name
+            );
+        }
     }
+    assert_eq!(report["schemaVersion"], 2);
+    assert!(
+        text.len() < 32 * 1024,
+        "the report grew to {} bytes; it is read to learn the socket",
+        text.len()
+    );
     wire.shutdown().await;
 }
 
