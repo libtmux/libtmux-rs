@@ -144,21 +144,23 @@ const DEBUG_INFO_EXAMPLES: &[Example] = &[example(
     "Print what a bug report needs",
 )];
 
-/// Every example table, for the tests.
-#[cfg(test)]
-pub(super) const ALL_EXAMPLES: &[&[Example]] = &[
-    ROOT_EXAMPLES,
-    LOAD_EXAMPLES,
-    FREEZE_EXAMPLES,
-    CONVERT_EXAMPLES,
-    EDIT_EXAMPLES,
-    TMUXINATOR_EXAMPLES,
-    TEAMOCIL_EXAMPLES,
-    LS_EXAMPLES,
-    SEARCH_EXAMPLES,
-    SHELL_EXAMPLES,
-    DEBUG_INFO_EXAMPLES,
-];
+/// The examples for the command at `path`, from the root's name down.
+pub(super) fn examples_for(path: &[&str]) -> &'static [Example] {
+    match path {
+        [_] => ROOT_EXAMPLES,
+        [_, "load"] => LOAD_EXAMPLES,
+        [_, "freeze"] => FREEZE_EXAMPLES,
+        [_, "convert"] => CONVERT_EXAMPLES,
+        [_, "edit"] => EDIT_EXAMPLES,
+        [_, "import", "tmuxinator"] => TMUXINATOR_EXAMPLES,
+        [_, "import", "teamocil"] => TEAMOCIL_EXAMPLES,
+        [_, "ls"] => LS_EXAMPLES,
+        [_, "search"] => SEARCH_EXAMPLES,
+        [_, "shell"] => SHELL_EXAMPLES,
+        [_, "debug-info"] => DEBUG_INFO_EXAMPLES,
+        _ => &[],
+    }
+}
 
 fn examples(list: &[Example]) -> String {
     let header = Styles::default().get_header().to_owned();
@@ -749,11 +751,39 @@ mod tests {
             .map_err(|error| format!("{line:?} does not parse:\n{error}"))
     }
 
+    /// Every command's path, root first.
+    fn paths(command: &Command, parent: &[String], found: &mut Vec<Vec<String>>) {
+        let mut path = parent.to_vec();
+        path.push(command.get_name().to_owned());
+        for child in command.get_subcommands() {
+            paths(child, &path, found);
+        }
+        found.push(path);
+    }
+
     #[test]
-    fn every_help_example_parses() {
-        for example in ALL_EXAMPLES.iter().copied().flatten() {
-            assert!(example.line.starts_with("tmux-workspace "));
-            parses(example.line).unwrap();
+    fn every_command_has_examples_and_every_example_parses() {
+        let mut found = Vec::new();
+        paths(&command(), &[], &mut found);
+        for path in found {
+            let path: Vec<&str> = path.iter().map(String::as_str).collect();
+            let examples = examples_for(&path);
+            // `import` only chooses an importer; its two commands have examples.
+            if path != ["tmux-workspace", "import"] {
+                assert!(!examples.is_empty(), "{path:?} has no examples");
+            }
+            for example in examples {
+                let command = path.join(" ");
+                let shown = example.line.replace("--json ", "");
+                assert!(
+                    path.len() == 1
+                        || shown == command
+                        || shown.starts_with(&format!("{command} ")),
+                    "{:?} is listed under {path:?}",
+                    example.line
+                );
+                parses(example.line).unwrap();
+            }
         }
     }
 

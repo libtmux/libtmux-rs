@@ -107,6 +107,7 @@ fn manual(command: &Command, parent: &[&str], output: &mut dyn Write) -> Result<
         man.render_synopsis_section(output)?;
         man.render_description_section(output)?;
         man.render_options_section(output)?;
+        examples(&path, ".SH", output)?;
         man.render_version_section(output)?;
     } else {
         writeln!(output, ".SH \"{}\"", path.join(" "))?;
@@ -123,12 +124,32 @@ fn manual(command: &Command, parent: &[&str], output: &mut dyn Write) -> Result<
                 output.write_all(line)?;
             }
         }
+        examples(&path, ".SS", output)?;
     }
     for child in command
         .get_subcommands()
         .filter(|child| !child.is_hide_set())
     {
         manual(child, &path, output)?;
+    }
+    Ok(())
+}
+
+/// The command's help examples as a manual section, under `heading`.
+fn examples(path: &[&str], heading: &str, output: &mut dyn Write) -> Result<()> {
+    let list = args::examples_for(path);
+    if list.is_empty() {
+        return Ok(());
+    }
+    let roff = |text: &str| text.replace('\\', "\\e").replace('-', "\\-");
+    writeln!(output, "{heading} EXAMPLES")?;
+    for example in list {
+        writeln!(
+            output,
+            ".TP\n\\fB{}\\fR\n{}",
+            roff(example.line),
+            roff(example.effect)
+        )?;
     }
     Ok(())
 }

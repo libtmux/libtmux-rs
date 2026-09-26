@@ -1308,6 +1308,11 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
         assert!(output.status.success(), "{format}: {output:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("tmux-workspace"));
         assert!(!String::from_utf8_lossy(&output.stdout).contains("88-colors"));
+        if format == "man" {
+            let manual = String::from_utf8_lossy(&output.stdout);
+            assert!(manual.contains(".SH EXAMPLES\n.TP\n\\fBtmux\\-workspace load"));
+            assert!(manual.contains(".SS EXAMPLES"));
+        }
     }
 }
 
