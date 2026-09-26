@@ -5,8 +5,9 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
-  # The fuzz lane is the only scheduled work. A parser is worth re-fuzzing
-  # because the corpus grows, not because the code changed.
+  # Fuzzing and benchmarks are the only scheduled work. A parser is worth
+  # re-fuzzing because the corpus grows, and a benchmark is compared with the
+  # previous week's, not because the code changed.
   schedule:
     - cron: "37 4 * * 1"
 
@@ -181,6 +182,54 @@ jobs:
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/
+
+  # Timing on a shared runner is too noisy to gate a pull request on, so this
+  # runs weekly against the previous run's numbers, kept in the cache, and fails
+  # only when a benchmark more than doubles: the size of an algorithmic
+  # regression, not of a noisy neighbour. Every change is in the job summary.
+  bench:
+    name: benchmarks
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux
+          tmux -V
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Restore the previous run
+        uses: actions/cache/restore@v6
+        with:
+          path: target/criterion
+          key: bench-criterion-${{ github.run_id }}
+          restore-keys: bench-criterion-
+
+      - name: Benchmark
+        run: |
+          cargo bench --locked --features test-support --bench hierarchy
+          cargo bench --locked --features test-support,control-mode --bench waits
+
+      - name: Compare with the previous run
+        run: python3 scripts/bench-regressions.py target/criterion
+
+      - name: Keep this run for the next
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: target/criterion
+          key: bench-criterion-${{ github.run_id }}
 
   # The slow lane. tmux's output and error wording change between releases, so
   # every supported one is built from source and runs the whole workspace.

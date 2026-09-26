@@ -377,6 +377,11 @@ bench *args:
 bench-waits *args:
     cargo bench --features test-support,control-mode --bench waits -- {{ args }}
 
+# Compare the last benchmark run with the one before it; fails past 2x
+[group: 'bench']
+bench-compare *args:
+    python3 scripts/bench-regressions.py target/criterion {{ args }}
+
 # Compare an installed workspace CLI binary against real tmux; pass --binary
 [group: 'bench']
 bench-cli *args:

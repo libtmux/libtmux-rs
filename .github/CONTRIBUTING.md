@@ -239,7 +239,7 @@ fails until the lockfile is committed.
 `compat-supervisor-test` exercises the Linux pidfd containment used by the
 slow compatibility lane. It skips on other Unix targets; CI runs it on Linux.
 
-Four gates are **not** in `just check` and run only in CI:
+These gates are **not** in `just check` and run only in CI:
 
 | Gate | Why it is separate |
 | --- | --- |
@@ -247,11 +247,12 @@ Four gates are **not** in `just check` and run only in CI:
 | `just example-coverage-check` | Same, and rides the same nightly build |
 | `just compat` | Builds five tmux releases from source; 90 minutes |
 | `just fuzz <target>` | Needs nightly and a sanitizer; runs weekly |
+| `just bench`, `just bench-waits`, `just bench-compare` | Timing on a shared runner; runs weekly against the previous week, failing past 2x |
 
 CI also runs the suite on macOS, but only on `master` or manual dispatch: a
 macOS runner bills at ten times a Linux one and the lints are
-platform-independent. On a pull request, `tests on macOS` and `fuzz parsers`
-report as skipping. That is the design, not a failure.
+platform-independent. On a pull request, `tests on macOS`, `fuzz parsers`
+and `benchmarks` report as skipping. That is the design, not a failure.
 
 `just parity-claims` fails when a row of `parity.md` marked `implemented` or
 `verified` names no caller-reachable Rust path, or puts an associated item on
