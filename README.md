@@ -43,7 +43,7 @@ You may be looking for:
 | Ask "which pane/window/session matches X?" | [`libtmux`](crates/libtmux) query layer, below |
 | Let an AI agent read and drive tmux | [`tmux-mcp`](crates/tmux-mcp) |
 | Filter *your own* structs with the same grammar | [`libtmux-macros`](crates/libtmux-macros) |
-| Build a workspace from a tmuxp-style YAML file | [`tmux-workspace`](crates/tmux-workspace) |
+| Load tmuxp workspaces from the command line, or build them from Rust | [`tmux-workspace`](crates/tmux-workspace) |
 
 Not for you if you need Windows without WSL — tmux does not run there — or a
 synchronous-first API. Blocking callers get a runtime, not a mirrored API.
@@ -224,6 +224,25 @@ evidence over a single process.
 
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
 has the behavior table, the how-to-turn-it-on table, and the named presets.
+
+## Load workspaces from YAML
+
+[`tmux-workspace`](crates/tmux-workspace) is a native tmuxp: it loads tmuxp
+workspace files, freezes running sessions back into them, and imports
+tmuxinator and teamocil projects.
+
+```console
+$ cargo install tmux-workspace \
+    --version 0.1.0-alpha.13 \
+    --features cli \
+    --locked
+```
+
+```console
+$ tmux-workspace load ./dev.yaml
+```
+
+See [its README](crates/tmux-workspace/README.md) for every command.
 
 ## Drive tmux from an agent
 

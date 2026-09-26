@@ -1,37 +1,4 @@
-#![doc = include_str!("../README.md")]
-//!
-//! Build tmux workspaces from tmuxp-style YAML.
-//!
-//! This crate exists to exercise the `libtmux` public API from outside, the
-//! way a real consumer would. It reads the parts of a tmuxp workspace file a
-//! builder needs and reproduces them with tmux.
-//!
-//! The `tmux-workspace` command adds file services and an interactive loader.
-//! Its reader and builder handle extensions and progress reporting separately;
-//! the README lists the configuration differences from this library.
-//!
-//! ```no_run
-//! use tmux_workspace::{Workspace, WorkspaceBuilder};
-//!
-//! # async fn build() -> Result<(), tmux_workspace::BuildError> {
-//! let workspace = Workspace::from_yaml(
-//!     "
-//! session_name: dev
-//! windows:
-//!   - window_name: editor
-//!     panes:
-//!       - vim
-//!       - htop
-//! ",
-//! )?;
-//!
-//! let server = libtmux::Server::new()?;
-//! let session = WorkspaceBuilder::new(&server).build(&workspace).await?;
-//! assert_eq!(session.window_count(), 1);
-//! # Ok(())
-//! # }
-//! ```
-
+#![doc = include_str!("../docs/library.md")]
 #![forbid(unsafe_code)]
 
 mod config;
@@ -407,3 +374,9 @@ impl<'server> WorkspaceBuilder<'server> {
 #[cfg(doctest)]
 #[doc = include_str!("../libtmux-macros-README.md")]
 pub struct MacrosReadme;
+
+/// Compiles the README's Rust blocks. The README is the command's page on
+/// crates.io, not this crate's documentation, so it renders nowhere here.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct Readme;

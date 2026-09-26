@@ -86,6 +86,8 @@ workspace_crate_files=(
     "$workspace_crate_root"/LICENSE-APACHE
     "$workspace_crate_root"/LICENSE-MIT
     "$workspace_crate_root"/README.md
+    "$workspace_crate_root"/docs/cli.md
+    "$workspace_crate_root"/docs/library.md
     "$workspace_crate_root"/libtmux-macros-README.md
     "$workspace_crate_root"/tests/fixtures/tmuxp/*
     "$workspace_crate_root"/src/cli/bridge.py

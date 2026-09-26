@@ -17,6 +17,7 @@ include = [
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
     "/README.md",
+    "/docs/*.md",
     "/libtmux-macros-README.md",
     "/src/**/*.rs",
     "/src/cli/bridge.py",

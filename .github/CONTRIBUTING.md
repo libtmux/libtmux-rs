@@ -107,7 +107,7 @@ Doctests are a separate target and are part of the gate:
 $ just doctest
 ```
 
-Four READMEs are compiled along with them, so a Rust example on any of these
+Five pages are compiled along with them, so a Rust example on any of these
 pages is a test rather than prose:
 
 - `crates/libtmux/README.md`, by `#![doc = include_str!(…)]` at the top of
@@ -115,8 +115,11 @@ pages is a test rather than prose:
 - `README.md`, by a `#[cfg(doctest)] #[doc = include_str!(…)]` item further
   down the same file, so the front page is tested without appearing in the
   rendered documentation.
-- `crates/tmux-workspace/README.md`, by the same top-of-crate include in
-  `crates/tmux-workspace/src/lib.rs`.
+- `crates/tmux-workspace/docs/library.md`, by the same top-of-crate include
+  in `crates/tmux-workspace/src/lib.rs`: that page is the library's
+  documentation.
+- `crates/tmux-workspace/README.md`, by `Readme` in the same file. It is the
+  command's page on crates.io, so it is compiled without being rendered.
 - `crates/libtmux-macros/README.md`, by `MacrosReadme` in
   `crates/tmux-workspace/src/lib.rs`, reached through a symlink. A proc-macro
   crate cannot doctest a README that derives through it, and the example needs
