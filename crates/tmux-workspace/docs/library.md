@@ -2,8 +2,8 @@ Build tmux workspaces from [tmuxp](https://tmuxp.git-pull.com/)-style YAML,
 using [libtmux](https://docs.rs/libtmux).
 
 This is the library. The package also ships the `tmux-workspace` command, a
-native tmuxp: `cargo install tmux-workspace --version 0.1.0-alpha.13
---features cli`, and see its
+native tmuxp: `cargo install tmux-workspace --version 0.1.0-alpha.13`, and
+see its
 [README](https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md).
 The library reads tmuxp's own example files and ignores five of tmuxp's keys;
 [Reading a tmuxp file](#reading-a-tmuxp-file) names them and says where the
@@ -186,8 +186,11 @@ lists.
 
 ## Install
 
+The command is a default feature; a library dependent leaves it, and clap
+with it, out:
+
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.13
+$ cargo add tmux-workspace@0.1.0-alpha.13 --no-default-features
 ```
 
 <details>
@@ -195,7 +198,7 @@ $ cargo add tmux-workspace@0.1.0-alpha.13
 
 ```toml
 [dependencies]
-tmux-workspace = "0.1.0-alpha.13"
+tmux-workspace = { version = "0.1.0-alpha.13", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 

@@ -14,13 +14,10 @@ them where tmuxp does and takes tmuxp's flags, as one binary with no Python.
 ```console
 $ cargo install tmux-workspace \
     --version 0.1.0-alpha.13 \
-    --features cli \
     --locked
 ```
 
-`--features cli` builds the command; without it the package is only the
-[library](#use-it-from-rust). It needs tmux 3.2a or newer on `PATH`, and Rust
-1.85 to build.
+It needs tmux 3.2a or newer on `PATH`, and Rust 1.85 to build.
 
 ## Load a session
 
@@ -230,9 +227,10 @@ command reference lists
 [where the two differ](docs/cli.md#the-command-and-the-library-read-documents-differently).
 
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.13
+$ cargo add tmux-workspace@0.1.0-alpha.13 --no-default-features
 ```
 
+`--no-default-features` leaves the command and its dependencies out.
 Examples and the API are on [docs.rs](https://docs.rs/tmux-workspace).
 
 ## Development

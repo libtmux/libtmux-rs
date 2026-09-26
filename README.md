@@ -234,7 +234,6 @@ tmuxinator and teamocil projects.
 ```console
 $ cargo install tmux-workspace \
     --version 0.1.0-alpha.13 \
-    --features cli \
     --locked
 ```
 
