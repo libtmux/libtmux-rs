@@ -18,7 +18,7 @@ and panes.**
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
-See the [migration notes](docs/migration.md) when upgrading from alpha.11.
+See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
 
 ```rust
 use libtmux::test::TestServer;
