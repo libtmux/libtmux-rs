@@ -937,7 +937,7 @@ async fn only_the_last_input_is_asked_about() {
 
 #[tokio::test]
 async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mutation() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
 
     let original = libtmux::test::TestServer::new().await.unwrap();
     let replacement = libtmux::test::TestServer::new().await.unwrap();
@@ -951,8 +951,7 @@ async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mu
     symlink(original.socket_path(), &alias).unwrap();
     let marker = directory.path().join("python-called");
     let python = directory.path().join("python-sentinel");
-    std::fs::write(&python, "#!/bin/sh\n: > python-called\nexit 97\n").unwrap();
-    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o700)).unwrap();
+    libtmux::test::install_executable(&python, "#!/bin/sh\n: > python-called\nexit 97\n").unwrap();
     let mut failures = Vec::new();
     for retarget in [false, true] {
         if retarget {
@@ -1357,8 +1356,6 @@ fn legacy_color_mode_is_rejected_before_reading_inputs() {
 
 #[tokio::test]
 async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let guard = libtmux::test::TestServer::new().await.unwrap();
     guard
         .server()
@@ -1369,15 +1366,12 @@ async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
     let trace = directory.path().join("trace");
     let wrapper = directory.path().join("tmux");
     let python = directory.path().join("python");
-    std::fs::write(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
-    std::fs::write(
+    libtmux::test::install_executable(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
+    libtmux::test::install_executable(
         &python,
         "#!/bin/sh\nprintf 'python\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexit 97\n",
     )
     .unwrap();
-    for executable in [&wrapper, &python] {
-        std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
     for name in ["first", "second", "bridge"] {
         let mut workspace =
             serde_json::json!({"session_name":name,"windows":[{"panes":["blank"]}]});
@@ -1957,8 +1951,6 @@ fn discovery_and_search_use_workspace_fields_and_case_modes() {
 
 #[tokio::test]
 async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
-    use std::os::unix::fs::PermissionsExt;
-
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let config_directory = directory.path().join("config directory");
@@ -1970,12 +1962,11 @@ async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
     let caller = caller.canonicalize().unwrap();
     let runtime = runtime.canonicalize().unwrap();
     let script = config_directory.join("bootstrap script");
-    std::fs::write(
+    libtmux::test::install_executable(
         &script,
         "#!/bin/sh\nrecord=$1\nshift\nprintf '%s\\0' \"$PWD\" \"$#\" \"$@\" > \"$record\"\n",
     )
     .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut failures = Vec::new();
     let mut index = 0;
     for executable in [
