@@ -371,7 +371,7 @@ impl<'server> WorkspaceBuilder<'server> {
         pane
     }
 
-    /// [`Self::pane_environment`] for every pane of a window, in order.
+    /// Each pane's [`Self::pane_environment`] for a window, in order.
     fn pane_environments(
         workspace: &Workspace,
         config: &WindowConfig,

@@ -383,8 +383,8 @@ impl Workspace {
         Self::parse(source, None, Strictness::Lenient)
     }
 
-    /// [`Self::from_yaml`], refusing a key that is neither this parser's own
-    /// vocabulary nor tmuxp's, unless it starts with `x-`.
+    /// Parse as [`Self::from_yaml`] does, refusing a key that is neither this
+    /// parser's own vocabulary nor tmuxp's, unless it starts with `x-`.
     ///
     /// This is the policy the `tmux-workspace` command applies to every
     /// document it loads.
@@ -436,7 +436,8 @@ impl Workspace {
         Self::read_file(path, Strictness::Lenient)
     }
 
-    /// [`Self::from_file`], under [`Self::from_yaml_strict`]'s policy.
+    /// Read as [`Self::from_file`] does, under [`Self::from_yaml_strict`]'s
+    /// policy.
     ///
     /// # Errors
     ///

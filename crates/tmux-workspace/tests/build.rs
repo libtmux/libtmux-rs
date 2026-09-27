@@ -654,7 +654,7 @@ windows: []
     assert_eq!(workspace.unsupported_keys, ["plugins", "before_script"]);
 }
 
-/// [`Workspace::from_yaml`] records a key it does not recognize;
+/// By default [`Workspace::from_yaml`] records a key it does not recognize;
 /// [`Workspace::from_yaml_strict`] -- the `tmux-workspace` command's own
 /// policy -- refuses one that is neither this parser's own vocabulary nor
 /// tmuxp's, and still accepts an `x-` prefixed key either way.
