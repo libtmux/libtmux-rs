@@ -176,18 +176,8 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
             )
         });
     }
-    if let Ok(pane) = std::env::var("TMUX_PANE") {
-        let result = server
-            .cmd(
-                Command::new("display-message")
-                    .arg("-p")
-                    .arg("-t")
-                    .arg(pane)
-                    .arg("#{session_name}"),
-            )
-            .await?;
-        let name = result.stdout_lossy().trim().to_owned();
-        if let Some(session) = server.session(name).await? {
+    if let Some(id) = invoking_session(server).await {
+        if let Some(session) = server.session_by_id(&id).await? {
             return Ok(session);
         }
     }
@@ -213,6 +203,17 @@ pub(super) async fn selected_session(server: &Server, name: Option<&str>) -> Res
 }
 
 fn load_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>> {
+    let workspaces = read_inputs(args)?;
+    if workspaces
+        .iter()
+        .any(|(_, workspace)| workspace.before_script.is_some() || workspace.bridge)
+    {
+        process::require_support()?;
+    }
+    Ok(workspaces)
+}
+
+fn read_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>> {
     let files = args
         .get_many::<String>("workspace_files")
         .ok_or_else(|| CliError::usage("workspace files are required"))?;
@@ -228,13 +229,94 @@ fn load_inputs(args: &ArgMatches) -> Result<Vec<(PathBuf, normalize::Workspace)>
         }
         workspaces.push((path, workspace));
     }
-    if workspaces
-        .iter()
-        .any(|(_, workspace)| workspace.before_script.is_some() || workspace.bridge)
-    {
-        process::require_support()?;
-    }
     Ok(workspaces)
+}
+
+/// What `load` would build, read from the same normalized workspaces it
+/// builds from, without asking tmux anything or running a script.
+///
+/// Environment variables are listed by name. A pane's environment carries
+/// the loader's value of every variable its commands name, so a value here
+/// could be a secret the document never held.
+fn describe(workspaces: &[(PathBuf, normalize::Workspace)], report: &Reporter) -> Result<()> {
+    let names = |pairs: &[(String, String)]| {
+        pairs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>()
+    };
+    let pane = |pane: &normalize::Pane| {
+        json!({
+            "start_directory": discovery::masked(&pane.directory),
+            "shell": pane.shell,
+            "focus": pane.focus,
+            "environment": names(&pane.environment),
+            "commands": pane.commands.iter().map(|command| json!({
+                "text": command.text,
+                "enter": command.enter,
+                "sleep_before_ms": command.before.as_millis(),
+                "sleep_after_ms": command.after.as_millis(),
+            })).collect::<Vec<_>>(),
+        })
+    };
+    let window = |window: &normalize::Window| {
+        json!({
+            "name": window.name,
+            "index": window.index,
+            "layout": window.layout,
+            "focus": window.focus,
+            "panes": window.panes.iter().map(pane).collect::<Vec<_>>(),
+        })
+    };
+    if report.machine() {
+        let sessions = workspaces
+            .iter()
+            .map(|(path, workspace)| {
+                json!({
+                    "source": discovery::masked(path),
+                    "session_name": workspace.name,
+                    "start_directory": discovery::masked(&workspace.directory),
+                    "before_script": workspace.before_script,
+                    "python_bridge": workspace.bridge,
+                    "environment": names(&workspace.environment),
+                    "windows": workspace.windows.iter().map(window).collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        return report.document(
+            &json!({"schema_version":1,"command":"load","status":"dry_run","sessions":sessions}),
+        );
+    }
+    for (path, workspace) in workspaces {
+        let source = discovery::masked(path);
+        let source = if workspace.bridge {
+            format!("{source}, built by tmuxp")
+        } else {
+            source
+        };
+        report.line("heading", &workspace.name, &source)?;
+        if let Some(script) = &workspace.before_script {
+            report.line("subject", "  before_script", script)?;
+        }
+        for window in &workspace.windows {
+            let name = window.name.as_deref().unwrap_or("(unnamed)");
+            let layout = window.layout.as_deref().unwrap_or("tiled");
+            report.line("subject", &format!("  {name}"), layout)?;
+            for pane in &window.panes {
+                let commands: Vec<_> = pane
+                    .commands
+                    .iter()
+                    .map(|command| command.text.trim_start())
+                    .collect();
+                report.line(
+                    "info",
+                    &format!("    {}", discovery::masked(&pane.directory)),
+                    &commands.join("; "),
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn native_layouts(
@@ -263,6 +345,9 @@ pub(super) async fn load(
         return Err(CliError::usage(
             "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2",
         ));
+    }
+    if flag(args, "dry-run") {
+        return describe(&read_inputs(args)?, report);
     }
     if report.machine() && !flag(args, "detached") && !flag(args, "append") {
         return Err(CliError::usage("machine load requires -d or --append"));
@@ -647,6 +732,27 @@ async fn target_context(server: &Server, target: &str) -> Result<(u32, u64, libt
         (pid > 0 && started > 0 && fields.next().is_none()).then_some((pid, started, session))
     })();
     parsed.ok_or_else(|| append_context("target has no live daemon and session identity"))
+}
+
+/// The session of the pane this command runs in, when `server` is that
+/// pane's server.
+///
+/// `TMUX_PANE` is only an ID, and the same ID names some other pane on every
+/// other server, so it counts only once `TMUX` and `server` agree on the
+/// daemon and on the pane's session. Aimed elsewhere, there is no current
+/// session to default to, which is not an error.
+async fn invoking_session(server: &Server) -> Option<libtmux::SessionId> {
+    let pane = std::env::var("TMUX_PANE").ok()?;
+    let context = std::env::var("TMUX").ok()?;
+    let (socket, pid) = tmux_context(&context).ok()?;
+    let inherited_server = Server::builder()
+        .socket_path(socket)
+        .tmux_executable(server.tmux_executable())
+        .build()
+        .ok()?;
+    let inherited = target_context(&inherited_server, &pane).await.ok()?;
+    let selected = target_context(server, &pane).await.ok()?;
+    (inherited.0 == pid && inherited == selected).then_some(selected.2)
 }
 
 async fn append_target(server: &Server) -> Result<AppendTarget> {

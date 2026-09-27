@@ -626,18 +626,16 @@ mod tests {
         let resolved = crate::manifest::resolve(crate::tools::router(), &selection)
             .expect("complete manifest");
 
+        let listed = resolved.router.list_all();
         let mut by_first_sentence: std::collections::HashMap<&str, Vec<&str>> =
             std::collections::HashMap::new();
-        for tool in &resolved.report.tools {
-            let first_sentence = tool
-                .description
-                .split(". ")
-                .next()
-                .unwrap_or(&tool.description);
+        for tool in &listed {
+            let description = tool.description.as_deref().expect("description");
+            let first_sentence = description.split(". ").next().unwrap_or(description);
             by_first_sentence
                 .entry(first_sentence)
                 .or_default()
-                .push(tool.name.as_str());
+                .push(tool.name.as_ref());
         }
         let collisions: Vec<_> = by_first_sentence
             .into_iter()

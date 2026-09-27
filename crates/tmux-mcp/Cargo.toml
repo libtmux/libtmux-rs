@@ -27,6 +27,7 @@ include = [
     "/examples/**/*.rs",
     "/src/**/*.rs",
     "/tests/**/*.rs",
+    "/tests/snapshots/*",
 ]
 
 [dependencies]
@@ -47,6 +48,14 @@ jsonschema.workspace = true
 libtmux = { workspace = true, features = ["control-mode", "query", "serde", "test-support"] }
 rmcp = { version = "3.0", features = ["server", "client", "macros", "transport-io"] }
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "time"] }
+
+# `cargo binstall tmux-mcp` fetches the release's prebuilt archive for the host,
+# built by .github/workflows/binaries.yml, and builds from source when the
+# release carries none.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ name }@v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ name }-{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
 
 [package.metadata.docs.rs]
 all-features = true

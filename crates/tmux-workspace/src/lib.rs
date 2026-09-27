@@ -1,37 +1,4 @@
-#![doc = include_str!("../README.md")]
-//!
-//! Build tmux workspaces from tmuxp-style YAML.
-//!
-//! This crate exists to exercise the `libtmux` public API from outside, the
-//! way a real consumer would. It reads the parts of a tmuxp workspace file a
-//! builder needs and reproduces them with tmux.
-//!
-//! The `tmux-workspace` command adds file services and an interactive loader.
-//! Its reader and builder handle extensions and progress reporting separately;
-//! the README lists the configuration differences from this library.
-//!
-//! ```no_run
-//! use tmux_workspace::{Workspace, WorkspaceBuilder};
-//!
-//! # async fn build() -> Result<(), tmux_workspace::BuildError> {
-//! let workspace = Workspace::from_yaml(
-//!     "
-//! session_name: dev
-//! windows:
-//!   - window_name: editor
-//!     panes:
-//!       - vim
-//!       - htop
-//! ",
-//! )?;
-//!
-//! let server = libtmux::Server::new()?;
-//! let session = WorkspaceBuilder::new(&server).build(&workspace).await?;
-//! assert_eq!(session.window_count(), 1);
-//! # Ok(())
-//! # }
-//! ```
-
+#![doc = include_str!("../docs/library.md")]
 #![forbid(unsafe_code)]
 
 mod config;
@@ -44,7 +11,7 @@ use std::path::Path;
 
 use libtmux::plan::{
     KillWindow, NewSession, NewWindow, PaneSlot, Pause, Plan, Planner, SelectLayout, SelectPane,
-    SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow,
+    SelectWindow, SendKeys, SessionSlot, SetEnvironment, SetOption, Slot, SplitWindow, WindowSlot,
 };
 use libtmux::{Server, Session, SessionId};
 
@@ -165,11 +132,13 @@ impl<'server> WorkspaceBuilder<'server> {
             let first_directory = first_pane
                 .and_then(|pane| pane.start_directory.as_deref())
                 .or(directory);
+            let pane_environments = Self::pane_environments(workspace, config);
             let window = plan.add(Self::window_op(
                 session,
                 config,
-                first_pane,
+                pane_environments.first().map_or(&[], Vec::as_slice),
                 first_directory,
+                first_pane.and_then(|pane| pane.shell.as_deref()),
             ));
             for (name, value) in &config.options {
                 plan.add(SetOption::window(window, name.as_str(), value.as_str()));
@@ -184,22 +153,17 @@ impl<'server> WorkspaceBuilder<'server> {
             // the active pane, which a detached split never changes.
             let mut source = window.pane();
             let mut panes = vec![source];
-            for pane in config.panes.iter().skip(1) {
-                let directory = pane.start_directory.as_deref().or(directory);
-                let mut split = SplitWindow::from_pane(source);
-                if let Some(directory) = directory {
-                    split = split.start_directory(directory);
-                }
-                for (name, value) in config.environment.iter().chain(&pane.environment) {
-                    split = split.environment(name.as_str(), value.as_str());
-                }
-                source = plan.add(split);
+            for (pane, environment) in config.panes.iter().zip(&pane_environments).skip(1) {
+                source = Self::split_op(
+                    &mut plan,
+                    window,
+                    source,
+                    config,
+                    directory,
+                    pane,
+                    environment,
+                );
                 panes.push(source);
-                // Halving each pane in turn runs out of rows before the
-                // fifth at a default terminal size; rebalancing after every
-                // split reclaims them. The window's own layout, below, still
-                // has the last say.
-                plan.add(SelectLayout::new(window, "tiled"));
             }
 
             // Layout is applied once the pane count is final, or tmux would
@@ -226,6 +190,7 @@ impl<'server> WorkspaceBuilder<'server> {
                     .shell_command_before
                     .iter()
                     .chain(&config.shell_command_before)
+                    .chain(&pane_config.shell_command_before)
                     .chain(&pane_config.shell_commands);
                 for command in commands {
                     enter = command.enter.unwrap_or(enter);
@@ -347,8 +312,9 @@ impl<'server> WorkspaceBuilder<'server> {
     fn window_op(
         session: Slot<SessionSlot>,
         config: &WindowConfig,
-        first_pane: Option<&PaneConfig>,
+        environment: &[(String, String)],
         directory: Option<&Path>,
+        pane_shell: Option<&str>,
     ) -> NewWindow {
         let mut window = NewWindow::new(session);
         if let Some(name) = config.window_name.as_deref() {
@@ -361,17 +327,99 @@ impl<'server> WorkspaceBuilder<'server> {
             window = window.index(index);
         }
         // tmuxp's window_shell replaces the window's shell rather than being
-        // typed into it, so the window closes when the command ends.
-        if let Some(shell) = config.window_shell.as_deref() {
+        // typed into it, so the window closes when the command ends; the
+        // first pane's own `shell` overrides it, the same as for a split.
+        if let Some(shell) = pane_shell.or(config.window_shell.as_deref()) {
             window = window.command(shell);
         }
-        let pane_environment = first_pane
-            .map(|pane| pane.environment.as_slice())
-            .unwrap_or_default();
-        for (name, value) in config.environment.iter().chain(pane_environment) {
+        for (name, value) in environment {
             window = window.environment(name.as_str(), value.as_str());
         }
         window
+    }
+
+    /// Split `source` into a new pane of `window`, and rebalance the layout.
+    ///
+    /// Halving each pane in turn runs out of rows before the fifth at a
+    /// default terminal size; rebalancing after every split reclaims them.
+    /// The window's own layout, applied once the pane count is final, still
+    /// has the last say. `window_shell` is the default shell for every pane
+    /// in the window, not only the one that comes with it, unless the pane
+    /// sets its own [`PaneConfig::shell`].
+    fn split_op(
+        plan: &mut Plan,
+        window: Slot<WindowSlot>,
+        source: Slot<PaneSlot>,
+        config: &WindowConfig,
+        directory: Option<&Path>,
+        pane: &PaneConfig,
+        environment: &[(String, String)],
+    ) -> Slot<PaneSlot> {
+        let directory = pane.start_directory.as_deref().or(directory);
+        let mut split = SplitWindow::from_pane(source);
+        if let Some(directory) = directory {
+            split = split.start_directory(directory);
+        }
+        for (name, value) in environment {
+            split = split.environment(name.as_str(), value.as_str());
+        }
+        if let Some(shell) = pane.shell.as_deref().or(config.window_shell.as_deref()) {
+            split = split.command(shell);
+        }
+        let pane = plan.add(split);
+        plan.add(SelectLayout::new(window, "tiled"));
+        pane
+    }
+
+    /// Each pane's [`Self::pane_environment`] for a window, in order.
+    fn pane_environments(
+        workspace: &Workspace,
+        config: &WindowConfig,
+    ) -> Vec<Vec<(String, String)>> {
+        config
+            .panes
+            .iter()
+            .map(|pane_config| Self::pane_environment(workspace, config, pane_config))
+            .collect()
+    }
+
+    /// This pane's own environment if it set one, else the window's, plus
+    /// the loader's value of every `$NAME` its commands -- and its shell,
+    /// or the window's when it sets none of its own -- reference, when the
+    /// document does not set that name and the loader has it.
+    ///
+    /// tmuxp pastes the value into the command instead, so a value holding
+    /// `;` or `$(...)` would run as a command of its own; here it stays data
+    /// in the environment for the pane's own shell to expand.
+    fn pane_environment(
+        workspace: &Workspace,
+        config: &WindowConfig,
+        pane_config: &PaneConfig,
+    ) -> Vec<(String, String)> {
+        let mut environment = pane_config
+            .environment
+            .clone()
+            .unwrap_or_else(|| config.environment.clone());
+        let commands = workspace
+            .shell_command_before
+            .iter()
+            .chain(&config.shell_command_before)
+            .chain(&pane_config.shell_command_before)
+            .chain(&pane_config.shell_commands)
+            .map(|command| command.cmd.as_str());
+        let shell = pane_config
+            .shell
+            .as_deref()
+            .or(config.window_shell.as_deref());
+        for name in commands.chain(shell).flat_map(referenced) {
+            if environment.iter().any(|(set, _)| set == name) {
+                continue;
+            }
+            if let Ok(value) = std::env::var(name) {
+                environment.push((name.to_owned(), value));
+            }
+        }
+        environment
     }
 
     /// Type one command into a pane, optionally running it.
@@ -398,6 +446,21 @@ impl<'server> WorkspaceBuilder<'server> {
     }
 }
 
+/// The variables `text` names as `$NAME` or `${NAME...}`, for a shell to
+/// expand. A braced form counts by its leading name, as in `${NAME:-default}`.
+fn referenced(text: &str) -> impl Iterator<Item = &str> {
+    text.match_indices('$').filter_map(|(index, _)| {
+        let tail = &text[index + 1..];
+        let tail = tail.strip_prefix('{').unwrap_or(tail);
+        let end = tail
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .unwrap_or(tail.len());
+        let name = &tail[..end];
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            .then_some(name)
+    })
+}
+
 /// Compiles the `libtmux-macros` README's examples, and nothing else.
 ///
 /// It cannot be compiled from `libtmux-macros`, whose only dependency on
@@ -407,3 +470,16 @@ impl<'server> WorkspaceBuilder<'server> {
 #[cfg(doctest)]
 #[doc = include_str!("../libtmux-macros-README.md")]
 pub struct MacrosReadme;
+
+/// The `tmux-workspace` command's reference, rendered with the library's
+/// documentation so it is readable on docs.rs and a link to it is checked
+/// when the documentation builds. Documentation only; it holds no items.
+#[cfg(doc)]
+#[doc = include_str!("../docs/cli.md")]
+pub mod command {}
+
+/// Compiles the README's Rust blocks. The README is the command's page on
+/// crates.io, not this crate's documentation, so it renders nowhere here.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct Readme;

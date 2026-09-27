@@ -3,7 +3,7 @@
 /// The fixture's five seconds bound a tmux that starts with a core to
 /// spare. Under a machine running several times its cores in work they
 /// stop bounding startup and start deciding the result, which is the
-/// failure `design.md` names and then leaves to a constant. A scale of
+/// failure `findings.md` names and then leaves to a constant. A scale of
 /// less than one would push it the wrong way, so it is refused rather
 /// than honoured: nothing here is trying to make a fixture fail sooner.
 #[test]
@@ -510,4 +510,38 @@ async fn a_retry_deadline_widens_with_the_load_scale() {
         scaled(base),
         "the deadline, and what it reports, carry the scale",
     );
+}
+
+/// What a process forked mid-write holds is the file, open for writing, and
+/// holding it is the one way to make `execve` fail with `ETXTBSY` on demand.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_busy_executable_is_waited_for_not_reported() {
+    let directory = std::env::temp_dir().join(super::unique_name("busy-executable"));
+    fs::create_dir(&directory).unwrap();
+    let path = directory.join("tool");
+    let mut writer = fs::File::create(&path).unwrap();
+    writer
+        .write_all(b"#!/bin/sh\n[ -n \"$LIBTMUX_EXECUTABLE_READY\" ] && exit 0\nexit 3\n")
+        .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    let busy = ProcessCommand::new(&path).status().unwrap_err();
+    assert_eq!(busy.kind(), std::io::ErrorKind::ExecutableFileBusy);
+
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        drop(writer);
+    });
+    super::run_until_ready(&path, Instant::now() + scaled(Duration::from_secs(5))).unwrap();
+    release.join().unwrap();
+
+    // Still busy at the deadline is an answer, not a hang.
+    let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let error = super::run_until_ready(&path, Instant::now()).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    drop(writer);
+
+    let error = super::install_executable(&path, "exit 0\n").unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    fs::remove_dir_all(&directory).unwrap();
 }

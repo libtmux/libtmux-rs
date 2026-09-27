@@ -11,6 +11,21 @@ pub(super) fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
 }
 
+/// The variables `text` names as `$NAME` or `${NAME...}`, for a shell to
+/// expand. A braced form counts by its leading name, as in `${NAME:-default}`.
+pub(super) fn referenced(text: &str) -> impl Iterator<Item = &str> {
+    text.match_indices('$').filter_map(|(index, _)| {
+        let tail = &text[index + 1..];
+        let tail = tail.strip_prefix('{').unwrap_or(tail);
+        let end = tail
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .unwrap_or(tail.len());
+        let name = &tail[..end];
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            .then_some(name)
+    })
+}
+
 pub(super) fn expand(text: &str) -> String {
     let mut text = if text == "~" {
         home().to_string_lossy().into_owned()
@@ -62,6 +77,18 @@ pub(super) fn masked(path: &Path) -> String {
             }
         },
     )
+}
+
+/// Where a new workspace belongs: the first directory `load <name>` searches
+/// that exists, else `$TMUXP_CONFIGDIR` when set, else
+/// `$XDG_CONFIG_HOME/tmuxp`. Saving there creates it.
+pub(super) fn workspace_dir() -> PathBuf {
+    let dirs = global_dirs();
+    dirs.iter()
+        .find(|path| path.is_dir())
+        .or_else(|| dirs.first())
+        .cloned()
+        .unwrap_or_else(|| home().join(".tmuxp"))
 }
 
 pub(super) fn global_dirs() -> Vec<PathBuf> {
@@ -118,10 +145,23 @@ fn candidate(path: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// A name with no directory and no extension. tmuxp looks one up only in the
+/// workspace directory, so `load dev` means the same session from anywhere,
+/// and a `dev.yaml` that happens to sit in the current directory -- or an
+/// earlier import's output beside a tmuxinator project -- cannot stand in.
+fn is_pure_name(name: &str) -> bool {
+    let path = Path::new(name);
+    !matches!(name, "" | "." | "..") && !name.contains('/') && path.extension().is_none()
+}
+
 pub(super) fn resolve(name: &str, importer: Option<&str>) -> Result<PathBuf> {
-    let path = PathBuf::from(expand(name));
-    if let Some(found) = candidate(&path) {
-        return Ok(found.canonicalize()?);
+    let expanded = expand(name);
+    let path = PathBuf::from(&expanded);
+    let pure = is_pure_name(&expanded);
+    if !pure {
+        if let Some(found) = candidate(&path) {
+            return Ok(found.canonicalize()?);
+        }
     }
     if path.components().count() == 1 {
         let directory = match importer {
@@ -135,8 +175,17 @@ pub(super) fn resolve(name: &str, importer: Option<&str>) -> Result<PathBuf> {
                 .find(|p| p.is_dir())
                 .unwrap_or_else(|| home().join(".tmuxp")),
         };
-        if let Some(found) = candidate(&directory.join(path)) {
+        if let Some(found) = candidate(&directory.join(&path)) {
             return Ok(found.canonicalize()?);
+        }
+        if pure && candidate(&path).is_some() {
+            return Err(CliError::new(
+                "workspace_not_found",
+                format!(
+                    "{name:?} is not in {}; to use the one in this directory, write ./{name}",
+                    masked(&directory)
+                ),
+            ));
         }
     }
     Err(CliError::new(

@@ -1,6 +1,37 @@
-# Migrating from 0.1.0-alpha.11
+# Migrating between alphas
 
-## Timestamps are `SystemTime`
+Each section is one release: what a caller has to change to build against it.
+Start at the section for the version you are on and work up. Changes that
+need no edit on your side are in the changelog, not here.
+
+## From 0.1.0-alpha.12 to 0.1.0-alpha.13
+
+### `ServerBuilder::colors` refuses 88
+
+No supported tmux release accepts `-8`, so `colors(88)` makes `build` fail
+with `ServerConfigurationErrorKind::InvalidColorMode` instead of starting tmux
+with it. Ask for 256 colors, which tmux spells `-2`, or leave the override
+out:
+
+```
+// was: libtmux::Server::builder().colors(88).build()?
+let server = libtmux::Server::builder().colors(256).build()?;
+assert_eq!(server.colors(), Some(256));
+# Ok::<(), libtmux::Error>(())
+```
+
+### A classic layout string is checked before tmux sees it
+
+`Window::select_layout` refuses a classic layout string whose checksum does
+not match or whose tree is empty, and `Server::validate_layouts` answers the
+same question before anything changes. tmux 3.3 and 3.3a exit the whole daemon
+on a layout string they cannot parse, so the refusal now comes from libtmux
+rather than from a lost server. A layout copied from `#{window_layout}` is
+unaffected.
+
+## From 0.1.0-alpha.11 to 0.1.0-alpha.12
+
+### Timestamps are `SystemTime`
 
 `Session::created`, `Session::last_attached`, `Window::last_activity`,
 `Client::created` and `ServerGeneration::start_time` return
@@ -24,7 +55,7 @@ let seconds = created.duration_since(UNIX_EPOCH)?.as_secs();
 The field handles are unchanged: `session.get(fields.session_created)` and a
 filter on it still see the `i64` tmux reports.
 
-## Buffer names are `TmuxText`
+### Buffer names are `TmuxText`
 
 `Server::buffer_names` returns `Vec<TmuxText>` in place of `Vec<String>`.
 `Server::buffer` and `Server::delete_buffer` take `impl AsRef<[u8]>`, so a
@@ -41,7 +72,7 @@ for name in server.buffer_names().await? {
 # }
 ```
 
-## `respawn` and `display_menu` take types, not literals
+### `respawn` and `display_menu` take types, not literals
 
 ```no_run
 # async fn respawn(pane: &mut libtmux::Pane) -> Result<(), libtmux::Error> {
@@ -57,7 +88,7 @@ for: tmux refuses the respawn while the old command is alive.
 `Server::display_menu` takes `MenuItem::new(label, key, command)` in place of
 a `(String, String, String)` triple.
 
-## ID filter handles carry their ID type
+### ID filter handles carry their ID type
 
 `PaneFields::pane_id`, `WindowFields::window_id` and
 `SessionFields::session_id` are `TextField<Target, PaneId>`,
@@ -73,7 +104,7 @@ let handle: TextField<Pane, PaneId> = Pane::filter_fields().pane_id;
 let _ = handle.eq("%1");
 ```
 
-## One option reader: `typed_option`
+### One option reader: `typed_option`
 
 `get_option` on `Server`, `Session`, `Window` and `Pane`, and
 `Server::{get_global_option, get_global_window_option}`, are gone. Read with
@@ -96,7 +127,7 @@ let left = session.typed_option("status-left").await?.map(TmuxText::from);
 `set_typed_option` writes the same types back, checked against tmux's option
 table; `set_option` is unchanged.
 
-## The `_or_empty` listing twins are gone
+### The `_or_empty` listing twins are gone
 
 Replace `x_or_empty().await` with `x().await.unwrap_or_default()`:
 
@@ -112,7 +143,7 @@ Worth a moment's thought rather than a blind rewrite: the twins collapsed an
 unreachable tmux into an empty list, and anything that reconciles state should
 take the `?` instead.
 
-## Names, titles and start directories are text
+### Names, titles and start directories are text
 
 Every argument tmux expands as a format now takes `TmuxArg`, and every
 conversion into it escapes. `&str`, `String`, `OsString`, `Path` and
@@ -152,7 +183,7 @@ The sinks: `NewSessionOptions::{new, window_name, start_directory}`,
 `Session::rename`, `Window::rename`, `Pane::set_title`. Option names and the
 `plan` operations escape internally and need no change at the call site.
 
-## Control events
+### Control events
 
 `ControlEvents` yields `Result<Event, Error>`. `ControlEvents::next_event`
 and `ControlMode::next_event` return `Option<Result<Event, Error>>`. Change
@@ -185,7 +216,7 @@ notifications so an unread stream cannot block executor shutdown.
 `PaneOutput` keeps its infallible byte-stream contract. Its `None` combines
 normal completion and failure; call `shutdown` to observe a connection error.
 
-## Scoped errors
+### Scoped errors
 
 `with_session`, `with_window` and `with_pane` return
 `Result<T, ScopeError<T, E>>` instead of `Result<T, E>`. Remove
@@ -224,7 +255,7 @@ the operation variant to reach its value or its own source chain. This keeps
 `ScopeError<T, E>` usable with boxed errors and values that do not implement
 `std::error::Error`.
 
-## Owned queries and names
+### Owned queries and names
 
 Borrowed `.iter().matching(...)` calls retain their result and inference
 behaviour. Use `.into_iter().matching_owned(...)` to move selected items

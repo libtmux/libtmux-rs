@@ -75,7 +75,7 @@ impl Server {
     /// This also finds a session whose name holds `:` or `.`, which `-t
     /// name` and `-t =name` both misread as a window or pane separator on
     /// every tmux release, `=` included: tmux splits a target on `:`/`.`
-    /// before it looks for `=`. `docs/design.md` has the detail, including
+    /// before it looks for `=`. `docs/findings.md` has the detail, including
     /// the `name:` spelling that tmux 3.7a and later do accept for such a
     /// name. Prefer [`Session::id`] over the name for any target built after
     /// this call; an ID target parses with no split at all.

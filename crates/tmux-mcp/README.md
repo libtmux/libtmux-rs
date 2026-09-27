@@ -28,7 +28,14 @@ tmux 3.2a or newer, on `$PATH`. Rust 1.88 to build.
 $ cargo install tmux-mcp --version 0.1.0-alpha.14
 ```
 
-That puts a `tmux-mcp` binary on your path. It speaks MCP on stdin and stdout,
+[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
+prebuilt binary for Linux or macOS instead, when the release carries one:
+
+```console
+$ cargo binstall tmux-mcp --version 0.1.0-alpha.14
+```
+
+Either puts a `tmux-mcp` binary on your path. It speaks MCP on stdin and stdout,
 so every client below is really the same thing: run `tmux-mcp`.
 
 ### Claude Code
@@ -254,9 +261,12 @@ it under `_meta["com.git-pull.libtmux-mcp/capability"]`, holding only what the
 tool does not already carry: toolset, process reach, effect and output sets,
 the secret and untrusted-content flags, schema-keyed input literalization, any
 nested authority, and future-input amplification. Name, title, description,
-annotations, and schemas stay on the tool, and `tmux://capabilities` reports
-them all together. The native definition also classifies every input sink, but
-that validation detail is not duplicated on the wire. For example, `get_tmux_variables.names` is
+annotations, and schemas stay on the tool. `tmux://capabilities` reports each
+tool's name, title, annotations and capability row, and leaves the description
+and schemas to `tools/list`, which a client already holds: the whole report is
+about 26 KB, read by an agent that wants the socket. The native definition
+also classifies every input sink, but that validation detail is not
+duplicated on the wire. For example, `get_tmux_variables.names` is
 reported as `validated-variable-name`; it is not falsely described as escaped
 literal text.
 
@@ -608,8 +618,29 @@ choosing another action.
 ## Using it from Rust
 
 The tool surface is a type, so a program can freeze a `Selection` in code or
-serve it over a transport other than stdio. Three runnable examples ship with
-the crate:
+serve it over a transport other than stdio, or call a tool directly. The
+crate ships runnable examples. `run_and_wait` runs a command and reads
+its real exit status, then waits for a line a background job prints, through
+the same tools a client calls:
+
+```console
+$ cargo run --example run_and_wait
+```
+
+`follow` pushes 200 lines through a 24-row pane between two `capture_since`
+calls, and the second call returns all 200:
+
+```console
+$ cargo run --example follow
+```
+
+`refused` serves only `inspect`, calls `send_keys` anyway, and prints the
+refusal a client gets: a JSON-RPC invalid-params error naming why the tool is
+missing and the setting an operator would change to offer it:
+
+```console
+$ cargo run --example refused
+```
 
 ```console
 $ cargo run --example readonly

@@ -16,6 +16,134 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `tmux-workspace load --dry-run` prints the sessions, windows, panes,
+  directories and commands a load would build, and names each environment
+  variable it would set, without asking tmux anything or running
+  `before_script`. `--json` prints the same as one document. (#33)
+
+- Releases of `tmux-workspace` and `tmux-mcp` carry prebuilt binaries for
+  Linux (musl, x86_64 and aarch64) and macOS (arm64 and x86_64), with build
+  provenance, and `cargo binstall` installs them. (#33)
+
+- `Workspace::from_yaml_strict` and `Workspace::from_file_strict` refuse a key
+  that neither this parser nor tmuxp reads, unless it starts with `x-`, as the
+  `tmux-workspace` command does. `from_yaml` and `from_file` still accept such
+  a key and record it in `unsupported_keys`. (#33)
+
+- **Breaking.** `PaneConfig` gains `shell`, which overrides `window_shell` for
+  that pane, and `shell_command_before`, typed after the workspace's and the
+  window's and before the pane's own commands, as tmuxp reads them. A struct
+  literal that builds a `PaneConfig` needs `..PaneConfig::default()` to
+  compile. (#33)
+
+- `tmux_mcp::ToolError` implements `Display` and `std::error::Error`, so a
+  program that calls a tool directly can propagate its failure with `?`.
+  (#33)
+
+- `tmux-mcp` ships runnable examples: `run_and_wait` runs a command for its
+  exit status and waits for a line a background job prints, `follow` reads
+  everything a pane wrote between two `capture_since` calls, scrollback
+  included, and `refused` shows the error a client gets for a tool the server
+  left out. (#33)
+
+- `tmux-workspace` ships runnable examples: `build` parses a workspace, lists
+  its plan, builds it on an isolated tmux and freezes it back to YAML, and
+  `strict` reads one document leniently and strictly. (#33)
+
+- `libtmux::test::install_executable` writes an executable script and returns
+  once it can run, for a wrapper passed to
+  `TestServerBuilder::tmux_executable`. A script written by hand failed
+  intermittently with `ETXTBSY` while other tests forked. (#33)
+
+### Changed
+
+- **Breaking.** `tmux-workspace load` leaves `$NAME` in a command or `shell`
+  for the pane's shell to expand, and adds the loader's value of each named
+  variable to that pane's environment. It had pasted the value into the
+  command text, as tmuxp does, so a value holding `;`, `|` or `$(...)`, such
+  as `LS_COLORS`, ran as a command of its own. `'$NAME'` in single quotes now
+  stays literal, `$PWD` is the pane's directory, and a program other than a
+  shell sees the variable unexpanded. (#33)
+
+- **Breaking.** `WorkspaceBuilder` adds the loader's value of each `$NAME` a
+  pane's commands, `window_shell` or `shell` name to that pane's environment,
+  unless the document sets it, as `tmux-workspace load` does. (#33)
+
+- **Breaking.** `tmux-workspace` looks up a bare name such as `dev`, with no
+  directory and no extension, only in the workspace directory, as tmuxp does,
+  for `load`, `convert`, `edit` and the importers. A `dev.yaml` or `dev/` in
+  the current directory no longer answers to `dev`; write `./dev`, which the
+  error suggests when only a local file exists. (#33)
+
+- **Breaking.** `tmux://capabilities` reports each tool's name, title,
+  annotations and capability row, and no longer its description or input and
+  output schemas, which `tools/list` already carries; `schemaVersion` is 2.
+  The report for the default surface falls from 164 KB to 26 KB. Read schemas
+  from `tools/list`. (#33)
+
+- `tmux-mcp`'s server instructions tell an agent what the server is for and
+  what it is not (tmux panes, not editor splits or desktop windows), that
+  listings cannot see terminal text, which tool to wait with instead of
+  polling, how output loss is reported, and that a pane in a tmux mode belongs
+  to the person in it. They stay under 2 KB. (#33)
+
+- `tmux-workspace --help`, each command's help and `--generate man` describe
+  every argument and end with examples. `import tmuxinator` and `import
+  teamocil` describe their own source format. (#33)
+
+- `tmux-workspace load -8` is hidden from help and shell completions. It is
+  still refused with its reason, and `--generate schema` lists it as hidden.
+  (#33)
+
+- `tmux-workspace` builds its command by default: `cli` is a default feature,
+  so `cargo install tmux-workspace` works where it had failed with "no
+  binaries are available". A library dependent that wants none of the
+  command's dependencies sets `default-features = false`. (#33)
+
+- **Breaking.** `Workspace::from_yaml` and `from_file` refuse a document whose
+  `windows` key is missing or null, as tmuxp's schema validation does. An
+  explicit `windows: []` still loads and keeps the window tmux made, and
+  `Workspace::to_yaml` writes an empty workspace that way. (#33)
+
+- **Breaking.** `PaneConfig::environment` is `Option<Vec<(String, String)>>`:
+  `None` inherits the window's environment, and `Some`, even empty, replaces
+  it, as tmuxp's builder does, where the two had been merged. A pane that sets
+  its own variables and relies on a window variable must now name that
+  variable too. (#33)
+
+- **Breaking.** `WorkspaceBuilder` applies `window_shell` to every pane it adds
+  to a window, as tmuxp's `get_pane_shell` does, where it had applied only to
+  the window's first pane. A pane's own `shell` overrides it. (#33)
+
+- **Breaking.** `Workspace::from_yaml` resolves YAML merge keys, `<<: *anchor`
+  and `<<: [*a, *b]`, at every level, as PyYAML's safe loader does. `<<` had
+  been kept as an unsupported key. (#33)
+
+- The `tmux-workspace` README covers the command: install, load, one command
+  per task and the differences from tmuxp. `docs/cli.md` is its reference, and
+  the library guide is its docs.rs page. The `libtmux` migration guide covers
+  each release, newest first. (#33)
+
+### Fixed
+
+- `tmux-workspace freeze` without a session name, run from a pane on one tmux
+  server and aimed at another with `-L` or `-S`, captured whichever session
+  owned the same pane ID there. It now uses the pane's session only when
+  `TMUX` names the selected server, and otherwise asks for a name, as it does
+  outside tmux. (#33)
+
+- `tmux-workspace import` without `--save-to` offers to save into the
+  workspace directory, `~/.config/tmuxp` unless configured otherwise, and
+  creates it, so `load <name>` finds the result. It had offered the source's
+  own directory, such as `~/.tmuxinator`, where nothing looks for a workspace.
+  (#33)
+
+- `cargo doc` for a crate depending on `libtmux` with default features no
+  longer warns about links to items behind the `blocking`, `control-mode`,
+  `plan` and `schema` features. (#33)
+
 ## 0.1.0-alpha.13 - 2026-09-26
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.13;

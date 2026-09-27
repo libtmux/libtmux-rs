@@ -48,6 +48,11 @@ libtmux  | recover  | test-support                                  |    |      
 tmux-mcp | budget   |                                               |    |               | of it output schemas
 tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo
+tmux-mcp | run_and_wait |                                           |    |               | waited: Matched
+tmux-mcp | follow   |                                               |    |               | saw 200 of 200 lines, missed: false
+tmux-mcp | refused  |                                               |    |               | send_keys refused: Mcp error: -32602: tool send_keys is not offered
+tmux-workspace | build |                                              |    |               | built editor: 2 panes
+tmux-workspace | strict |                                             |    |               | strict: refused: workspace configuration is invalid at line 8
 "
 
 rows() {

@@ -281,13 +281,10 @@ fn capability(meta: Option<&MetaObject>, name: &str) -> Result<Capability, Surfa
 pub(crate) struct ReportTool {
     pub(crate) name: String,
     pub(crate) title: String,
-    pub(crate) description: String,
     pub(crate) annotations: Annotations,
     /// The only part a tool's `_meta` carries: the rest is on the tool.
     #[serde(flatten)]
     pub(crate) capability: PublishedCapability,
-    pub(crate) input_schema: serde_json::Value,
-    pub(crate) output_schema: serde_json::Value,
 }
 
 #[cfg(test)]
@@ -432,7 +429,7 @@ pub(crate) fn resolve(
         router,
         nested_router,
         report: CapabilityReport {
-            schema_version: 1,
+            schema_version: 2,
             frozen: true,
             boundary: BoundaryReport {
                 one_socket_per_process: true,
@@ -513,26 +510,23 @@ fn finish_route(
         .as_deref()
         .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no title")))?
         .to_owned();
-    let description = route
-        .attr
-        .description
-        .as_deref()
-        .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no description")))?
-        .to_owned();
-    let output_schema = route
-        .attr
-        .output_schema
-        .as_ref()
-        .ok_or_else(|| SurfaceError::new(format!("tool {name:?} has no output schema")))?;
-    let capability = PublishedCapability::from(row);
+    // Required on every tool, and read from it: the report does not repeat
+    // what `tools/list` already gave the client.
+    if route.attr.description.is_none() {
+        return Err(SurfaceError::new(format!(
+            "tool {name:?} has no description"
+        )));
+    }
+    if route.attr.output_schema.is_none() {
+        return Err(SurfaceError::new(format!(
+            "tool {name:?} has no output schema"
+        )));
+    }
     Ok(ReportTool {
         name,
         title,
-        description,
         annotations: row.annotations(),
-        capability,
-        input_schema: serde_json::Value::Object((*route.attr.input_schema).clone()),
-        output_schema: serde_json::Value::Object((**output_schema).clone()),
+        capability: PublishedCapability::from(row),
     })
 }
 

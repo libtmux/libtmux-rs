@@ -69,6 +69,17 @@ fn text(value: &Value, name: &str) -> Result<Option<String>> {
         .ok_or_else(|| CliError::invalid(format!("{name} must be a string")))
 }
 
+/// A string run by a shell, kept as written for that shell to expand.
+fn literal(value: &Value, name: &str) -> Result<Option<String>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|v| Some(v.to_owned()))
+        .ok_or_else(|| CliError::invalid(format!("{name} must be a string")))
+}
+
 fn directory(value: &Value, parent: &Path) -> Result<PathBuf> {
     let path = text(value, "start_directory")?.map_or_else(|| parent.to_owned(), PathBuf::from);
     Ok(if path.is_absolute() {
@@ -202,7 +213,7 @@ fn commands(values: Vec<Value>, pane: &Value, suppress: bool) -> Result<Vec<Type
         } else {
             value
         };
-        let Some(mut text) = text(&value, "command")? else {
+        let Some(mut text) = literal(&value, "command")? else {
             continue;
         };
         if suppress {
@@ -501,19 +512,38 @@ fn pane(
         window_suppress,
         "suppress_history",
     )?;
+    let shell = literal(
+        pane.get("shell").unwrap_or(&window["window_shell"]),
+        "shell",
+    )?;
+    let commands = commands(sequence, &pane, suppress)?;
+    let mut environment = if pane.get("environment").is_some() {
+        pairs(&pane["environment"], false)?
+    } else {
+        environment.to_owned()
+    };
+    // The pane's shell expands `$NAME` in what it runs. The loader's value of
+    // each variable named reaches it through the pane's environment, as data:
+    // pasted into the text, as tmuxp does, a value holding `;` or `$(...)`
+    // would run as a command of its own.
+    let texts = commands.iter().map(|command| command.text.as_str());
+    for name in texts
+        .chain(shell.as_deref())
+        .flat_map(discovery::referenced)
+    {
+        if environment.iter().any(|(set, _)| set == name) {
+            continue;
+        }
+        if let Ok(value) = std::env::var(name) {
+            environment.push((name.to_owned(), value));
+        }
+    }
     Ok(Pane {
         directory: directory(&pane["start_directory"], window_directory)?,
-        environment: if pane.get("environment").is_some() {
-            pairs(&pane["environment"], false)?
-        } else {
-            environment.to_owned()
-        },
-        shell: text(
-            pane.get("shell").unwrap_or(&window["window_shell"]),
-            "shell",
-        )?,
+        environment,
+        shell,
         focus: boolean(&pane["focus"], false, "focus")?,
-        commands: commands(sequence, &pane, suppress)?,
+        commands,
     })
 }
 

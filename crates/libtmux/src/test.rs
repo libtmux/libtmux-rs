@@ -83,7 +83,7 @@ const CONTAINMENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Five seconds bounds a tmux that starts on a machine with a core to spare.
 /// It stops bounding one on a machine running several times its cores in
 /// work, and a deadline that fires on a healthy fixture reports the load
-/// rather than the thing under test -- which is the failure [design.md]
+/// rather than the thing under test -- which is the failure [findings.md]
 /// already describes and the rule it draws from it.
 ///
 /// Read once, because a deadline that changed inside a run would make two
@@ -93,7 +93,7 @@ const CONTAINMENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// a short deadline sets its own through
 /// [`TestServerBuilder::lifecycle_timeout`], which this does not touch.
 ///
-/// [design.md]: ../docs/design.md
+/// [findings.md]: ../docs/findings.md
 fn timeout_scale() -> f64 {
     static SCALE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     *SCALE.get_or_init(|| {
@@ -147,14 +147,14 @@ fn platform_fallback_grace_ceiling() -> Option<Duration> {
 }
 /// How long a blocking wait sleeps before looking again.
 ///
-/// Sleeping rather than yielding, for the reason [design.md] gives about the
+/// Sleeping rather than yielding, for the reason [findings.md] gives about the
 /// async poll loops and which applies with more force here: this runs inside
 /// `spawn_blocking` while waiting for a *process* to exit, so a spin holds a
 /// core the daemon needs to handle the signal it was just sent. On a machine
 /// with fewer cores than the suite has concurrent fixtures, that is the
 /// difference between a clean shutdown and a grace window that expires.
 ///
-/// [design.md]: ../docs/design.md
+/// [findings.md]: ../docs/findings.md
 pub(crate) const CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 #[cfg(any(
@@ -1063,6 +1063,99 @@ pub fn unique_name(prefix: &str) -> String {
     let count = NAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     format!("{prefix}-{}-{count}", std::process::id())
+}
+
+/// Write `script` to `path` as an executable, and return once it can run.
+///
+/// A test that points [`TestServerBuilder::tmux_executable`] at a wrapper
+/// script races every other test in its binary. A process forked while the
+/// script is open for writing keeps that descriptor until it calls `exec`,
+/// and until then running the script fails with `ETXTBSY`: intermittently,
+/// and only under parallel tests. This stages the script beside `path`, moves
+/// it into place, and runs it until an `exec` succeeds.
+///
+/// `script` must start with a `#!` line. The line inserted after it exits 0
+/// when `LIBTMUX_EXECUTABLE_READY` is set, so the readiness run does none of
+/// the script's work.
+///
+/// # Errors
+///
+/// Returns [`std::io::ErrorKind::InvalidInput`] for a script without a `#!`
+/// line, [`std::io::ErrorKind::TimedOut`] when it still cannot run after a
+/// [`scaled`] five seconds, and any error writing it or running it.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::test::{install_executable, unique_name};
+///
+/// let directory = std::env::temp_dir().join(unique_name("install"));
+/// std::fs::create_dir(&directory)?;
+/// let greet = directory.join("greet");
+/// install_executable(&greet, "#!/bin/sh\nprintf 'hello %s' \"$1\"\n")?;
+///
+/// let output = std::process::Command::new(&greet).arg("tmux").output()?;
+/// assert_eq!(output.stdout, b"hello tmux");
+/// # std::fs::remove_dir_all(&directory)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn install_executable(path: &Path, script: &str) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind, Write as _};
+
+    let Some((shebang, body)) = script
+        .split_once('\n')
+        .filter(|(first, _)| first.starts_with("#!"))
+    else {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "an executable script starts with a #! line",
+        ));
+    };
+    let staged = path.with_extension("staged");
+    let mut file = fs::File::create(&staged)?;
+    write!(
+        file,
+        "{shebang}\nif [ -n \"${{LIBTMUX_EXECUTABLE_READY:-}}\" ]; then exit 0; fi\n{body}"
+    )?;
+    file.sync_all()?;
+    drop(file);
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o700))?;
+    fs::rename(&staged, path)?;
+    run_until_ready(path, Instant::now() + scaled(Duration::from_secs(5)))
+}
+
+/// Run `path` with `LIBTMUX_EXECUTABLE_READY` set until it can be executed,
+/// or `deadline` passes while it is still busy.
+fn run_until_ready(path: &Path, deadline: Instant) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    loop {
+        let run = ProcessCommand::new(path)
+            .env("LIBTMUX_EXECUTABLE_READY", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match run {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                return Err(Error::other(format!(
+                    "{} exited with {status} on its readiness run",
+                    path.display()
+                )));
+            }
+            Err(error) if error.kind() == ErrorKind::ExecutableFileBusy => {
+                if Instant::now() >= deadline {
+                    return Err(Error::new(
+                        ErrorKind::TimedOut,
+                        format!("{} stayed busy: {error}", path.display()),
+                    ));
+                }
+                std::thread::yield_now();
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Kill tmux servers left behind by fixtures that never cleaned up.

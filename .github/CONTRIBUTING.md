@@ -107,7 +107,7 @@ Doctests are a separate target and are part of the gate:
 $ just doctest
 ```
 
-Four READMEs are compiled along with them, so a Rust example on any of these
+Five pages are compiled along with them, so a Rust example on any of these
 pages is a test rather than prose:
 
 - `crates/libtmux/README.md`, by `#![doc = include_str!(…)]` at the top of
@@ -115,8 +115,11 @@ pages is a test rather than prose:
 - `README.md`, by a `#[cfg(doctest)] #[doc = include_str!(…)]` item further
   down the same file, so the front page is tested without appearing in the
   rendered documentation.
-- `crates/tmux-workspace/README.md`, by the same top-of-crate include in
-  `crates/tmux-workspace/src/lib.rs`.
+- `crates/tmux-workspace/docs/library.md`, by the same top-of-crate include
+  in `crates/tmux-workspace/src/lib.rs`: that page is the library's
+  documentation.
+- `crates/tmux-workspace/README.md`, by `Readme` in the same file. It is the
+  command's page on crates.io, so it is compiled without being rendered.
 - `crates/libtmux-macros/README.md`, by `MacrosReadme` in
   `crates/tmux-workspace/src/lib.rs`, reached through a symlink. A proc-macro
   crate cannot doctest a README that derives through it, and the example needs
@@ -225,9 +228,10 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `doctest`, `examples`, `fixture-root`, `docs`,
-`doc-blocks`, `parity-claims`, `format-coverage-check`, `features`, `deny`,
-`msrv`, `package`.
+`compat-supervisor-test`, `doctest`, `examples`, `example-tables`,
+`fixture-root`, `docs`, `doc-blocks`, `doc-contents`, `doctests-run`,
+`parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`,
+`package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
 every cargo invocation passes `--locked`, so a change that moves `Cargo.lock`
 fails until the lockfile is committed.
@@ -235,7 +239,7 @@ fails until the lockfile is committed.
 `compat-supervisor-test` exercises the Linux pidfd containment used by the
 slow compatibility lane. It skips on other Unix targets; CI runs it on Linux.
 
-Four gates are **not** in `just check` and run only in CI:
+These gates are **not** in `just check` and run only in CI:
 
 | Gate | Why it is separate |
 | --- | --- |
@@ -243,11 +247,20 @@ Four gates are **not** in `just check` and run only in CI:
 | `just example-coverage-check` | Same, and rides the same nightly build |
 | `just compat` | Builds five tmux releases from source; 90 minutes |
 | `just fuzz <target>` | Needs nightly and a sanitizer; runs weekly |
+| `just bench`, `just bench-waits`, `just bench-compare` | Timing on a shared runner; runs weekly against the previous week, failing past 2x |
+| `just parity`, `just bench-cli` | Need tmuxp 1.74.0; load every tmuxp fixture through tmuxp and `tmux-workspace` and diff the sessions, then time both; run weekly |
+
+`just parity` needs a pinned tmuxp 1.74.0 on `--tmuxp` (or on `PATH`), not
+just tmux, so it runs weekly in CI rather than in `just check`. It loads every `crates/tmux-workspace/tests/fixtures/tmuxp` document
+with tmuxp and with `tmux-workspace load`, each on its own throwaway server,
+and diffs what tmux itself reports. A documented, deliberate difference from
+tmuxp -- see `scripts/tmuxp-parity.py`'s `ALLOWLIST` -- is reported but does
+not fail the run; anything else that differs does.
 
 CI also runs the suite on macOS, but only on `master` or manual dispatch: a
 macOS runner bills at ten times a Linux one and the lints are
-platform-independent. On a pull request, `tests on macOS` and `fuzz parsers`
-report as skipping. That is the design, not a failure.
+platform-independent. On a pull request, `tests on macOS`, `fuzz parsers`,
+`benchmarks` and `tmuxp parity` report as skipping. That is the design, not a failure.
 
 `just parity-claims` fails when a row of `parity.md` marked `implemented` or
 `verified` names no caller-reachable Rust path, or puts an associated item on
@@ -305,6 +318,12 @@ elsewhere does not fail somebody else's gate.
 comment opens mid-sentence or sits below a non-doc attribute — the shape a
 split leaves when it lands on a sentence boundary. See
 [`WRITING.md`](WRITING.md) for the rule this enforces.
+
+**A Contents list matches its document.** `design.md`, `findings.md` and
+`parity.md` open with one, and `just doc-contents` fails when it and the `##` sections
+disagree in title, order or anchor. A section that indexes its `###`
+subsections under its entry, as `design.md`'s longer ones do, is held to them
+the same way.
 
 **The format catalog is measured against tmux's own source.**
 `crates/libtmux/docs/format-coverage.txt` records every format name tmux
@@ -488,6 +507,14 @@ manifest, then runs the whole gate on that exact commit, packages the crate,
 attests it, publishes, and attaches the `.crate` to a GitHub release. It runs
 the gate rather than trusting the tag because a crates.io version is
 immutable: it is the one build that cannot be taken back.
+
+For `tmux-workspace` and `tmux-mcp` it then builds the command for Linux
+(musl, x86_64 and aarch64) and macOS (arm64 and x86_64), attests the archives
+and attaches them to the same release, through `binaries.yml`. `cargo
+binstall` finds them by the `pkg-url` in each crate's
+`[package.metadata.binstall]`, so the archive names and that template change
+together. A pull request touching either manifest, the lockfile or the
+workflow builds all eight without uploading.
 
 **Provenance is attached to the release, not to the registry.** crates.io does
 not host or display build attestations yet, and `cargo` does not verify them,

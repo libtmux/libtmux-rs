@@ -937,7 +937,7 @@ async fn only_the_last_input_is_asked_about() {
 
 #[tokio::test]
 async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mutation() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
 
     let original = libtmux::test::TestServer::new().await.unwrap();
     let replacement = libtmux::test::TestServer::new().await.unwrap();
@@ -951,8 +951,7 @@ async fn append_authenticates_inherited_and_selected_daemons_before_python_or_mu
     symlink(original.socket_path(), &alias).unwrap();
     let marker = directory.path().join("python-called");
     let python = directory.path().join("python-sentinel");
-    std::fs::write(&python, "#!/bin/sh\n: > python-called\nexit 97\n").unwrap();
-    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o700)).unwrap();
+    libtmux::test::install_executable(&python, "#!/bin/sh\n: > python-called\nexit 97\n").unwrap();
     let mut failures = Vec::new();
     for retarget in [false, true] {
         if retarget {
@@ -1104,6 +1103,38 @@ async fn empty_tmux_context_allows_freezing_an_isolated_default_endpoint() {
     guard.shutdown().await.unwrap();
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("borrowed"));
+}
+
+#[tokio::test]
+async fn freeze_defaults_to_this_panes_session_only_on_its_own_server() {
+    let here = libtmux::test::TestServer::new().await.unwrap();
+    let elsewhere = libtmux::test::TestServer::new().await.unwrap();
+    let mine = here.session("mine").await.unwrap();
+    let pane = current_pane(&mine).await;
+    // The same pane ID names a pane of another session over there.
+    let decoy = elsewhere.session("decoy").await.unwrap();
+    elsewhere.session("second").await.unwrap();
+    assert_eq!(current_pane(&decoy).await, pane, "the IDs have to collide");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let freeze = |guard: &libtmux::test::TestServer| {
+        let socket = guard.socket_path().to_str().unwrap().to_owned();
+        at_pane(
+            &["freeze", "-S", &socket, "--json"],
+            directory.path(),
+            Some((&here, &pane)),
+        )
+    };
+    let own = freeze(&here);
+    let other = freeze(&elsewhere);
+    here.shutdown().await.unwrap();
+    elsewhere.shutdown().await.unwrap();
+
+    assert!(own.status.success(), "{own:?}");
+    let captured: serde_json::Value = serde_json::from_slice(&own.stdout).unwrap();
+    assert_eq!(captured["session_name"], "mine");
+    assert_eq!(other.status.code(), Some(1), "{other:?}");
+    let error: serde_json::Value = serde_json::from_slice(&other.stderr).unwrap();
+    assert_eq!(error["code"], "session_not_found", "{other:?}");
 }
 
 #[tokio::test]
@@ -1295,6 +1326,8 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
             .unwrap()
             .contains("Reject legacy 88-color mode")
     );
+    // Accepted only to be refused, so offered nowhere a user picks from.
+    assert_eq!(colors["hidden"], true);
     assert_eq!(
         commands.iter().find(|c| c["name"] == "import").unwrap()["subcommands"]
             .as_array()
@@ -1306,8 +1339,11 @@ fn generated_metadata_completion_and_manual_use_the_command_graph() {
         let output = cli(&["--generate", format]);
         assert!(output.status.success(), "{format}: {output:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("tmux-workspace"));
-        if format != "man" {
-            assert!(String::from_utf8_lossy(&output.stdout).contains("88-colors"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("88-colors"));
+        if format == "man" {
+            let manual = String::from_utf8_lossy(&output.stdout);
+            assert!(manual.contains(".SH EXAMPLES\n.TP\n\\fBtmux\\-workspace load"));
+            assert!(manual.contains(".SS EXAMPLES"));
         }
     }
 }
@@ -1357,8 +1393,6 @@ fn legacy_color_mode_is_rejected_before_reading_inputs() {
 
 #[tokio::test]
 async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let guard = libtmux::test::TestServer::new().await.unwrap();
     guard
         .server()
@@ -1369,15 +1403,12 @@ async fn color_validation_preserves_sessions_and_256_reaches_tmux() {
     let trace = directory.path().join("trace");
     let wrapper = directory.path().join("tmux");
     let python = directory.path().join("python");
-    std::fs::write(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
-    std::fs::write(
+    libtmux::test::install_executable(&wrapper, "#!/bin/sh\nprintf '<%s>' \"$@\" >> \"$WORKSPACE_TMUX_TRACE\"\nprintf '\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexec \"$WORKSPACE_REAL_TMUX\" \"$@\"\n").unwrap();
+    libtmux::test::install_executable(
         &python,
         "#!/bin/sh\nprintf 'python\\n' >> \"$WORKSPACE_TMUX_TRACE\"\nexit 97\n",
     )
     .unwrap();
-    for executable in [&wrapper, &python] {
-        std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
     for name in ["first", "second", "bridge"] {
         let mut workspace =
             serde_json::json!({"session_name":name,"windows":[{"panes":["blank"]}]});
@@ -1502,6 +1533,62 @@ fn empty_discovery_has_stable_json_and_ndjson_shapes() {
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
         serde_json::json!([])
     );
+}
+
+#[test]
+fn a_bare_name_means_the_workspace_directory_not_the_current_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir_all(root.join(".tmuxp")).unwrap();
+    std::fs::create_dir_all(root.join(".tmuxinator")).unwrap();
+    std::fs::write(root.join(".tmuxp/dev.yaml"), "session_name: configured\n").unwrap();
+    std::fs::write(root.join("dev.yaml"), "session_name: local\n").unwrap();
+    std::fs::write(
+        root.join(".tmuxinator/api.yml"),
+        "name: api\nwindows:\n  - logs: tail -f /dev/null\n",
+    )
+    .unwrap();
+    // An earlier import's output, saved beside where it is run again.
+    std::fs::write(root.join("api.yaml"), "session_name: api\n").unwrap();
+    let session = |arguments: &[&str]| {
+        let output = at(arguments, root);
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["session_name"].clone()
+    };
+
+    assert_eq!(session(&["--json", "convert", "dev"]), "configured");
+    assert_eq!(session(&["--json", "convert", "./dev"]), "local");
+    assert_eq!(session(&["--json", "import", "tmuxinator", "api"]), "api");
+
+    std::fs::remove_file(root.join(".tmuxp/dev.yaml")).unwrap();
+    let output = at(&["--json", "convert", "dev"], root);
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["code"], "workspace_not_found");
+    assert!(error["message"].as_str().unwrap().contains("write ./dev"));
+}
+
+#[test]
+fn an_import_is_saved_where_load_finds_it_by_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir_all(root.join(".tmuxinator")).unwrap();
+    std::fs::write(
+        root.join(".tmuxinator/api.yml"),
+        "name: api\nwindows:\n  - logs: tail -f /dev/null\n",
+    )
+    .unwrap();
+    assert!(
+        !root.join(".tmuxp").exists(),
+        "the workspace directory is made"
+    );
+
+    let output = at(&["import", "tmuxinator", "-y", "api"], root);
+    assert!(output.status.success(), "{output:?}");
+    assert!(root.join(".tmuxp/api.yaml").is_file());
+    assert!(!root.join(".tmuxinator/api.yaml").exists());
+    let output = at(&["--json", "convert", "api"], root);
+    let loaded: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(loaded["session_name"], "api", "{output:?}");
 }
 
 #[test]
@@ -1957,8 +2044,6 @@ fn discovery_and_search_use_workspace_fields_and_case_modes() {
 
 #[tokio::test]
 async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
-    use std::os::unix::fs::PermissionsExt;
-
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
     let config_directory = directory.path().join("config directory");
@@ -1970,12 +2055,11 @@ async fn bootstrap_resolves_only_its_executable_from_the_config_directory() {
     let caller = caller.canonicalize().unwrap();
     let runtime = runtime.canonicalize().unwrap();
     let script = config_directory.join("bootstrap script");
-    std::fs::write(
+    libtmux::test::install_executable(
         &script,
         "#!/bin/sh\nrecord=$1\nshift\nprintf '%s\\0' \"$PWD\" \"$#\" \"$@\" > \"$record\"\n",
     )
     .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut failures = Vec::new();
     let mut index = 0;
     for executable in [
@@ -3719,6 +3803,94 @@ async fn load_places_panes_after_the_first_in_config_order() {
     }
 
     guard.shutdown().await.unwrap();
+}
+
+#[test]
+fn a_dry_run_describes_the_build_and_touches_nothing() {
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"planned", "before_script":"touch script-ran",
+            "windows":[{"window_name":"edit","layout":"main-vertical",
+                "panes":["echo $WS_SECRET","blank"]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let socket = directory.path().join("never.sock");
+    let socket = socket.to_str().unwrap();
+    let run = |mode: &[&str]| {
+        let mut arguments = mode.to_vec();
+        arguments.extend(["load", "--dry-run", "-S", socket, "workspace.json"]);
+        command_at(&arguments, directory.path())
+            .env("WS_SECRET", "hunter2")
+            .output()
+            .unwrap()
+    };
+    let human = run(&[]);
+    let machine = run(&["--json"]);
+
+    for output in [&human, &machine] {
+        assert!(output.status.success(), "{output:?}");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("hunter2"));
+    }
+    assert!(!directory.path().join("script-ran").exists());
+    assert!(!directory.path().join("never.sock").exists());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("planned"));
+    let plan: serde_json::Value = serde_json::from_slice(&machine.stdout).unwrap();
+    assert_eq!(plan["status"], "dry_run");
+    let window = &plan["sessions"][0]["windows"][0];
+    assert_eq!(window["layout"], "main-vertical");
+    assert_eq!(window["panes"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        window["panes"][0]["environment"],
+        serde_json::json!(["WS_SECRET"])
+    );
+}
+
+#[tokio::test]
+async fn a_loader_variable_reaches_the_pane_as_data_not_code() {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"values","windows":[{"panes":[
+            // Unquoted, as it is usually written: a value pasted into the
+            // text would end the command at its `;`.
+            "echo $WS_VALUE > value; touch done",
+            {"shell_command":["echo $WS_VALUE > document; touch documented"],
+                "environment":{"WS_VALUE":"from the document"}}
+        ]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let socket = guard.socket_path().to_str().unwrap();
+    let output = command_at(
+        &["load", "-d", "-S", socket, "workspace.json"],
+        directory.path(),
+    )
+    .env("WS_VALUE", "safe; touch pwned")
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let [done, documented] = ["done", "documented"].map(|name| directory.path().join(name));
+    let ran = libtmux::test::retry_until(std::time::Duration::from_secs(15), async || {
+        done.exists() && documented.exists()
+    })
+    .await;
+    guard.shutdown().await.unwrap();
+
+    assert!(ran.is_ok(), "the pane command never finished");
+    let value = std::fs::read_to_string(directory.path().join("value")).unwrap();
+    assert_eq!(value, "safe; touch pwned\n");
+    assert!(
+        !directory.path().join("pwned").exists(),
+        "the value ran as a command"
+    );
+    let document = std::fs::read_to_string(directory.path().join("document")).unwrap();
+    assert_eq!(
+        document, "from the document\n",
+        "the document's own value wins"
+    );
 }
 
 #[tokio::test]

@@ -379,20 +379,22 @@ async fn capabilities_resource_reports_the_effective_surface() {
         let mut hints = serde_json::to_value(tool.annotations.as_ref().expect("hints")).unwrap();
         hints.as_object_mut().unwrap().remove("title");
         assert_eq!(row["annotations"], hints, "{} annotations", tool.name);
-        assert_eq!(row["description"].as_str(), tool.description.as_deref());
-        assert_eq!(
-            row["inputSchema"],
-            Value::Object((*tool.input_schema).clone()),
-            "{} input schema",
-            tool.name,
-        );
-        assert_eq!(
-            row["outputSchema"],
-            Value::Object((**tool.output_schema.as_ref().expect("typed output schema")).clone()),
-            "{} output schema",
-            tool.name,
-        );
+        // The description and schemas are the tool's; the client already has
+        // them from `tools/list`, and the report does not send them twice.
+        for repeated in ["description", "inputSchema", "outputSchema"] {
+            assert!(
+                row.get(repeated).is_none(),
+                "{} repeats {repeated}",
+                tool.name
+            );
+        }
     }
+    assert_eq!(report["schemaVersion"], 2);
+    assert!(
+        text.len() < 32 * 1024,
+        "the report grew to {} bytes; it is read to learn the socket",
+        text.len()
+    );
     wire.shutdown().await;
 }
 
@@ -574,4 +576,26 @@ async fn an_unknown_tool_is_still_a_protocol_error() {
         .expect_err("an unknown tool name cannot become a tool result");
 
     wire.shutdown().await;
+}
+
+/// What an agent reads at connect time is reviewed as text, not assembled
+/// out of sight: a change to it shows up as a diff of the snapshot. Set
+/// `TMUX_MCP_BLESS=1` to rewrite the snapshot after a deliberate change.
+#[test]
+fn the_instructions_match_their_reviewed_snapshot() {
+    use rmcp::ServerHandler as _;
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .caller(None)
+        .build();
+    let instructions = tools.get_info().instructions.expect("instructions");
+    let snapshot =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/instructions.txt");
+    if std::env::var_os("TMUX_MCP_BLESS").is_some() {
+        std::fs::write(&snapshot, &instructions).expect("snapshot is written");
+    }
+    let expected = std::fs::read_to_string(&snapshot).expect("snapshot is readable");
+    assert_eq!(
+        instructions, expected,
+        "rerun with TMUX_MCP_BLESS=1 after a deliberate change"
+    );
 }

@@ -18,7 +18,7 @@ and panes.**
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
-See the [migration notes](docs/migration.md) when upgrading from alpha.11.
+See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
 
 ```rust
 use libtmux::test::TestServer;
@@ -114,7 +114,7 @@ below, so a caller who wants them all does not have to list them.
 Waiting needs no feature: `Pane::wait_for_text` and `Pane::wait_for_quiet` are
 in the library, poll the scrollback with wrapped lines joined, and answer
 `PaneWait::Dead` when the pane's process ends rather than running to the
-deadline. `docs/design.md` records what they had to survive, and what a
+deadline. `docs/findings.md` records what they had to survive, and what a
 control-mode doorbell was measured to buy.
 
 ## Waiting for something to happen
@@ -679,6 +679,8 @@ longer documents ship inside the crate, next to the source:
 - `docs/design.md` — why the crate is shaped the way it is: the transport, the
   snapshot and format boundary, the query grammar, the test guard, and the
   compatibility lanes.
+- `docs/findings.md` — every tmux defect and platform surprise the crate works
+  around, each with the tmux releases it holds for and what the crate does.
 - `docs/parity.md` — the capability ledger against Python libtmux, naming each
   Rust symbol and the test that exercises it.
 

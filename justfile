@@ -233,6 +233,15 @@ fuzz target="control_line" seconds="60":
 fuzz-list:
     cargo +nightly fuzz list
 
+# Load every crates/tmux-workspace/tests/fixtures/tmuxp document with both
+# tmuxp and `tmux-workspace load`, each on its own throwaway server under
+# /tmp/libtmux-rs-dev/, and diff what tmux itself reports. Needs a pinned
+# tmuxp 1.74.0 (see scripts/tmuxp-parity.py's docstring), so it is not part
+# of `just check`.
+[group: 'test']
+parity *args:
+    python3 scripts/tmuxp-parity.py {{ args }}
+
 # Watch files and run tests on change (requires entr)
 [group: 'test']
 watch-test:
@@ -291,9 +300,17 @@ watch-clippy:
     fi
 
 # Build the API documentation
+#
+# Every feature, as docs.rs builds it, then libtmux with its defaults and with
+# none, and tmux-workspace as a library dependent builds it, without the
+# command: a warning that only a partial build raises would otherwise reach
+# every such reader and no gate.
 [group: 'docs']
 docs:
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux --no-deps
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux --no-default-features --no-deps
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package tmux-workspace --no-default-features --no-deps
 
 # The catalog is hand-maintained, so a format tmux gained -- or one nobody
 # ever added -- is invisible: nothing fails, callers just cannot ask for the
@@ -337,6 +354,15 @@ example-tables:
     python3 -m unittest scripts/test_check_example_tables.py
     python3 scripts/check-example-tables.py README.md
 
+# A Contents list is a copy of a document's headings, and a copy drifts: a
+# renamed section leaves the list rendering a link to an anchor that is gone.
+#
+# Report Contents lists that disagree with their document's sections
+[group: 'docs']
+doc-contents:
+    python3 scripts/check-contents.py crates/libtmux/docs/design.md \
+        crates/libtmux/docs/findings.md crates/libtmux/docs/parity.md
+
 # rustdoc supplies a doctest's `fn main`, so a block whose body is only a
 # hidden function definition compiles it and then runs an empty main. Every
 # assertion inside is dead, and nothing says so: it renders like any other
@@ -369,6 +395,11 @@ bench *args:
 bench-waits *args:
     cargo bench --features test-support,control-mode --bench waits -- {{ args }}
 
+# Compare the last benchmark run with the one before it; fails past 2x
+[group: 'bench']
+bench-compare *args:
+    python3 scripts/bench-regressions.py target/criterion {{ args }}
+
 # Compare an installed workspace CLI binary against real tmux; pass --binary
 [group: 'bench']
 bench-cli *args:
@@ -400,7 +431,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test doctest examples example-tables fixture-root docs doc-blocks doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test doctest examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

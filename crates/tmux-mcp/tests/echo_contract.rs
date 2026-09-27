@@ -38,6 +38,12 @@ async fn s1_a_pending_answer_never_hides_real_output_containing_it() {
         .to_owned();
     prompt_ready(guard.server(), &pane).await;
 
+    // The job's one-second sleep starts when this send is dispatched, so the
+    // clock starts before it. Started after the next send instead, a loaded
+    // machine spends part of that second typing `y`, and the real output
+    // arrives inside the bound that is meant to exclude it.
+    let started = Instant::now();
+
     // A real, independent producer of "ready" -- backgrounded so the prompt
     // returns immediately and the pending keystroke below lands on a fresh
     // line, not mid-dispatch of this one.
@@ -62,7 +68,6 @@ async fn s1_a_pending_answer_never_hides_real_output_containing_it() {
         .await
         .expect("the pending keystroke is typed");
 
-    let started = Instant::now();
     let view = json(
         tools
             .wait_for_text(
@@ -306,14 +311,23 @@ async fn s5_unsubmitted_type_ahead_into_a_cold_shell_is_never_matched() {
         .expect("pane id")
         .to_owned();
 
-    tools
-        .send_keys(args(serde_json::json!({
-            "pane": pane,
-            "text": "MARKER",
-            "enter": false
-        })))
-        .await
-        .expect("type-ahead is queued before the shell reads it");
+    // The pane's program changes under the send as the fixture's `sleep`
+    // gives way to `cat`, and the server refuses a send that races that
+    // change before dispatching anything. That refusal is its job, so a
+    // refused send is made again; once `cat` runs it echoes the text back,
+    // and that echo must be discounted just the same.
+    let queued = libtmux::test::retry_until(Duration::from_secs(5), async || {
+        tools
+            .send_keys(args(serde_json::json!({
+                "pane": pane,
+                "text": "MARKER",
+                "enter": false
+            })))
+            .await
+            .is_ok()
+    })
+    .await;
+    assert!(queued.is_ok(), "type-ahead is queued");
 
     let view = json(
         tools

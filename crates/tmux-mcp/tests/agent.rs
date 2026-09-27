@@ -147,9 +147,8 @@ impl LoggedTmux {
             shell_quote(log.as_os_str()),
             shell_quote(actual.as_os_str()),
         );
-        std::fs::write(&executable, script).expect("logging fixture executable");
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
-            .expect("fixture executable permissions");
+        libtmux::test::install_executable(&executable, &script)
+            .expect("logging fixture executable");
         Self {
             directory,
             executable,

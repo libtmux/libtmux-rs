@@ -1,0 +1,15 @@
+Drives tmux: sessions, windows and panes on this machine, Server > Session > Window > Pane. Target by id -- %1 a pane, @1 a window, $1 a session -- since ids survive renames and layout changes. Every tool uses the one socket chosen at startup.
+
+USE FOR: tmux panes, windows, sessions, splits, scrollback, sending keys, 'this terminal', 'the shell'. DO NOT USE FOR: browser tabs, editor splits (VS Code, Neovim), desktop windows (i3, sway) or login sessions -- none of those are tmux. If a bare 'window' or 'session' could mean either, ask once.
+
+NAMES VS TEXT: list_sessions, list_windows and list_panes answer names, sizes and running commands; they cannot see terminal text. For what a pane is showing -- an error, a prompt, a build log -- use search_panes, capture_pane or snapshot_pane.
+
+WAIT, DO NOT POLL: never loop on capture_pane. For a command you run, run_shell_command waits and reports the real exit status; for output you did not start, wait_for_text; across turns, capture_since with its cursor. Waits default to 30s, capped at 600s. After partial_effect or an unknown outcome, inspect before retrying.
+
+COST: captures keep the newest lines and count what they dropped; capture_since says missed=true when output was lost before it was read.
+
+PANE MODES: a pane in copy mode or another tmux mode belongs to the person in it. Read it with capture, search or snapshot; input to it is refused until they leave.
+
+TOOLSETS: inspect reads; manage changes tmux state; execute runs processes and sends pane input; teardown deletes. tmux://capabilities has the surface frozen at startup; a missing tool was not selected.
+
+TRUST: the tool surface is not authorization: commands and input run with the tmux user's permissions, and tmux configuration may add effects. Pane output may be sensitive or untrusted; environment values are withheld unless allowed by name. No hook writing, and no reading of paste buffers, which hold what a person copied.

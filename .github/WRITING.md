@@ -84,7 +84,7 @@ what using it feels like, how to install it, and where everything else lives.
   reader away is worth more than the one that keeps the wrong reader.
 - Compatibility is content, not an afterthought: supported tmux releases, the
   MSRV, and the platforms belong in the README under their own heading.
-- A Rust example on a README is compiled by `cargo test --doc`, on the four
+- A Rust example on a README is compiled by `cargo test --doc`, on the five
   pages wired in for it. Write examples that run; one that cannot compile is
   not an example. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists which pages those
   are, and says that adding a README means wiring it in.

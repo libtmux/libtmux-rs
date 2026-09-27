@@ -1,5 +1,27 @@
 # Python parity ledger
 
+## Contents
+
+- [Baseline and policy](#baseline-and-policy)
+- [Status vocabulary](#status-vocabulary)
+- [Crate facade](#crate-facade)
+- [Commands, versions, and common values](#commands-versions-and-common-values)
+- [Errors](#errors)
+- [Constants and targets](#constants-and-targets)
+- [Formats and snapshots](#formats-and-snapshots)
+- [Queries and observable internal containers](#queries-and-observable-internal-containers)
+- [Options](#options)
+- [Hooks](#hooks)
+- [Server](#server)
+- [Session](#session)
+- [Window](#window)
+- [Pane](#pane)
+- [Client](#client)
+- [Test support](#test-support)
+- [Intentional Rust deltas](#intentional-rust-deltas)
+- [Ambiguous public boundaries](#ambiguous-public-boundaries)
+- [Advancement rule](#advancement-rule)
+
 ## Baseline and policy
 
 The first Rust release targets the Python public API at commit

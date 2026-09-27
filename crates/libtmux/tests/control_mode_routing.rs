@@ -22,7 +22,6 @@
 )]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
 use libtmux::control::ControlMode;
@@ -42,8 +41,7 @@ fn stub_tmux(directory: &Path, version: &str) -> (std::path::PathBuf, std::path:
         log = log.display(),
     );
 
-    fs::write(&stub, script).expect("the stub is written");
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("the stub is executable");
+    libtmux::test::install_executable(&stub, &script).expect("the stub is installed");
     fs::write(&log, "").expect("the log starts empty");
 
     (stub, log)

@@ -50,6 +50,7 @@ core_files=(
     "$core_root"/LICENSE-MIT
     "$core_root"/README.md
     "$core_root"/docs/design.md
+    "$core_root"/docs/findings.md
     "$core_root"/docs/parity.md
     "$core_root"/examples/*.rs
     "$core_root"/schema/*.json
@@ -72,6 +73,7 @@ mcp_files=(
     "$mcp_root"/LICENSE-MIT
     "$mcp_root"/README.md
     "$mcp_root"/examples/*.rs
+    "$mcp_root"/tests/snapshots/*
 )
 # `docs/libtmux-macros-README.md` is a symlink to the copy that crate owns,
 # and the doctest verifying it reads that path. It has to ship, or
@@ -86,6 +88,9 @@ workspace_crate_files=(
     "$workspace_crate_root"/LICENSE-APACHE
     "$workspace_crate_root"/LICENSE-MIT
     "$workspace_crate_root"/README.md
+    "$workspace_crate_root"/docs/cli.md
+    "$workspace_crate_root"/docs/library.md
+    "$workspace_crate_root"/examples/*.rs
     "$workspace_crate_root"/libtmux-macros-README.md
     "$workspace_crate_root"/tests/fixtures/tmuxp/*
     "$workspace_crate_root"/src/cli/bridge.py
@@ -120,6 +125,21 @@ done
 # name this one. The copy on crates.io is frozen at publish time, so a stale
 # number there sends every reader of the new release to the old one, and no
 # amount of fixing it afterwards reaches them without another release.
+# Print `crate version` for every version a document tells a reader to use:
+# a manifest line, `cargo add crate@version`, and `cargo [b]install crate
+# --version version`, the last read across `\` continuations because an
+# install command is the one most often split over lines.
+documented_versions() {
+    perl -0777 -ne '
+        my $crate = qr/\b(libtmux-macros|libtmux|tmux-mcp|tmux-workspace)\b/;
+        s/\\\n\s*/ /g;
+        print "$1 $2\n" while /$crate\s*=\s*(?:\{[^}]*version\s*=\s*)?"([^"]+)"/g;
+        my $version = qr/([0-9A-Za-z.+-]+)/;
+        print "$1 $2\n" while /cargo add $crate\@$version/g;
+        print "$1 $2\n" while /cargo b?install $crate[^\n]*?--version[ =]$version/g;
+    ' "$1"
+}
+
 check_documented_version() {
     local root="$1" name="$2" doc line found_crate found status=0
 
@@ -141,9 +161,7 @@ check_documented_version() {
                     "${crate_versions[$found_crate]}" >&2
                 status=1
             fi
-        done < <(grep -oP '\b(?:libtmux|libtmux-macros|tmux-mcp)\b(?=\s*=)\s*=\s*(?:\{[^}]*version\s*=\s*)?"[^"]+"' \
-                     "$root/$doc" \
-                     | sed -E 's/^([a-z-]+).*"([^"]+)"$/\1 \2/' || true)
+        done < <(documented_versions "$root/$doc")
     done <<< "$3"
 
     return "$status"
@@ -181,9 +199,11 @@ check_relative_links() {
         esac
 
         while IFS= read -r target; do
-            # Skip URLs and same-page anchors; neither resolves to a file.
+            # Skip URLs and same-page anchors, which resolve to no file, and
+            # rustdoc intra-doc paths such as `crate::command`, which the
+            # -D warnings documentation build resolves instead.
             case "$target" in
-                http://* | https://* | '#'*) continue ;;
+                http://* | https://* | '#'* | *::*) continue ;;
             esac
             target="${target%%#*}"
             [[ -n "$target" ]] || continue
