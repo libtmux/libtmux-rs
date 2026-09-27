@@ -235,20 +235,17 @@ $ tmux-workspace --generate fish > ~/.config/fish/completions/tmux-workspace.fis
 conflicts, overrides and numeric bounds. Under `--json` or `--ndjson` the
 artifact's exact bytes arrive in `artifact.content`.
 
-## The command and the library read documents differently
+## Where the command and the library differ
 
-The package ships a library and the command, and they are two readers: the
-command has its own parser and builder. A file that loads through one is not
-guaranteed to mean the same thing through the other.
+The package ships the command and a library with separate builders, and both
+read a document the way tmuxp does: merge keys, `window_shell` for every pane,
+a pane's `environment` replacing its window's, and a missing `windows`
+refused. Both also leave `$NAME` in a command to the pane's shell, with the
+loader's value in the pane's environment, where tmuxp pastes the value into
+the command. They differ only here:
 
 | | Library | `tmux-workspace` command |
 | --- | --- | --- |
-| An unknown key, by default | recorded in `unsupported_keys`, the file still loads | refused, unless it starts with `x-` |
-| An unknown key, under `Workspace::from_yaml_strict` | refused, unless it starts with `x-` | refused, unless it starts with `x-` |
-| A missing or null `windows` | refused | refused |
-| An empty `windows` list | keeps the window tmux made | refused |
+| An unknown key | recorded in `unsupported_keys`; `Workspace::from_yaml_strict` refuses it unless it starts with `x-` | refused, unless it starts with `x-` |
+| An empty `windows` list | keeps the window tmux made, as tmuxp does | refused |
 | `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |
-
-The unknown-key row is a choice the library offers rather than a
-disagreement: `Workspace::from_yaml_strict` and `Workspace::from_file_strict`
-apply the same policy the command always does.

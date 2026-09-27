@@ -236,9 +236,9 @@ covers installing it and wiring clients.
 
 The same package is a library: parse a workspace, preview the tmux commands
 it would run, build it, or freeze a session, through
-[libtmux](https://docs.rs/libtmux). The library has its own reader, and the
-command reference lists
-[where the two differ](docs/cli.md#the-command-and-the-library-read-documents-differently).
+[libtmux](https://docs.rs/libtmux). It reads a document the way the command
+does, tmuxp's way; the command reference lists
+[where the two differ](docs/cli.md#where-the-command-and-the-library-differ).
 
 ```console
 $ cargo add tmux-workspace@0.1.0-alpha.13 --no-default-features

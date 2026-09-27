@@ -199,10 +199,9 @@ file still loads: the three above, plus `workspace_builder`,
 any other unrecognized key instead, unless it starts with `x-`, which is the
 `tmux-workspace` command's own policy.
 
-The `tmux-workspace` command still reads documents with its own, separate
-parser and builder, and differs from this library in the ways
-[its reference](https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/docs/cli.md#the-command-and-the-library-read-documents-differently)
-lists.
+The `tmux-workspace` command has its own parser and builder but reads a
+document the same way, tmuxp's; the three places it differs are in
+[its reference](https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/docs/cli.md#where-the-command-and-the-library-differ).
 
 ## Install
 
