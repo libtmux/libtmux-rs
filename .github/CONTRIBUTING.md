@@ -250,9 +250,8 @@ These gates are **not** in `just check` and run only in CI:
 | `just bench`, `just bench-waits`, `just bench-compare` | Timing on a shared runner; runs weekly against the previous week, failing past 2x |
 | `just parity` | Needs tmuxp 1.74.0; loads every tmuxp fixture through tmuxp and `tmux-workspace` and diffs the sessions; runs weekly |
 
-`just parity` is separate for the same reason and runs in neither CI nor `just
-check`: it needs a pinned tmuxp 1.74.0 on `--tmuxp` (or on `PATH`), not just
-tmux. It loads every `crates/tmux-workspace/tests/fixtures/tmuxp` document
+`just parity` needs a pinned tmuxp 1.74.0 on `--tmuxp` (or on `PATH`), not
+just tmux, so it runs weekly in CI rather than in `just check`. It loads every `crates/tmux-workspace/tests/fixtures/tmuxp` document
 with tmuxp and with `tmux-workspace load`, each on its own throwaway server,
 and diffs what tmux itself reports. A documented, deliberate difference from
 tmuxp -- see `scripts/tmuxp-parity.py`'s `ALLOWLIST` -- is reported but does
