@@ -12,6 +12,7 @@ license.workspace = true
 keywords = ["tmux", "tmuxp", "workspace", "yaml", "terminal"]
 categories = ["command-line-utilities", "config", "os::unix-apis"]
 include = [
+    "/assets/*",
     "/Cargo.toml",
     "/build.rs",
     "/LICENSE-APACHE",
