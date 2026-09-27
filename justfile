@@ -302,13 +302,15 @@ watch-clippy:
 # Build the API documentation
 #
 # Every feature, as docs.rs builds it, then libtmux with its defaults and with
-# none, as a dependent's `cargo doc` does: a warning that only a partial build
-# raises would otherwise reach every such reader and no gate.
+# none, and tmux-workspace as a library dependent builds it, without the
+# command: a warning that only a partial build raises would otherwise reach
+# every such reader and no gate.
 [group: 'docs']
 docs:
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux --no-deps
     RUSTDOCFLAGS='-D warnings' cargo doc --locked --package libtmux --no-default-features --no-deps
+    RUSTDOCFLAGS='-D warnings' cargo doc --locked --package tmux-workspace --no-default-features --no-deps
 
 # The catalog is hand-maintained, so a format tmux gained -- or one nobody
 # ever added -- is invisible: nothing fails, callers just cannot ask for the
