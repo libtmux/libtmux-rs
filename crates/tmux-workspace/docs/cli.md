@@ -1,6 +1,6 @@
 # `tmux-workspace` command reference
 
-The [README](../README.md) shows the commands. This page is the detail behind
+The [README](https://crates.io/crates/tmux-workspace) shows the commands. This page is the detail behind
 them: how a workspace is found, what a load does when it cannot finish, what
 machine output promises, and where the command departs from tmuxp. Every
 switch is in `tmux-workspace <command> --help` and in the manual page:

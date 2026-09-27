@@ -471,6 +471,13 @@ fn referenced(text: &str) -> impl Iterator<Item = &str> {
 #[doc = include_str!("../libtmux-macros-README.md")]
 pub struct MacrosReadme;
 
+/// The `tmux-workspace` command's reference, rendered with the library's
+/// documentation so it is readable on docs.rs and a link to it is checked
+/// when the documentation builds. Documentation only; it holds no items.
+#[cfg(doc)]
+#[doc = include_str!("../docs/cli.md")]
+pub mod command {}
+
 /// Compiles the README's Rust blocks. The README is the command's page on
 /// crates.io, not this crate's documentation, so it renders nowhere here.
 #[cfg(doctest)]

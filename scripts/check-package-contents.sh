@@ -196,9 +196,11 @@ check_relative_links() {
         esac
 
         while IFS= read -r target; do
-            # Skip URLs and same-page anchors; neither resolves to a file.
+            # Skip URLs and same-page anchors, which resolve to no file, and
+            # rustdoc intra-doc paths such as `crate::command`, which the
+            # -D warnings documentation build resolves instead.
             case "$target" in
-                http://* | https://* | '#'*) continue ;;
+                http://* | https://* | '#'* | *::*) continue ;;
             esac
             target="${target%%#*}"
             [[ -n "$target" ]] || continue

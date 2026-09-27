@@ -3,8 +3,8 @@ using [libtmux](https://docs.rs/libtmux).
 
 This is the library. The package also ships the `tmux-workspace` command, a
 native tmuxp: `cargo install tmux-workspace --version 0.1.0-alpha.13`, and
-see its
-[README](https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md).
+see its [README](https://crates.io/crates/tmux-workspace) and its
+[reference](crate::command).
 The library reads tmuxp's own example files and, by default, records rather
 than acts on a handful of tmuxp's keys;
 [Reading a tmuxp file](#reading-a-tmuxp-file) names them and says where it
@@ -200,8 +200,8 @@ any other unrecognized key instead, unless it starts with `x-`, which is the
 `tmux-workspace` command's own policy.
 
 The `tmux-workspace` command has its own parser and builder but reads a
-document the same way, tmuxp's; the three places it differs are in
-[its reference](https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/docs/cli.md#where-the-command-and-the-library-differ).
+document the same way, tmuxp's; the last section of
+[its reference](crate::command) lists where it differs.
 
 ## Install
 
