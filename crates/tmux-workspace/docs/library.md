@@ -95,6 +95,9 @@ pane cells, with at most 256 nested groups. Geometry correction and pruning
 remain tmux's responsibility. An empty layout string leaves the default
 arrangement in place.
 
+`cargo run --example build` does all of this end to end: parse, list the
+plan's steps, build, and freeze the result back to YAML.
+
 ## See what it would do first
 
 `plan` returns the work without doing any of it, so a caller can print it,
