@@ -16,6 +16,21 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.14 - 2026-09-27
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.14;
+`tmux-mcp` is 0.1.0-alpha.15.
+
+Take this one if you run `tmux-workspace` as a command: every command's help
+and manual page describe each argument and end with examples, `load --dry-run`
+shows what a load would build, `cargo install tmux-workspace` builds it by
+default, and releases carry prebuilt binaries for it and `tmux-mcp`. `load`
+passes a variable's value to the pane's environment instead of pasting it into
+the command, where a value holding shell syntax ran as code. The library reads
+a tmuxp document the way tmuxp and the command do, which changes `PaneConfig`
+and refuses a document without `windows`, and `tmux://capabilities` leaves
+tool schemas to `tools/list`. Each breaking change is marked below.
+
 ### Added
 
 - `tmux-workspace load --dry-run` prints the sessions, windows, panes,
