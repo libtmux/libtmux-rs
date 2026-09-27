@@ -243,7 +243,12 @@ guaranteed to mean the same thing through the other.
 
 | | Library | `tmux-workspace` command |
 | --- | --- | --- |
-| An unknown key | recorded in `unsupported_keys`, the file still loads | refused, unless it starts with `x-` |
+| An unknown key, by default | recorded in `unsupported_keys`, the file still loads | refused, unless it starts with `x-` |
+| An unknown key, under `Workspace::from_yaml_strict` | refused, unless it starts with `x-` | refused, unless it starts with `x-` |
 | A missing or null `windows` | refused | refused |
 | An empty `windows` list | keeps the window tmux made | refused |
 | `before_script`, `plugins`, `options_after`, `workspace_builder_options` | not modelled | modelled |
+
+The unknown-key row is a choice the library offers rather than a
+disagreement: `Workspace::from_yaml_strict` and `Workspace::from_file_strict`
+apply the same policy the command always does.

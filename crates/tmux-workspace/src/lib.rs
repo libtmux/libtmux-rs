@@ -138,6 +138,7 @@ impl<'server> WorkspaceBuilder<'server> {
                 config,
                 pane_environments.first().map_or(&[], Vec::as_slice),
                 first_directory,
+                first_pane.and_then(|pane| pane.shell.as_deref()),
             ));
             for (name, value) in &config.options {
                 plan.add(SetOption::window(window, name.as_str(), value.as_str()));
@@ -189,6 +190,7 @@ impl<'server> WorkspaceBuilder<'server> {
                     .shell_command_before
                     .iter()
                     .chain(&config.shell_command_before)
+                    .chain(&pane_config.shell_command_before)
                     .chain(&pane_config.shell_commands);
                 for command in commands {
                     enter = command.enter.unwrap_or(enter);
@@ -312,6 +314,7 @@ impl<'server> WorkspaceBuilder<'server> {
         config: &WindowConfig,
         environment: &[(String, String)],
         directory: Option<&Path>,
+        pane_shell: Option<&str>,
     ) -> NewWindow {
         let mut window = NewWindow::new(session);
         if let Some(name) = config.window_name.as_deref() {
@@ -324,8 +327,9 @@ impl<'server> WorkspaceBuilder<'server> {
             window = window.index(index);
         }
         // tmuxp's window_shell replaces the window's shell rather than being
-        // typed into it, so the window closes when the command ends.
-        if let Some(shell) = config.window_shell.as_deref() {
+        // typed into it, so the window closes when the command ends; the
+        // first pane's own `shell` overrides it, the same as for a split.
+        if let Some(shell) = pane_shell.or(config.window_shell.as_deref()) {
             window = window.command(shell);
         }
         for (name, value) in environment {
@@ -340,7 +344,8 @@ impl<'server> WorkspaceBuilder<'server> {
     /// default terminal size; rebalancing after every split reclaims them.
     /// The window's own layout, applied once the pane count is final, still
     /// has the last say. `window_shell` is the default shell for every pane
-    /// in the window, not only the one that comes with it.
+    /// in the window, not only the one that comes with it, unless the pane
+    /// sets its own [`PaneConfig::shell`].
     fn split_op(
         plan: &mut Plan,
         window: Slot<WindowSlot>,
@@ -358,7 +363,7 @@ impl<'server> WorkspaceBuilder<'server> {
         for (name, value) in environment {
             split = split.environment(name.as_str(), value.as_str());
         }
-        if let Some(shell) = config.window_shell.as_deref() {
+        if let Some(shell) = pane.shell.as_deref().or(config.window_shell.as_deref()) {
             split = split.command(shell);
         }
         let pane = plan.add(split);
@@ -379,9 +384,9 @@ impl<'server> WorkspaceBuilder<'server> {
     }
 
     /// This pane's own environment if it set one, else the window's, plus
-    /// the loader's value of every `$NAME` its commands -- and the window's
-    /// shell, which replaces this pane's too -- reference, when the document
-    /// does not set that name and the loader has it.
+    /// the loader's value of every `$NAME` its commands -- and its shell,
+    /// or the window's when it sets none of its own -- reference, when the
+    /// document does not set that name and the loader has it.
     ///
     /// tmuxp pastes the value into the command instead, so a value holding
     /// `;` or `$(...)` would run as a command of its own; here it stays data
@@ -399,12 +404,14 @@ impl<'server> WorkspaceBuilder<'server> {
             .shell_command_before
             .iter()
             .chain(&config.shell_command_before)
+            .chain(&pane_config.shell_command_before)
             .chain(&pane_config.shell_commands)
             .map(|command| command.cmd.as_str());
-        for name in commands
-            .chain(config.window_shell.as_deref())
-            .flat_map(referenced)
-        {
+        let shell = pane_config
+            .shell
+            .as_deref()
+            .or(config.window_shell.as_deref());
+        for name in commands.chain(shell).flat_map(referenced) {
             if environment.iter().any(|(set, _)| set == name) {
                 continue;
             }

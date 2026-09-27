@@ -167,7 +167,8 @@ pub struct WindowConfig {
     pub window_name: Option<String>,
     /// The window index to create at, or `None` for the first free one.
     pub window_index: Option<i32>,
-    /// A command to run instead of the window's default shell.
+    /// A command that replaces the shell in every pane of this window that
+    /// does not set its own [`PaneConfig::shell`].
     pub window_shell: Option<String>,
     /// Environment variables set for the processes this window starts.
     pub environment: Vec<(String, String)>,
@@ -198,6 +199,10 @@ pub struct WindowConfig {
 /// empty `-` all mean.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PaneConfig {
+    /// Commands run in this pane before [`Self::shell_commands`], in order,
+    /// after the workspace's and the window's own
+    /// [`WindowConfig::shell_command_before`].
+    pub shell_command_before: Vec<ShellCommand>,
     /// Commands to run in the pane once it exists.
     pub shell_commands: Vec<ShellCommand>,
     /// Environment variables set for the process this pane starts.
@@ -210,6 +215,9 @@ pub struct PaneConfig {
     pub start_directory: Option<PathBuf>,
     /// Whether this pane should end up selected.
     pub focus: bool,
+    /// A command that replaces this pane's shell, overriding
+    /// [`WindowConfig::window_shell`] when both are given.
+    pub shell: Option<String>,
     /// Whether to press Enter after each command, until a command sets its
     /// own [`ShellCommand::enter`].
     ///
@@ -232,10 +240,12 @@ pub struct PaneConfig {
 impl Default for PaneConfig {
     fn default() -> Self {
         Self {
+            shell_command_before: Vec::new(),
             shell_commands: Vec::new(),
             environment: None,
             start_directory: None,
             focus: false,
+            shell: None,
             enter: true,
             sleep_before: None,
             sleep_after: None,
@@ -308,12 +318,31 @@ impl ShellCommand {
     }
 }
 
+/// How this parser treats a key it does not recognize.
+///
+/// [`Strictness::Lenient`] accepts a richer tmuxp file and records what it
+/// left out in [`Workspace::unsupported_keys`] and the same field on a window
+/// or pane. [`Strictness::Strict`] refuses a key that is neither this
+/// parser's own vocabulary nor tmuxp's -- `before_script`, `plugins`,
+/// `workspace_builder`, `workspace_builder_options`, `config` and
+/// `socket_name` on the workspace, `options_after` on a window -- so a typo
+/// is refused rather than silently ignored. A key starting with `x-`, at any
+/// level, is inert either way: accepted and never acted on. Checked on the
+/// workspace, a window and a pane; a command mapping's own keys (`cmd`,
+/// `enter`, `sleep_before`, `sleep_after`) are not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Strictness {
+    Lenient,
+    Strict,
+}
+
 impl Workspace {
     /// Parse one workspace from tmuxp-style YAML.
     ///
-    /// This accepts the shape tmuxp uses for the parts a builder needs. It is
-    /// deliberately not a full tmuxp implementation: unknown keys are ignored
-    /// rather than rejected, so a richer tmuxp file still loads.
+    /// This accepts the shape tmuxp uses for the parts a builder needs. A key
+    /// this parser does not act on is recorded rather than rejected, so a
+    /// richer tmuxp file still loads; [`Self::from_yaml_strict`] refuses one
+    /// instead.
     ///
     /// As tmuxp does, it expands `~` and `$NAME` or `${NAME}` from this
     /// process's environment in names, start directories, and `environment`
@@ -351,7 +380,30 @@ impl Workspace {
     /// # Ok::<(), tmux_workspace::ConfigError>(())
     /// ```
     pub fn from_yaml(source: &str) -> Result<Self, ConfigError> {
-        Self::parse(source, None)
+        Self::parse(source, None, Strictness::Lenient)
+    }
+
+    /// [`Self::from_yaml`], refusing a key that is neither this parser's own
+    /// vocabulary nor tmuxp's, unless it starts with `x-`.
+    ///
+    /// This is the policy the `tmux-workspace` command applies to every
+    /// document it loads.
+    ///
+    /// # Errors
+    ///
+    /// What [`Self::from_yaml`] returns, and also an unrecognized key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tmux_workspace::Workspace;
+    ///
+    /// let error = Workspace::from_yaml_strict("session_name: demo\nwindows: []\nfrobnicate: 1\n")
+    ///     .expect_err("an unrecognized key is refused");
+    /// assert!(error.to_string().contains("frobnicate"));
+    /// ```
+    pub fn from_yaml_strict(source: &str) -> Result<Self, ConfigError> {
+        Self::parse(source, None, Strictness::Strict)
     }
 
     /// Read and parse one workspace file, as `tmuxp load` does.
@@ -381,6 +433,19 @@ impl Workspace {
     /// # }
     /// ```
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::read_file(path, Strictness::Lenient)
+    }
+
+    /// [`Self::from_file`], under [`Self::from_yaml_strict`]'s policy.
+    ///
+    /// # Errors
+    ///
+    /// What [`Self::from_file`] returns, and also an unrecognized key.
+    pub fn from_file_strict(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::read_file(path, Strictness::Strict)
+    }
+
+    fn read_file(path: impl AsRef<Path>, strictness: Strictness) -> Result<Self, ConfigError> {
         let path = path.as_ref();
         let read = |source| ConfigError::Read {
             path: path.to_owned(),
@@ -391,10 +456,14 @@ impl Workspace {
             .map_err(read)?
             .parent()
             .map(Path::to_path_buf);
-        Self::parse(&source, directory.as_deref())
+        Self::parse(&source, directory.as_deref(), strictness)
     }
 
-    fn parse(source: &str, base: Option<&Path>) -> Result<Self, ConfigError> {
+    fn parse(
+        source: &str,
+        base: Option<&Path>,
+        strictness: Strictness,
+    ) -> Result<Self, ConfigError> {
         let documents = YamlLoader::load_from_str(source)?;
         let [document] = documents.as_slice() else {
             return Err(ConfigError::DocumentCount {
@@ -402,11 +471,16 @@ impl Workspace {
             });
         };
         let document = resolve_merges(document);
-        Self::from_document(&document, &Directories { base })
+        Self::from_document(&document, &Directories { base }, strictness)
             .map_err(|problem| problem.locate(source))
     }
 
-    fn from_document(document: &Yaml, directories: &Directories<'_>) -> Result<Self, Problem> {
+    fn from_document(
+        document: &Yaml,
+        directories: &Directories<'_>,
+        strictness: Strictness,
+    ) -> Result<Self, Problem> {
+        check_known(document, SESSION_KEYS, SESSION_RECOGNIZED, strictness, "")?;
         let session_name = document["session_name"]
             .as_str()
             .ok_or_else(|| Problem::new("session_name", "must be a string"))?;
@@ -428,7 +502,13 @@ impl Workspace {
                 .iter()
                 .enumerate()
                 .map(|(index, window)| {
-                    WindowConfig::from_yaml(window, index, directories, start_directory.as_deref())
+                    WindowConfig::from_yaml(
+                        window,
+                        index,
+                        directories,
+                        start_directory.as_deref(),
+                        strictness,
+                    )
                 })
                 .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(Problem::new("windows", "must be a list")),
@@ -459,11 +539,13 @@ impl WindowConfig {
         index: usize,
         directories: &Directories<'_>,
         session: Option<&Path>,
+        strictness: Strictness,
     ) -> Result<Self, Problem> {
         let at = format!("windows[{index}]");
         if !matches!(value, Yaml::Hash(_)) {
             return Err(Problem::new(at, "must be a mapping"));
         }
+        check_known(value, WINDOW_KEYS, WINDOW_RECOGNIZED, strictness, &at)?;
         // tmuxp joins a window's relative directory onto the session's.
         let start_directory = directories.resolve(
             &value["start_directory"],
@@ -479,7 +561,7 @@ impl WindowConfig {
                 .iter()
                 .enumerate()
                 .map(|(pane, entry)| {
-                    PaneConfig::from_yaml(entry, &at, pane, directories, inherited)
+                    PaneConfig::from_yaml(entry, &at, pane, directories, inherited, strictness)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(Problem::new(format!("{at}.panes"), "must be a list")),
@@ -523,6 +605,7 @@ impl PaneConfig {
         index: usize,
         directories: &Directories<'_>,
         inherited: Option<&Path>,
+        strictness: Strictness,
     ) -> Result<Self, Problem> {
         let at = format!("{window}.panes[{index}]");
         match value {
@@ -542,8 +625,13 @@ impl PaneConfig {
                 ));
             }
         }
+        check_known(value, PANE_KEYS, &[], strictness, &at)?;
 
         Ok(Self {
+            shell_command_before: commands(
+                &value["shell_command_before"],
+                &format!("{at}.shell_command_before"),
+            )?,
             shell_commands: commands(&value["shell_command"], &format!("{at}.shell_command"))?,
             // tmuxp's builder replaces the window's environment with the
             // pane's own when the pane sets the key at all, even to an empty
@@ -560,6 +648,9 @@ impl PaneConfig {
                 false,
             )?,
             focus: is_true(&value["focus"], &format!("{at}.focus"))?,
+            // tmuxp's builder resolves a pane's own shell before falling
+            // back to the window's, the same way it resolves environment.
+            shell: value["shell"].as_str().map(ToOwned::to_owned),
             // tmuxp presses Enter unless a file says otherwise.
             enter: optional_bool(&value["enter"], &format!("{at}.enter"))?.unwrap_or(true),
             sleep_before: optional_seconds(&value["sleep_before"], &format!("{at}.sleep_before"))?,
@@ -588,12 +679,20 @@ const WINDOW_KEYS: &[&str] = &[
     "panes",
 ];
 
+/// Keys tmuxp gives a window that this parser recognizes but does not act
+/// on. Strict parsing accepts them alongside [`WINDOW_KEYS`] rather than
+/// refusing a document only the `tmux-workspace` command's own builder can
+/// finish.
+const WINDOW_RECOGNIZED: &[&str] = &["options_after"];
+
 /// Keys this parser understands on a pane.
 const PANE_KEYS: &[&str] = &[
     "shell_command",
+    "shell_command_before",
     "environment",
     "start_directory",
     "focus",
+    "shell",
     "enter",
     "sleep_before",
     "sleep_after",
@@ -612,9 +711,60 @@ const SESSION_KEYS: &[&str] = &[
     "windows",
 ];
 
+/// Keys tmuxp gives a workspace that this parser recognizes but does not act
+/// on -- the Python extension bridge and script hook the `tmux-workspace`
+/// command's own builder implements, and the endpoint fields it routes
+/// through its own flags instead. Strict parsing accepts them alongside
+/// [`SESSION_KEYS`] rather than refusing a document only that builder can
+/// finish.
+const SESSION_RECOGNIZED: &[&str] = &[
+    "before_script",
+    "plugins",
+    "workspace_builder",
+    "workspace_builder_options",
+    "config",
+    "socket_name",
+];
+
 /// Whether a mapping has this key at all, regardless of its value.
 fn has_key(value: &Yaml, key: &str) -> bool {
     matches!(value, Yaml::Hash(entries) if entries.contains_key(&Yaml::String(key.to_owned())))
+}
+
+/// Refuse a mapping's key that is neither `known` nor `extra` nor `x-`
+/// prefixed, under [`Strictness::Strict`]. [`Strictness::Lenient`] never
+/// refuses here: [`unsupported`] records the same keys instead. `at` is the
+/// enclosing mapping's own key path, empty at the document root, matching
+/// the paths [`Problem`] already uses elsewhere in this module.
+fn check_known(
+    value: &Yaml,
+    known: &[&str],
+    extra: &[&str],
+    strictness: Strictness,
+    at: &str,
+) -> Result<(), Problem> {
+    if strictness == Strictness::Lenient {
+        return Ok(());
+    }
+    let Yaml::Hash(entries) = value else {
+        return Ok(());
+    };
+    for key in entries.keys().filter_map(Yaml::as_str) {
+        if key.starts_with("x-") || known.contains(&key) || extra.contains(&key) {
+            continue;
+        }
+        let path = if at.is_empty() {
+            key.to_owned()
+        } else {
+            format!("{at}.{key}")
+        };
+        return Err(Problem::new(
+            path,
+            "is not a key this parser acts on; prefix it x- to keep it inert, \
+             or read this document with Workspace::from_yaml instead",
+        ));
+    }
+    Ok(())
 }
 
 /// Collect the keys present in a mapping that this parser does not act on.
@@ -1047,6 +1197,10 @@ impl PaneConfig {
     fn write_yaml(&self, out: &mut String) {
         let mut entry = Entry::new("      - ", "        ");
 
+        if !self.shell_command_before.is_empty() {
+            entry.key(out, "shell_command_before:");
+            write_commands(out, None, &self.shell_command_before, 10);
+        }
         if !self.shell_commands.is_empty() {
             entry.key(out, "shell_command:");
             write_commands(out, None, &self.shell_commands, 10);
@@ -1056,6 +1210,9 @@ impl PaneConfig {
         }
         if self.focus {
             entry.key(out, "focus: true");
+        }
+        if let Some(shell) = &self.shell {
+            entry.key(out, &format!("shell: {}", quoted(shell)));
         }
         if !self.enter {
             entry.key(out, "enter: false");
@@ -1300,7 +1457,7 @@ mod tests {
         assert_eq!(quoted("tab\there"), "\"tab\\u0009here\"");
     }
 
-    use super::{Directories, PaneConfig};
+    use super::{Directories, PaneConfig, Strictness};
 
     /// tmuxp's builder replaces the window's environment with the pane's own
     /// when the pane sets the key at all, even to an empty mapping, rather
@@ -1308,8 +1465,16 @@ mod tests {
     #[test]
     fn pane_environment_distinguishes_absent_from_explicitly_set() {
         let directories = Directories { base: None };
-        let pane =
-            |source| PaneConfig::from_yaml(&value(source), "windows[0]", 0, &directories, None);
+        let pane = |source| {
+            PaneConfig::from_yaml(
+                &value(source),
+                "windows[0]",
+                0,
+                &directories,
+                None,
+                Strictness::Lenient,
+            )
+        };
 
         assert_eq!(pane("{}").unwrap().environment, None);
         assert_eq!(

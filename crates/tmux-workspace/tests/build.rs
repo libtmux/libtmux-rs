@@ -425,6 +425,52 @@ windows:
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
+/// A pane's own `shell` overrides `window_shell` for that pane, including a
+/// split's; every pane that sets none of its own still gets the window's.
+#[tokio::test]
+async fn a_panes_own_shell_overrides_window_shell() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: shells
+windows:
+  - window_shell: exec sleep 300
+    panes:
+      - {}
+      - {}
+      - shell: exec cat
+",
+    )
+    .expect("the workspace parses");
+    assert!(
+        workspace.windows[0].panes[2].unsupported_keys.is_empty(),
+        "a pane's own `shell` is a key this parser acts on",
+    );
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+    let panes = session.panes().await.expect("panes");
+    assert_eq!(panes.len(), 3);
+    for (index, pane) in panes.iter().take(2).enumerate() {
+        assert_eq!(
+            pane.current_command().map(text).as_deref(),
+            Some("sleep"),
+            "pane {index}, with no shell of its own, still gets window_shell",
+        );
+    }
+    assert_eq!(
+        panes[2].current_command().map(text).as_deref(),
+        Some("cat"),
+        "a pane's own shell overrides window_shell",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
 /// The loader's value of a variable a pane's command names reaches that
 /// pane's environment, as with the `tmux-workspace` command, rather than
 /// being pasted into the command text as tmuxp does.
@@ -455,6 +501,47 @@ windows:
 
     // Joined rather than searched per line: a value this long soft-wraps
     // across more than one row of an 80-column pane.
+    let marker = format!("got:{value}:end");
+    let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
+        pane.capture().await.is_ok_and(|lines| {
+            lines
+                .iter()
+                .map(|line| line.to_string_lossy())
+                .collect::<String>()
+                .contains(marker.as_str())
+        })
+    })
+    .await;
+    assert!(printed.is_ok(), "the loader's value reached the pane");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// The loader's value of a variable a pane's own `shell` names reaches that
+/// pane's environment, the same way a `window_shell` reference does.
+#[tokio::test]
+async fn a_panes_own_shell_variable_reaches_its_environment() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let value = std::env::var("CARGO_MANIFEST_DIR").expect("cargo test sets this");
+
+    let workspace = Workspace::from_yaml(
+        "
+session_name: shell-passed-through
+windows:
+  - panes:
+      - {}
+      - shell: echo got:$CARGO_MANIFEST_DIR:end; sleep 300
+",
+    )
+    .expect("the workspace parses");
+
+    let session = WorkspaceBuilder::new(server)
+        .build(&workspace)
+        .await
+        .expect("the workspace builds");
+    let pane = session.panes().await.expect("panes").remove(1);
+
     let marker = format!("got:{value}:end");
     let printed = libtmux::test::retry_until(std::time::Duration::from_secs(30), async || {
         pane.capture().await.is_ok_and(|lines| {
@@ -565,6 +652,47 @@ windows: []
     // Loading a richer tmuxp file still works, but the caller can say what
     // was left out instead of finding out later.
     assert_eq!(workspace.unsupported_keys, ["plugins", "before_script"]);
+}
+
+/// [`Workspace::from_yaml`] records a key it does not recognize;
+/// [`Workspace::from_yaml_strict`] -- the `tmux-workspace` command's own
+/// policy -- refuses one that is neither this parser's own vocabulary nor
+/// tmuxp's, and still accepts an `x-` prefixed key either way.
+#[test]
+fn strict_parsing_refuses_an_unrecognized_key_but_accepts_tmuxps_own_and_x_prefixed() {
+    let error = Workspace::from_yaml_strict("session_name: s\nwindows: []\nfrobnicate: 1\n")
+        .expect_err("an unrecognized key is refused under strict parsing");
+    assert!(matches!(error, ConfigError::Invalid { .. }));
+    assert!(error.to_string().contains("frobnicate"), "{error}");
+
+    Workspace::from_yaml_strict("session_name: s\nwindows: []\nbefore_script: ./setup.sh\n")
+        .expect("a key tmuxp has that this parser only records still loads strictly");
+    Workspace::from_yaml_strict(
+        "session_name: s\nwindows:\n  - options_after: {status: 'on'}\n    panes: [blank]\n",
+    )
+    .expect("a window key tmuxp has that this parser only records still loads strictly");
+    Workspace::from_yaml_strict("session_name: s\nwindows: []\nx-anything: 1\n")
+        .expect("an x-prefixed key is always inert");
+
+    Workspace::from_yaml("session_name: s\nwindows: []\nfrobnicate: 1\n")
+        .expect("lenient parsing -- the default -- records rather than refuses");
+}
+
+/// A workspace with no windows renders `windows: []`, which parses back into
+/// the same workspace. A bare `windows:` would read back as `null`, which
+/// `Workspace::from_yaml` refuses.
+#[test]
+fn a_workspace_with_no_windows_round_trips() {
+    let workspace = Workspace::from_yaml("session_name: empty\nwindows: []\n")
+        .expect("an explicit empty list parses");
+    assert!(workspace.windows.is_empty());
+
+    let rendered = workspace.to_yaml();
+    assert!(rendered.contains("windows: []\n"), "{rendered}");
+    assert_eq!(
+        Workspace::from_yaml(&rendered).expect("the rendered YAML parses"),
+        workspace,
+    );
 }
 
 /// tmuxp refuses a document missing `windows`; a null one crashes its
@@ -1358,6 +1486,46 @@ windows:
         " first second third"
     );
     assert_eq!(typed_line(&session, "before last").await, " before last");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pane's own `shell_command_before` trickles down after the workspace's
+/// and the window's, ahead of the pane's own commands, as tmuxp's builder
+/// resolves them (`before_cmds = workspace + window + pane`).
+#[tokio::test]
+async fn pane_level_shell_command_before_leads_the_panes_own_commands() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let mut workspace = Workspace::from_yaml(
+        "
+session_name: paneled
+windows:
+  - shell_command_before: [{cmd: from-window, enter: false}]
+    panes:
+      - shell_command_before: [{cmd: from-pane, enter: false}]
+        shell_command:
+          - cmd: own-command
+            enter: true
+",
+    )
+    .expect("configuration parses");
+    assert!(
+        workspace.windows[0].panes[0].unsupported_keys.is_empty(),
+        "a pane's own `shell_command_before` is a key this parser acts on",
+    );
+    workspace
+        .global_options
+        .push(("default-command".to_owned(), "exec cat".to_owned()));
+
+    let session = WorkspaceBuilder::new(guard.server())
+        .build(&workspace)
+        .await
+        .expect("workspace builds");
+
+    assert_eq!(
+        typed_line(&session, "from-window from-pane own-command").await,
+        " from-window from-pane own-command",
+    );
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

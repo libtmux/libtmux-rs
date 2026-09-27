@@ -5,9 +5,10 @@ This is the library. The package also ships the `tmux-workspace` command, a
 native tmuxp: `cargo install tmux-workspace --version 0.1.0-alpha.13`, and
 see its
 [README](https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md).
-The library reads tmuxp's own example files and ignores five of tmuxp's keys;
-[Reading a tmuxp file](#reading-a-tmuxp-file) names them and says where the
-two disagree.
+The library reads tmuxp's own example files and, by default, records rather
+than acts on a handful of tmuxp's keys;
+[Reading a tmuxp file](#reading-a-tmuxp-file) names them and says where it
+still departs from tmuxp.
 
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not
@@ -162,9 +163,12 @@ where tmuxp's behaviour is surprising:
   instead, halving each split from the last. With no explicit `focus`, the
   last pane a window builds stays active, as tmuxp leaves it.
 - `window_shell` is the default shell for every pane in the window, not only
-  the one it comes with, as tmuxp's own builder does (`get_pane_shell`).
+  the one it comes with, as tmuxp's own builder does (`get_pane_shell`); a
+  pane's own `shell` overrides it for that pane.
 - A pane's own `environment` replaces its window's, rather than adding to
   it, as tmuxp's builder does.
+- `shell_command_before` trickles down through the workspace, the window
+  and the pane, in that order, ahead of the pane's own `shell_command`.
 - `<<: *anchor` and `<<: [*a, *b]` merge keys resolve at every level, as
   `PyYAML`'s safe loader does.
 - A missing or null `windows` key is refused, as tmuxp's own schema
@@ -173,22 +177,30 @@ where tmuxp's behaviour is surprising:
 It differs where following tmuxp would be unsafe or impossible:
 
 - Commands are typed as written, for the pane's shell to expand, and the
-  loader's value of each variable a command or `window_shell` names is added
-  to that pane's environment unless the document sets it. tmuxp pastes the
-  value into the command instead, which reads a variable's value as shell
-  code.
+  loader's value of each variable a command, `window_shell` or a pane's own
+  `shell` names is added to that pane's environment unless the document sets
+  it. tmuxp pastes the value into the command instead, which reads a
+  variable's value as shell code.
 - `~name` in a start directory is refused, not looked up; elsewhere it stays
   as written.
 - A `.` path with nothing to inherit, and a null among commands, crash
   tmuxp. Here the first starts from the file's directory and the second is
   an error naming its line.
 
-Five of tmuxp's keys are not acted on, and are listed in `unsupported_keys`
-along with any key tmuxp does not have: `before_script`, `plugins`,
-`options_after`, and a pane's `shell` and `shell_command_before`.
+Three of tmuxp's keys are not acted on, and are listed in `unsupported_keys`
+along with any key tmuxp does not have: `before_script`, `plugins`, and a
+window's `options_after`.
 
-The `tmux-workspace` command reads documents with its own parser and builder,
-and differs from this library in the ways
+[`Workspace::from_yaml`] and [`Workspace::from_file`] record a key they do
+not act on in `unsupported_keys` rather than refusing it, so a richer tmuxp
+file still loads: the three above, plus `workspace_builder`,
+`workspace_builder_options`, `config` and `socket_name` on the workspace.
+[`Workspace::from_yaml_strict`] and [`Workspace::from_file_strict`] refuse
+any other unrecognized key instead, unless it starts with `x-`, which is the
+`tmux-workspace` command's own policy.
+
+The `tmux-workspace` command still reads documents with its own, separate
+parser and builder, and differs from this library in the ways
 [its reference](https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/docs/cli.md#the-command-and-the-library-read-documents-differently)
 lists.
 
