@@ -5,9 +5,9 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
-  # Fuzzing and benchmarks are the only scheduled work. A parser is worth
-  # re-fuzzing because the corpus grows, and a benchmark is compared with the
-  # previous week's, not because the code changed.
+  # Scheduled weekly, whether or not the code changed: a parser is worth
+  # re-fuzzing as its corpus grows, and a benchmark is compared with the
+  # previous week's.
   schedule:
     - cron: "37 4 * * 1"
 
@@ -231,6 +231,44 @@ jobs:
         with:
           path: target/criterion
           key: bench-criterion-${{ github.run_id }}
+
+  # tmux-workspace claims to build what tmuxp builds. This loads every tmuxp
+  # fixture through both, on separate servers, and diffs the sessions; a
+  # difference not in the harness's allowlist, each entry with its reason,
+  # fails. Weekly, because it needs tmuxp and a settled shell per pane.
+  parity:
+    name: tmuxp parity
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tmux
+          tmux -V
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: uv
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install tmuxp
+        run: uv tool install tmuxp==1.74.0
+
+      - run: cargo build --locked -p tmux-workspace
+
+      - name: Compare every fixture
+        run: python3 scripts/tmuxp-parity.py --binary target/debug/tmux-workspace --tmuxp "$(command -v tmuxp)"
 
   # The slow lane. tmux's output and error wording change between releases, so
   # every supported one is built from source and runs the whole workspace.
