@@ -95,6 +95,24 @@ ALLOWLIST = {
         "(BadSessionName: contains colons/periods), so both sides simply "
         "refuse and this allowlist entry goes unused"
     ),
+    "session-window-option": (
+        "a window option such as main-pane-height listed under the session's "
+        "`options:` reaches the document's windows under tmux-workspace "
+        "(docs/cli.md 'Documents'); tmuxp sets it on the default window "
+        "new_session made, which it then replaces, so the value is lost and "
+        "tmux's own default shapes the window -- a tmuxp bug, observed on "
+        "options.yaml"
+    ),
+    "prompt-redraw": (
+        "tmux-workspace waits for a pane's shell to own its terminal before "
+        "typing (execution.rs), and a pane resized by a later split redraws "
+        "its prompt once more; the screens differ only by a bare prompt line"
+    ),
+    "live-filesystem": (
+        "the fixture lists /var/log, which the running system writes to "
+        "between the two loads, so the listing differs whichever tool ran "
+        "it; the commands typed are the same"
+    ),
     "var-in-command-env": (
         "$VAR and ~ in a typed command are meant to reach the pane's shell "
         "as written, with the loader's value added to the pane's "
@@ -479,6 +497,36 @@ def read_session(tmux_bin: str, socket: str, env: dict[str, str], doc: DocFacts)
 # --------------------------------------------------------------------------
 
 
+PROMPTS = {"%", "$", "#", ">"}
+
+# Window options tmux keeps per window, which a document may still list under
+# the session's `options:`.
+WINDOW_SCOPE = {
+    "main-pane-height", "main-pane-width", "other-pane-height",
+    "other-pane-width", "pane-base-index", "synchronize-panes",
+}
+
+
+def text_allow(tp: Pane, wp: Pane, shape_allow: str | None) -> str | None:
+    """Which allowlisted cause explains two different screens, if one does."""
+    def bare(text: list[str]) -> list[str]:
+        return [line for line in text if line.strip() not in PROMPTS]
+
+    if bare(tp.text) == bare(wp.text):
+        return "prompt-redraw"
+    # The command line itself can scroll away under a long listing, so the
+    # listing is recognised by its own lines: `ls -al` rows of log files.
+    def lists_logs(text: list[str]) -> bool:
+        return any(
+            "/var/log" in line or re.match(r"^[-dl]r[-w]\S+\s.*\.(log|gz)\S*$", line)
+            for line in text
+        )
+
+    if lists_logs(tp.text) and lists_logs(wp.text):
+        return "live-filesystem"
+    return shape_allow
+
+
 def compare_pane(tp: Pane, wp: Pane, label: str, shape_allow: str | None) -> list[Difference]:
     diffs = []
     for attr in ("path", "active", "dead", "command"):
@@ -492,11 +540,13 @@ def compare_pane(tp: Pane, wp: Pane, label: str, shape_allow: str | None) -> lis
         # A window's allowlisted shape difference does change its panes'
         # widths, though, which reflows wrapped text on its own -- credit
         # that to the same allowlist entry rather than report it as new.
-        diffs.append(Difference(label, "screen_text", tp.text, wp.text, shape_allow))
+        diffs.append(Difference(label, "screen_text", tp.text, wp.text, text_allow(tp, wp, shape_allow)))
     return diffs
 
 
-def compare_window(tw: Window, ww: Window, doc: WindowFacts, label: str) -> list[Difference]:
+def compare_window(
+    tw: Window, ww: Window, doc: WindowFacts, label: str, session_option_keys: set[str]
+) -> list[Difference]:
     diffs = []
     if tw.name != ww.name:
         diffs.append(Difference(label, "name", tw.name, ww.name))
@@ -504,7 +554,10 @@ def compare_window(tw: Window, ww: Window, doc: WindowFacts, label: str) -> list
         diffs.append(Difference(label, "active", tw.active, ww.active))
     shape_allow = None
     if tw.shape != ww.shape:
-        shape_allow = None if doc.has_layout else "default-layout"
+        if not doc.has_layout:
+            shape_allow = "default-layout"
+        elif session_option_keys & WINDOW_SCOPE:
+            shape_allow = "session-window-option"
         diffs.append(Difference(label, "shape", tw.shape, ww.shape, shape_allow))
     for key in sorted(doc.option_keys):
         tv, wv = tw.options.get(key), ww.options.get(key)
@@ -548,7 +601,9 @@ def compare(tmuxp: RunResult, workspace: RunResult, doc: DocFacts, extra_allow: 
         diffs.append(Difference("session", "window_count", len(t_session.windows), len(w_session.windows)))
     for index, (tw, ww) in enumerate(zip(t_session.windows, w_session.windows)):
         window_doc = doc.windows[index] if index < len(doc.windows) else WindowFacts()
-        diffs.extend(compare_window(tw, ww, window_doc, f"window[{tw.index}]"))
+        diffs.extend(
+            compare_window(tw, ww, window_doc, f"window[{tw.index}]", doc.session_option_keys)
+        )
     return diffs
 
 
