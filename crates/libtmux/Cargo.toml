@@ -12,6 +12,7 @@ license.workspace = true
 keywords = ["tmux", "terminal", "multiplexer", "async", "tokio"]
 categories = ["api-bindings", "asynchronous", "os::unix-apis"]
 include = [
+    "/assets/*",
     "/Cargo.toml",
     "/LICENSE-APACHE",
     "/LICENSE-MIT",

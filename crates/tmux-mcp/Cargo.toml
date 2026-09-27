@@ -18,6 +18,7 @@ license.workspace = true
 keywords = ["tmux", "mcp", "terminal-use", "cli-use", "shell-use"]
 categories = ["command-line-utilities", "development-tools", "api-bindings"]
 include = [
+    "/assets/*",
     "/Cargo.toml",
     "/LICENSE-APACHE",
     "/LICENSE-MIT",
