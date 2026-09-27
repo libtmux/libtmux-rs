@@ -73,6 +73,7 @@ mcp_files=(
     "$mcp_root"/LICENSE-MIT
     "$mcp_root"/README.md
     "$mcp_root"/examples/*.rs
+    "$mcp_root"/tests/snapshots/*
 )
 # `docs/libtmux-macros-README.md` is a symlink to the copy that crate owns,
 # and the doctest verifying it reads that path. It has to ship, or

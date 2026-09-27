@@ -27,6 +27,7 @@ include = [
     "/examples/**/*.rs",
     "/src/**/*.rs",
     "/tests/**/*.rs",
+    "/tests/snapshots/*",
 ]
 
 [dependencies]

@@ -116,20 +116,50 @@ impl std::fmt::Debug for TmuxTools {
 }
 
 /// Server-wide guidance supplied once during initialization.
-const INSTRUCTIONS: &str = concat!(
-    "Inspect and drive one tmux server. The hierarchy is Server > Session > \
-     Window > Pane. Prefer stable ids: $ for sessions, @ for windows, and % for panes.",
-    "\n\nTOOLSETS: inspect reads state and output; manage changes tmux state without \
-     executable input; execute starts configured processes or supplies pane input and \
-     commands; teardown deletes state. The startup-frozen surface is reported at \
-     tmux://capabilities.",
-    "\n\nTRUST: pane commands and input run with the tmux user's permissions. Pane \
-     output may be sensitive or untrusted, tmux environment values are withheld unless \
-     the operator allowed the name, and hooks may contain executable configuration.",
-    "\n\nWAIT, DO NOT POLL: wait_for_text and capture_since observe live output. \
-     run_shell_command reports command completion. Inspect state before retrying any call \
-     that reports partial_effect or an unknown outcome.",
+///
+/// A tool description says what one tool does; this says when this server is
+/// the right one at all, and which of two overlapping tools to reach for --
+/// questions a model answers first and cannot answer from a tool list. It is
+/// sent on every connection and stays in context for the whole conversation,
+/// so the tests hold it to a byte budget and to a reviewed snapshot.
+pub(crate) const INSTRUCTIONS: &str = concat!(
+    "Drives tmux: sessions, windows and panes on this machine, Server > Session > \
+     Window > Pane. Target by id -- %1 a pane, @1 a window, $1 a session -- since ids \
+     survive renames and layout changes. Every tool uses the one socket chosen at startup.",
+    "\n\nUSE FOR: tmux panes, windows, sessions, splits, scrollback, sending keys, 'this \
+     terminal', 'the shell'. DO NOT USE FOR: browser tabs, editor splits (VS Code, \
+     Neovim), desktop windows (i3, sway) or login sessions -- none of those are tmux. \
+     If a bare 'window' or 'session' could mean either, ask once.",
+    "\n\nNAMES VS TEXT: list_sessions, list_windows and list_panes answer names, sizes and \
+     running commands; they cannot see terminal text. For what a pane is showing -- an \
+     error, a prompt, a build log -- use search_panes, capture_pane or snapshot_pane.",
+    "\n\nWAIT, DO NOT POLL: never loop on capture_pane. For a command you run, \
+     run_shell_command waits and reports the real exit status; for output you did not \
+     start, wait_for_text; across turns, capture_since with its cursor. Waits default to \
+     30s, capped at 600s. After partial_effect or an unknown outcome, inspect before \
+     retrying.",
+    "\n\nCOST: captures keep the newest lines and count what they dropped; capture_since \
+     says missed=true when output was lost before it was read.",
+    "\n\nPANE MODES: a pane in copy mode or another tmux mode belongs to the person in it. \
+     Read it with capture, search or snapshot; input to it is refused until they leave.",
+    "\n\nTOOLSETS: inspect reads; manage changes tmux state; execute runs processes and \
+     sends pane input; teardown deletes. tmux://capabilities has the surface frozen at \
+     startup; a missing tool was not selected.",
+    "\n\nTRUST: the tool surface is not authorization: commands and input run with the \
+     tmux user's permissions, and tmux configuration may add effects. Pane output may be \
+     sensitive or untrusted; environment values are withheld unless allowed by name. No \
+     hook writing, and no reading of paste buffers, which hold what a person copied.",
 );
+
+/// The one paragraph that depends on how this process was started: the pane
+/// it inherited, when it runs inside tmux.
+fn launch_context(pane: &str) -> String {
+    format!(
+        "\n\nLAUNCH CONTEXT: this process inherited pane {pane} from tmux. If its socket \
+         matches the selected server, pane listings mark it caller=self. Pane-input and \
+         teardown tools use a conservative caller guard."
+    )
+}
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TmuxTools {
@@ -198,23 +228,29 @@ impl ServerHandler for TmuxTools {
             .enable_resources()
             .build();
         let mut instructions = String::from(INSTRUCTIONS);
-        instructions.push_str(
-            "\n\nTOOL SURFACE IS NOT AUTHORIZATION: startup-frozen toolsets shape what this \
-             server advertises and accepts. Pane input and pane commands still run with the \
-             tmux user's authority, and configured tmux behavior may add effects.",
-        );
         // This is launch context, not a claim about the selected server. The
         // socket comparison that marks a listing as `self` happens later.
         if let Some(pane) = self.caller.as_ref().and_then(|caller| caller.pane_id()) {
-            instructions.push_str("\n\nLAUNCH CONTEXT: this process inherited pane ");
-            instructions.push_str(pane);
-            instructions.push_str(
-                " from tmux. If its socket matches the selected server, pane listings \
-                 mark it caller=self. Pane-input and teardown tools use a conservative \
-                 caller guard.",
-            );
+            instructions.push_str(&launch_context(pane));
         }
         info.instructions = Some(instructions);
         info
+    }
+}
+
+#[cfg(test)]
+mod instruction_tests {
+    /// Sent on every connection and kept in context for the whole
+    /// conversation, so a paragraph added here is paid for by every call
+    /// after it. Shorten one rather than raise this.
+    #[test]
+    fn the_instructions_fit_their_budget() {
+        assert!(
+            super::INSTRUCTIONS.len() <= 2048,
+            "{} bytes",
+            super::INSTRUCTIONS.len()
+        );
+        let launch = super::launch_context("%2147483647");
+        assert!(launch.len() <= 256, "{} bytes", launch.len());
     }
 }

@@ -577,3 +577,25 @@ async fn an_unknown_tool_is_still_a_protocol_error() {
 
     wire.shutdown().await;
 }
+
+/// What an agent reads at connect time is reviewed as text, not assembled
+/// out of sight: a change to it shows up as a diff of the snapshot. Set
+/// `TMUX_MCP_BLESS=1` to rewrite the snapshot after a deliberate change.
+#[test]
+fn the_instructions_match_their_reviewed_snapshot() {
+    use rmcp::ServerHandler as _;
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .caller(None)
+        .build();
+    let instructions = tools.get_info().instructions.expect("instructions");
+    let snapshot =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/instructions.txt");
+    if std::env::var_os("TMUX_MCP_BLESS").is_some() {
+        std::fs::write(&snapshot, &instructions).expect("snapshot is written");
+    }
+    let expected = std::fs::read_to_string(&snapshot).expect("snapshot is readable");
+    assert_eq!(
+        instructions, expected,
+        "rerun with TMUX_MCP_BLESS=1 after a deliberate change"
+    );
+}
