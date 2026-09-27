@@ -14,7 +14,7 @@ import pathlib
 import re
 import sys
 
-ENTRY = re.compile(r"^- \[(?P<title>[^\]]+)\]\(#(?P<anchor>[^)]+)\)$")
+ENTRY = re.compile(r"^(?P<indent>(  )?)- \[(?P<title>[^\]]+)\]\(#(?P<anchor>[^)]+)\)$")
 
 
 def anchor(title: str) -> str:
@@ -25,9 +25,16 @@ def anchor(title: str) -> str:
 
 
 def check(path: pathlib.Path) -> list[str]:
+    """Compare the Contents list with the sections it names.
+
+    A top-level entry names a `##` section, in order. Entries indented under
+    one name that section's `###` subsections, in order, when a section lists
+    them at all: a long section can carry its own index without every short
+    one having to.
+    """
     lines = path.read_text(encoding="utf-8").splitlines()
-    headings: list[str] = []
-    listed: list[tuple[str, str]] = []
+    sections: list[tuple[str, list[str]]] = []
+    listed: list[tuple[str, str, list[tuple[str, str]]]] = []
     fenced = False
     in_contents = False
     for line in lines:
@@ -40,17 +47,26 @@ def check(path: pathlib.Path) -> list[str]:
             title = line[3:].strip()
             in_contents = title == "Contents"
             if not in_contents:
-                headings.append(title)
+                sections.append((title, []))
             continue
-        if in_contents and line.startswith("- "):
+        if line.startswith("### ") and sections:
+            sections[-1][1].append(line[4:].strip())
+            continue
+        if in_contents and line.lstrip().startswith("- "):
             match = ENTRY.match(line)
             if match is None:
                 return [f"{path}: a Contents entry is not `- [Title](#anchor)`: {line}"]
-            listed.append((match["title"], match["anchor"]))
+            if match["indent"]:
+                if not listed:
+                    return [f"{path}: a nested Contents entry has no section above it: {line}"]
+                listed[-1][2].append((match["title"], match["anchor"]))
+            else:
+                listed.append((match["title"], match["anchor"], []))
     if not listed:
         return [f"{path}: no `## Contents` list"]
     problems = []
-    titles = [title for title, _ in listed]
+    titles = [title for title, _, _ in listed]
+    headings = [title for title, _ in sections]
     if titles != headings:
         missing = [title for title in headings if title not in titles]
         stale = [title for title in titles if title not in headings]
@@ -58,9 +74,18 @@ def check(path: pathlib.Path) -> list[str]:
             f"{path}: Contents does not match the sections in order;"
             f" missing {missing}, stale {stale}"
         )
+    subsections = dict(sections)
+    entries = [(title, target) for title, target, _ in listed]
+    for title, _, nested in listed:
+        entries += nested
+        if nested and [sub for sub, _ in nested] != subsections.get(title, []):
+            problems.append(
+                f"{path}: Contents under [{title}] does not match its ### subsections in order;"
+                f" listed {[sub for sub, _ in nested]}, found {subsections.get(title, [])}"
+            )
     problems += [
         f"{path}: [{title}] links #{target}, but the section's anchor is #{anchor(title)}"
-        for title, target in listed
+        for title, target in entries
         if target != anchor(title)
     ]
     return problems

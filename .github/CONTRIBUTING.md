@@ -321,7 +321,9 @@ split leaves when it lands on a sentence boundary. See
 
 **A Contents list matches its document.** `design.md`, `findings.md` and
 `parity.md` open with one, and `just doc-contents` fails when it and the `##` sections
-disagree in title, order or anchor.
+disagree in title, order or anchor. A section that indexes its `###`
+subsections under its entry, as `design.md`'s longer ones do, is held to them
+the same way.
 
 **The format catalog is measured against tmux's own source.**
 `crates/libtmux/docs/format-coverage.txt` records every format name tmux
