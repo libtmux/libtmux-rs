@@ -233,6 +233,15 @@ fuzz target="control_line" seconds="60":
 fuzz-list:
     cargo +nightly fuzz list
 
+# Load every crates/tmux-workspace/tests/fixtures/tmuxp document with both
+# tmuxp and `tmux-workspace load`, each on its own throwaway server under
+# /tmp/libtmux-rs-dev/, and diff what tmux itself reports. Needs a pinned
+# tmuxp 1.74.0 (see scripts/tmuxp-parity.py's docstring), so it is not part
+# of `just check`.
+[group: 'test']
+parity *args:
+    python3 scripts/tmuxp-parity.py {{ args }}
+
 # Watch files and run tests on change (requires entr)
 [group: 'test']
 watch-test:
