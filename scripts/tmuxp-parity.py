@@ -16,9 +16,7 @@ session name holding ':' or '.' is refused, and a typed command's $VAR is
 meant to reach the pane's shell as written rather than be substituted into
 the command text. ALLOWLIST records each with its reason; a fixture that
 only differs there still reports "match" and does not fail the run.
-Anything else that differs is a real finding and fails it. Two of the four
-have not been observed to fire against the pinned tmuxp and the commit this
-was written against -- the report explains why, not this script.
+Anything else that differs is a real finding and fails it.
 
 Two fixtures need help this script cannot fabricate safely: plugin-system.yaml
 names a real, unpublished tmuxp plugin, and pane-shell.yaml's window_shell
@@ -37,6 +35,7 @@ bounded by a timeout, never a fixed sleep.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -103,10 +102,13 @@ ALLOWLIST = {
         "tmux's own default shapes the window -- a tmuxp bug, observed on "
         "options.yaml"
     ),
-    "prompt-redraw": (
-        "tmux-workspace waits for a pane's shell to own its terminal before "
-        "typing (execution.rs), and a pane resized by a later split redraws "
-        "its prompt once more; the screens differ only by a bare prompt line"
+    "prompt-and-echo": (
+        "the same commands ran and printed the same output; only how the "
+        "shell drew them differs. tmux-workspace waits for a pane's shell to "
+        "own its terminal before typing (execution.rs), so its screen has "
+        "neither the early echo tmuxp's type-ahead leaves above the first "
+        "prompt under bash, nor the prompt a zsh pane redraws when a later "
+        "split resizes it"
     ),
     "live-filesystem": (
         "the fixture lists /var/log, which the running system writes to "
@@ -217,6 +219,11 @@ class DocFacts:
     session_option_keys: set[str] = field(default_factory=set)
     windows: list[WindowFacts] = field(default_factory=list)
     allow: str | None = None  # set only for this script's own extra cases
+    # What each pane types, keyed by window name, since `window_index` can
+    # put a window somewhere other than its place in the document; an unnamed
+    # window, which tmux names after its program, falls back to its place.
+    typed: dict[str, list[set[str]]] = field(default_factory=dict)
+    typed_in_order: list[list[set[str]]] = field(default_factory=list)
 
 
 def read_doc_facts(text: str) -> DocFacts:
@@ -497,7 +504,6 @@ def read_session(tmux_bin: str, socket: str, env: dict[str, str], doc: DocFacts)
 # --------------------------------------------------------------------------
 
 
-PROMPTS = {"%", "$", "#", ">"}
 
 # Window options tmux keeps per window, which a document may still list under
 # the session's `options:`.
@@ -507,13 +513,29 @@ WINDOW_SCOPE = {
 }
 
 
-def text_allow(tp: Pane, wp: Pane, shape_allow: str | None) -> str | None:
+def text_allow(tp: Pane, wp: Pane, shape_allow: str | None, typed: set[str]) -> str | None:
     """Which allowlisted cause explains two different screens, if one does."""
-    def bare(text: list[str]) -> list[str]:
-        return [line for line in text if line.strip() not in PROMPTS]
+    def output(text: list[str]) -> list[str]:
+        """What the commands printed.
 
-    if bare(tp.text) == bare(wp.text):
-        return "prompt-redraw"
+        Prompts are the shell's own and take any shape, so they are not
+        recognised by form: a line holding something the pane typed is an
+        echo or a prompt carrying it, and the settled screen's last line is
+        the idle prompt, so either kind is dropped wherever it appears.
+        """
+        idle = text[-1].strip() if text else ""
+        return [
+            line
+            for line in text
+            if line.strip() != idle
+            # A prompt redrawn on resize can come back shorter than the idle
+            # one, zsh's `%` without its host, say.
+            and line.strip() not in {"%", "$", "#", ">"}
+            and not any(command in line for command in typed)
+        ]
+
+    if output(tp.text) == output(wp.text):
+        return "prompt-and-echo"
     # The command line itself can scroll away under a long listing, so the
     # listing is recognised by its own lines: `ls -al` rows of log files.
     def lists_logs(text: list[str]) -> bool:
@@ -527,25 +549,29 @@ def text_allow(tp: Pane, wp: Pane, shape_allow: str | None) -> str | None:
     return shape_allow
 
 
-def compare_pane(tp: Pane, wp: Pane, label: str, shape_allow: str | None) -> list[Difference]:
+def compare_pane(
+    tp: Pane, wp: Pane, label: str, shape_allow: str | None, typed: set[str]
+) -> list[Difference]:
     diffs = []
     for attr in ("path", "active", "dead", "command"):
         tv, wv = getattr(tp, attr), getattr(wp, attr)
         if tv != wv:
             diffs.append(Difference(label, attr, tv, wv))
     if tp.text is not None and wp.text is not None and tp.text != wp.text:
-        # `var-in-command-env` (see ALLOWLIST) would show up here if it ever
-        # fires, but nothing in this fixture set exercises it at the commit
-        # under test (see the report), so it is never auto-allowed here.
-        # A window's allowlisted shape difference does change its panes'
-        # widths, though, which reflows wrapped text on its own -- credit
-        # that to the same allowlist entry rather than report it as new.
-        diffs.append(Difference(label, "screen_text", tp.text, wp.text, text_allow(tp, wp, shape_allow)))
+        # A window's allowlisted shape difference changes its panes' widths,
+        # which reflows wrapped text on its own; credit that to the same
+        # allowlist entry rather than report it as new.
+        diffs.append(Difference(label, "screen_text", tp.text, wp.text, text_allow(tp, wp, shape_allow, typed)))
     return diffs
 
 
 def compare_window(
-    tw: Window, ww: Window, doc: WindowFacts, label: str, session_option_keys: set[str]
+    tw: Window,
+    ww: Window,
+    doc: WindowFacts,
+    label: str,
+    session_option_keys: set[str],
+    typed: list[set[str]],
 ) -> list[Difference]:
     diffs = []
     if tw.name != ww.name:
@@ -565,8 +591,9 @@ def compare_window(
             diffs.append(Difference(label, f"option:{key}", tv, wv))
     if len(tw.panes) != len(ww.panes):
         diffs.append(Difference(label, "pane_count", len(tw.panes), len(ww.panes)))
-    for tp, wp in zip(tw.panes, ww.panes):
-        diffs.extend(compare_pane(tp, wp, f"{label}.pane[{tp.index}]", shape_allow))
+    for position, (tp, wp) in enumerate(zip(tw.panes, ww.panes)):
+        pane_typed = typed[position] if position < len(typed) else set()
+        diffs.extend(compare_pane(tp, wp, f"{label}.pane[{tp.index}]", shape_allow, pane_typed))
     return diffs
 
 
@@ -602,7 +629,15 @@ def compare(tmuxp: RunResult, workspace: RunResult, doc: DocFacts, extra_allow: 
     for index, (tw, ww) in enumerate(zip(t_session.windows, w_session.windows)):
         window_doc = doc.windows[index] if index < len(doc.windows) else WindowFacts()
         diffs.extend(
-            compare_window(tw, ww, window_doc, f"window[{tw.index}]", doc.session_option_keys)
+            compare_window(
+                tw,
+                ww,
+                window_doc,
+                f"window[{tw.index}]",
+                doc.session_option_keys,
+                doc.typed.get(tw.name)
+                or (doc.typed_in_order[index] if index < len(doc.typed_in_order) else []),
+            )
         )
     return diffs
 
@@ -648,14 +683,11 @@ def build_env(run_dir: Path) -> dict[str, str]:
     tmux_conf_dir.mkdir(parents=True, exist_ok=True)
     (tmux_conf_dir / "tmux.conf").write_text(f"set -g default-size {DEFAULT_SIZE}\n", encoding="utf-8")
 
-    # Pinning `default-shell` to /bin/sh looked like the fix for the zsh rc
-    # noise below, but a plain "-c command" pane then comes up running sh
-    # itself rather than exec'ing into it (reproduces identically for both
-    # loaders, so it never fails a comparison -- it just quietly defeats
-    # pane-shell.yaml, whose point is exactly which command ends up running).
-    # ZDOTDIR pointed at an empty directory keeps the operator's real
-    # default-shell, so a `shell:`/`window_shell:` override still execs
-    # cleanly, while zsh reads no rc file and so never reaches for it.
+    # ZDOTDIR pointed at an empty directory keeps zsh from reading rc files
+    # and leaves the operator's default-shell in place, so a `shell:` or
+    # `window_shell:` override still execs cleanly. A /bin/sh default-shell
+    # would run a plain "-c command" pane as sh instead of exec'ing it, for
+    # both loaders alike, which defeats pane-shell.yaml.
     zdotdir = run_dir / "zdotdir"
     zdotdir.mkdir(parents=True, exist_ok=True)
     # An empty .zshrc, not just an empty ZDOTDIR: with none of .zshenv,
@@ -735,6 +767,7 @@ def run_fixture(
             workspace_proc.returncode, workspace_proc.stdout, workspace_proc.stderr, workspace_session
         )
 
+        record_typed(args.binary, fixture, env, cwd)
         diffs = compare(tmuxp_result, workspace_result, fixture.doc, fixture.allow)
         real = [diff for diff in diffs if diff.allow is None]
         status = "differs" if real else "match"
@@ -744,6 +777,23 @@ def run_fixture(
         kill_server(args.tmux, WORKSPACE_SOCKET, env)
         if not args.keep:
             shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def record_typed(binary: Path, fixture: Fixture, env: dict[str, str], cwd: Path) -> None:
+    """Fill each window's per-pane typed commands from `load --dry-run`."""
+    proc = run_loader([str(binary), "--json", "load", "--dry-run", str(fixture.path)], env, cwd)
+    if proc.returncode != 0:
+        return
+    plan = json.loads(proc.stdout)
+    windows = plan["sessions"][0]["windows"] if plan.get("sessions") else []
+    for window in windows:
+        panes = [
+            {command["text"].strip() for command in pane["commands"] if command["text"].strip()}
+            for pane in window["panes"]
+        ]
+        fixture.doc.typed_in_order.append(panes)
+        if window.get("name"):
+            fixture.doc.typed[window["name"]] = panes
 
 
 def resolve_tmux(explicit: str | None) -> str:
