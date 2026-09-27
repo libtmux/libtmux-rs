@@ -200,7 +200,8 @@ file still loads: the three above, plus `workspace_builder`,
 `workspace_builder_options`, `config` and `socket_name` on the workspace.
 [`Workspace::from_yaml_strict`] and [`Workspace::from_file_strict`] refuse
 any other unrecognized key instead, unless it starts with `x-`, which is the
-`tmux-workspace` command's own policy.
+`tmux-workspace` command's own policy. `cargo run --example strict` reads one
+document both ways.
 
 The `tmux-workspace` command has its own parser and builder but reads a
 document the same way, tmuxp's; the last section of
