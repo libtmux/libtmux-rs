@@ -2,11 +2,15 @@
 """Report criterion's change against the previous run, and fail on a doubling.
 
 Criterion compares each run with the last one it saved under `target/criterion`
-and writes the relative change of the mean to `change/estimates.json`. On a
-shared runner a few tens of percent either way is weather, so this gates only
-on a benchmark that got more than `--limit` times slower -- the size of an
-algorithmic regression, not of a noisy neighbour -- and prints every change so
-a slower drift is still visible.
+and writes the relative change of the mean to `change/estimates.json`. Two
+runs rarely share a machine: a slower runner moves nearly every benchmark
+together, 11 of 12 by 50-105% on one observed pair. So each benchmark is judged against the run's
+machine factor -- the median change across all of them -- and fails only when
+it is more than `--limit` times slower than its neighbours moved: the size of
+an algorithmic regression, not of different hardware. A factor past
+`--machine-limit` fails on its own, since a slowdown every benchmark shares
+would otherwise cancel out. Every change is printed, so a drift below either
+limit is still visible.
 
 The first run has nothing to compare with and passes.
 """
@@ -17,6 +21,7 @@ import argparse
 import json
 import os
 import pathlib
+import statistics
 import sys
 
 
@@ -38,21 +43,31 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=pathlib.Path)
     parser.add_argument("--limit", type=float, default=2.0)
+    parser.add_argument("--machine-limit", type=float, default=3.0)
     args = parser.parse_args(argv)
 
     found = changes(args.root)
     if not found:
         print(f"no earlier run under {args.root} to compare with")
         return 0
-    rows = ["| Benchmark | Mean | Change |", "| --- | ---: | ---: |"]
+    factor = statistics.median(1 + change for _, change, _ in found)
+    rows = [
+        f"Machine factor: {factor:.2f}x (the median change across {len(found)} benchmarks)",
+        "",
+        "| Benchmark | Mean | Change | Against the machine |",
+        "| --- | ---: | ---: | ---: |",
+    ]
     slower = []
     for name, change, mean in found:
-        rows.append(f"| `{name}` | {mean / 1e6:.3f} ms | {change:+.1%} |")
-        if 1 + change > args.limit:
-            slower.append(f"{name} is {1 + change:.2f}x its previous mean")
+        relative = (1 + change) / factor
+        rows.append(f"| `{name}` | {mean / 1e6:.3f} ms | {change:+.1%} | {relative:.2f}x |")
+        if relative > args.limit:
+            slower.append(f"{name} is {relative:.2f}x slower than the run's other benchmarks moved")
+    if factor > args.machine_limit:
+        slower.append(f"every benchmark moved together by {factor:.2f}x, past {args.machine_limit:g}x")
     if slower:
         # First, so a reader of the summary sees the verdict before the table.
-        rows = [f"**Regressed past {args.limit:g}x:**", ""] + [f"- {line}" for line in slower] + [""] + rows
+        rows = ["**Regressed:**", ""] + [f"- {line}" for line in slower] + [""] + rows
     report = "\n".join(rows)
     print(report)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
