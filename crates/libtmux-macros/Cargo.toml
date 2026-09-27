@@ -12,6 +12,7 @@ categories = ["development-tools::procedural-macro-helpers", "api-bindings"]
 repository.workspace = true
 license.workspace = true
 include = [
+    "/assets/*",
     "/Cargo.toml",
     "/LICENSE-APACHE",
     "/LICENSE-MIT",

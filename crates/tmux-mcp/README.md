@@ -1,3 +1,12 @@
+<!-- libtmux-logo -->
+<p align="center">
+  <picture>
+    <source srcset="assets/logo.svg" type="image/svg+xml">
+    <img src="assets/logo.png" width="128" height="128" alt="libtmux for Rust MCP">
+  </picture>
+</p>
+<!-- /libtmux-logo -->
+
 # tmux-mcp
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for

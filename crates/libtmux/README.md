@@ -1,3 +1,12 @@
+<!-- libtmux-logo -->
+<p align="center">
+  <picture>
+    <source srcset="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux/assets/logo.svg" type="image/svg+xml">
+    <img src="https://raw.githubusercontent.com/libtmux/libtmux-rs/master/crates/libtmux/assets/logo.png" width="128" height="128" alt="libtmux for Rust">
+  </picture>
+</p>
+<!-- /libtmux-logo -->
+
 # libtmux
 
 [![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]

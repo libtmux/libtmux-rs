@@ -1,3 +1,12 @@
+<!-- libtmux-logo -->
+<p align="center">
+  <picture>
+    <source srcset="assets/logo.svg" type="image/svg+xml">
+    <img src="assets/logo.png" width="128" height="128" alt="libtmux for Rust workspace">
+  </picture>
+</p>
+<!-- /libtmux-logo -->
+
 # tmux-workspace
 
 Load tmux sessions from YAML, and save running ones back to it. A native
