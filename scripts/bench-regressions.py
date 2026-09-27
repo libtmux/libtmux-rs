@@ -50,6 +50,9 @@ def main(argv: list[str]) -> int:
         rows.append(f"| `{name}` | {mean / 1e6:.3f} ms | {change:+.1%} |")
         if 1 + change > args.limit:
             slower.append(f"{name} is {1 + change:.2f}x its previous mean")
+    if slower:
+        # First, so a reader of the summary sees the verdict before the table.
+        rows = [f"**Regressed past {args.limit:g}x:**", ""] + [f"- {line}" for line in slower] + [""] + rows
     report = "\n".join(rows)
     print(report)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
