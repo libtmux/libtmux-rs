@@ -6,6 +6,7 @@ mod keys;
 mod locate;
 mod merge;
 mod parse;
+mod values;
 
 use std::path::PathBuf;
 use std::time::Duration;
