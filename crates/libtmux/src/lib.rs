@@ -322,6 +322,24 @@ println!("{} sessions", sessions.len());
 // docs.rs builds with this cfg set, so every gated item there carries the
 // feature that unlocks it. Nightly-only, and a no-op everywhere else.
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// A link into a feature-gated item resolves only when that feature is on.
+// docs.rs and `just docs` build with every feature, where a broken link is an
+// error; a partial build -- a dependent's `cargo doc` with the defaults -- can
+// never resolve those, so it is not told they are broken.
+#![cfg_attr(
+    not(all(
+        feature = "blocking",
+        feature = "control-mode",
+        feature = "derive",
+        feature = "plan",
+        feature = "query",
+        feature = "schema",
+        feature = "serde",
+        feature = "test-support",
+        feature = "tracing"
+    )),
+    allow(rustdoc::broken_intra_doc_links)
+)]
 #![forbid(unsafe_code)]
 
 #[cfg(not(unix))]
