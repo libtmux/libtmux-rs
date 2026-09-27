@@ -50,6 +50,7 @@ core_files=(
     "$core_root"/LICENSE-MIT
     "$core_root"/README.md
     "$core_root"/docs/design.md
+    "$core_root"/docs/findings.md
     "$core_root"/docs/parity.md
     "$core_root"/examples/*.rs
     "$core_root"/schema/*.json

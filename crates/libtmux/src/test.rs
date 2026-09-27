@@ -83,7 +83,7 @@ const CONTAINMENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Five seconds bounds a tmux that starts on a machine with a core to spare.
 /// It stops bounding one on a machine running several times its cores in
 /// work, and a deadline that fires on a healthy fixture reports the load
-/// rather than the thing under test -- which is the failure [design.md]
+/// rather than the thing under test -- which is the failure [findings.md]
 /// already describes and the rule it draws from it.
 ///
 /// Read once, because a deadline that changed inside a run would make two
@@ -93,7 +93,7 @@ const CONTAINMENT_TIMEOUT: Duration = Duration::from_secs(5);
 /// a short deadline sets its own through
 /// [`TestServerBuilder::lifecycle_timeout`], which this does not touch.
 ///
-/// [design.md]: ../docs/design.md
+/// [findings.md]: ../docs/findings.md
 fn timeout_scale() -> f64 {
     static SCALE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
     *SCALE.get_or_init(|| {
@@ -147,14 +147,14 @@ fn platform_fallback_grace_ceiling() -> Option<Duration> {
 }
 /// How long a blocking wait sleeps before looking again.
 ///
-/// Sleeping rather than yielding, for the reason [design.md] gives about the
+/// Sleeping rather than yielding, for the reason [findings.md] gives about the
 /// async poll loops and which applies with more force here: this runs inside
 /// `spawn_blocking` while waiting for a *process* to exit, so a spin holds a
 /// core the daemon needs to handle the signal it was just sent. On a machine
 /// with fewer cores than the suite has concurrent fixtures, that is the
 /// difference between a clean shutdown and a grace window that expires.
 ///
-/// [design.md]: ../docs/design.md
+/// [findings.md]: ../docs/findings.md
 pub(crate) const CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 #[cfg(any(

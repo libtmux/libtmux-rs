@@ -563,7 +563,7 @@ async fn liveness_and_session_lookup_answer_over_raw_bytes() {
 /// No `-t` target reaches a session named with `:` or `.` the way a bare
 /// name or `-t =name` would reach any other: tmux splits the target on the
 /// separator before `=` narrows anything, so both spellings answer as
-/// though the session were not there (`docs/design.md` has the detail).
+/// though the session were not there (`docs/findings.md` has the detail).
 /// `Server::session` and `Server::has_session` never ask tmux to resolve a
 /// target at all -- they list sessions and compare names as bytes -- so
 /// they find such a session regardless.

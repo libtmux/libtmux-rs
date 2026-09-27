@@ -311,8 +311,8 @@ comment opens mid-sentence or sits below a non-doc attribute — the shape a
 split leaves when it lands on a sentence boundary. See
 [`WRITING.md`](WRITING.md) for the rule this enforces.
 
-**A Contents list matches its document.** `design.md` and `parity.md` open
-with one, and `just doc-contents` fails when it and the `##` sections
+**A Contents list matches its document.** `design.md`, `findings.md` and
+`parity.md` open with one, and `just doc-contents` fails when it and the `##` sections
 disagree in title, order or anchor.
 
 **The format catalog is measured against tmux's own source.**

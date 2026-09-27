@@ -3,7 +3,7 @@
 /// The fixture's five seconds bound a tmux that starts with a core to
 /// spare. Under a machine running several times its cores in work they
 /// stop bounding startup and start deciding the result, which is the
-/// failure `design.md` names and then leaves to a constant. A scale of
+/// failure `findings.md` names and then leaves to a constant. A scale of
 /// less than one would push it the wrong way, so it is refused rather
 /// than honoured: nothing here is trying to make a fixture fail sooner.
 #[test]

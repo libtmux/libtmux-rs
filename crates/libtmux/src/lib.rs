@@ -433,6 +433,11 @@ pub use window::{
 #[doc = include_str!("../docs/design.md")]
 pub struct DesignNotes;
 
+/// The findings catalogue, compiled for the same reason as [`DesignNotes`].
+#[cfg(doctest)]
+#[doc = include_str!("../docs/findings.md")]
+pub struct Findings;
+
 /// Derive a stable typed filter schema for a named struct.
 ///
 /// The generated companion exposes typed field handles through

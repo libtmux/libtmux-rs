@@ -343,7 +343,8 @@ example-tables:
 # Report Contents lists that disagree with their document's sections
 [group: 'docs']
 doc-contents:
-    python3 scripts/check-contents.py crates/libtmux/docs/design.md crates/libtmux/docs/parity.md
+    python3 scripts/check-contents.py crates/libtmux/docs/design.md \
+        crates/libtmux/docs/findings.md crates/libtmux/docs/parity.md
 
 # rustdoc supplies a doctest's `fn main`, so a block whose body is only a
 # hidden function definition compiles it and then runs an empty main. Every
