@@ -235,7 +235,8 @@ jobs:
   # tmux-workspace claims to build what tmuxp builds. This loads every tmuxp
   # fixture through both, on separate servers, and diffs the sessions; a
   # difference not in the harness's allowlist, each entry with its reason,
-  # fails. Weekly, because it needs tmuxp and a settled shell per pane.
+  # fails. It then times both on one fixture for the job summary. Weekly,
+  # because it needs tmuxp and a settled shell per pane.
   parity:
     name: tmuxp parity
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -269,6 +270,18 @@ jobs:
 
       - name: Compare every fixture
         run: python3 scripts/tmuxp-parity.py --binary target/debug/tmux-workspace --tmuxp "$(command -v tmuxp)"
+
+      # Timing against the same tmuxp, reported in the job summary. Not a gate:
+      # a shared runner's timings vary more than the difference would.
+      - run: cargo build --locked --release -p tmux-workspace
+
+      - name: Time it against tmuxp
+        run: >-
+          python3 scripts/bench-workspace-cli.py
+          --binary target/release/tmux-workspace
+          --tmuxp "$(command -v tmuxp)"
+          --samples 10
+          --load-samples 5
 
   # The slow lane. tmux's output and error wording change between releases, so
   # every supported one is built from source and runs the whole workspace.

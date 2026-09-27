@@ -248,7 +248,7 @@ These gates are **not** in `just check` and run only in CI:
 | `just compat` | Builds five tmux releases from source; 90 minutes |
 | `just fuzz <target>` | Needs nightly and a sanitizer; runs weekly |
 | `just bench`, `just bench-waits`, `just bench-compare` | Timing on a shared runner; runs weekly against the previous week, failing past 2x |
-| `just parity` | Needs tmuxp 1.74.0; loads every tmuxp fixture through tmuxp and `tmux-workspace` and diffs the sessions; runs weekly |
+| `just parity`, `just bench-cli` | Need tmuxp 1.74.0; load every tmuxp fixture through tmuxp and `tmux-workspace` and diff the sessions, then time both; run weekly |
 
 `just parity` needs a pinned tmuxp 1.74.0 on `--tmuxp` (or on `PATH`), not
 just tmux, so it runs weekly in CI rather than in `just check`. It loads every `crates/tmux-workspace/tests/fixtures/tmuxp` document

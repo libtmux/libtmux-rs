@@ -9,6 +9,7 @@ import json
 import math
 import os
 import shutil
+import site
 import statistics
 import subprocess
 import tempfile
@@ -46,6 +47,10 @@ def main() -> None:
         env["PATH"] = (
             str(Path(args.tmux).resolve().parent) + os.pathsep + env.get("PATH", "")
         )
+        # The sandboxed HOME below would also move Python's user site, and a
+        # tmuxp installed with `pip --user` would stop importing: keep it
+        # where the real HOME puts it.
+        env.setdefault("PYTHONUSERBASE", site.getuserbase())
         env.update(
             HOME=str(configs.parent),
             TMUXP_CONFIGDIR=str(configs),
@@ -400,6 +405,24 @@ def main() -> None:
                 indent=2,
             )
         )
+        write_step_summary(summary)
+
+
+def write_step_summary(summary: dict[str, dict[str, float]]) -> None:
+    """In CI, set the matched comparison against tmuxp side by side."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    rows = ["| Operation | tmux-workspace median | tmuxp median |", "| --- | ---: | ---: |"]
+    for name in sorted(summary):
+        if not name.startswith("matched_rust_"):
+            continue
+        operation = name.removeprefix("matched_rust_")
+        tmuxp = summary.get(f"matched_tmuxp_{operation}")
+        other = f"{tmuxp['median_ms']:.1f} ms" if tmuxp else "--"
+        rows.append(f"| `{operation}` | {summary[name]['median_ms']:.1f} ms | {other} |")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("\n".join(rows) + "\n")
 
 
 if __name__ == "__main__":

@@ -199,6 +199,14 @@ project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
 
 The [command reference](docs/cli.md) has the complete list.
 
+It starts in about a millisecond where tmuxp takes about 125, and a cold
+two-window load takes about 150 ms against 205 (one Linux machine, tmux 3.7d,
+tmuxp 1.74.0, medians of 20 starts and 5 loads). To measure your own:
+
+```console
+$ just bench-cli --binary target/release/tmux-workspace --tmuxp "$(command -v tmuxp)"
+```
+
 ## Scripting
 
 `--json` prints one JSON document, and `--ndjson` streams one event per line
