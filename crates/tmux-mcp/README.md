@@ -7,11 +7,15 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # tmux-mcp
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [tmux](https://github.com/tmux/tmux), built on
 [libtmux](https://docs.rs/libtmux).
+
+</div>
 
 > [!WARNING]
 > **Alpha.** The tool surface changes between releases, including in ways that

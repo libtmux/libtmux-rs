@@ -7,11 +7,15 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # tmux-workspace
 
 Load tmux sessions from YAML, and save running ones back to it. A native
 [tmuxp](https://tmuxp.git-pull.com/): it reads tmuxp's workspace files, finds
 them where tmuxp does and takes tmuxp's flags, as one binary with no Python.
+
+</div>
 
 > **Alpha.** Commands and flags can change between releases, and changes are
 > listed in the [changelog][changelog] rather than flagged as breaking.

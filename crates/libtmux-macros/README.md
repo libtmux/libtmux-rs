@@ -7,10 +7,14 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # libtmux-macros
 
 `#[derive(Filterable)]` for [`libtmux`](https://docs.rs/libtmux): give your own
 structs the same typed query grammar `libtmux` uses for tmux objects.
+
+</div>
 
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not

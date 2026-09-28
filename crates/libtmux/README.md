@@ -7,6 +7,8 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # libtmux
 
 [![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]
@@ -20,6 +22,8 @@
 
 **Drive tmux from Rust: typed, async control over servers, sessions, windows,
 and panes.**
+
+</div>
 
 > **Alpha.** The API changes between releases, including in ways that will not
 > be called out as breaking, because nothing here is stable yet. Cargo will not

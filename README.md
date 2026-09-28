@@ -7,6 +7,8 @@
 </p>
 <!-- /libtmux-logo -->
 
+<div align="center">
+
 # libtmux for Rust
 
 [![CI]][actions] [![libtmux]][libtmux-crate] [![tmux-mcp]][mcp-crate] [![MSRV]][rust-1.85] [![License]][license]
@@ -25,6 +27,8 @@
 **Drive tmux from Rust: typed, async control over servers, sessions, windows,
 and panes — and a query layer that makes "which pane is running the tests?" one
 expression instead of a parsing problem.**
+
+</div>
 
 > **Alpha.** Releases carry an `-alpha` prerelease tag. The API is not
 > settled, and any release may change or remove exported identifiers without a
