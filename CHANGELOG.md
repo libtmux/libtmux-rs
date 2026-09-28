@@ -16,6 +16,20 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.15 - 2026-09-27
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;
+`tmux-mcp` is 0.1.0-alpha.16.
+
+Nothing in the API changes. Each crate's page on crates.io and docs.rs now
+opens with its logo.
+
+### Changed
+
+- Each crate's README opens with its logo, and each crate packages the SVG and
+  PNG under `assets/`. The images load from absolute URLs, so the logo also
+  shows where `libtmux` embeds its README in the API reference. (#36)
+
 ## 0.1.0-alpha.14 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.14;

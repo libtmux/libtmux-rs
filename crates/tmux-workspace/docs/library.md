@@ -2,7 +2,7 @@ Build tmux workspaces from [tmuxp](https://tmuxp.git-pull.com/)-style YAML,
 using [libtmux](https://docs.rs/libtmux).
 
 This is the library. The package also ships the `tmux-workspace` command, a
-native tmuxp: `cargo install tmux-workspace --version 0.1.0-alpha.14`, and
+native tmuxp: `cargo install tmux-workspace --version 0.1.0-alpha.15`, and
 see its [README](https://crates.io/crates/tmux-workspace) and its
 [reference](crate::command).
 The library reads tmuxp's own example files and, by default, records rather
@@ -213,7 +213,7 @@ The command is a default feature; a library dependent leaves it, and clap
 with it, out:
 
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.14 --no-default-features
+$ cargo add tmux-workspace@0.1.0-alpha.15 --no-default-features
 ```
 
 <details>
@@ -221,7 +221,7 @@ $ cargo add tmux-workspace@0.1.0-alpha.14 --no-default-features
 
 ```toml
 [dependencies]
-tmux-workspace = { version = "0.1.0-alpha.14", default-features = false }
+tmux-workspace = { version = "0.1.0-alpha.15", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
