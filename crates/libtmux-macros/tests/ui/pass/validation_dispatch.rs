@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::{
+use libtmux::query::{
     __private::{self, Predicate},
     BoolField, EnumField, FilterEnum, FilterExpressionError, FilterExpressionErrorKind,
     Filterable as QueryFilterable, IntegerField, ManyRelation, OneRelation, TextField,
 };
-use renamed_libtmux::TmuxText;
+use libtmux::TmuxText;
 
 enum State {
     Ready,

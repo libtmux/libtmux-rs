@@ -27,6 +27,7 @@ use tracing::instrument::{Instrument as _, WithSubscriber as _};
 
 use crate::internal::core::Core;
 use crate::internal::listing;
+use crate::internal::race::{Either, race};
 use crate::{ChannelWait, Command, CommandResult, Error};
 
 /// The `wait-for` channels this process has a client on, or a signal for.
@@ -221,12 +222,7 @@ pub(crate) async fn wait(
             park(core, channel);
         }
 
-        tokio::select! {
-            result = waiter.released.changed() => {
-                let _ = result;
-            }
-            () = elapsed(deadline) => {}
-        }
+        let _ = race(waiter.released.changed(), elapsed(deadline)).await;
 
         match waiter.settle() {
             Settled::Signalled => return Ok(ChannelWait::Signalled),
@@ -284,12 +280,10 @@ pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> R
         settled: false,
     };
     let deadline = Instant::now().checked_add(budget);
-    tokio::select! {
-        outcome = &mut grant.taken => match outcome {
-            Ok(outcome) => outcome,
-            Err(_) => Err(Error::supervisor_lost(request_id.get(), summary)),
-        },
-        () = elapsed(deadline) => grant
+    match race(&mut grant.taken, elapsed(deadline)).await {
+        Either::First(Ok(outcome)) => outcome,
+        Either::First(Err(_)) => Err(Error::supervisor_lost(request_id.get(), summary)),
+        Either::Second(()) => grant
             .close()
             .unwrap_or_else(|| Err(Error::timeout(request_id.get(), summary, budget))),
     }

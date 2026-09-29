@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::{EnumField, FilterEnum, Filterable as _};
+use libtmux::query::{EnumField, FilterEnum, Filterable as _};
 
 enum State {
     Ready,

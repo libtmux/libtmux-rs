@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::{Filterable as _, QueryIteratorExt};
+use libtmux::query::{Filterable as _, QueryIteratorExt};
 
 #[derive(Filterable)]
 #[filterable(target = "row")]

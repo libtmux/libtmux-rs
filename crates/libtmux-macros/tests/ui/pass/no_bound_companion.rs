@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::{FilterEnum, Filterable as _};
+use libtmux::query::{FilterEnum, Filterable as _};
 
 struct OpaqueState(Rc<()>);
 
@@ -28,7 +28,7 @@ struct Related {
 struct Envelope<E, R>
 where
     E: FilterEnum,
-    R: renamed_libtmux::query::Filterable,
+    R: libtmux::query::Filterable,
 {
     #[filterable(enum)]
     state: E,

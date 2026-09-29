@@ -2,10 +2,10 @@ use std::any::Any;
 use std::collections::{HashMap, hash_map::Entry};
 use std::ffi::OsString;
 use std::fmt;
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
@@ -28,6 +28,7 @@ use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, Shutdown
 use crate::internal::process::{
     LaunchContext, ProcessAdmission, ProcessGroupGuard, validate_request,
 };
+use crate::internal::race::{Either3, race3};
 
 #[derive(Clone)]
 pub(crate) struct SubprocessExecutor {
@@ -547,10 +548,16 @@ async fn supervise_inner(
     };
 
     let wait_result = loop {
-        let outcome = tokio::select! {
-            result = child.wait() => Some(result),
-            () = cancelled(cancellation) => None,
-            () = deadline_elapsed(deadline) => {
+        let outcome = match race3(
+            child.wait(),
+            cancelled(cancellation),
+            deadline_elapsed(deadline),
+        )
+        .await
+        {
+            Either3::First(result) => Some(result),
+            Either3::Second(()) => None,
+            Either3::Third(()) => {
                 return InnerOutcome::Failed(Error::timeout(
                     context.request_id(),
                     context.command.clone(),
@@ -599,6 +606,13 @@ enum InnerOutcome {
     Failed(Error),
 }
 
+enum Drained {
+    Stdout(Result<Result<Vec<u8>, io::Error>, tokio::task::JoinError>),
+    Stderr(Result<Result<Vec<u8>, io::Error>, tokio::task::JoinError>),
+    Cancelled,
+    Expired,
+}
+
 async fn drain_readers(
     readers: &mut ReaderTasks,
     cancellation: &mut watch::Receiver<bool>,
@@ -611,22 +625,50 @@ async fn drain_readers(
     while stdout.is_none() || stderr.is_none() {
         let stdout_reader = &mut readers.stdout;
         let stderr_reader = &mut readers.stderr;
-        tokio::select! {
-            result = wait_reader(stdout_reader), if stdout.is_none() => {
+        let stdout_open = stdout.is_none();
+        let stderr_open = stderr.is_none();
+        let event = {
+            let mut out = pin!(wait_reader(stdout_reader));
+            let mut err = pin!(wait_reader(stderr_reader));
+            let mut cancel = pin!(cancelled(cancellation));
+            let mut expiry = pin!(deadline_elapsed(deadline));
+            poll_fn(|task| {
+                if stdout_open {
+                    if let Poll::Ready(result) = out.as_mut().poll(task) {
+                        return Poll::Ready(Drained::Stdout(result));
+                    }
+                }
+                if stderr_open {
+                    if let Poll::Ready(result) = err.as_mut().poll(task) {
+                        return Poll::Ready(Drained::Stderr(result));
+                    }
+                }
+                if cancel.as_mut().poll(task).is_ready() {
+                    return Poll::Ready(Drained::Cancelled);
+                }
+                if expiry.as_mut().poll(task).is_ready() {
+                    return Poll::Ready(Drained::Expired);
+                }
+                Poll::Pending
+            })
+            .await
+        };
+        match event {
+            Drained::Stdout(result) => {
                 *stdout_reader = None;
                 stdout = Some(map_reader_result(result, "stdout", context)?);
             }
-            result = wait_reader(stderr_reader), if stderr.is_none() => {
+            Drained::Stderr(result) => {
                 *stderr_reader = None;
                 stderr = Some(map_reader_result(result, "stderr", context)?);
             }
-            () = cancelled(cancellation) => {
+            Drained::Cancelled => {
                 return Err(Error::executor_shutdown(
                     context.request_id(),
                     context.command.clone(),
                 ));
             }
-            () = deadline_elapsed(deadline) => {
+            Drained::Expired => {
                 return Err(Error::timeout(
                     context.request_id(),
                     context.command.clone(),

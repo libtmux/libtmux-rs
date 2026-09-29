@@ -15,9 +15,9 @@ pub mod model {
     }
 }
 
-use renamed_libtmux::query::Filterable as _;
+use libtmux::query::Filterable as _;
 
 fn main() {
     let fields: model::PublicRowFields = model::PublicRow::filter_fields();
-    let _: renamed_libtmux::query::TextField<model::PublicRow> = fields.name;
+    let _: libtmux::query::TextField<model::PublicRow> = fields.name;
 }

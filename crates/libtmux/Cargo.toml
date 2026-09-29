@@ -107,13 +107,13 @@ full = ["blocking", "control-mode", "derive", "plan", "query", "schema", "serde"
 # `full`, and nothing but `fuzz/` turns it on.
 unstable-fuzzing = ["control-mode", "query", "serde"]
 blocking = ["tokio/rt"]
-control-mode = ["dep:futures-core", "tokio/io-util", "tokio/process", "tokio/sync"]
+control-mode = ["dep:futures-core", "tokio/io-util", "tokio/macros", "tokio/process", "tokio/sync"]
 # The derive writes `impl Filterable`, which does not exist without `query`.
 derive = ["dep:libtmux-macros", "query"]
 # Recording tmux work before doing it. No new dependencies: it is opt-in
 # because it is API surface a caller who only dispatches commands never needs.
 plan = []
-query = ["dep:caseless", "dep:regex"]
+query = ["dep:regex"]
 # Describe serde's plan and portable-filter wire grammars without making schema
 # generation part of the ordinary serialization feature.
 schema = ["dep:schemars", "dep:serde_json", "serde"]
@@ -122,7 +122,6 @@ test-support = ["dep:tempfile", "rustix/fs", "rustix/net"]
 tracing = ["dep:tracing"]
 
 [dependencies]
-caseless = { version = "0.2", optional = true }
 futures-core = { version = "0.3", optional = true }
 libtmux-macros = { workspace = true, optional = true }
 regex = { version = "1.13", optional = true }
@@ -131,8 +130,7 @@ schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
-thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "process", "rt", "sync", "time"] }
 tracing = { version = "0.1.36", optional = true }
 
 [dev-dependencies]

@@ -14,7 +14,7 @@ struct MisplacedHelperItems {
     name: String,
     #[filterable(target = "field_target")]
     label: String,
-    #[filterable(crate = "renamed_libtmux")]
+    #[filterable(crate = "libtmux")]
     context: String,
 }
 

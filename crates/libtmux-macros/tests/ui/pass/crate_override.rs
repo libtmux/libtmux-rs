@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::Filterable as _;
+use libtmux::query::Filterable as _;
 
 mod support {
-    pub use renamed_libtmux as core;
+    pub use libtmux as core;
 }
 
 #[derive(Filterable)]

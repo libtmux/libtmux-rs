@@ -196,7 +196,7 @@ impl Server {
     /// Returns an error when any of the three listings fails.
     pub async fn hierarchy(&self) -> Result<Vec<SessionTree>, Error> {
         let (sessions, windows, panes) =
-            tokio::try_join!(self.sessions(), self.windows(), self.panes(),)?;
+            crate::internal::race::try_join3(self.sessions(), self.windows(), self.panes()).await?;
 
         // Grouping is by the numeric part of each ID rather than the ID: it
         // is Copy and unique among IDs of one kind, so stitching the three

@@ -4,12 +4,12 @@ use libtmux_macros::Filterable;
 #[filterable(
     target = "first",
     fields = "FirstFields",
-    crate = "renamed_libtmux"
+    crate = "libtmux"
 )]
 #[filterable(
     target = "second",
     fields = "SecondFields",
-    crate = "renamed_libtmux"
+    crate = "libtmux"
 )]
 struct DuplicateContainerKeys {
     name: String,

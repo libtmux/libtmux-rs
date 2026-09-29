@@ -19,7 +19,7 @@ use expand::expand_filterable;
 ///
 /// The required `target` is the stable name embedded in portable expressions.
 /// Every supported field produces one member of the generated `<Type>Fields`
-/// companion. Bring `renamed_libtmux::query::Filterable` into scope to call
+/// companion. Bring `libtmux::query::Filterable` into scope to call
 /// `filter_fields`.
 ///
 /// Enable the core crate's `derive` feature and use its root `Filterable`
@@ -29,8 +29,8 @@ use expand::expand_filterable;
 /// # Examples
 ///
 /// ```
-/// use renamed_libtmux::Filterable;
-/// use renamed_libtmux::query::{Filterable as _, QueryIteratorExt as _};
+/// use libtmux::Filterable;
+/// use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 ///
 /// #[derive(Filterable)]
 /// #[filterable(target = "task")]

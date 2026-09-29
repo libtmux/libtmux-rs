@@ -3,11 +3,11 @@
 
 extern crate core;
 extern crate libtmux_macros;
-extern crate renamed_libtmux;
+extern crate libtmux;
 extern crate std;
 
 use crate::libtmux_macros::Filterable;
-use crate::renamed_libtmux::query::Filterable as _;
+use crate::libtmux::query::Filterable as _;
 
 type i128 = ();
 type u128 = ();
@@ -22,7 +22,7 @@ struct QualifiedChild {
 #[filterable(target = "qualified_row")]
 struct QualifiedRow {
     text: ::std::string::String,
-    raw: crate::renamed_libtmux::TmuxText,
+    raw: crate::libtmux::TmuxText,
     maybe_flag: ::core::option::Option<bool>,
     signed: ::core::primitive::i16,
     maybe_signed: ::core::option::Option<::core::primitive::i32>,

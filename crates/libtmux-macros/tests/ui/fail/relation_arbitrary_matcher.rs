@@ -1,5 +1,5 @@
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::{Filterable as _, Matcher};
+use libtmux::query::{Filterable as _, Matcher};
 
 #[derive(Filterable)]
 #[filterable(target = "child")]

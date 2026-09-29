@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::Filterable as _;
+use libtmux::query::Filterable as _;
 
 struct OpaqueIterator(Rc<()>);
 

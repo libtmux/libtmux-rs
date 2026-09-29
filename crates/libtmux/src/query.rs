@@ -368,7 +368,8 @@ use std::marker::PhantomData;
 #[cfg(feature = "serde")]
 use std::sync::OnceLock;
 
-use caseless::default_case_fold_str;
+mod fold;
+use fold::default_case_fold_str;
 #[cfg(feature = "serde")]
 use regex::RegexBuilder;
 

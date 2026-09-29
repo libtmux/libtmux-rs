@@ -43,5 +43,5 @@ error: filterable `target` is only valid on the container
 error: filterable `crate` is only valid on the container
   --> tests/ui/fail/misplaced_helper_items.rs:17:18
    |
-17 |     #[filterable(crate = "renamed_libtmux")]
+17 |     #[filterable(crate = "libtmux")]
    |                  ^^^^^

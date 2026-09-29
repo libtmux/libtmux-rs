@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::{Filterable as _, TextField};
+use libtmux::query::{Filterable as _, TextField};
 
 #[derive(Filterable)]
 #[filterable(target = "artifact", fields = "DocumentHandles")]

@@ -425,12 +425,10 @@ impl std::error::Error for IdParseError {}
 /// # Ok(())
 /// # }
 /// ```
-#[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// A layout is unsafe to dispatch or cannot hold the planned panes.
     #[non_exhaustive]
-    #[error("invalid tmux layout: {reason}")]
     InvalidLayout {
         /// A diagnosis without the caller's layout bytes.
         reason: &'static str,
@@ -443,32 +441,27 @@ pub enum Error {
     /// `source` to diagnose the later failure, but do not use its retryability
     /// as evidence that the whole operation is safe to replay.
     #[non_exhaustive]
-    #[error("tmux accepted an effect in {operation} before a later step failed: {source}")]
     AfterEffect {
         /// A fixed operation name, without targets or argument values.
         operation: &'static str,
         /// The failure that followed the accepted effect.
-        #[source]
         source: Box<Error>,
     },
 
     /// A server builder value was invalid.
     #[non_exhaustive]
-    #[error("invalid server configuration ({kind:?})")]
     InvalidServerConfiguration {
         /// The path-free failure category.
         kind: ServerConfigurationErrorKind,
     },
 
     /// The output from `tmux -V` did not match a supported shape.
-    #[error("invalid tmux version output")]
     InvalidVersionOutput {
         /// The number of bytes returned by tmux.
         output_len: usize,
     },
 
     /// The detected tmux version does not meet the supported floor.
-    #[error("tmux {found} is below the minimum supported version {minimum}")]
     UnsupportedTmuxVersion {
         /// The detected tmux version.
         found: TmuxVersion,
@@ -483,7 +476,6 @@ pub enum Error {
     /// rejected value needs a different value. A caller reading stderr would
     /// have to know that tmux says "bad value" for a flag and "value is
     /// invalid" for a number.
-    #[error("tmux rejected the option: {detail}")]
     OptionRejected {
         /// Which of the three answers tmux gave.
         kind: OptionErrorKind,
@@ -501,10 +493,6 @@ pub enum Error {
     ///
     /// [`crate::OptionSchema::accepts`] answers ahead of the call, for a
     /// caller choosing a handle rather than reacting to a refusal.
-    #[error(
-        "tmux keeps {option} in {declared:?}, so writing it through a \
-         {requested:?} handle would land there instead"
-    )]
     OptionScopeMismatch {
         /// The option that was asked for.
         option: String,
@@ -521,7 +509,6 @@ pub enum Error {
     /// tmux, and the option is left as it was. [`crate::OptionValue`] says
     /// which variant each kind of option takes. The value is not kept, as no
     /// option value is; `reason` says what the option takes instead.
-    #[error("refused to write {option} before sending it: {reason}")]
     OptionValueRefused {
         /// The option, as tmux's table names it.
         option: &'static str,
@@ -535,7 +522,6 @@ pub enum Error {
     /// not a caller mistake: the crate asked for an ID and tmux returned
     /// something that is not one. Worth reporting.
     #[non_exhaustive]
-    #[error("tmux answered {format} with a value that is not an id: {detail}")]
     UnreadableFormatValue {
         /// The format the crate asked for.
         format: &'static str,
@@ -549,7 +535,6 @@ pub enum Error {
     /// server was replaced. Ids are reissued from the start by the
     /// replacement, so a handle held across the restart names an object that
     /// exists and is not the one it meant.
-    #[error("the tmux server was replaced: expected {expected}, found {found}")]
     ServerGenerationChanged {
         /// The daemon the caller captured.
         expected: crate::ServerGeneration,
@@ -564,7 +549,6 @@ pub enum Error {
     /// instead, and the caller either asks tmux for less or raises
     /// [`crate::OutputLimits`].
     #[non_exhaustive]
-    #[error("{command} produced more than {limit} bytes on {stream} (request {request_id})")]
     OutputLimitExceeded {
         /// Core-scoped dispatch-request identity.
         request_id: u64,
@@ -582,10 +566,6 @@ pub enum Error {
     /// to tmux and no state changed. Distinct from
     /// [`Self::Timeout`](Self::Timeout), which means the work may have run.
     #[non_exhaustive]
-    #[error(
-        "work was not admitted: {in_flight} already running is this kind's limit, \
-         and nothing was sent, so retrying is safe (request {request_id}, {command})"
-    )]
     Overloaded {
         /// Core-scoped dispatch-request identity.
         request_id: u64,
@@ -604,7 +584,6 @@ pub enum Error {
     /// attaches again.
     #[cfg(feature = "control-mode")]
     #[non_exhaustive]
-    #[error("a control-mode {frame} grew past its {limit} byte budget")]
     ControlModeFrameTooLarge {
         /// Which frame: a line, or a command's response block.
         frame: &'static str,
@@ -618,7 +597,6 @@ pub enum Error {
     /// creation failure a caller routinely expects and handles: it means "pick
     /// another name", not "tmux is broken". Checking with `has-session` first
     /// would race, since another process can take the name in between.
-    #[error("a session named {name} already exists")]
     SessionExists {
         /// The name that was already taken.
         name: String,
@@ -631,7 +609,6 @@ pub enum Error {
     /// does not. tmux itself would usually accept the flag and quietly ignore
     /// it, which turns "your tmux is too old" into "the command did nothing",
     /// so it is reported rather than passed through.
-    #[error("{capability} needs tmux {needs} or newer, and this is {found}")]
     UnsupportedCapability {
         /// What the caller asked for, named as a caller would say it.
         capability: &'static str,
@@ -650,10 +627,6 @@ pub enum Error {
     ///
     /// Raised rather than returning what the release reports, because what it
     /// reports is wrong in a way the caller cannot see.
-    #[error(
-        "tmux {found} does not implement {capability} correctly; \
-         releases from {broken_in} up to but not including {fixed_in} are affected"
-    )]
     CapabilityDefective {
         /// What the caller asked for, named as a caller would say it.
         capability: &'static str,
@@ -667,9 +640,6 @@ pub enum Error {
 
     /// The version probe process returned a non-zero status.
     #[non_exhaustive]
-    #[error(
-        "tmux version probe request {request_id} ({command}) failed with exit code {exit_code:?} and signal {signal:?}"
-    )]
     VersionProbeFailed {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -683,7 +653,6 @@ pub enum Error {
 
     /// A command or executable contained a byte that cannot be passed to a process.
     #[non_exhaustive]
-    #[error("invalid {input} for tmux request {request_id}")]
     InvalidCommandInput {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -700,7 +669,6 @@ pub enum Error {
     /// not refused. [`crate::Server::require_generation`] is what tells those two
     /// apart, and it costs the round trip this check does not spend.
     #[non_exhaustive]
-    #[error("{operation} requires handles from the same tmux server endpoint")]
     ServerMismatch {
         /// The operation that rejected the foreign handle.
         operation: &'static str,
@@ -713,7 +681,6 @@ pub enum Error {
     /// on a layout `select-layout` cannot parse, destroying every session on
     /// the socket, and a value such as `-o` is never a layout on any release.
     /// The rejected value is not retained.
-    #[error("select-layout needs a preset name or a layout tmux reported")]
     UnrecognizedLayout,
 
     /// A saved layout value is a preset prefix that names more than one
@@ -727,7 +694,6 @@ pub enum Error {
     /// the running release: `main-h` is unique on tmux 3.2a and ambiguous
     /// from 3.5, where the mirrored pair exists.
     #[non_exhaustive]
-    #[error("layout {input:?} names more than one preset: {}", candidates.join(", "))]
     AmbiguousLayout {
         /// The value the caller passed.
         input: String,
@@ -737,42 +703,35 @@ pub enum Error {
 
     /// A plan has a dependency that cannot be resolved before dispatch.
     #[cfg(feature = "plan")]
-    #[error("invalid plan: {source}")]
     InvalidPlan {
         /// The payload-free dependency failure.
-        #[source]
         source: crate::plan::PlanValidationError,
     },
 
     /// The configured tmux executable was not found.
     #[non_exhaustive]
-    #[error("tmux executable was not found for request {request_id} ({command})")]
     ExecutableNotFound {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
         /// The sanitized logical command.
         command: CommandSummary,
         /// The operating-system spawn error.
-        #[source]
         source: io::Error,
     },
 
     /// The tmux process could not be started.
     #[non_exhaustive]
-    #[error("failed to start tmux request {request_id} ({command})")]
     Spawn {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
         /// The sanitized logical command.
         command: CommandSummary,
         /// The operating-system spawn error.
-        #[source]
         source: io::Error,
     },
 
     /// A captured output stream could not be drained.
     #[non_exhaustive]
-    #[error("failed to read {stream} for tmux request {request_id} ({command})")]
     ReadOutput {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -786,20 +745,17 @@ pub enum Error {
 
     /// The direct tmux child could not be awaited.
     #[non_exhaustive]
-    #[error("failed to wait for tmux request {request_id} ({command})")]
     WaitChild {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
         /// The sanitized logical command.
         command: CommandSummary,
         /// The operating-system wait error.
-        #[source]
         source: io::Error,
     },
 
     /// A tmux request exceeded its configured deadline.
     #[non_exhaustive]
-    #[error("tmux request {request_id} ({command}) timed out after {timeout:?}")]
     Timeout {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -814,7 +770,6 @@ pub enum Error {
     /// Shutdown is permanent for every handle sharing this Core. Build another
     /// [`crate::Server`] to issue more requests.
     #[non_exhaustive]
-    #[error("tmux executor is shut down for request {request_id} ({command})")]
     ExecutorShutdown {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -825,7 +780,6 @@ pub enum Error {
     /// A Core-scoped dispatch-request identity is already active in this
     /// executor.
     #[non_exhaustive]
-    #[error("tmux request {request_id} is already active ({command})")]
     DuplicateRequest {
         /// The duplicate Core-scoped dispatch-request identity.
         request_id: u64,
@@ -835,7 +789,6 @@ pub enum Error {
 
     /// The independent supervisor ended unexpectedly after cleaning up its child.
     #[non_exhaustive]
-    #[error("tmux supervisor was lost for request {request_id} ({command})")]
     SupervisorLost {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -854,7 +807,6 @@ pub enum Error {
     /// That is [`Self::ClientSuspended`], reported separately so that
     /// [`Self::is_object_gone`] keeps meaning "stop using this handle".
     #[non_exhaustive]
-    #[error("tmux no longer has {kind} {id}")]
     ObjectGone {
         /// The kind of object that disappeared.
         kind: ObjectKind,
@@ -882,7 +834,6 @@ pub enum Error {
     /// [`Self::is_object_gone`] answers `false`: a handle whose object is
     /// still running must not be dropped on this evidence.
     #[non_exhaustive]
-    #[error("tmux has no {kind} at {target}")]
     LinkGone {
         /// The kind of object the target named.
         kind: ObjectKind,
@@ -907,7 +858,6 @@ pub enum Error {
     /// process continues -- the suspended one on `SIGCONT`, the locked one
     /// when its `lock-command` exits.
     #[non_exhaustive]
-    #[error("client {name} is suspended, not gone")]
     ClientSuspended {
         /// The client's tmux name, which is the path of its terminal.
         name: String,
@@ -916,21 +866,17 @@ pub enum Error {
     /// A control-mode connection failed.
     #[cfg(feature = "control-mode")]
     #[non_exhaustive]
-    #[error("control mode connection failed ({kind:?})")]
     ControlMode {
         /// Which stage of the connection failed.
         kind: ControlModeErrorKind,
         /// The operating-system error, when there was one.
-        #[source]
         source: Option<io::Error>,
     },
 
     /// A blocking runtime could not be created.
     #[non_exhaustive]
-    #[error("could not build a runtime")]
     RuntimeUnavailable {
         /// The operating-system error.
-        #[source]
         source: io::Error,
     },
 
@@ -939,7 +885,6 @@ pub enum Error {
     /// A runtime cannot be driven from within one, so [`crate::blocking::Runtime::run`]
     /// panics here. [`crate::blocking::Runtime::try_run`] returns this instead,
     /// for callers who would rather handle it: await the future directly.
-    #[error("a blocking runtime cannot be driven from inside an async context")]
     RuntimeNested,
 
     /// The tmux server the command needed was not there.
@@ -948,7 +893,6 @@ pub enum Error {
     /// only in stderr, so this is read from the message rather than the
     /// status. [`ServerGoneKind`] says which way it was missing; the raw
     /// stderr remains available only through [`crate::Server::cmd`].
-    #[error("tmux found no server for {command}: {kind}")]
     ServerGone {
         /// The tmux command that found no server.
         command: &'static str,
@@ -962,7 +906,6 @@ pub enum Error {
     /// This variant is for operations whose whole purpose is the effect, so a
     /// refusal is a failure rather than a result.
     #[non_exhaustive]
-    #[error("tmux rejected {command} (exit {}): {stderr}", exit_code_text(*exit_code))]
     CommandFailed {
         /// The tmux command that was rejected.
         command: &'static str,
@@ -983,7 +926,6 @@ pub enum Error {
     /// -- and rather than [`Self::AfterEffect`], which would claim an
     /// effect that never happened.
     #[non_exhaustive]
-    #[error("{command} had no effect: {stderr}")]
     NoEffect {
         /// The tmux command that exited 0 without effect.
         command: &'static str,
@@ -997,7 +939,6 @@ pub enum Error {
     /// answered, not an ordinary tmux failure. A command that merely reports a
     /// nonzero status stays raw data at the [`crate::Server::cmd`] boundary.
     #[non_exhaustive]
-    #[error("failed to decode {list_command} output: {detail}")]
     DecodeListing {
         /// The tmux list command whose output failed to decode.
         list_command: &'static str,
@@ -1014,11 +955,284 @@ pub enum Error {
     /// detected tmux version. This is the third case: a line this crate
     /// cannot place in either grammar, reported rather than dropped.
     #[non_exhaustive]
-    #[error("server-access -l printed an entry this crate does not recognize: {marker}")]
     UnreadableAccessRule {
         /// The unrecognized trailing marker, without the name it followed.
         marker: String,
     },
+}
+
+impl fmt::Display for Error {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per variant keeps each message beside the variant it describes"
+    )]
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidLayout { reason } => write!(formatter, "invalid tmux layout: {reason}"),
+            Self::AfterEffect { operation, source } => write!(
+                formatter,
+                "tmux accepted an effect in {operation} before a later step failed: {source}"
+            ),
+            Self::InvalidServerConfiguration { kind } => {
+                write!(formatter, "invalid server configuration ({kind:?})")
+            }
+            Self::InvalidVersionOutput { .. } => write!(formatter, "invalid tmux version output"),
+            Self::UnsupportedTmuxVersion { found, minimum } => write!(
+                formatter,
+                "tmux {found} is below the minimum supported version {minimum}"
+            ),
+            Self::OptionRejected { detail, .. } => {
+                write!(formatter, "tmux rejected the option: {detail}")
+            }
+            Self::OptionScopeMismatch {
+                option,
+                requested,
+                declared,
+            } => write!(
+                formatter,
+                "tmux keeps {option} in {declared:?}, so writing it through a \
+         {requested:?} handle would land there instead"
+            ),
+            Self::OptionValueRefused { option, reason } => write!(
+                formatter,
+                "refused to write {option} before sending it: {reason}"
+            ),
+            Self::UnreadableFormatValue { format, detail } => write!(
+                formatter,
+                "tmux answered {format} with a value that is not an id: {detail}"
+            ),
+            Self::ServerGenerationChanged { expected, found } => write!(
+                formatter,
+                "the tmux server was replaced: expected {expected}, found {found}"
+            ),
+            Self::OutputLimitExceeded {
+                request_id,
+                command,
+                stream,
+                limit,
+            } => write!(
+                formatter,
+                "{command} produced more than {limit} bytes on {stream} (request {request_id})"
+            ),
+            Self::Overloaded {
+                request_id,
+                command,
+                in_flight,
+            } => write!(
+                formatter,
+                "work was not admitted: {in_flight} already running is this kind's limit, \
+         and nothing was sent, so retrying is safe (request {request_id}, {command})"
+            ),
+            #[cfg(feature = "control-mode")]
+            Self::ControlModeFrameTooLarge { frame, limit } => write!(
+                formatter,
+                "a control-mode {frame} grew past its {limit} byte budget"
+            ),
+            Self::SessionExists { name } => {
+                write!(formatter, "a session named {name} already exists")
+            }
+            Self::UnsupportedCapability {
+                capability,
+                needs,
+                found,
+            } => write!(
+                formatter,
+                "{capability} needs tmux {needs} or newer, and this is {found}"
+            ),
+            Self::CapabilityDefective {
+                capability,
+                found,
+                broken_in,
+                fixed_in,
+            } => write!(
+                formatter,
+                "tmux {found} does not implement {capability} correctly; \
+         releases from {broken_in} up to but not including {fixed_in} are affected"
+            ),
+            Self::VersionProbeFailed {
+                request_id,
+                command,
+                exit_code,
+                signal,
+            } => write!(
+                formatter,
+                "tmux version probe request {request_id} ({command}) failed with exit code {exit_code:?} and signal {signal:?}"
+            ),
+            Self::InvalidCommandInput { request_id, input } => {
+                write!(formatter, "invalid {input} for tmux request {request_id}")
+            }
+            Self::ServerMismatch { operation } => write!(
+                formatter,
+                "{operation} requires handles from the same tmux server endpoint"
+            ),
+            Self::UnrecognizedLayout => write!(
+                formatter,
+                "select-layout needs a preset name or a layout tmux reported"
+            ),
+            Self::AmbiguousLayout { input, candidates } => write!(
+                formatter,
+                "layout {input:?} names more than one preset: {}",
+                candidates.join(", ")
+            ),
+            #[cfg(feature = "plan")]
+            Self::InvalidPlan { source } => write!(formatter, "invalid plan: {source}"),
+            Self::ExecutableNotFound {
+                request_id,
+                command,
+                ..
+            } => write!(
+                formatter,
+                "tmux executable was not found for request {request_id} ({command})"
+            ),
+            Self::Spawn {
+                request_id,
+                command,
+                ..
+            } => write!(
+                formatter,
+                "failed to start tmux request {request_id} ({command})"
+            ),
+            Self::ReadOutput {
+                request_id,
+                command,
+                stream,
+                ..
+            } => write!(
+                formatter,
+                "failed to read {stream} for tmux request {request_id} ({command})"
+            ),
+            Self::WaitChild {
+                request_id,
+                command,
+                ..
+            } => write!(
+                formatter,
+                "failed to wait for tmux request {request_id} ({command})"
+            ),
+            Self::Timeout {
+                request_id,
+                command,
+                timeout,
+            } => write!(
+                formatter,
+                "tmux request {request_id} ({command}) timed out after {timeout:?}"
+            ),
+            Self::ExecutorShutdown {
+                request_id,
+                command,
+            } => write!(
+                formatter,
+                "tmux executor is shut down for request {request_id} ({command})"
+            ),
+            Self::DuplicateRequest {
+                request_id,
+                command,
+            } => write!(
+                formatter,
+                "tmux request {request_id} is already active ({command})"
+            ),
+            Self::SupervisorLost {
+                request_id,
+                command,
+            } => write!(
+                formatter,
+                "tmux supervisor was lost for request {request_id} ({command})"
+            ),
+            Self::ObjectGone { kind, id } => write!(formatter, "tmux no longer has {kind} {id}"),
+            Self::LinkGone { kind, target } => write!(formatter, "tmux has no {kind} at {target}"),
+            Self::ClientSuspended { name } => {
+                write!(formatter, "client {name} is suspended, not gone")
+            }
+            #[cfg(feature = "control-mode")]
+            Self::ControlMode { kind, .. } => {
+                write!(formatter, "control mode connection failed ({kind:?})")
+            }
+            Self::RuntimeUnavailable { .. } => write!(formatter, "could not build a runtime"),
+            Self::RuntimeNested => write!(
+                formatter,
+                "a blocking runtime cannot be driven from inside an async context"
+            ),
+            Self::ServerGone { command, kind } => {
+                write!(formatter, "tmux found no server for {command}: {kind}")
+            }
+            Self::CommandFailed {
+                command,
+                exit_code,
+                stderr,
+            } => write!(
+                formatter,
+                "tmux rejected {command} (exit {}): {stderr}",
+                exit_code_text(*exit_code)
+            ),
+            Self::NoEffect { command, stderr } => {
+                write!(formatter, "{command} had no effect: {stderr}")
+            }
+            Self::DecodeListing {
+                list_command,
+                detail,
+            } => write!(
+                formatter,
+                "failed to decode {list_command} output: {detail}"
+            ),
+            Self::UnreadableAccessRule { marker } => write!(
+                formatter,
+                "server-access -l printed an entry this crate does not recognize: {marker}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::AfterEffect { source, .. } => Some(source),
+            #[cfg(feature = "plan")]
+            Self::InvalidPlan { source } => Some(source),
+            Self::ExecutableNotFound { source, .. }
+            | Self::Spawn { source, .. }
+            | Self::WaitChild { source, .. }
+            | Self::RuntimeUnavailable { source } => Some(source),
+            #[cfg(feature = "control-mode")]
+            Self::ControlMode { source, .. } => source
+                .as_ref()
+                .map(|source| source as &(dyn std::error::Error + 'static)),
+            Self::InvalidLayout { .. }
+            | Self::InvalidServerConfiguration { .. }
+            | Self::InvalidVersionOutput { .. }
+            | Self::UnsupportedTmuxVersion { .. }
+            | Self::OptionRejected { .. }
+            | Self::OptionScopeMismatch { .. }
+            | Self::OptionValueRefused { .. }
+            | Self::UnreadableFormatValue { .. }
+            | Self::ServerGenerationChanged { .. }
+            | Self::OutputLimitExceeded { .. }
+            | Self::Overloaded { .. }
+            | Self::SessionExists { .. }
+            | Self::UnsupportedCapability { .. }
+            | Self::CapabilityDefective { .. }
+            | Self::VersionProbeFailed { .. }
+            | Self::InvalidCommandInput { .. }
+            | Self::ServerMismatch { .. }
+            | Self::UnrecognizedLayout
+            | Self::AmbiguousLayout { .. }
+            | Self::ReadOutput { .. }
+            | Self::Timeout { .. }
+            | Self::ExecutorShutdown { .. }
+            | Self::DuplicateRequest { .. }
+            | Self::SupervisorLost { .. }
+            | Self::ObjectGone { .. }
+            | Self::LinkGone { .. }
+            | Self::ClientSuspended { .. }
+            | Self::RuntimeNested
+            | Self::ServerGone { .. }
+            | Self::CommandFailed { .. }
+            | Self::NoEffect { .. }
+            | Self::DecodeListing { .. }
+            | Self::UnreadableAccessRule { .. } => None,
+            #[cfg(feature = "control-mode")]
+            Self::ControlModeFrameTooLarge { .. } => None,
+        }
+    }
 }
 
 /// Renders a rejected command's exit code for [`Error::CommandFailed`],

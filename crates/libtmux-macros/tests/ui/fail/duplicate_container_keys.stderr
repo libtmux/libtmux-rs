@@ -13,5 +13,5 @@ error: duplicate filterable container option `fields`
 error: duplicate filterable container option `crate`
   --> tests/ui/fail/duplicate_container_keys.rs:12:5
    |
-12 |     crate = "renamed_libtmux"
+12 |     crate = "libtmux"
    |     ^^^^^

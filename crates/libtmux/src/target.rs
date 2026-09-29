@@ -433,6 +433,7 @@ impl WindowLinkIdentity {
 
 pub(crate) mod endpoint_resolution {
     use std::ffi::OsString;
+    use std::fmt;
 
     use super::{OsStr, OsStrExt, Path, PathBuf, ServerIdentity};
 
@@ -493,21 +494,40 @@ pub(crate) mod endpoint_resolution {
         pub(crate) selector: ResolvedSocketSelector,
     }
 
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     pub(crate) enum IdentityError {
-        #[error("tmux socket path is empty")]
         EmptySocketPath,
-        #[error("tmux socket path contains a NUL byte")]
         SocketPathContainsNul,
-        #[error("working directory is not absolute")]
         RelativeWorkingDirectory,
-        #[error("socket path and socket name are mutually exclusive")]
         ConflictingSelectors,
-        #[error("tmux socket name is not one normal path component")]
         InvalidSocketName,
-        #[error("no tmux socket root could be resolved")]
         NoSocketRoot,
     }
+
+    impl fmt::Display for IdentityError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::EmptySocketPath => write!(formatter, "tmux socket path is empty"),
+                Self::SocketPathContainsNul => {
+                    write!(formatter, "tmux socket path contains a NUL byte")
+                }
+                Self::RelativeWorkingDirectory => {
+                    write!(formatter, "working directory is not absolute")
+                }
+                Self::ConflictingSelectors => write!(
+                    formatter,
+                    "socket path and socket name are mutually exclusive"
+                ),
+                Self::InvalidSocketName => write!(
+                    formatter,
+                    "tmux socket name is not one normal path component"
+                ),
+                Self::NoSocketRoot => write!(formatter, "no tmux socket root could be resolved"),
+            }
+        }
+    }
+
+    impl std::error::Error for IdentityError {}
 
     fn capture_endpoint(path: &OsStr, cwd: &Path) -> Result<ServerIdentity, IdentityError> {
         let bytes = path.as_bytes();
@@ -750,23 +770,36 @@ impl From<SessionName> for OsString {
 /// assert!(matches!(SessionName::new(""), Err(SessionNameError::Empty)));
 /// assert!(SessionName::new("build-release").is_ok());
 /// ```
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SessionNameError {
     /// The name is empty, which tmux reads as "the current session".
-    #[error("a session name cannot be empty: tmux reads that as the current session")]
     Empty,
 
     /// The name holds a character tmux splits targets on.
-    #[error(
-        "a session name cannot hold {separator:?}: tmux splits a target there, so the session \
-         would not be addressable by name"
-    )]
     Separator {
         /// The separator found.
         separator: char,
     },
 }
+
+impl fmt::Display for SessionNameError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(
+                formatter,
+                "a session name cannot be empty: tmux reads that as the current session"
+            ),
+            Self::Separator { separator } => write!(
+                formatter,
+                "a session name cannot hold {separator:?}: tmux splits a target there, so the session \
+         would not be addressable by name"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SessionNameError {}
 
 /// Text bound for a tmux argument that tmux expands as a format.
 ///

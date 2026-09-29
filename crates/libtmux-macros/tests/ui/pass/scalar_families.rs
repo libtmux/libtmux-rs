@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use libtmux_macros::Filterable;
-use renamed_libtmux::query::{
+use libtmux::query::{
     __private::{self, Predicate},
     BoolField, FilterExpressionError, FilterExpressionErrorKind, Filterable as QueryFilterable,
     IntegerField, TextField,
 };
-use renamed_libtmux::TmuxText;
+use libtmux::TmuxText;
 
 #[derive(Filterable)]
 #[filterable(target = "scalar_row")]
