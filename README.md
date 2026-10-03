@@ -323,6 +323,19 @@ the ones in this file. See
 things that will bite, and [`.github/WRITING.md`](.github/WRITING.md) for how
 the prose reads.
 
+## Attribution
+
+Please use the following BibTeX template to cite libtmux-rs in scientific discourse:
+
+```bibtex
+@misc{libtmux-rs,
+   author = {Tony Narlock},
+   year = {2026},
+   note = {https://libtmux.org/en/rs/},
+   title = {libtmux-rs: Rust wrapper for tmux}
+}
+```
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
