@@ -52,7 +52,7 @@ jobs:
   # A pull request builds `latest` without publishing; this port has no
   # preview role.
   build:
-    uses: libtmux/docs/.github/workflows/port-docs.yml@638db5f0924c782f2c35b15ed3bd5daa50efce44
+    uses: libtmux/docs/.github/workflows/port-docs.yml@6af308cf6e82a46b72010ebdb9ec138a443669ba
     with:
       port: rs
       tag-prefix: libtmux@
@@ -79,7 +79,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@638db5f0924c782f2c35b15ed3bd5daa50efce44
+    uses: libtmux/docs/.github/workflows/reusable-deploy.yml@6af308cf6e82a46b72010ebdb9ec138a443669ba
     with:
       # Unprefixed by locale: reusable-deploy prepends <locale>/ itself when
       # `port` is set, so this becomes en/rs/<version>.
