@@ -228,7 +228,7 @@ $ just check
 ```
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
-`compat-supervisor-test`, `doctest`, `examples`, `example-tables`,
+`compat-supervisor-test`, `doctest`, `api-examples`, `examples`, `example-tables`,
 `fixture-root`, `docs`, `doc-blocks`, `doc-contents`, `doctests-run`,
 `parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`,
 `package`.
@@ -274,6 +274,12 @@ fails when one exits nonzero or leaves a socket in `/tmp/libtmux-rs-dev/`.
 this an example that failed on every run passed every gate. It points `$TMUX`
 at its own socket, which is how `inspect` and `find` find a server without
 reaching the one the reader is using.
+
+`just api-examples` checks complete API programs and their setup files against
+the native public API inventory. It rejects missing programs, duplicate or
+unknown targets, hidden source helpers and incomplete file boundaries.
+`just examples` executes these programs along with the other shipped examples;
+the manifest check alone does not establish native execution.
 
 The gates worth explaining:
 

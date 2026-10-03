@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "language": "rust",
+  "nativeInventory": "crates/libtmux/docs/public-api.txt",
+  "setupFiles": [
+    {
+      "sourceFile": "crates/libtmux/examples/api/consumer.toml",
+      "name": "Cargo.toml"
+    },
+    {
+      "sourceFile": "rust-toolchain.toml",
+      "name": "rust-toolchain.toml"
+    }
+  ],
+  "programFileName": "src/main.rs",
+  "runCommand": "cargo run --quiet",
+  "examples": [
+    {
+      "id": "rust-construction",
+      "title": "Construct a private server",
+      "description": "Construct a handle without starting tmux, then create a session on its own socket.",
+      "sourceFile": "crates/libtmux/examples/api_construction.rs",
+      "cargoExample": "api_construction",
+      "targets": [
+        "libtmux::Server",
+        "libtmux::Server::builder",
+        "libtmux::ServerBuilder::socket_path",
+        "libtmux::ServerBuilder::config_file",
+        "libtmux::ServerBuilder::default_timeout",
+        "libtmux::ServerBuilder::build"
+      ],
+      "expectedOutput": "construction: private daemon started by new_session"
+    },
+    {
+      "id": "rust-listings",
+      "title": "List sessions, windows and panes",
+      "description": "Read each collection and its relations, then inspect a hierarchy snapshot.",
+      "sourceFile": "crates/libtmux/examples/api_listings.rs",
+      "cargoExample": "api_listings",
+      "targets": [
+        "libtmux::Server::sessions",
+        "libtmux::Server::windows",
+        "libtmux::Server::panes",
+        "libtmux::Server::hierarchy",
+        "libtmux::Session::windows",
+        "libtmux::Session::panes",
+        "libtmux::Window::panes"
+      ],
+      "expectedOutput": "listings: 1 session, 2 windows, 2 panes"
+    },
+    {
+      "id": "rust-creation",
+      "title": "Create windows and split panes",
+      "description": "Create a session and a second window, then split from a window and from a pane.",
+      "sourceFile": "crates/libtmux/examples/api_creation.rs",
+      "cargoExample": "api_creation",
+      "targets": [
+        "libtmux::Server::new_session",
+        "libtmux::NewSessionOptions",
+        "libtmux::Session::new_window",
+        "libtmux::NewWindowOptions",
+        "libtmux::Window::split",
+        "libtmux::Pane::split",
+        "libtmux::SplitOptions"
+      ],
+      "expectedOutput": "creation: 2 windows, 4 panes"
+    },
+    {
+      "id": "rust-query",
+      "title": "Filter snapshots with typed fields",
+      "description": "Match a session name prefix without changing the source snapshot.",
+      "sourceFile": "crates/libtmux/examples/api_query.rs",
+      "cargoExample": "api_query",
+      "targets": [
+        "libtmux::query::Filterable",
+        "libtmux::query::QueryIteratorExt::matching"
+      ],
+      "expectedOutput": "query: prod-api"
+    },
+    {
+      "id": "rust-cardinality",
+      "title": "Handle missing and ambiguous matches",
+      "description": "Compare exactly_one and one_or_none for no match, one match and multiple matches.",
+      "sourceFile": "crates/libtmux/examples/api_cardinality.rs",
+      "cargoExample": "api_cardinality",
+      "targets": [
+        "libtmux::query::QueryIteratorExt::exactly_one",
+        "libtmux::query::QueryIteratorExt::one_or_none",
+        "libtmux::query::ExactlyOneError",
+        "libtmux::query::MultipleItemsError"
+      ],
+      "expectedOutput": "cardinality: none, one, multiple"
+    },
+    {
+      "id": "rust-input",
+      "title": "Send literal text and named keys",
+      "description": "Wait for a shell prompt, send literal text without Enter, then submit a named Enter key.",
+      "sourceFile": "crates/libtmux/examples/api_input.rs",
+      "cargoExample": "api_input",
+      "targets": [
+        "libtmux::Pane::send_keys",
+        "libtmux::Pane::send_key_names"
+      ],
+      "expectedOutput": "input: C-c is text"
+    },
+    {
+      "id": "rust-capture",
+      "title": "Capture complete output lines",
+      "description": "Submit a shell command atomically and wait for whole output lines within a deadline.",
+      "sourceFile": "crates/libtmux/examples/api_capture.rs",
+      "cargoExample": "api_capture",
+      "targets": [
+        "libtmux::Pane::send_line",
+        "libtmux::Pane::capture",
+        "libtmux::Pane::wait_for_text"
+      ],
+      "expectedOutput": "capture: first line, second line"
+    }
+  ]
+}

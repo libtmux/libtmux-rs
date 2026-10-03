@@ -1,0 +1,13 @@
+[package]
+name = "libtmux-api-example"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+exclude = ["libtmux-source"]
+
+[dependencies]
+libtmux = { path = "libtmux-source/crates/libtmux" }
+tempfile = "3.20"
+tokio = { version = "1.40", features = ["macros", "rt", "time"] }

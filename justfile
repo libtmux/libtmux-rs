@@ -43,6 +43,11 @@ doctest:
 # fails at runtime passes every other gate. This runs each against a server it
 # owns and fails when one exits nonzero or leaves a socket behind.
 #
+# Verify complete API programs and their native attachment targets
+api-examples:
+    python3 -m unittest scripts/test_check_api_examples.py
+    python3 scripts/check-api-examples.py
+
 # Run every example and check it cleaned up
 [group: 'test']
 examples:
@@ -431,7 +436,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test doctest examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

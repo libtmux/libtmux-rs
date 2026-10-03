@@ -37,6 +37,13 @@ readonly dev_root=/tmp/libtmux-rs-dev
 # matched nothing every time; `scratch` printed a line count and none of the
 # session it built. Naming what each is for makes that a failure.
 readonly table="
+libtmux  | api_construction | query | | | construction: private daemon started by new_session
+libtmux  | api_listings | query | | | listings: 1 session, 2 windows, 2 panes
+libtmux  | api_creation | query | | | creation: 2 windows, 4 panes
+libtmux  | api_query | query | | | query: prod-api
+libtmux  | api_cardinality | query | | | cardinality: none, one, multiple
+libtmux  | api_input | query | | | input: C-c is text
+libtmux  | api_capture | query | | | capture: first line, second line
 libtmux  | inspect  |                                               |    |               | examples
 libtmux  | find     | query                                         | sh |               | in window
 libtmux  | scratch  | test-support                                  |    |               | hello from tmux

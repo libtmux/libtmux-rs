@@ -23,6 +23,9 @@ include = [
     "/docs/parity.md",
     "/benches/**/*.rs",
     "/examples/**/*.rs",
+    "/examples/api/*.json",
+    "/examples/api/*.md",
+    "/examples/api/*.toml",
     "/schema/**/*.json",
     "/src/**/*.rs",
     "/tests/fixtures/filter-v1/*.json",
@@ -46,6 +49,29 @@ required-features = ["test-support"]
 [[example]]
 name = "find"
 required-features = ["query"]
+
+[[example]]
+name = "api_construction"
+
+[[example]]
+name = "api_listings"
+
+[[example]]
+name = "api_creation"
+
+[[example]]
+name = "api_query"
+required-features = ["query"]
+
+[[example]]
+name = "api_cardinality"
+required-features = ["query"]
+
+[[example]]
+name = "api_input"
+
+[[example]]
+name = "api_capture"
 
 # The matrix compares the transports against each other, so it needs one of
 # each rather than a subset.

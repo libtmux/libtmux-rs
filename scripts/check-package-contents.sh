@@ -53,6 +53,9 @@ core_files=(
     "$core_root"/docs/findings.md
     "$core_root"/docs/parity.md
     "$core_root"/examples/*.rs
+    "$core_root"/examples/api/README.md
+    "$core_root"/examples/api/manifest.json
+    "$core_root"/examples/api/consumer.toml
     "$core_root"/schema/*.json
     "$core_root"/tests/fixtures/filter-v1/*.json
     "$core_root"/tests/fixtures/dialect-v1/*.json
