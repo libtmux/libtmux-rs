@@ -78,7 +78,8 @@ windows:
     let workspace = Workspace::from_yaml(source)?;
 
     let guard = TestServer::new().await?;
-    let session = WorkspaceBuilder::new(guard.server()).build(&workspace).await?;
+    let session =
+        WorkspaceBuilder::new(guard.server()).build(&workspace).await?;
 
     assert_eq!(session.name().to_string_lossy(), "dev");
     assert_eq!(session.windows().await?.len(), 1);
