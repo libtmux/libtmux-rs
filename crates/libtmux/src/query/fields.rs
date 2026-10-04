@@ -66,7 +66,8 @@ pub struct BoolField<T> {
 /// use libtmux::query::__private;
 ///
 /// struct Row;
-/// let field: IntegerField<Row, i64> = __private::integer_field("row", "count");
+/// let field: IntegerField<Row, i64> =
+///     __private::integer_field("row", "count");
 /// let _ = field.eq(7_i64);
 /// ```
 pub struct IntegerField<T, N> {
@@ -554,7 +555,10 @@ impl<T, V> TextField<T, V> {
     /// struct Row;
     /// let field: TextField<Row> = __private::text_field("row", "name");
     /// let expression = field.regex("^build$").expect("the pattern is valid");
-    /// assert_eq!(expression, field.regex("^build$").expect("the pattern is valid"));
+    /// assert_eq!(
+    ///     expression,
+    ///     field.regex("^build$").expect("the pattern is valid")
+    /// );
     /// ```
     pub fn regex(self, pattern: impl Into<String>) -> Result<FilterExpr<T>, FilterExpressionError> {
         self.regex_inner(pattern.into(), false)
@@ -828,13 +832,18 @@ impl<T, E: FilterEnum> EnumField<T, E> {
     /// use libtmux::query::{EnumField, FilterEnum};
     /// use libtmux::query::__private;
     ///
-    /// enum State { Ready }
+    /// enum State {
+    ///     Ready,
+    /// }
     /// impl FilterEnum for State {
     ///     const FILTER_VARIANTS: &'static [&'static str] = &["ready"];
-    ///     fn filter_name(&self) -> &'static str { "ready" }
+    ///     fn filter_name(&self) -> &'static str {
+    ///         "ready"
+    ///     }
     /// }
     /// struct Row;
-    /// let field: EnumField<Row, State> = __private::enum_field("row", "state");
+    /// let field: EnumField<Row, State> =
+    ///     __private::enum_field("row", "state");
     /// let _ = field.eq(State::Ready);
     /// ```
     #[must_use]
@@ -850,15 +859,23 @@ impl<T, E: FilterEnum> EnumField<T, E> {
     /// use libtmux::query::{EnumField, FilterEnum};
     /// use libtmux::query::__private;
     ///
-    /// enum State { Ready, Blocked }
+    /// enum State {
+    ///     Ready,
+    ///     Blocked,
+    /// }
     /// impl FilterEnum for State {
-    ///     const FILTER_VARIANTS: &'static [&'static str] = &["ready", "blocked"];
+    ///     const FILTER_VARIANTS: &'static [&'static str] =
+    ///         &["ready", "blocked"];
     ///     fn filter_name(&self) -> &'static str {
-    ///         match self { Self::Ready => "ready", Self::Blocked => "blocked" }
+    ///         match self {
+    ///             Self::Ready => "ready",
+    ///             Self::Blocked => "blocked",
+    ///         }
     ///     }
     /// }
     /// struct Row;
-    /// let field: EnumField<Row, State> = __private::enum_field("row", "state");
+    /// let field: EnumField<Row, State> =
+    ///     __private::enum_field("row", "state");
     /// let _ = field.is_in([State::Ready, State::Blocked]);
     /// ```
     #[must_use]
@@ -874,13 +891,18 @@ impl<T, E: FilterEnum> EnumField<T, E> {
     /// use libtmux::query::{EnumField, FilterEnum};
     /// use libtmux::query::__private;
     ///
-    /// enum State { Ready }
+    /// enum State {
+    ///     Ready,
+    /// }
     /// impl FilterEnum for State {
     ///     const FILTER_VARIANTS: &'static [&'static str] = &["ready"];
-    ///     fn filter_name(&self) -> &'static str { "ready" }
+    ///     fn filter_name(&self) -> &'static str {
+    ///         "ready"
+    ///     }
     /// }
     /// struct Row;
-    /// let field: EnumField<Row, State> = __private::enum_field("row", "state");
+    /// let field: EnumField<Row, State> =
+    ///     __private::enum_field("row", "state");
     /// let _ = field.not_in([State::Ready]);
     /// ```
     #[must_use]

@@ -782,7 +782,8 @@ pub const fn bool_field<T>(target: &'static str, field: &'static str) -> BoolFie
 /// use libtmux::query::IntegerField;
 /// use libtmux::query::__private;
 /// struct Row;
-/// let field: IntegerField<Row, i64> = __private::integer_field("row", "count");
+/// let field: IntegerField<Row, i64> =
+///     __private::integer_field("row", "count");
 /// assert!(format!("{field:?}").contains("count"));
 /// ```
 #[must_use]
@@ -853,7 +854,8 @@ pub const fn many_relation<From, To>(
 /// use libtmux::query::__private;
 /// struct Parent;
 /// struct Owner;
-/// let field: OneRelation<Parent, Owner> = __private::one_relation("parent", "owner");
+/// let field: OneRelation<Parent, Owner> =
+///     __private::one_relation("parent", "owner");
 /// assert!(format!("{field:?}").contains("owner"));
 /// ```
 #[must_use]
