@@ -224,11 +224,13 @@ $ tmux-workspace --generate zsh > ~/.zfunc/_tmux-workspace
 ```
 
 ```console
-$ tmux-workspace --generate bash > ~/.local/share/bash-completion/completions/tmux-workspace
+$ tmux-workspace --generate bash \
+    > ~/.local/share/bash-completion/completions/tmux-workspace
 ```
 
 ```console
-$ tmux-workspace --generate fish > ~/.config/fish/completions/tmux-workspace.fish
+$ tmux-workspace --generate fish \
+    > ~/.config/fish/completions/tmux-workspace.fish
 ```
 
 `schema` exports the command graph: positional arity, aliases, groups,
