@@ -78,7 +78,10 @@ impl<T> Availability<T> {
     /// use libtmux::{Availability, TmuxText};
     ///
     /// let owned = Availability::Available(TmuxText::from("copy-mode"));
-    /// assert_eq!(owned.as_ref().available(), Some(&TmuxText::from("copy-mode")));
+    /// assert_eq!(
+    ///     owned.as_ref().available(),
+    ///     Some(&TmuxText::from("copy-mode"))
+    /// );
     /// ```
     pub const fn as_ref(&self) -> Availability<&T> {
         match self {
@@ -236,7 +239,10 @@ mod sealed {
 /// use libtmux::{Availability, Pane};
 ///
 /// // Any field of a pane, read the same way.
-/// fn read<F: ReadField<Pane>>(pane: &Pane, field: F) -> Availability<F::Value<'_>> {
+/// fn read<F: ReadField<Pane>>(
+///     pane: &Pane,
+///     field: F,
+/// ) -> Availability<F::Value<'_>> {
 ///     pane.get(field)
 /// }
 ///
