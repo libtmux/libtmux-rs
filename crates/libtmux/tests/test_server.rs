@@ -37,7 +37,7 @@ assert_impl_all!(TestServerBuilder: Debug, Send, Sync);
 assert_impl_all!(TestServerError: Debug, Display, StdError, Send, Sync);
 assert_impl_all!(TestServerErrorKind: Clone, Copy, Debug, Eq, Send, Sync);
 
-const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
+const OBSERVATION_TIMEOUT: Duration = libtmux::test::HANG_GUARD;
 const UMASK_CHILD: &str = "LIBTMUX_TEST_SERVER_UMASK_CHILD";
 const ENVIRONMENT_CHILD: &str = "LIBTMUX_TEST_SERVER_ENVIRONMENT_CHILD";
 const CLIENT_ENVIRONMENT_CHILD: &str = "LIBTMUX_TEST_SERVER_CLIENT_ENVIRONMENT_CHILD";

@@ -27,7 +27,7 @@ use crate::{Command, DispatchLimits, Error};
 
 const CHILD_ENV: &str = "LIBTMUX_RS_TEST_CHILD";
 const CHILD_TEST: &str = "internal::subprocess::tests::child_helper";
-const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const TEST_TIMEOUT: Duration = crate::test::HANG_GUARD;
 
 /// How long a poll loop waits before looking again.
 ///

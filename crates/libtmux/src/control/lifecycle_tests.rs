@@ -22,7 +22,7 @@ use super::{ControlMode, Event, PaneOutput};
 use crate::internal::core::{BuildContext, Core, CoreConfiguration, SocketSelection};
 use crate::{Command, ControlModeErrorKind, Error, ErrorKind, Server, SessionId, TmuxText};
 
-const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+const TEST_TIMEOUT: Duration = crate::test::HANG_GUARD;
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 /// How long a reply that never arrives is waited for.
