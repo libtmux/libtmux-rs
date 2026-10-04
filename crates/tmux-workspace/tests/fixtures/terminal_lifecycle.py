@@ -70,6 +70,25 @@ def process_state(pid):
         return None
 
 
+def wait_for_exit(fds, timeout):
+    """Wait until every pidfd reports its process exited.
+
+    A pidfd turns readable when the process exits, reaped or not, and stays
+    readable. The /proc state letter is no substitute: it passes through X
+    between the zombie and the process vanishing, so a sample taken while a
+    reaper is mid-wait reads X, which is neither running nor Z nor absent.
+    """
+    deadline = time.monotonic() + timeout
+    pending = list(fds)
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        ready, _, _ = select.select(pending, [], [], remaining)
+        pending = [fd for fd in pending if fd not in ready]
+    return True
+
+
 def terminal_descriptors(pid):
     result = []
     try:
@@ -237,9 +256,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                 report = json.loads((directory / "supervisor.json").read_text())
                 break
         assert report is not None, {"directory": str(directory), "terminal": terminal_text.decode(errors="replace")}
-        settle = time.monotonic() + 0.5
-        while any((state := process_state(pid)) and state["state"] != "Z" for pid in pids) and time.monotonic() < settle:
-            time.sleep(0.005)
+        exited = wait_for_exit([fd for _, fd in pidfds], 5)
         after = {pid: process_state(pid) for pid in pids}
         observed_keeper = native("list-panes", "-t", "=keeper", "-F", "#{pid}:#{session_id}:#{window_id}:#{pane_id}")
         assert observed_keeper == keeper, (keeper, observed_keeper)
@@ -284,7 +301,7 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                       keeper=keeper, terminal=terminal_text.decode(errors="replace"),
                       active=active, retained=retained,
                       evidence_directory=str(directory))
-        report["children_stopped"] = all(state is None or state["state"] == "Z" for state in after.values())
+        report["children_stopped"] = exited
         report["pass"] = (sent_input and bool(pids) and report["termios_restored"]
                           and report["foreground"] == report["expected_foreground"]
                           and report["children_stopped"]
