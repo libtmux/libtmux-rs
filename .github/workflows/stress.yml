@@ -1,0 +1,106 @@
+name: Test stress
+
+# Repeats the real-tmux suites and reports how often each test fails.
+#
+# One CI run answers "did it pass", and a test that fails one run in twenty
+# passes nineteen of them. This answers "how often does it fail" on the
+# runner where the answer differs: macOS timing differs from Linux. The Linux
+# job is the control: a test that fails there too is not a macOS difference.
+#
+# It is also the evidence for running `tests on macOS` on pull requests: that
+# lane stays a gate only while this one shows no test failing.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Repetitions per runner
+        type: number
+        default: 10
+      scope:
+        description: The whole workspace suite, or the targeted test binaries
+        type: choice
+        options: [full, targeted]
+        default: full
+  schedule:
+    - cron: "17 5 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  LC_ALL: C.UTF-8
+
+jobs:
+  stress:
+    name: stress on ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    # The org shares a small pool of macOS runners, so there is one macOS job,
+    # looping, and no matrix over it.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macos
+          - os: ubuntu-latest
+            label: linux-control
+    env:
+      REPEAT: ${{ inputs.repeat || 10 }}
+      SCOPE: ${{ inputs.scope || 'full' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install tmux
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install tmux
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends tmux
+          fi
+          tmux -V
+
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Check the report script
+        run: python3 -m unittest scripts/test_stress_tests.py
+
+      - name: Build the tests once
+        run: cargo test --locked --workspace --all-targets --all-features --no-run
+
+      - name: Repeat the suite
+        run: |
+          if [ "$SCOPE" = targeted ]; then
+            suite=(bash scripts/stress-targeted.sh)
+          else
+            suite=(cargo test --locked --workspace --all-targets --all-features --no-fail-fast)
+          fi
+          python3 scripts/stress-tests.py \
+            --repeat "$REPEAT" \
+            --label "${{ matrix.label }}-$SCOPE" \
+            --csv "stress-${{ matrix.label }}.csv" \
+            --markdown "stress-${{ matrix.label }}.md" \
+            --log "stress-${{ matrix.label }}.log" \
+            -- "${suite[@]}"
+
+      - name: Report
+        if: always()
+        run: cat "stress-${{ matrix.label }}.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: stress-${{ matrix.label }}
+          path: |
+            stress-${{ matrix.label }}.csv
+            stress-${{ matrix.label }}.md
+            stress-${{ matrix.label }}.log
