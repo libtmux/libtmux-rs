@@ -55,7 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .offered()
         .iter()
         .map(|tool| {
-            let bytes = serde_json::to_string(tool).map_or(0, |rendered| rendered.len());
+            let bytes = serde_json::to_string(tool)
+                .map_or(0, |rendered| rendered.len());
             (bytes, tool.name.to_string())
         })
         .collect();

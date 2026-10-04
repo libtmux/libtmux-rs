@@ -27,7 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder().socket_path(&socket).build()?;
 
     let session = server.new_session(unique_name("watched").as_str()).await?;
-    let (commands, mut events) = ControlMode::attach(&server, session.id()).await?.split();
+    let (commands, mut events) =
+        ControlMode::attach(&server, session.id()).await?.split();
     println!("one connection to {}", socket.display());
 
     // The watcher gets its own task. Sending and watching are separate
@@ -42,7 +43,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     seen.push(window.to_string());
                 }
                 Event::WindowRenamed { window, name } => {
-                    println!("  <- window {window} is now {}", name.to_string_lossy());
+                    println!(
+                        "  <- window {window} is now {}",
+                        name.to_string_lossy()
+                    );
                     seen.push(window.to_string());
                 }
                 Event::Exit { .. } => break,

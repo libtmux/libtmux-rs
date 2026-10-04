@@ -33,7 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A search that matches nothing is the likeliest first run, so say what to
     // search for instead of leaving the reader with a cardinality error.
     if found == 0 {
-        println!("\nnothing here is running {wanted:?}. This server is running:");
+        println!(
+            "\nnothing here is running {wanted:?}. This server is running:"
+        );
         let mut commands: Vec<_> = panes
             .iter()
             .filter_map(|pane| pane.current_command())
@@ -45,7 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  {command}");
         }
         if let Some(command) = commands.first() {
-            println!("\n  cargo run --example find --features query -- {command}");
+            println!(
+                "\n  cargo run --example find --features query -- {command}"
+            );
         }
     }
 

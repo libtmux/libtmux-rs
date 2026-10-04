@@ -47,7 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     tools
         .wait_for_text(
-            args(json!({"pane": pane, "patterns": ["line-200"], "seconds": 10}))?,
+            args(
+                json!({"pane": pane, "patterns": ["line-200"], "seconds": 10}),
+            )?,
             CancellationToken::new(),
             Reporter::none(),
         )
