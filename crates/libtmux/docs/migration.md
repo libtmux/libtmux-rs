@@ -190,12 +190,15 @@ and `ControlMode::next_event` return `Option<Result<Event, Error>>`. Change
 `match event` to `match event?` in a fallible consumer:
 
 ```no_run
-# async fn watch(mut events: libtmux::control::ControlEvents) -> Result<(), libtmux::Error> {
+# use libtmux::{Error, control::ControlEvents};
+# async fn watch(mut events: ControlEvents) -> Result<(), Error> {
 use libtmux::control::Event;
 
 while let Some(event) = events.next_event().await {
     match event? {
-        Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
+        Event::Output { pane, bytes } => {
+            println!("{pane}: {} bytes", bytes.len())
+        }
         Event::Exit { .. } => break,
         _ => {}
     }
@@ -235,7 +238,9 @@ use libtmux::{Error, ScopeError};
 
 fn both<T, E>(error: &ScopeError<T, E>) -> Option<(&E, &Error)> {
     match error {
-        ScopeError::OperationAndCleanup { operation, cleanup } => Some((operation, cleanup)),
+        ScopeError::OperationAndCleanup { operation, cleanup } => {
+            Some((operation, cleanup))
+        }
         _ => None,
     }
 }
