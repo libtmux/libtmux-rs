@@ -257,10 +257,9 @@ and diffs what tmux itself reports. A documented, deliberate difference from
 tmuxp -- see `scripts/tmuxp-parity.py`'s `ALLOWLIST` -- is reported but does
 not fail the run; anything else that differs does.
 
-CI also runs the suite on macOS, but only on `master` or manual dispatch: a
-macOS runner bills at ten times a Linux one and the lints are
-platform-independent. On a pull request, `tests on macOS`, `fuzz parsers`,
-`benchmarks` and `tmuxp parity` report as skipping. That is the design, not a failure.
+CI also runs the suite on macOS, on pull requests as well as `master`. See
+[`MACOS_CI.md`](MACOS_CI.md). On a pull request, `fuzz parsers`, `benchmarks`
+and `tmuxp parity` report as skipping. That is the design, not a failure.
 
 `just parity-claims` fails when a row of `parity.md` marked `implemented` or
 `verified` names no caller-reachable Rust path, or puts an associated item on
