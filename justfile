@@ -359,6 +359,16 @@ example-tables:
     python3 -m unittest scripts/test_check_example_tables.py
     python3 scripts/check-example-tables.py README.md
 
+# Code a reader sees rendered scrolls sideways past 80 columns, and rustfmt
+# leaves doc comments and doctest code as written, so a formatter run does not
+# catch it. Pure text, no toolchain, so it is part of `just check`.
+#
+# Fail when example code is wider than 80 columns
+[group: 'docs']
+example-width:
+    python3 scripts/check_example_width.py --self-test
+    python3 scripts/check_example_width.py
+
 # A Contents list is a copy of a document's headings, and a copy drifts: a
 # renamed section leaves the list rendering a link to an anchor that is gone.
 #
@@ -436,7 +446,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
+check: fmt-check clippy test swap-test compat-supervisor-test doctest api-examples examples example-tables example-width fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:
