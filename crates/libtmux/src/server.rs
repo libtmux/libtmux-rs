@@ -204,8 +204,16 @@ use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
 /// // tmux keeps a separate history per prompt kind, so a command typed at the
 /// // `:` prompt is not offered when searching.
 /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
-///     assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
-///     assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
+///     assert!(
+///         guard
+///             .server()
+///             .prompt_history(PromptKind::Command)
+///             .await?
+///             .is_empty()
+///     );
+///     assert!(
+///         guard.server().prompt_history(PromptKind::Search).await?.is_empty()
+///     );
 /// }
 ///
 /// guard.shutdown().await?;
@@ -474,7 +482,10 @@ impl Server {
     /// let server = libtmux::Server::builder()
     ///     .socket_path("/tmp/libtmux-rs-test/builder-example.sock")
     ///     .build()?;
-    /// assert_eq!(server.socket_path(), std::path::Path::new("/tmp/libtmux-rs-test/builder-example.sock"));
+    /// assert_eq!(
+    ///     server.socket_path(),
+    ///     std::path::Path::new("/tmp/libtmux-rs-test/builder-example.sock")
+    /// );
     /// # Ok::<(), libtmux::Error>(())
     /// ```
     pub fn builder() -> ServerBuilder {
@@ -535,7 +546,10 @@ impl Server {
     /// let server = libtmux::Server::builder()
     ///     .config_file("/tmp/libtmux-example.conf")
     ///     .build()?;
-    /// assert_eq!(server.config_file(), Some(std::path::Path::new("/tmp/libtmux-example.conf")));
+    /// assert_eq!(
+    ///     server.config_file(),
+    ///     Some(std::path::Path::new("/tmp/libtmux-example.conf"))
+    /// );
     /// # Ok::<(), libtmux::Error>(())
     /// ```
     #[must_use]
@@ -562,7 +576,8 @@ impl Server {
     /// # Examples
     ///
     /// ```
-    /// let server = libtmux::Server::builder().tmux_executable("tmux").build()?;
+    /// let server =
+    ///     libtmux::Server::builder().tmux_executable("tmux").build()?;
     /// assert_eq!(server.tmux_executable(), std::ffi::OsStr::new("tmux"));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
@@ -611,7 +626,8 @@ impl Server {
     ///
     /// ```
     /// let timeout = std::time::Duration::from_secs(7);
-    /// let server = libtmux::Server::builder().default_timeout(timeout).build()?;
+    /// let server =
+    ///     libtmux::Server::builder().default_timeout(timeout).build()?;
     /// assert_eq!(server.default_timeout(), timeout);
     /// # Ok::<(), libtmux::Error>(())
     /// ```
@@ -813,8 +829,13 @@ impl Server {
     /// let outside = libtmux::Server::from_env_value(None::<OsString>);
     /// assert!(outside.is_err(), "a process outside tmux has no TMUX value");
     ///
-    /// let inside = libtmux::Server::from_env_value(Some("/tmp/tmux-1000/default,7,$0"))?;
-    /// assert_eq!(inside.socket_path(), std::path::Path::new("/tmp/tmux-1000/default"));
+    /// let inside = libtmux::Server::from_env_value(Some(
+    ///     "/tmp/tmux-1000/default,7,$0",
+    /// ))?;
+    /// assert_eq!(
+    ///     inside.socket_path(),
+    ///     std::path::Path::new("/tmp/tmux-1000/default")
+    /// );
     /// # Ok::<(), libtmux::Error>(())
     /// ```
     pub fn from_env() -> Result<Self, Error> {
@@ -1310,7 +1331,9 @@ impl Server {
     ///
     /// // A fresh server has answered no prompts.
     /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
-    ///     assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
+    ///     assert!(
+    ///         server.prompt_history(PromptKind::Command).await?.is_empty()
+    ///     );
     /// }
     ///
     /// guard.shutdown().await?;
@@ -1384,7 +1407,8 @@ impl Server {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux::test::TestServer::new().await?;
-    /// let version = guard.server().capabilities().await?.tmux_version().clone();
+    /// let version =
+    ///     guard.server().capabilities().await?.tmux_version().clone();
     ///
     /// // Whoever started the server owns it and may act.
     /// if version.has_behavior(&libtmux::since::SERVER_ACCESS) {
@@ -2181,7 +2205,8 @@ mod tests {
 ///     .new_session(NewSessionOptions::new("work").window_name("editor"))
 ///     .await?;
 ///
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 /// assert_eq!(window.name().to_string_lossy(), "editor");
 ///
 /// guard.shutdown().await?;
