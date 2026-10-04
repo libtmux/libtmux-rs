@@ -1,0 +1,39 @@
+width = 80
+markdown = ["**/*.md"]
+sources = ["crates/*/examples/**/*.rs", "crates/libtmux/examples/api/consumer.toml"]
+doc_comments = ["crates/*/src/**/*.rs"]
+checker_digest = "91f275967fc1b77542a89b9b769b833c0bdcb967768e9a6a1e4127f68abfc1c4"
+shared_digest = "872d3f4cb1eb2b5cd9c5b7adc9cd140a153e4bbed3cb5bd0b7400a905e6dae4d"
+allow_ceiling = 1
+
+[[exclude]]
+glob = "crates/*/docs/plans/**"
+reason = "dated implementation plans, a decision record no reader copies code from"
+
+[[exclude]]
+glob = "crates/*/examples/rustfmt.toml"
+reason = "formatter config compared with the root rustfmt.toml by [[formatter_copies]] below"
+
+[[exclude]]
+glob = "crates/libtmux/examples/api/manifest.json"
+reason = "machine-read manifest whose JSON description strings cannot wrap; the docs site renders them as prose"
+
+[[allow]]
+path = ".github/WRITING.md"
+line = "let control = libtmux::control::ControlMode::attach(server, session.id()).await?;"
+reason = "the Bad example in the port block; it shows the width problem the Good example fixes"
+
+[[formatter_copies]]
+copy = "crates/libtmux/examples/rustfmt.toml"
+root = "rustfmt.toml"
+key = "max_width"
+
+[[formatter_copies]]
+copy = "crates/tmux-mcp/examples/rustfmt.toml"
+root = "rustfmt.toml"
+key = "max_width"
+
+[[formatter_copies]]
+copy = "crates/tmux-workspace/examples/rustfmt.toml"
+root = "rustfmt.toml"
+key = "max_width"

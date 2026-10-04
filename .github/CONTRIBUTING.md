@@ -229,7 +229,7 @@ $ just check
 
 That runs, in order: `fmt-check`, `clippy`, `test`, `swap-test`,
 `compat-supervisor-test`, `doctest`, `api-examples`, `examples`, `example-tables`,
-`fixture-root`, `docs`, `doc-blocks`, `doc-contents`, `doctests-run`,
+`example-width`, `fixture-root`, `docs`, `doc-blocks`, `doc-contents`, `doctests-run`,
 `parity-claims`, `format-coverage-check`, `features`, `deny`, `msrv`,
 `package`.
 Clippy runs with `-D warnings`, `docs` with `RUSTDOCFLAGS='-D warnings'`, and
@@ -280,6 +280,15 @@ the native public API inventory. It rejects missing programs, duplicate or
 unknown targets, hidden source helpers and incomplete file boundaries.
 `just examples` executes these programs along with the other shipped examples;
 the manifest check alone does not establish native execution.
+
+`just example-width` fails when example code is wider than 80 columns. It
+reads the files `.github/example-width.toml` names: the programs under
+`crates/*/examples/`, fenced code in READMEs and `docs/`, and code in doc
+comments, none of which rustfmt wraps. Run it on its own with:
+
+```console
+$ just example-width
+```
 
 The gates worth explaining:
 
