@@ -348,7 +348,8 @@ pub struct SessionTree {
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 /// window.split(SplitDirection::Below).await?;
 ///
 /// let tree = guard.server().hierarchy().await?;
@@ -392,8 +393,9 @@ pub struct WindowTree {
 /// let sessions = SessionTree::filter_fields();
 /// let windows = WindowTree::filter_fields();
 ///
-/// // The session's own fields sit beside the relation rather than behind it, so
-/// // a question about the session and a question about what it contains compose.
+/// // The session's own fields sit beside the relation rather than behind it,
+/// // so a question about the session and a question about what it contains
+/// // compose.
 /// let building = sessions
 ///     .session
 ///     .session_name

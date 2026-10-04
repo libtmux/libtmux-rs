@@ -337,8 +337,12 @@ impl Server {
     /// let server = guard.server();
     ///
     /// // Written far apart on purpose: nothing renumbers, so the gap stays.
-    /// server.set_array_option("command-alias", 30, "thirty=display -p 30").await?;
-    /// server.set_array_option("command-alias", 35, "five=display -p 35").await?;
+    /// server
+    ///     .set_array_option("command-alias", 30, "thirty=display -p 30")
+    ///     .await?;
+    /// server
+    ///     .set_array_option("command-alias", 35, "five=display -p 35")
+    ///     .await?;
     ///
     /// let aliases = server.array_option("command-alias").await?;
     /// assert_eq!(aliases.get(31), None, "the gap is tmux's, and it is kept");
@@ -523,10 +527,15 @@ impl Server {
     /// entries.insert(3, TmuxText::from(b"display-message fourth".to_vec()));
     ///
     /// server
-    ///     .set_hooks("alert-bell", &IndexedHooks::from(entries), ReplaceMode::Replace)
+    ///     .set_hooks(
+    ///         "alert-bell",
+    ///         &IndexedHooks::from(entries),
+    ///         ReplaceMode::Replace,
+    ///     )
     ///     .await?;
     ///
-    /// let written = server.hook("alert-bell").await?.expect("the hook is set");
+    /// let written =
+    ///     server.hook("alert-bell").await?.expect("the hook is set");
     /// assert_eq!(written.len(), 2);
     /// assert!(written.get(1).is_none(), "the gap is kept");
     ///

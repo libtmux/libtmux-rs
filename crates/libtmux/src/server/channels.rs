@@ -205,11 +205,14 @@ impl Server {
     /// # let server = guard.server();
     /// // Signalling first is safe: the channel keeps it.
     /// server.signal_channel("ready").await?;
-    /// let outcome = server.wait_for_channel("ready", Duration::from_secs(5)).await?;
+    /// let outcome =
+    ///     server.wait_for_channel("ready", Duration::from_secs(5)).await?;
     /// assert_eq!(outcome, ChannelWait::Signalled);
     ///
     /// // The latch is spent, so a second wait runs out of time instead.
-    /// let again = server.wait_for_channel("ready", Duration::from_millis(200)).await?;
+    /// let again = server
+    ///     .wait_for_channel("ready", Duration::from_millis(200))
+    ///     .await?;
     /// assert_eq!(again, ChannelWait::TimedOut);
     /// # guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
