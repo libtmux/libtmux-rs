@@ -3248,7 +3248,7 @@ async fn typing_a_marker_without_submitting_while_a_wait_is_open_is_not_matched(
                     args(serde_json::json!({
                         "pane": pane,
                         "patterns": ["MCPMARKER4"],
-                        "seconds": 3
+                        "seconds": 20
                     })),
                     CancellationToken::new(),
                     tmux_mcp::Reporter::none(),

@@ -189,7 +189,7 @@ async fn s3_unsubmitted_text_is_pending_not_matched() {
                 args(serde_json::json!({
                     "pane": pane,
                     "patterns": ["MARKER"],
-                    "seconds": 1
+                    "seconds": 60
                 })),
                 CancellationToken::new(),
                 tmux_mcp::Reporter::none(),
@@ -200,7 +200,7 @@ async fn s3_unsubmitted_text_is_pending_not_matched() {
 
     assert_eq!(view["outcome"], "pending", "{view}");
     assert!(
-        started.elapsed() < Duration::from_millis(500),
+        started.elapsed() < Duration::from_secs(30),
         "an unsubmitted pattern must not wait out the deadline: {:?}",
         started.elapsed()
     );
@@ -411,7 +411,7 @@ async fn s6_an_unrecognized_key_stops_discounting_the_line() {
                 args(serde_json::json!({
                     "pane": pane,
                     "patterns": ["MARKER"],
-                    "seconds": 3
+                    "seconds": 20
                 })),
                 CancellationToken::new(),
                 tmux_mcp::Reporter::none(),

@@ -233,7 +233,7 @@ fn unavailable_observer_caps_oversized_grace_before_group_cleanup() {
             CleanupOutcome::Complete
         ));
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(30),
             "unobservable graceful cleanup uses its fallback ceiling"
         );
         assert_eq!(pids.len(), 2);

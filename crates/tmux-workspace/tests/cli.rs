@@ -3592,13 +3592,20 @@ fn interrupted_editor_terminates_its_owned_child_group() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    for _ in 0..200 {
-        if marker.exists() {
-            break;
+    // The editor creates the file and then writes the pid, so a file that
+    // exists may still be empty.
+    let marker_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let pid = loop {
+        match std::fs::read_to_string(&marker) {
+            Ok(text) if !text.is_empty() => break text,
+            _ => {}
         }
+        assert!(
+            std::time::Instant::now() < marker_deadline,
+            "the editor never reported its descendant"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    let pid = std::fs::read_to_string(&marker).unwrap();
+    };
     assert!(
         Command::new("kill")
             .args(["-INT", &child.id().to_string()])
@@ -3606,7 +3613,7 @@ fn interrupted_editor_terminates_its_owned_child_group() {
             .unwrap()
             .success()
     );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
@@ -3614,7 +3621,7 @@ fn interrupted_editor_terminates_its_owned_child_group() {
         child.kill().unwrap();
     }
     let output = child.wait_with_output().unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let descendant_alive = loop {
         let state = Command::new("ps")
             .args(["-o", "stat=", "-p", &pid])
@@ -3704,7 +3711,7 @@ fn exited_editor_cannot_leave_a_descendant_holding_capture_pipes() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }

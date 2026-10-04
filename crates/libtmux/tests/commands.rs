@@ -2025,12 +2025,21 @@ async fn real_tmux_compat_capture_line_flags_mark_prompts_when_the_shell_emits_t
     // Standing in for shell integration: the sequences a shell would emit
     // around its prompt and before its output.
     pane.send_keys(
-        r"printf '\033]133;A\007'; echo THE-PROMPT; printf '\033]133;C\007'; echo the-output",
+        r"printf '\033]133;A\007'; echo THE-PROMPT; printf '\033]133;C\007'; echo the-output; echo finished-$((20 + 22))",
     )
     .await
     .expect("keys are sent");
     pane.send_key_names(["Enter"]).await.expect("Enter is sent");
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    // The sum appears only once the shell has run the line: the terminal's
+    // echo of what was typed spells it as an expression.
+    let ran = pane
+        .wait_for_text(
+            "finished-42",
+            libtmux::test::scaled(Duration::from_secs(20)),
+        )
+        .await
+        .expect("the pane is watched");
+    assert_eq!(ran, libtmux::PaneWait::Arrived, "the shell ran the line");
 
     let lines = pane
         .capture_lines(CaptureOptions::history())
@@ -2103,7 +2112,7 @@ async fn a_suspended_client_is_not_reported_gone() {
         .tmux_version()
         .has_behavior(&since::CLIENTS_HIDE_STOPPED);
 
-    let child = process::Command::new("tmux")
+    let child = process::Command::new(server.resolved_tmux_executable().expect("tmux resolves"))
         .arg("-S")
         .arg(guard.socket_path())
         .arg("-C")

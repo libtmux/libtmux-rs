@@ -616,27 +616,23 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
         .next()
         .expect("one pane");
 
-    pane.send_keys("printf marker-8fa1\n")
+    // The terminal echoes what was typed, so the marker is assembled by the
+    // shell: only its output spells it whole.
+    pane.send_keys("printf 'marker-%s' 8fa1\n")
         .await
         .expect("keys are sent");
 
-    // Wait for the shell to produce the output rather than sleeping.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let captured = loop {
-        let lines = pane.capture().await.expect("capture succeeds");
-        if lines.iter().any(|line| {
+    let mut captured = Vec::new();
+    retry_until(Duration::from_secs(20), async || {
+        captured = pane.capture().await.expect("capture succeeds");
+        captured.iter().any(|line| {
             line.as_bytes()
                 .windows(11)
                 .any(|window| window == b"marker-8fa1")
-        }) {
-            break lines;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the shell did not echo the marker before the deadline",
-        );
-        tokio::task::yield_now().await;
-    };
+        })
+    })
+    .await
+    .expect("the shell did not print the marker before the deadline");
     assert!(!captured.is_empty());
 
     // A sole pane fills its window, so there is nothing for a resize to take

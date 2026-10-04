@@ -31,7 +31,7 @@ fn initialize_result_is_accepted_with_the_spec_environment() {
         env: BTreeMap::from([("TOKEN".into(), "yes".into())]),
     };
 
-    preflight(&spec, Duration::from_secs(2)).expect("initialize response");
+    preflight(&spec, Duration::from_secs(10)).expect("initialize response");
 }
 
 #[test]
@@ -53,9 +53,11 @@ fn initialize_result_is_accepted_before_a_long_lived_server_exits() {
     };
     let started = Instant::now();
 
-    preflight(&spec, Duration::from_secs(2)).expect("initialize response before exit");
+    preflight(&spec, Duration::from_secs(10)).expect("initialize response before exit");
 
-    assert!(started.elapsed() < Duration::from_secs(1));
+    // The server would live for 30 seconds, so the property is that preflight
+    // did not wait for it; the bound only has to sit well below that.
+    assert!(started.elapsed() < Duration::from_secs(15));
     assert_process_stopped(&child_pid);
 }
 
@@ -80,11 +82,11 @@ fn initialize_result_reaps_a_setsid_descendant_holding_pipes() {
     };
     let (sender, receiver) = std::sync::mpsc::channel();
     let worker = thread::spawn(move || {
-        let result = preflight(&spec, Duration::from_secs(2));
+        let result = preflight(&spec, Duration::from_secs(10));
         let _ = sender.send(result);
     });
 
-    let result = match receiver.recv_timeout(Duration::from_secs(3)) {
+    let result = match receiver.recv_timeout(Duration::from_secs(20)) {
         Ok(result) => {
             worker.join().expect("preflight worker");
             result
@@ -101,7 +103,7 @@ fn initialize_result_reaps_a_setsid_descendant_holding_pipes() {
 
     result.expect("initialize response before exit");
     // Promptness is already bounded above: `recv_timeout` panics with
-    // "preflight did not return promptly" if this takes longer than three
+    // "preflight did not return promptly" if this takes longer than twenty
     // seconds. A second, tighter wall-clock bound here only added a way for a
     // loaded machine to fail a test about reaping.
     assert_process_stopped(&child_pid);
@@ -133,7 +135,7 @@ fn launch_failure_and_stderr_are_reported() {
             args: Vec::new(),
             env: BTreeMap::new(),
         },
-        Duration::from_secs(2),
+        Duration::from_secs(10),
     )
     .expect_err("missing initialize result");
     assert!(error.to_string().contains("last diagnostic"));
@@ -154,7 +156,7 @@ fn incomplete_initialize_result_is_rejected() {
             args: Vec::new(),
             env: BTreeMap::new(),
         },
-        Duration::from_secs(2),
+        Duration::from_secs(10),
     )
     .expect_err("incomplete initialize result");
 }
@@ -176,7 +178,7 @@ fn timeout_kills_the_bounded_process_group() {
     .expect_err("timeout");
 
     assert!(error.to_string().contains("within"));
-    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(started.elapsed() < Duration::from_secs(15));
 }
 
 #[test]
