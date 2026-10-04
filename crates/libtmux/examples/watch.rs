@@ -83,9 +83,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // teardown below still runs on that path instead of leaking the
     // throwaway server and its socket file.
     let outcome: Result<usize, Box<dyn std::error::Error>> = async {
-        let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await???;
+        let limit = Duration::from_secs(10);
+        let (seen, events) = tokio::time::timeout(limit, watcher).await???;
         println!(
-            "{} events arrived while those commands were being sent, on the same socket",
+            "{} events arrived while those commands were being sent, on the \
+             same socket",
             seen.len()
         );
         drop(commands);
