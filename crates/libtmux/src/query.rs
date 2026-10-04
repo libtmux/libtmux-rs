@@ -227,7 +227,8 @@
 //!
 //! struct Parent;
 //! struct Child;
-//! let relation = __private::many_relation::<Parent, Child>("parent", "children");
+//! let relation =
+//!     __private::many_relation::<Parent, Child>("parent", "children");
 //! let _ = relation.any(|_: &Child| true);
 //! ```
 //!
@@ -261,8 +262,12 @@
 //!             type Fields = ();
 //!             const FILTER_TARGET: &'static str = $target;
 //!             fn filter_fields() {}
-//!             fn __filter_matches(&self, _: &Predicate) -> bool { false }
-//!             fn __filter_validate(_: &Predicate) -> Result<(), FilterExpressionError> {
+//!             fn __filter_matches(&self, _: &Predicate) -> bool {
+//!                 false
+//!             }
+//!             fn __filter_validate(
+//!                 _: &Predicate,
+//!             ) -> Result<(), FilterExpressionError> {
 //!                 Ok(())
 //!             }
 //!         }
@@ -270,7 +275,8 @@
 //! }
 //! filterable!(Child, "child");
 //! filterable!(Other, "other");
-//! let relation = __private::many_relation::<Parent, Child>("parent", "children");
+//! let relation =
+//!     __private::many_relation::<Parent, Child>("parent", "children");
 //! let other = __private::bool_field::<Other>("other", "enabled").eq(true);
 //! let _ = relation.any(other);
 //! ```
@@ -288,8 +294,12 @@
 //!             type Fields = ();
 //!             const FILTER_TARGET: &'static str = $target;
 //!             fn filter_fields() {}
-//!             fn __filter_matches(&self, _: &Predicate) -> bool { false }
-//!             fn __filter_validate(_: &Predicate) -> Result<(), FilterExpressionError> {
+//!             fn __filter_matches(&self, _: &Predicate) -> bool {
+//!                 false
+//!             }
+//!             fn __filter_validate(
+//!                 _: &Predicate,
+//!             ) -> Result<(), FilterExpressionError> {
 //!                 Ok(())
 //!             }
 //!         }
@@ -309,7 +319,8 @@
 //!
 //! struct Parent;
 //! struct Child;
-//! let relation = __private::many_relation::<Parent, Child>("parent", "children");
+//! let relation =
+//!     __private::many_relation::<Parent, Child>("parent", "children");
 //! let child = __private::bool_field::<Child>("child", "enabled").eq(true);
 //! let _ = relation.is(child);
 //! ```
@@ -352,11 +363,15 @@
 //! fn label(kind: FilterExpressionErrorKind) -> &'static str {
 //!     match kind {
 //!         FilterExpressionErrorKind::InvalidRegex => "invalid regex",
-//!         FilterExpressionErrorKind::UnsupportedVersion => "unsupported version",
+//!         FilterExpressionErrorKind::UnsupportedVersion => {
+//!             "unsupported version"
+//!         }
 //!         FilterExpressionErrorKind::InvalidTarget => "invalid target",
 //!         FilterExpressionErrorKind::UnknownField => "unknown field",
 //!         FilterExpressionErrorKind::UnknownOperator => "unknown operator",
-//!         FilterExpressionErrorKind::UnknownQuantifier => "unknown quantifier",
+//!         FilterExpressionErrorKind::UnknownQuantifier => {
+//!             "unknown quantifier"
+//!         }
 //!         FilterExpressionErrorKind::InvalidLiteral => "invalid literal",
 //!         FilterExpressionErrorKind::InvalidStructure => "invalid structure",
 //!     }
@@ -498,7 +513,10 @@ impl std::error::Error for MultipleItemsError {}
 /// use libtmux::query::QueryIteratorExt;
 ///
 /// let values = [1, 2, 3];
-/// assert_eq!(values.iter().exactly_one(), Err(libtmux::query::ExactlyOneError::MultipleItems));
+/// assert_eq!(
+///     values.iter().exactly_one(),
+///     Err(libtmux::query::ExactlyOneError::MultipleItems)
+/// );
 /// ```
 #[allow(clippy::module_name_repetitions)]
 pub trait QueryIteratorExt: Iterator + Sized {
@@ -518,7 +536,8 @@ pub trait QueryIteratorExt: Iterator + Sized {
     /// }
     ///
     /// let values = [1, 2, 3, 4];
-    /// let selected = values.iter().matching(IsEven).copied().collect::<Vec<_>>();
+    /// let selected =
+    ///     values.iter().matching(IsEven).copied().collect::<Vec<_>>();
     /// assert_eq!(selected, [2, 4]);
     /// ```
     fn matching<'a, T: 'a, M: Matcher<T>>(self, matcher: M) -> impl Iterator<Item = &'a T>
@@ -831,26 +850,39 @@ pub trait FilterEnum {
 ///         TaskFields {
 ///             name: __private::text_field(Self::FILTER_TARGET, "name"),
 ///             done: __private::bool_field(Self::FILTER_TARGET, "done"),
-///             priority: __private::integer_field(Self::FILTER_TARGET, "priority"),
-///             retries: __private::integer_field(Self::FILTER_TARGET, "retries"),
+///             priority: __private::integer_field(
+///                 Self::FILTER_TARGET,
+///                 "priority",
+///             ),
+///             retries: __private::integer_field(
+///                 Self::FILTER_TARGET,
+///                 "retries",
+///             ),
 ///             state: __private::enum_field(Self::FILTER_TARGET, "state"),
 ///         }
 ///     }
 ///
 ///     fn __filter_matches(&self, predicate: &Predicate) -> bool {
-///         Self::__filter_validate(predicate)
-///             .expect("typed field expressions must validate before matching");
+///         Self::__filter_validate(predicate).expect(
+///             "typed field expressions must validate before matching",
+///         );
 ///         match predicate.field() {
 ///             "name" => predicate.matches_text(self.name),
 ///             "done" => predicate.matches_bool(self.done),
-///             "priority" => predicate.matches_signed(i128::from(self.priority)),
-///             "retries" => predicate.matches_unsigned(u128::from(self.retries)),
+///             "priority" => {
+///                 predicate.matches_signed(i128::from(self.priority))
+///             }
+///             "retries" => {
+///                 predicate.matches_unsigned(u128::from(self.retries))
+///             }
 ///             "state" => predicate.matches_enum(self.state.filter_name()),
 ///             _ => false,
 ///         }
 ///     }
 ///
-///     fn __filter_validate(predicate: &Predicate) -> Result<(), FilterExpressionError> {
+///     fn __filter_validate(
+///         predicate: &Predicate,
+///     ) -> Result<(), FilterExpressionError> {
 ///         match predicate.field() {
 ///             "name" => predicate.validate_text(),
 ///             "done" => predicate.validate_bool(),
@@ -916,7 +948,9 @@ pub trait FilterEnum {
 ///         }
 ///     }
 ///
-///     fn __filter_validate(predicate: &Predicate) -> Result<(), FilterExpressionError> {
+///     fn __filter_validate(
+///         predicate: &Predicate,
+///     ) -> Result<(), FilterExpressionError> {
 ///         match predicate.field() {
 ///             "done" => predicate.validate_bool(),
 ///             _ => Err(__private::unknown_field_error()),
@@ -940,8 +974,14 @@ pub trait FilterEnum {
 ///
 ///     fn filter_fields() -> Self::Fields {
 ///         ParentFields {
-///             children: __private::many_relation(Self::FILTER_TARGET, "children"),
-///             favorite: __private::one_relation(Self::FILTER_TARGET, "favorite"),
+///             children: __private::many_relation(
+///                 Self::FILTER_TARGET,
+///                 "children",
+///             ),
+///             favorite: __private::one_relation(
+///                 Self::FILTER_TARGET,
+///                 "favorite",
+///             ),
 ///         }
 ///     }
 ///
@@ -954,7 +994,9 @@ pub trait FilterEnum {
 ///         }
 ///     }
 ///
-///     fn __filter_validate(predicate: &Predicate) -> Result<(), FilterExpressionError> {
+///     fn __filter_validate(
+///         predicate: &Predicate,
+///     ) -> Result<(), FilterExpressionError> {
 ///         match predicate.field() {
 ///             "children" => predicate.validate_many::<Child>(),
 ///             "favorite" => predicate.validate_one::<Child>(),
@@ -1216,7 +1258,9 @@ impl<T: Filterable> FilterExpr<T> {
     ///         predicate.matches_bool(self.0)
     ///     }
     ///
-    ///     fn __filter_validate(_: &Predicate) -> Result<(), FilterExpressionError> {
+    ///     fn __filter_validate(
+    ///         _: &Predicate,
+    ///     ) -> Result<(), FilterExpressionError> {
     ///         Ok(())
     ///     }
     /// }
