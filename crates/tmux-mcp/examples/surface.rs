@@ -42,7 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .meta
             .as_ref()
             .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
-            .ok_or_else(|| std::io::Error::other("offered tool has no capability row"))?;
+            .ok_or_else(|| {
+                std::io::Error::other("offered tool has no capability row")
+            })?;
         let answers = tool
             .output_schema
             .as_ref()
@@ -51,7 +53,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 schema
                     .get("properties")
                     .and_then(|fields| fields.as_object())
-                    .map(|fields| fields.keys().cloned().collect::<Vec<_>>().join(", "))
+                    .map(|fields| {
+                        fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                    })
             })
             .unwrap_or_default();
 

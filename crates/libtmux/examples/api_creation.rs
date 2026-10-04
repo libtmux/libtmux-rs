@@ -3,7 +3,9 @@
 use std::error::Error;
 use std::time::Duration;
 
-use libtmux::{NewSessionOptions, NewWindowOptions, Server, SplitDirection, SplitOptions};
+use libtmux::{
+    NewSessionOptions, NewWindowOptions, Server, SplitDirection, SplitOptions,
+};
 
 type ExampleError = Box<dyn Error>;
 
@@ -63,7 +65,9 @@ async fn main() -> Result<(), ExampleError> {
         .config_file("/dev/null")
         .default_timeout(Duration::from_secs(5))
         .build()?;
-    let outcome = tokio::time::timeout(Duration::from_secs(10), demonstrate(&server)).await;
+    let outcome =
+        tokio::time::timeout(Duration::from_secs(10), demonstrate(&server))
+            .await;
 
     // Stop the owned daemon before closing the client executor.
     let killed = server.kill().await;
@@ -83,7 +87,8 @@ async fn main() -> Result<(), ExampleError> {
     }
     if cleanup_failed {
         let retained = directory.keep();
-        failures.push(format!("inspect retained directory {}", retained.display()));
+        failures
+            .push(format!("inspect retained directory {}", retained.display()));
     } else if let Err(error) = directory.close() {
         failures.push(format!("directory cleanup: {error}"));
     }

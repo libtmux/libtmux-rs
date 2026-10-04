@@ -51,7 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let text = result
                 .content
                 .iter()
-                .filter_map(|content| content.as_text().map(|text| text.text.clone()))
+                .filter_map(|content| {
+                    content.as_text().map(|text| text.text.clone())
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
             println!("send_keys refused: {text}");
