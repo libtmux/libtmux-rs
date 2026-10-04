@@ -33,7 +33,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let offered = tools.offered();
     println!(
-        "{} tools for toolsets={requested:?} include={included:?} exclude={excluded:?}\n",
+        "{} tools for toolsets={requested:?} include={included:?} \
+         exclude={excluded:?}\n",
         offered.len()
     );
 
