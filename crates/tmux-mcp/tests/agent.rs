@@ -92,7 +92,7 @@ impl GuardedDispatch {
 
 impl DispatchBarrier {
     async fn wait(&self) {
-        libtmux::test::retry_until(Duration::from_secs(2), async || self.held.exists())
+        libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || self.held.exists())
             .await
             .expect("the selected dispatch reaches its barrier");
     }
@@ -657,7 +657,7 @@ fn assert_active_run(error: &rmcp::model::ErrorData, operation: &str) {
 async fn await_channel(server: &Server, channel: &str) {
     assert_eq!(
         server
-            .wait_for_channel(channel, Duration::from_secs(2))
+            .wait_for_channel(channel, libtmux::test::hang_guard())
             .await
             .expect("channel wait answers"),
         libtmux::ChannelWait::Signalled,
@@ -736,12 +736,12 @@ async fn send_and_wait(
         .expect("fixture shell input is sent");
     assert_eq!(
         server
-            .wait_for_channel(channel, Duration::from_secs(2))
+            .wait_for_channel(channel, libtmux::test::hang_guard())
             .await
             .expect("fixture signal is observed"),
         libtmux::ChannelWait::Signalled
     );
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         pane_handle(server, pane).await.current_command() == Some(&foreground)
     })
     .await
@@ -893,7 +893,7 @@ async fn send_keys_refuses_modal_and_dead_configured_members_before_input() {
         .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
         .await
         .expect("fixture command exits");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         pane_handle(guard.server(), &peer).await.is_dead()
     })
     .await
@@ -1340,7 +1340,7 @@ async fn paste_text_is_target_only_and_guards_before_buffer_creation() {
         .respawn(Some("exit 0"), libtmux::Respawn::Replacing)
         .await
         .expect("fixture command exits");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         pane_handle(guard.server(), &source).await.is_dead()
     })
     .await
@@ -1440,7 +1440,7 @@ async fn paste_text_appends_enter_in_the_same_target_only_buffer() {
     assert_eq!(
         guard
             .server()
-            .wait_for_channel(channel, Duration::from_secs(2))
+            .wait_for_channel(channel, libtmux::test::hang_guard())
             .await
             .expect("pasted command signal is observed"),
         libtmux::ChannelWait::Signalled
@@ -1521,7 +1521,7 @@ async fn send_keys_batch_preflights_each_executed_row() {
             assert_eq!(
                 guard
                     .server()
-                    .wait_for_channel(&channel, Duration::from_secs(2))
+                    .wait_for_channel(&channel, libtmux::test::hang_guard())
                     .await
                     .expect("continued row signals"),
                 libtmux::ChannelWait::Signalled
@@ -1657,7 +1657,7 @@ async fn an_interrupt_ends_a_run_that_outlived_its_deadline() {
                 )
                 .await
                 .expect("fixture pane changes shell");
-            libtmux::test::retry_until(Duration::from_secs(2), async || {
+            libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
                 pane_handle(guard.server(), &pane)
                     .await
                     .current_command()
@@ -1714,7 +1714,7 @@ async fn an_interrupt_ends_a_run_that_outlived_its_deadline() {
             baseline,
             "{shell_name}: the interrupted run never proved its completion"
         );
-        libtmux::test::retry_until(Duration::from_secs(5), async || {
+        libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
             tools
                 .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
                 .await
@@ -1773,7 +1773,7 @@ async fn respawning_releases_a_run_that_ignores_interrupts() {
     )
     .await;
     assert_ne!(respawned.is_error, Some(true), "{respawned:?}");
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         tools
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
@@ -1807,7 +1807,7 @@ async fn real_tmux_compat_a_pane_query_survives_its_server_exiting() {
         .cmd(Command::new("kill-server"))
         .await
         .expect("kill-server runs");
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         guard.server().panes().await.is_err()
     })
     .await
@@ -1915,13 +1915,13 @@ async fn real_tmux_compat_dead_pane_settles_an_interrupted_run() {
         return;
     }
 
-    libtmux::test::retry_until(Duration::from_secs(3), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         pane_handle(guard.server(), &pane).await.is_dead()
     })
     .await
     .expect("the retained pane reports its dead process");
 
-    libtmux::test::retry_until(Duration::from_secs(3), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         tools
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
@@ -1948,7 +1948,7 @@ async fn run_requires_a_known_posix_shell_before_watcher_setup() {
         .respawn(Some("exec cat"), libtmux::Respawn::Replacing)
         .await
         .expect("the pane enters an input-reading non-shell");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         target.refresh().await.is_ok_and(|pane| {
             pane.current_command()
                 .is_some_and(|value| value.as_bytes().ends_with(b"cat"))
@@ -2205,7 +2205,7 @@ async fn uncertain_dispatch_keeps_the_run_reserved_until_proven() {
     assert_active_run(&refusal, "paste after uncertain dispatch");
 
     signal_channel(guard.server(), release).await;
-    libtmux::test::retry_until(Duration::from_secs(3), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         normal
             .paste_text(args(serde_json::json!({"pane": pane, "text": ""})))
             .await
@@ -2621,7 +2621,7 @@ async fn run_framing_preserves_parent_shell_state_and_status() {
         })))
         .await
         .expect("pane launch context is changed");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         pane_screen(&tools, &pane).await.contains("MCP-DRIFT-READY")
     })
     .await
@@ -2731,7 +2731,7 @@ async fn run_frame_preserves_inherited_error_and_debug_traps() {
             )
             .await
             .expect("fixture pane changes shell");
-        libtmux::test::retry_until(Duration::from_secs(2), async || {
+        libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
             pane_handle(guard.server(), &pane)
                 .await
                 .current_command()
@@ -2981,7 +2981,7 @@ async fn list_sessions_excludes_this_processs_own_observation_client() {
         }
     });
 
-    let raw_attached = libtmux::test::retry_until(Duration::from_secs(3), async || {
+    let raw_attached = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         guard
             .server()
             .session(name)
@@ -3025,7 +3025,7 @@ async fn list_sessions_excludes_this_processs_own_observation_client() {
         .spawn()
         .expect("a foreign control client starts");
 
-    let listed_with_foreign = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let listed_with_foreign = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         json(
             tools
                 .list_sessions()
@@ -3066,7 +3066,7 @@ async fn send_then_wait_does_not_match_the_commands_own_echo() {
         .await
         .expect("input is sent");
     let server = guard.server();
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         server
             .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
             .await
@@ -3182,7 +3182,7 @@ async fn a_match_after_the_wait_attaches_is_still_reported() {
         })))
         .await
         .expect("input is sent");
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         guard
             .server()
             .cmd(Command::new("capture-pane").arg("-p").arg("-t").arg(&pane))
@@ -3537,7 +3537,7 @@ async fn selection_paste_and_channel_handlers_change_tmux() {
         })))
         .await
         .expect("text pastes");
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         tools
             .capture_pane(args(serde_json::json!({"pane": first})))
             .await
@@ -3702,7 +3702,7 @@ async fn mcp_flag_shaped_input_operands_stay_literal() {
     assert_eq!(batch["succeeded"], 1, "{batch}");
     assert_eq!(batch["failed"], 0, "{batch}");
 
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         let screen = pane_screen(&tools, &pane).await;
         ["-mcp-text", "-mcp-key", "-mcp-paste", "-mcp-batch"]
             .iter()

@@ -16,6 +16,9 @@ use mcp_swap::source::{Source, SourceOptions, resolve_repo_meta, source_spec};
 use mcp_swap::transaction::{UseRequest, use_clients_with_hook};
 use tempfile::TempDir;
 
+/// What a step that starts a process may take before a test calls it hung.
+const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(20);
+
 struct CliFixture {
     _root: TempDir,
     home: PathBuf,
@@ -557,7 +560,7 @@ fn concurrent_cli_planning_waits_until_backup_and_ledger_are_published() {
     })
     .expect("first transaction");
     let mut second = second.expect("planning boundary reached");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + HANG_GUARD;
     while second
         .0
         .as_mut()

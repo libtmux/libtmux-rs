@@ -1251,7 +1251,7 @@ async fn send_commands(pane: &libtmux::Pane, commands: &[normalize::TypedCommand
 }
 
 async fn wait_for_prompt(pane: &libtmux::Pane, report: &mut Reporter) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + libtmux::test::hang_guard();
     while tokio::time::Instant::now() < deadline {
         match pane.format("#{cursor_x},#{cursor_y}").await {
             Ok(cursor) if cursor.to_string_lossy() != "0,0" => return Ok(()),

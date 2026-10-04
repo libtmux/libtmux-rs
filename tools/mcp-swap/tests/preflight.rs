@@ -17,6 +17,9 @@ use rustix::process::{Pid, test_kill_process};
 use rustix::process::{Signal, kill_process};
 use tempfile::tempdir;
 
+/// What a step that starts a process may take before a test calls it hung.
+const HANG_GUARD: Duration = Duration::from_secs(20);
+
 #[test]
 fn initialize_result_is_accepted_with_the_spec_environment() {
     let root = tempdir().expect("temporary root");
@@ -203,7 +206,7 @@ fn long_lived_oversized_streams_are_refused_and_reaped() {
                 args: Vec::new(),
                 env: BTreeMap::new(),
             },
-            Duration::from_secs(2),
+            HANG_GUARD,
         )
         .expect_err("oversized output");
 
@@ -226,7 +229,8 @@ fn assert_process_stopped(pid_path: &Path) {
     let raw_pid = fs::read_to_string(pid_path).expect("descendant PID");
     let pid = Pid::from_raw(raw_pid.trim().parse().expect("numeric descendant PID"))
         .expect("positive descendant PID");
-    for _ in 0..100 {
+    let deadline = Instant::now() + HANG_GUARD;
+    while Instant::now() < deadline {
         if matches!(test_kill_process(pid), Err(Errno::SRCH)) {
             return;
         }
@@ -260,7 +264,7 @@ fn a_writable_executable_is_waited_for_rather_than_refused() {
         args: Vec::new(),
         env: BTreeMap::new(),
     };
-    preflight(&spec, Duration::from_secs(5)).expect("a briefly busy executable still launches");
+    preflight(&spec, HANG_GUARD).expect("a briefly busy executable still launches");
 
     released.join().expect("release thread");
 }

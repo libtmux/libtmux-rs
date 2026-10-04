@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use libtmux::test::{TestServer, retry_until, scaled};
+use libtmux::test::{TestServer, retry_until};
 use libtmux::{ErrorKind, Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
@@ -366,7 +366,7 @@ async fn flag_shaped_names_layouts_and_keys_stay_literal() {
         .await
         .expect("a flag-shaped line stays literal");
 
-    retry_until(Duration::from_secs(5), async || {
+    retry_until(libtmux::test::HANG_GUARD, async || {
         pane.capture().await.is_ok_and(|lines| {
             let screen = lines
                 .iter()
@@ -689,7 +689,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
     });
     assert_eq!(
         server
-            .wait_for_channel(accepted, scaled(Duration::from_secs(5)))
+            .wait_for_channel(accepted, libtmux::test::hang_guard())
             .await
             .expect("the send can signal"),
         libtmux::ChannelWait::Signalled,
@@ -710,7 +710,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
 
     assert_eq!(
         server
-            .wait_for_channel(ran, scaled(Duration::from_secs(1)))
+            .wait_for_channel(ran, libtmux::test::hang_guard())
             .await
             .expect("the command signal can be read"),
         libtmux::ChannelWait::Signalled,
@@ -740,7 +740,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         .await
         .expect("the reader is started");
     assert_eq!(
-        pane.wait_for_text("reader-ready", Duration::from_secs(5))
+        pane.wait_for_text("reader-ready", libtmux::test::hang_guard())
             .await
             .expect("the reader can be watched"),
         libtmux::PaneWait::Arrived,
@@ -754,7 +754,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         pane.send_line(payload).await.expect("the line is sent");
         let expected = format!("got:<{payload}>");
         assert_eq!(
-            pane.wait_for_text(&expected, Duration::from_secs(5))
+            pane.wait_for_text(&expected, libtmux::test::hang_guard())
                 .await
                 .expect("the reader can be watched"),
             libtmux::PaneWait::Arrived,
@@ -2011,7 +2011,7 @@ async fn a_dead_panes_pid_is_absent_rather_than_a_decode_failure() {
         .await
         .expect("the command runs and exits");
 
-    retry_until(Duration::from_secs(5), async || {
+    retry_until(libtmux::test::HANG_GUARD, async || {
         pane.refreshed()
             .await
             .is_ok_and(|refreshed| refreshed.is_dead())

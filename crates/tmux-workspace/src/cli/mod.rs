@@ -377,7 +377,7 @@ mod tests {
                     .stderr(Stdio::piped())
                     .spawn()
                     .unwrap();
-                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                let deadline = std::time::Instant::now() + libtmux::test::hang_guard();
                 while child.try_wait().unwrap().is_none() && std::time::Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(5));
                 }

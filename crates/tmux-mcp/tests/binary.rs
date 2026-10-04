@@ -183,7 +183,8 @@ fn daemon_is_alive(socket: &Path) -> bool {
 }
 
 fn daemon_stops(socket: &Path) -> bool {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + libtmux::test::hang_guard();
+    while std::time::Instant::now() < deadline {
         if !daemon_is_alive(socket) {
             return true;
         }

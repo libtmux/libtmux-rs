@@ -117,7 +117,7 @@ async fn flag_shaped_buffer_data_and_channels_stay_literal() {
         .expect("a flag-shaped channel signals");
     assert_eq!(
         server
-            .wait_for_channel("-literal-signal", Duration::from_secs(5))
+            .wait_for_channel("-literal-signal", libtmux::test::hang_guard())
             .await
             .expect("a flag-shaped channel waits"),
         ChannelWait::Signalled,
@@ -438,7 +438,7 @@ async fn scoped_operations_clean_up_after_cancellation() {
         }
     });
 
-    tokio::time::timeout(Duration::from_secs(5), ready.wait())
+    tokio::time::timeout(libtmux::test::hang_guard(), ready.wait())
         .await
         .expect("all scoped objects are created");
     session_scope.abort();
@@ -448,7 +448,7 @@ async fn scoped_operations_clean_up_after_cancellation() {
         assert!(scope.await.expect_err("scope is aborted").is_cancelled());
     }
 
-    let cleanup = retry_until(Duration::from_secs(5), async || {
+    let cleanup = retry_until(libtmux::test::HANG_GUARD, async || {
         matches!(server.sessions().await, Ok(objects) if objects.len() == 1)
             && matches!(anchor.windows().await, Ok(objects) if objects.len() == 1)
             && matches!(window.panes().await, Ok(objects) if objects.len() == 1)
@@ -530,7 +530,7 @@ async fn wait_for_channels_lock_and_release() {
         .expect("channel is signalled");
     assert_eq!(
         server
-            .wait_for_channel("gate", Duration::from_secs(5))
+            .wait_for_channel("gate", libtmux::test::hang_guard())
             .await
             .expect("waiting is not an error"),
         ChannelWait::Signalled,
@@ -1751,7 +1751,7 @@ async fn retry_until_waits_for_tmux_rather_than_sleeping() {
         .await
         .expect("pane is created");
 
-    retry_until(Duration::from_secs(5), async || {
+    retry_until(libtmux::test::HANG_GUARD, async || {
         session.panes().await.is_ok_and(|panes| panes.len() == 2)
     })
     .await
@@ -1810,7 +1810,7 @@ async fn a_scoped_raw_command_targets_its_own_object() {
     .await
     .expect("keys are sent");
 
-    let seen = retry_until(Duration::from_secs(5), async || {
+    let seen = retry_until(libtmux::test::HANG_GUARD, async || {
         pane.capture().await.is_ok_and(|lines| {
             lines
                 .iter()

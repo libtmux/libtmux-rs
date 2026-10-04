@@ -580,7 +580,7 @@ async fn operation_reports_keep_typed_values_aligned_across_planners() {
         .expect("the source pane is created");
     let pane = session.panes().await.expect("panes list").remove(0);
     assert_eq!(
-        pane.wait_for_text(marker, Duration::from_secs(5))
+        pane.wait_for_text(marker, libtmux::test::hang_guard())
             .await
             .expect("capture waits"),
         PaneWait::Arrived,
@@ -1086,7 +1086,7 @@ async fn text_that_names_a_key_is_typed_rather_than_pressed() {
         plan.run(server, planner).await.expect("the plan runs");
 
         assert_eq!(
-            pane.wait_for_text("Space", Duration::from_secs(5))
+            pane.wait_for_text("Space", libtmux::test::hang_guard())
                 .await
                 .expect("the capture waits"),
             PaneWait::Arrived,
@@ -1133,7 +1133,7 @@ async fn text_followed_by_enter_runs_the_line() {
 
         assert_eq!(
             server
-                .wait_for_channel(&channel, Duration::from_secs(5))
+                .wait_for_channel(&channel, libtmux::test::hang_guard())
                 .await
                 .expect("the channel wait can be read"),
             ChannelWait::Signalled,

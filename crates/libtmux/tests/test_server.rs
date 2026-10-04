@@ -617,7 +617,7 @@ async fn missing_executable_is_bounded_and_path_free() {
 async fn builder_starts_with_consuming_configuration() {
     let guard = TestServer::builder()
         .tmux_executable(OsStr::new("tmux"))
-        .lifecycle_timeout(Duration::from_secs(5))
+        .lifecycle_timeout(libtmux::test::hang_guard())
         .start()
         .await
         .expect("configured fixture starts");
@@ -674,7 +674,7 @@ async fn readiness_probe_is_no_start_and_uses_the_retained_pid() {
 
     let guard = TestServer::builder()
         .tmux_executable(&executable)
-        .lifecycle_timeout(Duration::from_secs(2))
+        .lifecycle_timeout(libtmux::test::hang_guard())
         .start()
         .await
         .expect("PID-emulating fixture starts");
@@ -797,7 +797,7 @@ async fn construction_failure_after_spawn_reaps_the_child() {
 
     let error = TestServer::builder()
         .tmux_executable(&executable)
-        .lifecycle_timeout(Duration::from_secs(1))
+        .lifecycle_timeout(libtmux::test::hang_guard())
         .start()
         .await
         .expect_err("exited foreground daemon is rejected");
@@ -850,7 +850,7 @@ async fn startup_rollback_reports_descriptor_cleanup_failure() {
 
     let error = TestServer::builder()
         .tmux_executable(&executable)
-        .lifecycle_timeout(Duration::from_secs(1))
+        .lifecycle_timeout(libtmux::test::hang_guard())
         .start()
         .await
         .expect_err("mismatched daemon PID rolls startup back");
@@ -899,7 +899,7 @@ async fn exited_construction_leader_still_cleans_its_same_group_descendant() {
 
     let error = TestServer::builder()
         .tmux_executable(&executable)
-        .lifecycle_timeout(Duration::from_millis(200))
+        .lifecycle_timeout(libtmux::test::hang_guard())
         .start()
         .await
         .expect_err("exited foreground daemon is rejected");
@@ -928,7 +928,7 @@ async fn aborting_startup_reaps_the_owned_process_group() {
     let mut startup = tokio::spawn(
         TestServer::builder()
             .tmux_executable(&executable)
-            .lifecycle_timeout(Duration::from_secs(2))
+            .lifecycle_timeout(libtmux::test::hang_guard())
             .start(),
     );
     let daemon_pid = tokio::select! {
@@ -1100,7 +1100,7 @@ async fn pending_readiness_timeout_reports_an_exited_leader() {
     let mut startup = tokio::spawn(
         TestServer::builder()
             .tmux_executable(&executable)
-            .lifecycle_timeout(Duration::from_secs(2))
+            .lifecycle_timeout(libtmux::test::hang_guard())
             .start(),
     );
     tokio::select! {
@@ -1165,7 +1165,7 @@ async fn externally_reaped_daemon_reports_shutdown_failed_and_retains_root() {
     let startup = tokio::spawn(
         TestServer::builder()
             .tmux_executable(&executable)
-            .lifecycle_timeout(Duration::from_millis(500))
+            .lifecycle_timeout(libtmux::test::hang_guard())
             .start(),
     );
     wait_for_file(&client_ready).await;
@@ -1251,7 +1251,7 @@ async fn aborting_shutdown_leaves_an_unabortable_waiter_owning_cleanup() {
     );
     let guard = TestServer::builder()
         .tmux_executable(&executable)
-        .lifecycle_timeout(Duration::from_secs(2))
+        .lifecycle_timeout(libtmux::test::hang_guard())
         .start()
         .await
         .expect("PID-emulating fixture starts");
@@ -1299,7 +1299,7 @@ fn aborting_shutdown_reaps_active_client_before_runtime_teardown() {
     runtime.block_on(async {
         let guard = TestServer::builder()
             .tmux_executable(&executable)
-            .lifecycle_timeout(Duration::from_secs(1))
+            .lifecycle_timeout(libtmux::test::hang_guard())
             .start()
             .await
             .expect("fake fixture starts");
@@ -1466,7 +1466,7 @@ async fn startup_failure_contains_a_reparented_double_fork_before_root_cleanup()
     let startup = tokio::spawn(
         TestServer::builder()
             .tmux_executable(&executable)
-            .lifecycle_timeout(Duration::from_secs(5))
+            .lifecycle_timeout(libtmux::test::hang_guard())
             .start(),
     );
     let descendant_pid = wait_for_file(&descendant_pid_file)
@@ -1509,7 +1509,7 @@ async fn graceful_shutdown_signals_only_the_retained_pid_before_forced_group_cle
     );
     let guard = TestServer::builder()
         .tmux_executable(&executable)
-        .lifecycle_timeout(Duration::from_millis(500))
+        .lifecycle_timeout(libtmux::test::hang_guard())
         .start()
         .await
         .expect("PID-emulating fixture starts");
@@ -2124,7 +2124,7 @@ async fn a_replacement_daemon_on_the_same_socket_is_a_different_generation() {
             .map(|pane| pane.id().to_string());
 
         server.kill().await?;
-        retry_until(Duration::from_secs(5), async || !server.is_alive().await)
+        retry_until(libtmux::test::HANG_GUARD, async || !server.is_alive().await)
             .await
             .expect("the first daemon goes away");
 

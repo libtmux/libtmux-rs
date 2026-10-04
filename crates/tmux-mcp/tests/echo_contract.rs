@@ -316,7 +316,7 @@ async fn s5_unsubmitted_type_ahead_into_a_cold_shell_is_never_matched() {
     // change before dispatching anything. That refusal is its job, so a
     // refused send is made again; once `cat` runs it echoes the text back,
     // and that echo must be discounted just the same.
-    let queued = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let queued = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         tools
             .send_keys(args(serde_json::json!({
                 "pane": pane,

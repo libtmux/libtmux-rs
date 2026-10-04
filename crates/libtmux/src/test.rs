@@ -1096,7 +1096,7 @@ pub fn unique_name(prefix: &str) -> String {
 ///
 /// Returns [`std::io::ErrorKind::InvalidInput`] for a script without a `#!`
 /// line, [`std::io::ErrorKind::TimedOut`] when it still cannot run after a
-/// [`scaled`] five seconds, and any error writing it or running it.
+/// [`hang_guard`], and any error writing it or running it.
 ///
 /// # Examples
 ///
@@ -1135,7 +1135,7 @@ pub fn install_executable(path: &Path, script: &str) -> std::io::Result<()> {
     drop(file);
     fs::set_permissions(&staged, fs::Permissions::from_mode(0o700))?;
     fs::rename(&staged, path)?;
-    run_until_ready(path, Instant::now() + scaled(Duration::from_secs(5)))
+    run_until_ready(path, Instant::now() + hang_guard())
 }
 
 /// Run `path` with `LIBTMUX_EXECUTABLE_READY` set until it can be executed,

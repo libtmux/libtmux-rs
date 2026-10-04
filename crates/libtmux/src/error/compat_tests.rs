@@ -137,8 +137,6 @@ async fn real_tmux_compat_error_missing_target_wording_is_recognized() {
 #[cfg(feature = "test-support")]
 #[tokio::test]
 async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
-    use std::time::Duration;
-
     use crate::test::{TestServer, retry_until};
     use crate::{Command, ErrorKind, ServerGoneKind};
 
@@ -154,7 +152,7 @@ async fn real_tmux_compat_error_absent_server_wording_is_recognized() {
     // tmux stops answering on the socket before the kernel has a status
     // for the process behind it, so this waits for the daemon rather than
     // for a duration.
-    retry_until(Duration::from_secs(5), async || {
+    retry_until(crate::test::HANG_GUARD, async || {
         !guard.daemon_state().is_running()
     })
     .await

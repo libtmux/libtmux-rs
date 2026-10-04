@@ -729,7 +729,7 @@ impl PromptDriver<'_> {
         pane.send_line(format!("{binary} load -S {socket} {load_args}; echo RC=$?"))
             .await
             .unwrap();
-        pane.wait_for_text(prompt_needle, std::time::Duration::from_secs(5))
+        pane.wait_for_text(prompt_needle, libtmux::test::hang_guard())
             .await
             .unwrap();
         pane.send_line(answer.to_string()).await.unwrap();
@@ -1930,14 +1930,12 @@ async fn imported_workspaces_load_with_ordered_commands_and_relocated_roots() {
         );
         let mut observations = None;
         if loaded.status.success() {
-            for _ in 0..200 {
+            let _ = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
                 let first = std::fs::read_to_string(root.join("order")).unwrap_or_default();
                 let second = std::fs::read_to_string(runtime.join("order")).unwrap_or_default();
-                if first == "firstsecond" && second.ends_with("final") {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
+                first == "firstsecond" && second.ends_with("final")
+            })
+            .await;
             observations = Some(imported_state(&guard, kind).await);
         }
         let before_cleanup = current_pane(&keeper).await;
@@ -2157,12 +2155,9 @@ async fn native_load_freeze_reuse_and_append_preserve_owned_session_state() {
     for pair in events.windows(2) {
         assert!(pair[0]["sequence"].as_u64().unwrap() < pair[1]["sequence"].as_u64().unwrap());
     }
-    for _ in 0..100 {
-        if marker.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || marker.exists())
+        .await
+        .expect("the marker is written");
     assert_eq!(std::fs::read_to_string(marker).unwrap(), "session:window");
     let output = at(
         &["freeze", "-S", socket, "--json", "cli-native"],
@@ -2599,7 +2594,7 @@ async fn file_limited_output(
         .kill_on_drop(true)
         .spawn()
         .unwrap();
-    let exit = tokio::time::timeout(Duration::from_secs(5), child.wait())
+    let exit = tokio::time::timeout(libtmux::test::hang_guard(), child.wait())
         .await
         .unwrap()
         .unwrap();
@@ -2611,7 +2606,7 @@ async fn file_limited_output(
 async fn bounded_cli_output(mut command: Command) -> Output {
     command.stdin(std::process::Stdio::null());
     tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        libtmux::test::hang_guard(),
         tokio::process::Command::from(command)
             .kill_on_drop(true)
             .output(),
@@ -2875,7 +2870,7 @@ async fn closed_workspace_completed_event_retains_the_completed_input() {
     .unwrap();
     let mut stdout = child.stdout.take().unwrap();
     let marker = b"\"event\":\"workspace-completed\"";
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(libtmux::test::hang_guard(), async {
         let mut received = Vec::new();
         let mut buffer = [0; 1024];
         loop {
@@ -2893,7 +2888,7 @@ async fn closed_workspace_completed_event_retains_the_completed_input() {
     .await
     .unwrap();
     drop(stdout);
-    let output = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait_with_output())
+    let output = tokio::time::timeout(libtmux::test::hang_guard(), child.wait_with_output())
         .await
         .unwrap()
         .unwrap();
@@ -3426,7 +3421,7 @@ async fn bootstrap_output_streams_escaped_records_before_the_child_finishes() {
         .spawn()
         .unwrap();
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-    let saw_script = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let saw_script = tokio::time::timeout(libtmux::test::hang_guard(), async {
         while let Some(line) = lines.next_line().await.unwrap() {
             assert!(!line.contains('\x1b'));
             let event: serde_json::Value = serde_json::from_str(&line).unwrap();

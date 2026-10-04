@@ -1029,7 +1029,7 @@ async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() 
         output,
         &patterns,
         &stops,
-        Duration::from_secs(5),
+        libtmux::test::hang_guard(),
         &cancelled,
         EchoContext {
             echoes: &echoes,
@@ -1080,7 +1080,7 @@ async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo()
         .expect("session starts");
     let pane = session.panes().await.expect("panes list").remove(0);
 
-    libtmux::test::retry_until(Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         server
             .cmd(
                 libtmux::Command::new("display-message")
@@ -1130,7 +1130,7 @@ async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo()
         output,
         &patterns,
         &stops,
-        Duration::from_secs(5),
+        libtmux::test::hang_guard(),
         &cancelled,
         EchoContext {
             echoes: &tools.echoes,
