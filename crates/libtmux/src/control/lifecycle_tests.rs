@@ -244,7 +244,7 @@ async fn attach_uses_the_cores_captured_launch_context() {
         fixture.path(),
         executable.into_os_string(),
         OsString::from("/captured/path"),
-        Duration::from_secs(1),
+        TEST_TIMEOUT,
         Some(PathBuf::from("config;")),
         Some(256),
     );
@@ -510,7 +510,7 @@ async fn the_earliest_committed_deadline_ends_the_connection() {
         fixture.path(),
         &process_script(&parent, &descendant, &prefix),
     );
-    let server = basic_server(fixture.path(), executable, Duration::from_secs(2));
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (later, events) = attach(&server)
         .await
         .expect("control mode attaches")
@@ -634,7 +634,7 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
     .await
     .expect("the fake client opens the response block");
 
-    tokio::time::timeout(Duration::from_secs(2), events.shutdown())
+    tokio::time::timeout(TEST_TIMEOUT, events.shutdown())
         .await
         .expect("watcher shutdown interrupts the read")
         .expect("explicit shutdown is clean");
@@ -723,7 +723,7 @@ async fn terminal_notifications_drain_after_exit_and_eof() {
                 EVENT_QUEUE + 1,
             ),
         );
-        let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+        let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
         let (commands, mut events) = attach(&server)
             .await
             .expect("control mode attaches")
@@ -779,7 +779,7 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
             EVENT_QUEUE + 1,
         ),
     );
-    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (commands, mut events) = attach(&server)
         .await
         .expect("control mode attaches")
@@ -841,7 +841,7 @@ async fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
             EVENT_QUEUE + 1,
         ),
     );
-    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
@@ -893,7 +893,7 @@ async fn pane_snapshot_separates_output_at_the_capture_block() {
             opening_success(),
         ),
     );
-    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     let (commands, events) = attach(&server)
         .await
         .expect("control mode attaches")
@@ -920,7 +920,7 @@ async fn pane_snapshot_separates_output_at_the_capture_block() {
 async fn an_error_opening_block_is_not_ready() {
     let fixture = directory();
     let executable = write_script(fixture.path(), "printf '%%begin 0 1 0\\n%%error 0 1 0\\n'");
-    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
 
     let error = attach(&server)
         .await
@@ -969,7 +969,7 @@ async fn server_shutdown_owns_active_control_clients() {
     .await
     .expect("the request becomes active before shutdown");
 
-    tokio::time::timeout(Duration::from_secs(2), server.shutdown())
+    tokio::time::timeout(TEST_TIMEOUT, server.shutdown())
         .await
         .expect("server shutdown waits for control cleanup")
         .expect("server shuts down");
@@ -992,7 +992,7 @@ async fn server_shutdown_owns_active_control_clients() {
 async fn attach_after_server_shutdown_is_rejected() {
     let fixture = directory();
     let executable = write_script(fixture.path(), opening_success());
-    let server = basic_server(fixture.path(), executable, Duration::from_secs(1));
+    let server = basic_server(fixture.path(), executable, TEST_TIMEOUT);
     server
         .capabilities()
         .await
@@ -1073,7 +1073,7 @@ async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
         .await
         .expect("producer starts");
     assert!(produced.success(), "producer is accepted: {produced:?}");
-    tokio::time::timeout(Duration::from_secs(1), sender.commands.closed())
+    tokio::time::timeout(TEST_TIMEOUT, sender.commands.closed())
         .await
         .expect("oversized output closes admission");
     let send_error = sender

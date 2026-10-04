@@ -378,7 +378,7 @@ async fn deadline_kills_awaits_and_unregisters_the_child() {
     // write. At 100ms that happened on CI, where re-executing this binary
     // takes longer than it does here. The length is not what is under
     // test; that the deadline kills, awaits, and unregisters is.
-    let executor = executor("block", Duration::from_secs(2));
+    let executor = executor("block", Duration::from_secs(10));
     let dispatch =
         tokio::spawn(executor.execute(request(4, [pid_path.as_os_str().to_os_string()])));
     let child_pid = read_pids(&pid_path, 1).await[0];
@@ -573,7 +573,7 @@ async fn exited_leader_anchors_group_while_descendant_holds_pipes() {
     let pid_path = directory.path().join("exited-leader.pid");
     // Same race as `deadline_kills_awaits_and_unregisters_the_child`, and
     // worse: two PIDs have to be published before the deadline expires.
-    let executor = executor("descendant-parent-exits", Duration::from_secs(2));
+    let executor = executor("descendant-parent-exits", Duration::from_secs(10));
     let dispatch =
         tokio::spawn(executor.execute(request(25, [pid_path.as_os_str().to_os_string()])));
     let pids = read_pids(&pid_path, 2).await;
