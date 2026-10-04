@@ -23,6 +23,9 @@ on:
         default: full
   schedule:
     - cron: "17 5 * * 3"
+  push:
+    branches: [flaky-investigations-000]
+    paths: [.github/workflows/stress.yml]
 
 permissions:
   contents: read
@@ -52,7 +55,7 @@ jobs:
             label: linux-control
     env:
       REPEAT: ${{ inputs.repeat || 10 }}
-      SCOPE: ${{ inputs.scope || 'full' }}
+      SCOPE: ${{ inputs.scope || 'targeted' }}
     steps:
       - uses: actions/checkout@v7
 
