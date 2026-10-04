@@ -42,7 +42,8 @@ const fn pane_mode_is_active(count: u32) -> bool {
 /// # runtime.block_on(async {
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 /// let pane = window.active_pane().await?.expect("a window has a pane");
 ///
 /// pane.send_line("echo hello").await?;
@@ -108,7 +109,8 @@ impl Pane {
     /// let expected = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
-    /// let found = Pane::from_env_value(server, Some(expected.id().as_ref())).await?;
+    /// let found =
+    ///     Pane::from_env_value(server, Some(expected.id().as_ref())).await?;
     ///
     /// assert_eq!(found.expect("the pane exists").id(), expected.id());
     /// # guard.shutdown().await?;
@@ -267,7 +269,8 @@ impl Pane {
     ///
     /// // Splitting below leaves the original touching the top and not the
     /// // bottom, and the new one the other way round.
-    /// let lower = window.split(SplitOptions::new(SplitDirection::Below)).await?;
+    /// let lower =
+    ///     window.split(SplitOptions::new(SplitDirection::Below)).await?;
     /// let upper = window
     ///     .panes()
     ///     .await?
@@ -540,7 +543,10 @@ impl Pane {
     ///
     /// let session = server.new_session("resized-pane").await?;
     /// let pane = session.panes().await?.remove(0);
-    /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
+    /// pane.split(
+    ///     SplitOptions::new(SplitDirection::Below).command("sleep 300"),
+    /// )
+    /// .await?;
     ///
     /// let mut pane = pane.refreshed().await?;
     /// let before = pane.height();
@@ -596,7 +602,10 @@ impl Pane {
     ///
     /// let session = server.new_session("zoomed").await?;
     /// let pane = session.panes().await?.remove(0);
-    /// pane.split(SplitOptions::new(SplitDirection::Below).command("sleep 300")).await?;
+    /// pane.split(
+    ///     SplitOptions::new(SplitDirection::Below).command("sleep 300"),
+    /// )
+    /// .await?;
     ///
     /// let mut pane = pane.refreshed().await?;
     /// pane.toggle_zoom().await?;
@@ -788,7 +797,11 @@ impl Pane {
     /// let pane = window.active_pane().await?.expect("a pane");
     ///
     /// let result = pane
-    ///     .cmd(libtmux::Command::new("display-message").arg("-p").arg("#{pane_id}"))
+    ///     .cmd(
+    ///         libtmux::Command::new("display-message")
+    ///             .arg("-p")
+    ///             .arg("#{pane_id}"),
+    ///     )
     ///     .await?;
     /// assert_eq!(result.stdout_lossy().trim(), pane.id().to_string());
     ///
@@ -1291,12 +1304,18 @@ impl Pane {
     ///
     /// pane.copy_mode().await?;
     /// pane.refresh().await?;
-    /// assert_eq!(pane.get(fields.scroll_position), Availability::Available(0));
+    /// assert_eq!(
+    ///     pane.get(fields.scroll_position),
+    ///     Availability::Available(0)
+    /// );
     /// assert_eq!(
     ///     pane.get(fields.pane_mode),
     ///     Availability::Available(&TmuxText::from("copy-mode")),
     /// );
-    /// assert_eq!(pane.get(fields.pane_id), Availability::Available(pane.id()));
+    /// assert_eq!(
+    ///     pane.get(fields.pane_id),
+    ///     Availability::Available(pane.id())
+    /// );
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1418,7 +1437,8 @@ pub enum PaneWait {
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("capture").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 /// let pane = window.active_pane().await?.expect("a window has a pane");
 ///
 /// // The constructors name the two questions people actually ask, rather
@@ -1672,9 +1692,17 @@ enum CaptureBound {
 /// let session = server.new_session("marked").await?;
 /// let pane = session.panes().await?.remove(0);
 ///
-/// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
-///     let lines: Vec<CapturedLine> = pane.capture_lines(CaptureOptions::visible()).await?;
-///     assert!(lines.iter().all(|line| !line.starts_output || !line.starts_prompt));
+/// if server
+///     .capabilities()
+///     .await?
+///     .tmux_version()
+///     .has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS)
+/// {
+///     let lines: Vec<CapturedLine> =
+///         pane.capture_lines(CaptureOptions::visible()).await?;
+///     assert!(
+///         lines.iter().all(|line| !line.starts_output || !line.starts_prompt)
+///     );
 /// }
 ///
 /// guard.shutdown().await?;
