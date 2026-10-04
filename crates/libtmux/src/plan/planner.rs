@@ -153,7 +153,10 @@ impl Planner {
     ///
     /// assert_eq!(Planner::Folding.steps(&plan).len(), 1);
     /// let after_first = BTreeSet::from([0]);
-    /// assert_eq!(Planner::Folding.steps_bounded(&plan, &after_first).len(), 2);
+    /// assert_eq!(
+    ///     Planner::Folding.steps_bounded(&plan, &after_first).len(),
+    ///     2
+    /// );
     /// # Ok::<(), libtmux::IdParseError>(())
     /// ```
     #[must_use]
