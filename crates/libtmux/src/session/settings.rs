@@ -261,10 +261,15 @@ impl Session {
     /// entries.insert(3, TmuxText::from(b"display-message fourth".to_vec()));
     ///
     /// session
-    ///     .set_hooks("alert-bell", &IndexedHooks::from(entries), ReplaceMode::Replace)
+    ///     .set_hooks(
+    ///         "alert-bell",
+    ///         &IndexedHooks::from(entries),
+    ///         ReplaceMode::Replace,
+    ///     )
     ///     .await?;
     ///
-    /// let written = session.hook("alert-bell").await?.expect("the hook is set");
+    /// let written =
+    ///     session.hook("alert-bell").await?.expect("the hook is set");
     /// assert_eq!(written.len(), 2);
     /// assert!(written.get(1).is_none(), "the gap is kept");
     ///
