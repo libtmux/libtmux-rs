@@ -744,7 +744,9 @@ impl TestServer {
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let client = guard.server().clone();
     /// guard.shutdown().await?;
-    /// assert!(client.cmd(libtmux::Command::new("list-sessions")).await.is_err());
+    /// assert!(
+    ///     client.cmd(libtmux::Command::new("list-sessions")).await.is_err()
+    /// );
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// # })
     /// # }
@@ -1192,7 +1194,8 @@ fn run_until_ready(path: &Path, deadline: Instant) -> std::io::Result<()> {
 /// use std::time::Duration;
 ///
 /// // Nothing this old is in use, so nothing a running test owns is at risk.
-/// let reaped = libtmux::test::reap_abandoned_servers(Duration::from_secs(3600))?;
+/// let reaped =
+///     libtmux::test::reap_abandoned_servers(Duration::from_secs(3600))?;
 /// println!("reaped {} abandoned fixtures", reaped.len());
 /// # Ok(())
 /// # }
