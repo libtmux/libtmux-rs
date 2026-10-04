@@ -1010,7 +1010,12 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
         .split(SplitOptions::new(SplitDirection::Below).command("seq 1 20000"))
         .await
         .expect("pane is created");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The flood is over when the pane running it has exited.
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
+        window.panes().await.is_ok_and(|panes| panes.len() == 1)
+    })
+    .await
+    .expect("the flooding pane exits");
 
     // `events` is held and never polled, which is what a caller awaiting a
     // reply does for as long as the await lasts.

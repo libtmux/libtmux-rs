@@ -555,15 +555,21 @@ async fn client_count(server: &Server) -> usize {
 }
 
 async fn clients_settle(server: &Server, wanted: usize) -> usize {
-    let mut seen = client_count(server).await;
-    for _ in 0..200 {
-        if seen == wanted {
-            return seen;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        seen = client_count(server).await;
-    }
-    seen
+    let _ = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
+        client_count(server).await == wanted
+    })
+    .await;
+    client_count(server).await
+}
+
+/// Wait until a control client beyond `baseline` is attached, which is how a
+/// spawned `wait_for_text` shows it is watching the pane.
+async fn wait_attached(server: &Server, baseline: usize) {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
+        client_count(server).await > baseline
+    })
+    .await
+    .expect("the wait attaches a control client");
 }
 
 async fn run_view(tools: &TmuxTools, pane: &str, command: &str) -> Value {
@@ -2892,6 +2898,7 @@ async fn wait_and_cursor_tools_observe_live_output() {
             .expect("tail opens"),
     );
     let cursor = opened["cursor"].as_str().expect("cursor").to_owned();
+    let baseline = client_count(guard.server()).await;
     let waiting = tokio::spawn({
         let tools = tools.clone();
         let pane = pane.clone();
@@ -2909,7 +2916,7 @@ async fn wait_and_cursor_tools_observe_live_output() {
                 .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_attached(guard.server(), baseline).await;
     tools
         .send_keys(args(serde_json::json!({
             "pane": pane,
@@ -2922,21 +2929,19 @@ async fn wait_and_cursor_tools_observe_live_output() {
     let waited = json(waiting.await.expect("wait joins").expect("wait answers"));
     assert_eq!(waited["outcome"], "matched");
     let mut since = Value::Null;
-    for _ in 0..40 {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         since = json(
             tools
                 .capture_since(args(serde_json::json!({"pane": pane, "cursor": cursor})))
                 .await
                 .expect("tail reads"),
         );
-        if since["text"]
+        since["text"]
             .as_str()
             .is_some_and(|text| text.contains("live-marker"))
-        {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    })
+    .await
+    .expect("the tail reads the marker");
     assert!(since["text"].as_str().unwrap().contains("live-marker"));
 
     guard.shutdown().await.expect("tmux fixture shuts down");
@@ -3187,6 +3192,7 @@ async fn a_match_after_the_wait_attaches_is_still_reported() {
     .await
     .expect("the shell echoes the typed line");
 
+    let baseline = client_count(guard.server()).await;
     let waiting = tokio::spawn({
         let tools = tools.clone();
         let pane = pane.clone();
@@ -3204,7 +3210,7 @@ async fn a_match_after_the_wait_attaches_is_still_reported() {
                 .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_attached(guard.server(), baseline).await;
 
     tools
         .send_keys(args(serde_json::json!({"pane": pane, "enter": true})))
@@ -3239,6 +3245,7 @@ async fn a_match_after_the_wait_attaches_is_still_reported() {
 async fn typing_a_marker_without_submitting_while_a_wait_is_open_is_not_matched() {
     let (guard, tools, pane) = typing_fixture("type-while-waiting").await;
 
+    let baseline = client_count(guard.server()).await;
     let waiting = tokio::spawn({
         let tools = tools.clone();
         let pane = pane.clone();
@@ -3259,7 +3266,7 @@ async fn typing_a_marker_without_submitting_while_a_wait_is_open_is_not_matched(
     // The wait must be attached before the marker is typed: the point is a
     // pattern arriving as fresh stream output, not one already on the
     // screen `read_present_at_entry` reads before this task even starts.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_attached(guard.server(), baseline).await;
     tools
         .send_keys(args(serde_json::json!({
             "pane": pane,
@@ -3565,7 +3572,6 @@ async fn selection_paste_and_channel_handlers_change_tmux() {
                 .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
     tools
         .signal_channel(args(serde_json::json!({"channel": "retained-channel"})))
         .await
