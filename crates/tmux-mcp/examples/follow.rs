@@ -24,10 +24,12 @@ fn args<T: serde::de::DeserializeOwned>(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
+    let toolsets = Some("inspect,manage,execute");
+    let selection = Selection::parse(toolsets, None, None)?;
     let tools = TmuxTools::builder(guard.server().clone())
         // Not the caller's own tmux: this example has none to protect.
         .caller(None)
-        .selection(Selection::parse(Some("inspect,manage,execute"), None, None)?)
+        .selection(selection)
         .build();
 
     tools
@@ -45,14 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "enter": true
         }))?)
         .await?;
+    let wait = json!({"pane": pane, "patterns": ["line-200"], "seconds": 10});
     tools
-        .wait_for_text(
-            args(
-                json!({"pane": pane, "patterns": ["line-200"], "seconds": 10}),
-            )?,
-            CancellationToken::new(),
-            Reporter::none(),
-        )
+        .wait_for_text(args(wait)?, CancellationToken::new(), Reporter::none())
         .await?;
 
     // The next call, with that cursor, returns everything written since.
