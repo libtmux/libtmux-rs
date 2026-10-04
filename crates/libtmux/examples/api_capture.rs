@@ -8,12 +8,9 @@ use libtmux::{NewSessionOptions, PaneWait, Server};
 type ExampleError = Box<dyn Error>;
 
 async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
-    let session = server
-        .new_session(
-            NewSessionOptions::new("capture")
-                .command("env ENV=/dev/null PS1='api-ready> ' sh"),
-        )
-        .await?;
+    let shell = "env ENV=/dev/null PS1='api-ready> ' sh";
+    let options = NewSessionOptions::new("capture").command(shell);
+    let session = server.new_session(options).await?;
     let panes = session.panes().await?;
     let pane = panes.first().ok_or("session has no pane")?;
     if pane
@@ -27,9 +24,9 @@ async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
         .await?;
     loop {
         let lines = pane.capture().await?;
-        if lines.iter().any(|line| line.as_bytes() == b"first line")
-            && lines.iter().any(|line| line.as_bytes() == b"second line")
-        {
+        let has =
+            |text: &[u8]| lines.iter().any(|line| line.as_bytes() == text);
+        if has(b"first line") && has(b"second line") {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -54,9 +51,8 @@ async fn main() -> Result<(), ExampleError> {
         .config_file("/dev/null")
         .default_timeout(Duration::from_secs(5))
         .build()?;
-    let outcome =
-        tokio::time::timeout(Duration::from_secs(10), demonstrate(&server))
-            .await;
+    let limit = Duration::from_secs(10);
+    let outcome = tokio::time::timeout(limit, demonstrate(&server)).await;
 
     // Stop the owned daemon before closing the client executor.
     let killed = server.kill().await;
@@ -76,8 +72,8 @@ async fn main() -> Result<(), ExampleError> {
     }
     if cleanup_failed {
         let retained = directory.keep();
-        failures
-            .push(format!("inspect retained directory {}", retained.display()));
+        let path = retained.display();
+        failures.push(format!("inspect retained directory {path}"));
     } else if let Err(error) = directory.close() {
         failures.push(format!("directory cleanup: {error}"));
     }
