@@ -26,7 +26,11 @@ enum SuffixKind {
 /// // tmux's two suffix shapes order differently: a patch letter comes *after*
 /// // the plain release, and a release candidate comes before it.
 /// let plain = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
-/// let patched = ReleaseVersion::new(3, 5, ReleaseSuffix::patch('a').expect("a patch letter"));
+/// let patched = ReleaseVersion::new(
+///     3,
+///     5,
+///     ReleaseSuffix::patch('a').expect("a patch letter"),
+/// );
 /// let candidate = ReleaseVersion::new(
 ///     3,
 ///     5,
@@ -63,7 +67,8 @@ impl ReleaseSuffix {
     /// ```
     /// use libtmux::ReleaseSuffix;
     ///
-    /// let suffix = ReleaseSuffix::release_candidate(2).expect("two is nonzero");
+    /// let suffix =
+    ///     ReleaseSuffix::release_candidate(2).expect("two is nonzero");
     /// assert_eq!(suffix.release_candidate_number(), Some(2));
     /// assert_eq!(ReleaseSuffix::release_candidate(0), None);
     /// ```
@@ -108,7 +113,10 @@ impl ReleaseSuffix {
     /// use libtmux::ReleaseSuffix;
     ///
     /// assert_eq!(ReleaseSuffix::FINAL.patch_letter(), None);
-    /// assert_eq!(ReleaseSuffix::patch('a').and_then(|value| value.patch_letter()), Some('a'));
+    /// assert_eq!(
+    ///     ReleaseSuffix::patch('a').and_then(|value| value.patch_letter()),
+    ///     Some('a')
+    /// );
     /// ```
     #[must_use]
     pub fn patch_letter(self) -> Option<char> {
@@ -127,7 +135,10 @@ impl ReleaseSuffix {
     /// ```
     /// use libtmux::ReleaseSuffix;
     ///
-    /// assert_eq!(ReleaseSuffix::RELEASE_CANDIDATE.release_candidate_number(), Some(1));
+    /// assert_eq!(
+    ///     ReleaseSuffix::RELEASE_CANDIDATE.release_candidate_number(),
+    ///     Some(1)
+    /// );
     /// assert_eq!(ReleaseSuffix::FINAL.release_candidate_number(), None);
     /// ```
     #[must_use]
@@ -205,7 +216,11 @@ impl fmt::Display for ReleaseSuffix {
 ///
 /// // tmux numbers a patch with a letter, so `3.5a` is later than `3.5`.
 /// let plain = ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL);
-/// let patched = ReleaseVersion::new(3, 5, ReleaseSuffix::patch('a').expect("a patch letter"));
+/// let patched = ReleaseVersion::new(
+///     3,
+///     5,
+///     ReleaseSuffix::patch('a').expect("a patch letter"),
+/// );
 /// assert!(patched > plain);
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -272,7 +287,8 @@ impl ReleaseVersion {
     /// ```
     /// use libtmux::{ReleaseSuffix, ReleaseVersion};
     ///
-    /// let release = ReleaseVersion::new(3, 7, ReleaseSuffix::RELEASE_CANDIDATE);
+    /// let release =
+    ///     ReleaseVersion::new(3, 7, ReleaseSuffix::RELEASE_CANDIDATE);
     /// assert_eq!(release.suffix(), ReleaseSuffix::RELEASE_CANDIDATE);
     /// ```
     #[must_use]
@@ -456,7 +472,8 @@ impl TmuxVersion {
     /// use libtmux::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
     ///
     /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
-    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    /// let capture_line_flags =
+    ///     ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
     ///
     /// // `next-3.9`'s tree already has 3.7's behavior, but this clamps every
     /// // development identifier to the crate's floor, so it says no anyway.
@@ -509,7 +526,8 @@ impl TmuxVersion {
     /// use libtmux::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
     ///
     /// let next = TmuxVersion::parse_output(b"tmux next-3.9\n")?;
-    /// let capture_line_flags = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+    /// let capture_line_flags =
+    ///     ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
     ///
     /// // `next-3.9` already contains 3.7's behavior, so this reports it --
     /// // unlike `meets`, which clamps every development identifier to the
