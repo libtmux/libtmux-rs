@@ -38,7 +38,8 @@ mod settings;
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 /// let lower = window.split(SplitDirection::Below).await?;
 ///
 /// // Focus follows the layout, and tmux wraps at the edge rather than
@@ -99,7 +100,8 @@ impl PaneDirection {
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 ///
 /// // Splitting is detached by default, so focus stays where it was.
 /// window.split(SplitDirection::Below).await?;
@@ -149,7 +151,8 @@ impl Window {
     /// let pane = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
-    /// let found = Window::from_env_value(server, Some(pane.id().as_ref())).await?;
+    /// let found =
+    ///     Window::from_env_value(server, Some(pane.id().as_ref())).await?;
     ///
     /// assert_eq!(found.expect("the window exists").id(), pane.window_id());
     /// # guard.shutdown().await?;
@@ -647,13 +650,16 @@ impl Window {
     /// let mut window = session.active_window().await?.expect("a window");
     /// window.split(SplitOptions::new(SplitDirection::Below)).await?;
     ///
-    /// let before: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// let before: Vec<_> =
+    ///     window.panes().await?.iter().map(|p| p.id().clone()).collect();
     /// window.rotate(Rotation::Up).await?;
-    /// let after: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// let after: Vec<_> =
+    ///     window.panes().await?.iter().map(|p| p.id().clone()).collect();
     ///
     /// assert_ne!(before, after, "the panes moved");
     /// window.rotate(Rotation::Down).await?;
-    /// let back: Vec<_> = window.panes().await?.iter().map(|p| p.id().clone()).collect();
+    /// let back: Vec<_> =
+    ///     window.panes().await?.iter().map(|p| p.id().clone()).collect();
     /// assert_eq!(before, back, "and the other way undoes it");
     ///
     /// guard.shutdown().await?;
@@ -747,7 +753,11 @@ impl Window {
     /// let window = session.active_window().await?.expect("a window");
     ///
     /// let result = window
-    ///     .cmd(libtmux::Command::new("display-message").arg("-p").arg("#{window_id}"))
+    ///     .cmd(
+    ///         libtmux::Command::new("display-message")
+    ///             .arg("-p")
+    ///             .arg("#{window_id}"),
+    ///     )
     ///     .await?;
     /// assert_eq!(result.stdout_lossy().trim(), window.id().to_string());
     ///
@@ -1172,7 +1182,8 @@ impl Window {
     ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let session = guard.server().new_session("read").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let window =
+    ///     session.active_window().await?.expect("a session has a window");
     /// let fields = Window::filter_fields();
     ///
     /// // The layout as shown, which only differs from the layout while zoomed.
@@ -1180,7 +1191,10 @@ impl Window {
     ///     window.get(fields.window_visible_layout),
     ///     Availability::Available(window.layout()),
     /// );
-    /// assert_eq!(window.get(fields.window_id), Availability::Available(window.id()));
+    /// assert_eq!(
+    ///     window.get(fields.window_id),
+    ///     Availability::Available(window.id())
+    /// );
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1249,10 +1263,12 @@ impl FilterSchema for Window {
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 /// window.split(SplitDirection::Below).await?;
 ///
-/// // Rotating moves panes between positions; it does not create or destroy any.
+/// // Rotating moves panes between positions; it does not create or destroy
+/// // any.
 /// let before = window.panes().await?.len();
 /// window.rotate(Rotation::Down).await?;
 /// assert_eq!(window.panes().await?.len(), before);
@@ -1594,7 +1610,8 @@ impl SavedLayout {
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 ///
 /// // The direction names where the *new* pane lands, not which edge moves.
 /// window.split(SplitDirection::Right).await?;
@@ -1730,16 +1747,21 @@ impl JoinOptions {
 /// # runtime.block_on(async {
 /// use libtmux::{PaneSize, SplitDirection, SplitOptions};
 ///
-/// // A size renders as tmux's own `-l` argument, cells bare and shares suffixed.
+/// // A size renders as tmux's own `-l` argument, cells bare and shares
+/// // suffixed.
 /// assert_eq!(PaneSize::Cells(20).to_string(), "20");
 /// assert_eq!(PaneSize::Percent(25).to_string(), "25%");
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 ///
 /// let pane = window
-///     .split(SplitOptions::new(SplitDirection::Below).size(PaneSize::Percent(25)))
+///     .split(
+///         SplitOptions::new(SplitDirection::Below)
+///             .size(PaneSize::Percent(25)),
+///     )
 ///     .await?;
 /// assert!(pane.height() > 0);
 ///
@@ -1778,7 +1800,8 @@ impl fmt::Display for PaneSize {
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("work").await?;
-/// let mut window = session.active_window().await?.expect("a session has a window");
+/// let mut window =
+///     session.active_window().await?.expect("a session has a window");
 ///
 /// // The direction names the edge that moves, so `Down` makes a window taller
 /// // rather than shorter.
@@ -1831,15 +1854,17 @@ impl ResizeDirection {
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
 /// let session = guard.server().new_session("split").await?;
-/// let window = session.active_window().await?.expect("a session has a window");
+/// let window =
+///     session.active_window().await?.expect("a session has a window");
 ///
 /// // Splitting leaves focus where it was unless asked otherwise, so a caller
 /// // that wants the new pane selected says so.
-/// let pane = window
-///     .split(SplitOptions::new(SplitDirection::Right).select())
-///     .await?;
-/// assert_eq!(window.active_pane().await?.map(|active| active.id().to_string()),
-///            Some(pane.id().to_string()));
+/// let pane =
+///     window.split(SplitOptions::new(SplitDirection::Right).select()).await?;
+/// assert_eq!(
+///     window.active_pane().await?.map(|active| active.id().to_string()),
+///     Some(pane.id().to_string())
+/// );
 ///
 /// guard.shutdown().await?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())

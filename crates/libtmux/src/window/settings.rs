@@ -245,7 +245,11 @@ impl Window {
     /// entries.insert(3, TmuxText::from(b"display-message fourth".to_vec()));
     ///
     /// window
-    ///     .set_hooks("pane-died", &IndexedHooks::from(entries), ReplaceMode::Replace)
+    ///     .set_hooks(
+    ///         "pane-died",
+    ///         &IndexedHooks::from(entries),
+    ///         ReplaceMode::Replace,
+    ///     )
     ///     .await?;
     ///
     /// let written = window.hook("pane-died").await?.expect("the hook is set");
