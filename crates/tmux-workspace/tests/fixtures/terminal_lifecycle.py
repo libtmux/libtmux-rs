@@ -16,6 +16,11 @@ import termios
 import time
 
 
+# Written to the terminal once the child has exited, behind everything the
+# child wrote there, so reading up to it reads all of the child's output.
+OUTPUT_END = b"\x1e<supervisor-output-end>\x1e"
+
+
 def terminal_session():
     os.setsid()
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
@@ -42,6 +47,7 @@ def run_supervisor(argv):
         if child.poll() is None:
             child.kill()
         status = child.wait(timeout=2)
+        os.write(1, OUTPUT_END)
         result = {
             "status": status,
             "foreground": os.tcgetpgrp(0),
@@ -256,6 +262,17 @@ def case(binary, tmux, action, append, tostop, socket_name, fixture_root):
                 report = json.loads((directory / "supervisor.json").read_text())
                 break
         assert report is not None, {"directory": str(directory), "terminal": terminal_text.decode(errors="replace")}
+        output_deadline = time.monotonic() + 5
+        while OUTPUT_END not in terminal_text and time.monotonic() < output_deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                try:
+                    terminal_text.extend(os.read(master, 65536))
+                except OSError as error:
+                    if error.errno != errno.EIO:
+                        raise
+                    break
+        assert OUTPUT_END in terminal_text, terminal_text.decode(errors="replace")
+        terminal_text = terminal_text.replace(OUTPUT_END, b"")
         exited = wait_for_exit([fd for _, fd in pidfds], 5)
         after = {pid: process_state(pid) for pid in pids}
         observed_keeper = native("list-panes", "-t", "=keeper", "-F", "#{pid}:#{session_id}:#{window_id}:#{pane_id}")
