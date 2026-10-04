@@ -30,8 +30,10 @@ Cargo commands.
 
 - For changes to documentation or any user-facing text — `README.md`,
   `CHANGELOG.md`, release notes, commit messages, CLI and help text, error
-  messages, rustdoc, or source comments — follow
-  [`.github/WRITING.md`](.github/WRITING.md).
+  messages, rustdoc, source comments, or any code example (example programs,
+  doctests, Markdown code blocks) — follow
+  [`.github/WRITING.md`](.github/WRITING.md), and its
+  [Examples](.github/WRITING.md#examples) section for code a reader sees.
 - For building, testing, the gates a change must pass, the language floor,
   dependencies, releases, or opening a pull request, follow
   [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md).
