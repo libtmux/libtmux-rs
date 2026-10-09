@@ -49,10 +49,12 @@ pub enum ServerConfigurationErrorKind {
     ConflictingSocketSelectors,
     /// A socket name was not one non-empty path component.
     InvalidSocketName,
-    /// An explicit socket path was empty or contained a NUL byte.
+    /// A socket path was empty, relative, or contained a NUL byte.
     InvalidSocketPath,
     /// A config path was empty or contained a NUL byte.
     InvalidConfigPath,
+    /// A client environment key was empty or contained `=` or NUL, or a value contained NUL.
+    InvalidClientEnvironment,
     /// The requested color override was not 256 colors.
     InvalidColorMode,
     /// The process working directory could not be captured.
@@ -69,8 +71,10 @@ pub enum ServerConfigurationErrorKind {
 
     /// The `TMUX` variable is present but is not tmux's triple.
     ///
-    /// tmux writes `socket,pid,session`. An empty value, or one with no
-    /// socket before the first comma, means something rewrote it.
+    /// tmux writes `socket,pid,session`. Parsing from the right preserves
+    /// commas in the absolute socket path; the final fields must name a
+    /// positive decimal PID and a decimal session, with an optional `$`, or
+    /// the no-session sentinel `-1`.
     MalformedTmuxVariable,
 }
 
@@ -555,6 +559,60 @@ pub enum Error {
         expected: crate::ServerGeneration,
         /// The daemon answering now.
         found: crate::ServerGeneration,
+    },
+
+    /// The daemon's reserved ownership token changed or disappeared.
+    #[error("the tmux ownership token changed; the accepted daemon cannot be confirmed")]
+    OwnershipTokenChanged,
+
+    /// Ownership metadata could not be initialized or decoded.
+    #[error("cannot accept tmux ownership metadata: {reason}")]
+    OwnershipMetadata {
+        /// The metadata or random-source failure, without retaining token values.
+        reason: String,
+    },
+
+    /// More than one resource matched a find-or-create selection.
+    #[error("{kind} selection matched {matches} objects; select a unique identity")]
+    LifecycleAmbiguous {
+        /// The selected object type.
+        kind: &'static str,
+        /// The number of matching objects.
+        matches: usize,
+    },
+
+    /// A lifecycle argument cannot establish a stable selection identity.
+    #[error("invalid lifecycle input: {reason}")]
+    LifecycleInput {
+        /// The input constraint that failed.
+        reason: &'static str,
+    },
+
+    /// A lifecycle supervisor ended before reporting its result.
+    #[error("lifecycle task ended before reporting its result: {detail}")]
+    LifecycleTaskLost {
+        /// The task cancellation or panic diagnostic.
+        detail: String,
+    },
+
+    /// Creation failed after an ID was received and rollback also failed.
+    #[error("resource creation failed: {operation}; rollback failed: {cleanup}")]
+    AcquisitionRollback {
+        /// The original post-creation error.
+        operation: Box<Error>,
+        /// The failure to kill the known object on its creating daemon.
+        cleanup: Box<Error>,
+    },
+
+    /// A create reply did not identify the resource that may have been made.
+    #[error(
+        "{command} has an unknown result; inspect the accepted endpoint before retrying: {source}"
+    )]
+    UnknownCreation {
+        /// The command whose reply did not establish ownership.
+        command: &'static str,
+        /// The original dispatch or decoding failure.
+        source: Box<Error>,
     },
 
     /// tmux produced more output than the dispatch was allowed to read.
@@ -1493,6 +1551,34 @@ impl fmt::Debug for Error {
                 .field("request_id", request_id)
                 .field("command", command)
                 .field("in_flight", in_flight)
+                .finish(),
+            Self::OwnershipTokenChanged => formatter.write_str("OwnershipTokenChanged"),
+            Self::OwnershipMetadata { reason } => formatter
+                .debug_struct("OwnershipMetadata")
+                .field("reason", reason)
+                .finish(),
+            Self::LifecycleAmbiguous { kind, matches } => formatter
+                .debug_struct("LifecycleAmbiguous")
+                .field("kind", kind)
+                .field("matches", matches)
+                .finish(),
+            Self::LifecycleInput { reason } => formatter
+                .debug_struct("LifecycleInput")
+                .field("reason", reason)
+                .finish(),
+            Self::LifecycleTaskLost { detail } => formatter
+                .debug_struct("LifecycleTaskLost")
+                .field("detail", detail)
+                .finish(),
+            Self::AcquisitionRollback { operation, cleanup } => formatter
+                .debug_struct("AcquisitionRollback")
+                .field("operation", operation)
+                .field("cleanup", cleanup)
+                .finish(),
+            Self::UnknownCreation { command, source } => formatter
+                .debug_struct("UnknownCreation")
+                .field("command", command)
+                .field("source", source)
                 .finish(),
             Self::ServerGenerationChanged { expected, found } => formatter
                 .debug_struct("ServerGenerationChanged")
