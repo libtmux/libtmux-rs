@@ -42,7 +42,9 @@ full.
   time bounds, skipped/failed-probe diagnostics and truncation information.
 - Find-or-create APIs return `Created(Owned<T>)` or borrowed `Reused(T)` for all
   four object types. They state exact matching rules, reject ambiguous matches
-  and serialize competing calls that share a server core.
+  and serialize competing calls that share a server core. Final window and
+  pane identity writes check the creation receipt's daemon identity before
+  changing the target; replacement refusal preserves any rollback failure.
 
 ## 0.1.0-alpha.15 - 2026-09-27
 

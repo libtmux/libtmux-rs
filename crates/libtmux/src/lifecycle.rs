@@ -210,7 +210,7 @@ pub(crate) async fn guarded_action(
             Command::new("if-shell")
                 .arg("-F")
                 .arg(condition)
-                .arg(action)
+                .sensitive_arg(action)
                 .arg("display-message -p '__libtmux_generation__ #{pid} #{start_time}'"),
         )
         .await?;
