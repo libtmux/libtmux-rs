@@ -20,7 +20,8 @@ Creation and explicit adoption initialize the reserved server option
 bytes encoded as exactly 32 ASCII hexadecimal characters. A valid existing
 value is reused unchanged; an empty or malformed value returns
 `OwnershipMetadata`. Applications must preserve this reserved metadata for
-the daemon lifetime. Removing or changing it makes old owners refuse cleanup
+the daemon lifetime, including avoiding the same key at narrower option
+scopes. Removing or changing it makes old owners refuse cleanup
 with `OwnershipTokenChanged`, even when the public PID/start-time generation
 still matches. The token prevents accidental identity reuse; it does not
 authenticate a daemon against a client deliberately copying its metadata.
@@ -107,6 +108,16 @@ boundary. External writers can rename or move an object after lookup, or
 create duplicate window names and pane identities. These APIs do not promise
 a transaction spanning those clients. A creation or identity-assignment
 failure returns its original error and any rollback error.
+
+The final window name and automatic-rename setting, and a created pane's
+identity value, are written under the original creation receipt's PID, start
+time and token guard. tmux checks that guard on the connection executing the
+writes. A replacement refuses finalisation and its rollback; the caller gets
+both failures instead of `Created`. The returned owner retains the original
+receipt and snapshot, without a follow-up lookup through the endpoint. Names
+and option values remain literal through the nested tmux command parser.
+As with any remote operation, the accepted daemon can exit after replying;
+later cleanup still checks the captured authority.
 
 Server creation uses a per-launch environment nonce before accepting daemon
 ownership. A startup reply and nonce must name the same daemon before the

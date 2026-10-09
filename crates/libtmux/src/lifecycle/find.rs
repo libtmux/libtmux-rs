@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::{Owned, Target};
 use crate::internal::scoped;
 use crate::{
-    Command, Error, NewSessionOptions, NewWindowOptions, Pane, Server, Session, SplitOptions,
-    Window,
+    Command, CommandChain, Error, NewSessionOptions, NewWindowOptions, Pane, Server, Session,
+    SplitOptions, Window,
 };
 
 static SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -277,6 +277,8 @@ impl Session {
     /// Returns `LifecycleAmbiguous` for duplicate names, or the listing/create
     /// error. Calls sharing this core serialize; external writers can create
     /// duplicate names. The returned created window keeps the requested name.
+    /// Final writes use the creation receipt's daemon guard; replacement
+    /// refusal retains the original and any rollback failure.
     pub async fn find_or_create_window(
         &self,
         name: impl Into<OsString>,
@@ -308,13 +310,26 @@ impl Session {
                 .new_window(NewWindowOptions::new(name.clone()))
                 .await?;
             let owner = window.created_owner()?;
-            if let Err(operation) = owner.resource().set_option("automatic-rename", "off").await {
-                return Err(rollback_error(operation, &owner).await);
-            }
-            let mut current = owner.resource().clone();
-            if let Err(operation) = current.rename(name).await {
-                return Err(rollback_error(operation, &owner).await);
-            }
+            let id = owner.resource().id().to_string();
+            finalize(
+                &owner,
+                CommandChain::new(
+                    Command::new("set-option")
+                        .arg("-w")
+                        .arg("-t")
+                        .arg(&id)
+                        .arg("automatic-rename")
+                        .arg("off"),
+                )
+                .then(
+                    Command::new("rename-window")
+                        .arg("-t")
+                        .arg(id)
+                        .arg("--")
+                        .arg(crate::TmuxArg::literal(name).into_os_string()),
+                ),
+            )
+            .await?;
             Ok(FindOrCreate::Created(owner))
         })
         .await
@@ -327,6 +342,8 @@ impl Window {
     /// # Errors
     /// Returns `LifecycleAmbiguous` for duplicate identities, or a listing,
     /// split or assignment error. Assignment failures roll back the known ID.
+    /// Assignment checks the creation receipt's daemon guard on the executing
+    /// connection; a replacement cannot receive the identity write.
     /// Calls sharing this core serialize. External clients can change identity
     /// options or move panes; a later call observes those changes.
     pub async fn find_or_create_pane(
@@ -370,13 +387,18 @@ impl Window {
                 return Ok(FindOrCreate::Reused(pane));
             }
             let owner = window.split(options).await?.created_owner()?;
-            if let Err(operation) = owner
-                .resource()
-                .set_option(&identity.key, identity.value)
-                .await
-            {
-                return Err(rollback_error(operation, &owner).await);
-            }
+            finalize(
+                &owner,
+                CommandChain::new(
+                    Command::new("set-option")
+                        .arg("-p")
+                        .arg("-t")
+                        .arg(owner.resource().id().to_string())
+                        .arg(identity.key)
+                        .arg(identity.value),
+                ),
+            )
+            .await?;
             Ok(FindOrCreate::Created(owner))
         })
         .await
@@ -389,7 +411,7 @@ async fn startup_failure(startup: &Server, nonce: &str, operation: Error) -> Err
     let answer = startup
         .core
         .execute_chain_no_start(
-            crate::CommandChain::new(match super::identity::initialize() {
+            CommandChain::new(match super::identity::initialize() {
                 Ok(command) => command,
                 Err(cleanup) => {
                     return Error::AcquisitionRollback {
@@ -448,6 +470,24 @@ async fn rollback_error<T>(operation: Error, owner: &Owned<T>) -> Error {
             operation: Box::new(operation),
             cleanup: Box::new(cleanup),
         },
+    }
+}
+
+async fn finalize<T>(owner: &Owned<T>, commands: CommandChain) -> Result<(), Error> {
+    // Accept no follow-up lookup: the original receipt supplies both the
+    // target and authority for the guarded writes and the returned owner.
+    let (_, id) = owner.lease.target.command();
+    match super::guarded_action(
+        &owner.lease.server.core,
+        owner.lease.identity,
+        &commands.command_string(),
+        "find-or-create",
+        id,
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(operation) => Err(rollback_error(operation, owner).await),
     }
 }
 
