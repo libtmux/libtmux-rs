@@ -662,6 +662,9 @@ Every surface that takes bytes this workspace did not write is fuzzed:
 - the format-row codec every listing decodes through (`format_rows`), whose
   names, paths and titles users and programs write, checked by writing values
   the way each dialect of tmux prints them and decoding them back;
+- lifecycle ownership and creation receipts (`lifecycle_receipts`), checked
+  that accepted identities and object-ID receipts survive reconstruction, with
+  seeds captured from a disposable tmux daemon;
 - the versioned filter-expression wire format (`filter_expr_json`), which can
   arrive from a config file, a CLI argument, or an MCP tool call, checked that
   what it accepts writes out and reads back as the same expression;

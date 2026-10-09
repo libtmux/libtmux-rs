@@ -104,14 +104,19 @@ pub enum EnvironmentEntry {
 /// ```
 #[derive(Clone)]
 pub struct Session {
-    core: Arc<Core>,
+    pub(crate) core: Arc<Core>,
     info: SessionInfo,
+    pub(crate) created_identity: Option<Arc<crate::lifecycle::identity::DaemonIdentity>>,
 }
 
 impl Session {
     /// Build a handle from a hydrated snapshot.
     pub(crate) const fn new(core: Arc<Core>, info: SessionInfo) -> Self {
-        Self { core, info }
+        Self {
+            core,
+            info,
+            created_identity: None,
+        }
     }
 
     /// Find the session this process is running in.
@@ -491,11 +496,13 @@ impl Session {
     pub async fn new_window(&self, options: impl Into<NewWindowOptions>) -> Result<Window, Error> {
         let options = options.into();
         let session = self.id().to_string();
-        let projection =
+        let (projection, generation) =
             listing::create_window(&self.core, |format| options.into_command(&session, format))
                 .await?;
 
-        Ok(Window::new(Arc::clone(&self.core), projection))
+        let mut created = Window::new(Arc::clone(&self.core), projection);
+        created.created_identity = Some(Arc::new(generation));
+        Ok(created)
     }
 
     /// Rename the session and update this handle.
@@ -775,10 +782,10 @@ impl Session {
     ///
     /// # Cancel safety
     ///
-    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
+    /// Once polled, creation and cleanup run in tasks
     /// of their own, so the window is killed even if this future is dropped
     /// or the operation panics, while the Tokio runtime is alive. A cleanup
-    /// failure then has no caller to reach; the `tracing` feature records it.
+    /// failure remains available through [`Server::drain_cleanup`](crate::Server::drain_cleanup).
     pub async fn with_window<T, E>(
         &self,
         options: impl Into<NewWindowOptions>,
@@ -786,11 +793,12 @@ impl Session {
     ) -> Result<T, crate::ScopeError<T, E>> {
         let session = self.clone();
         let options = options.into();
-        scoped::run(
+        scoped::run_tracked(
+            self.core.lifecycle.clone(),
             "with-window",
-            async move { session.new_window(options).await },
-            Window::kill,
-            operation,
+            async move { session.new_window(options).await?.created_owner() },
+            |owner| async move { owner.close().await },
+            async |owner: &crate::lifecycle::Owned<Window>| operation(owner.resource()).await,
         )
         .await
     }

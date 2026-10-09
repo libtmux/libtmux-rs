@@ -305,9 +305,9 @@ fn default_named_and_explicit_socket_selection_are_distinct() {
         .build()
         .expect("named server configuration");
     let explicit = Server::builder()
-        .socket_path("relative.sock")
+        .socket_path("/tmp/libtmux-rs-dev/explicit.sock")
         .build()
-        .expect("relative explicit path is captured");
+        .expect("absolute explicit path is captured");
 
     assert_eq!(default.socket_name(), None);
     assert!(default.socket_path().is_absolute());
@@ -361,15 +361,16 @@ async fn public_capability_raw_command_and_shutdown_boundary_is_usable() {
 /// never one a `-S` path names, and it answers three different ways:
 /// 3.2a exits **0** saying nothing at all, 3.3a through 3.7c exit **0** after
 /// printing `error creating <path> (No such file or directory)` on stderr, and
-/// next-3.9 prints that and exits **1**. Nothing is created in any of them, so
-/// none may read as a partial effect, and tmux's own reason -- when it gave one
-/// -- must not be replaced by a generic message or a `Debug`-formatted exit
-/// code.
+/// next-3.9 prints that and exits **1**. A successful reply without a creation
+/// receipt has an unknown result, even though this fixture independently
+/// proves that no socket exists. Preserve tmux's own reason when it gave one.
 #[tokio::test]
-async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
-    let directory = tempfile::tempdir().expect("temporary directory");
+async fn a_missing_socket_directory_preserves_the_startup_diagnostic() {
+    fs::create_dir_all("/tmp/libtmux-rs-test").expect("test socket root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("temporary directory");
+    let socket = directory.path().join("missing-parent").join("sock");
     let server = Server::builder()
-        .socket_path(directory.path().join("missing-parent").join("sock"))
+        .socket_path(&socket)
         .build()
         .expect("a socket under a missing directory is valid setup");
 
@@ -378,14 +379,28 @@ async fn a_missing_socket_directory_is_a_plain_refusal_not_a_partial_effect() {
         .await
         .expect_err("tmux creates nothing under a missing parent directory");
 
-    assert_ne!(
-        error.kind(),
-        libtmux::ErrorKind::PartialEffect,
-        "nothing was created, so this is not a partial effect: {error:?}",
-    );
+    if let Error::UnknownCreation { source, .. } = &error {
+        assert!(
+            matches!(
+                source.as_ref(),
+                Error::CommandFailed {
+                    exit_code: Some(0),
+                    ..
+                }
+            ),
+            "only the successful reply without a receipt is uncertain: {error:?}",
+        );
+    } else {
+        assert_ne!(
+            error.kind(),
+            libtmux::ErrorKind::PartialEffect,
+            "a nonzero refusal does not imply creation: {error:?}",
+        );
+    }
+    assert!(!socket.exists(), "this fixture created no socket");
     let message = error.to_string();
     assert!(
-        message.contains("error creating") || message.contains("gave no reason"),
+        message.contains("error creating") || message.contains("no creation receipt"),
         "tmux's own reason survives, or the message says there was none: {message}",
     );
     assert!(
@@ -1174,7 +1189,11 @@ fn an_absent_tmux_variable_is_told_apart_from_a_malformed_one() {
     // Present but not tmux's triple: something rewrote it, which is a broken
     // environment rather than a state to branch on. Collapsing the two into
     // one variant loses exactly that distinction.
-    for broken in ["", ",7,$0"] {
+    for absent in [None, Some("")] {
+        let error = Server::from_env_value(absent).expect_err("absent context");
+        assert_configuration_error(&error, ServerConfigurationErrorKind::NotInsideTmux, &[]);
+    }
+    for broken in [",7,$0", "/socket,7", "/socket,0,0", "/socket,7,-2"] {
         let error = Server::from_env_value(Some(broken)).expect_err("malformed value");
         assert_configuration_error(
             &error,
@@ -1703,4 +1722,195 @@ async fn a_caller_can_bound_one_command_with_tokio_timeout() {
     server.sessions().await.expect("the server still answers");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[test]
+fn default_environment_child() {
+    let Some(expected) = std::env::var_os("LIBTMUX_RS_EXPECT_ENDPOINT") else {
+        return;
+    };
+    let before = std::env::vars_os().collect::<Vec<_>>();
+    let server = Server::new().expect("environment endpoint resolves");
+    assert_eq!(server.socket_path().as_os_str(), expected);
+    assert!(
+        before.eq(&std::env::vars_os().collect::<Vec<_>>()),
+        "host environment changed"
+    );
+}
+
+#[test]
+fn default_environment_is_resolved_in_a_child_without_host_mutation() {
+    let before = std::env::vars_os().collect::<Vec<_>>();
+    let root = tempfile::tempdir().expect("resolution-only root");
+    let default = Path::new("/tmp").canonicalize().unwrap().join(format!(
+        "tmux-{}/default",
+        rustix::process::getuid().as_raw()
+    ));
+    let named = root
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join(format!("tmux-{}/named", rustix::process::getuid().as_raw()));
+    let cases: &[(&str, &str, &str, PathBuf)] = &[
+        ("", "", "", default),
+        (
+            "/tmp/libtmux-rs-dev/selected",
+            "bad/name",
+            "bad-context",
+            PathBuf::from("/tmp/libtmux-rs-dev/selected"),
+        ),
+        ("", "named", "bad-context", named),
+        (
+            "",
+            "",
+            "/tmp/libtmux-rs-dev/com,ma,42,-1",
+            PathBuf::from("/tmp/libtmux-rs-dev/com,ma"),
+        ),
+    ];
+    for (path, name, tmux, expected) in cases {
+        let mut child = process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", "default_environment_child", "--nocapture"])
+            .env("LIBTMUX_RS_EXPECT_ENDPOINT", expected)
+            .env("LIBTMUX_SOCKET_PATH", path)
+            .env("LIBTMUX_SOCKET_NAME", name)
+            .env("TMUX", tmux)
+            .env("TMUX_PANE", "%999");
+        if name.is_empty() {
+            child.env_remove("TMUX_TMPDIR");
+        } else {
+            child.env("TMUX_TMPDIR", root.path());
+        }
+        assert!(child.status().expect("helper starts").success());
+    }
+    assert!(
+        before.eq(&std::env::vars_os().collect::<Vec<_>>()),
+        "host environment changed"
+    );
+}
+
+#[test]
+fn explicit_tmux_parser_preserves_commas_and_rejects_invalid_triples() {
+    for session in ["0", "$0", "-1"] {
+        let server =
+            Server::from_env_value(Some(format!("/tmp/libtmux-rs-dev/one,two,42,{session}")))
+                .unwrap();
+        assert_eq!(
+            server.socket_path(),
+            Path::new("/tmp/libtmux-rs-dev/one,two")
+        );
+    }
+    for value in [
+        "relative,1,0",
+        "/socket,1",
+        "/socket,0,0",
+        "/socket,1,-2",
+        "/socket,1,$-1",
+    ] {
+        assert!(Server::from_env_value(Some(value)).is_err(), "{value}");
+    }
+}
+
+#[tokio::test]
+async fn client_environment_overrides_are_local_ordered_and_cannot_retarget() {
+    let directory = tempfile::tempdir().expect("script directory");
+    let executable = write_script(
+        directory.path(),
+        "environment",
+        r#"
+for argument do printf '<%s>\n' "$argument"; done
+printf '<VALUE=%s>\n' "${LIBTMUX_RS_CHILD_VALUE-unset}"
+printf '<REMOVED=%s>\n' "${LIBTMUX_RS_REMOVED-unset}"
+printf '<TMUX=%s>\n' "${TMUX-unset}"
+printf '<PANE=%s>\n' "${TMUX_PANE-unset}"
+printf '<ROOT=%s>\n' "${TMUX_TMPDIR-unset}"
+"#,
+    );
+    let before = std::env::vars_os().collect::<Vec<_>>();
+    let server = Server::builder()
+        .socket_path("/tmp/libtmux-rs-dev/captured-client-environment")
+        .tmux_executable(executable)
+        .client_environment("LIBTMUX_RS_CHILD_VALUE", "first")
+        .remove_client_environment("LIBTMUX_RS_CHILD_VALUE")
+        .client_environment("LIBTMUX_RS_CHILD_VALUE", "last")
+        .client_environment("LIBTMUX_RS_REMOVED", "remove-me")
+        .remove_client_environment("LIBTMUX_RS_REMOVED")
+        .client_environment("TMUX", "/unrelated,42,0")
+        .client_environment("TMUX_PANE", "%999")
+        .client_environment("TMUX_TMPDIR", "/unrelated")
+        .build()
+        .unwrap();
+    let result = server.cmd(Command::new("display-message")).await.unwrap();
+    server.shutdown().await.unwrap();
+    let output = result.stdout_utf8().unwrap();
+    assert!(output.contains("<-S>\n</tmp/libtmux-rs-dev/captured-client-environment>"));
+    for expected in [
+        "<VALUE=last>",
+        "<REMOVED=unset>",
+        "<TMUX=unset>",
+        "<PANE=unset>",
+        "<ROOT=unset>",
+    ] {
+        assert!(output.contains(expected), "{output}");
+    }
+    assert!(
+        before.eq(&std::env::vars_os().collect::<Vec<_>>()),
+        "host environment changed"
+    );
+    for (key, value) in [("", "x"), ("A=B", "x"), ("A\0B", "x"), ("A", "x\0y")] {
+        assert!(matches!(
+            Server::builder().client_environment(key, value).build(),
+            Err(Error::InvalidServerConfiguration {
+                kind: ServerConfigurationErrorKind::InvalidClientEnvironment,
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn builder_environment_defaults_resolve_before_the_endpoint_is_frozen() {
+    let before = std::env::vars_os().collect::<Vec<_>>();
+    let mut path = OsString::from("/tmp/libtmux-rs-dev/builder-first");
+    let server = Server::builder()
+        .client_environment("LIBTMUX_SOCKET_PATH", path.clone())
+        .client_environment("LIBTMUX_SOCKET_NAME", "ignored/invalid")
+        .client_environment("TMUX", "ignored-invalid-context")
+        .build()
+        .unwrap();
+    path = OsString::from("/tmp/libtmux-rs-dev/builder-second");
+    assert_ne!(server.socket_path().as_os_str(), path);
+    assert_eq!(
+        server.socket_path(),
+        Path::new("/tmp/libtmux-rs-dev/builder-first")
+    );
+    let selected = Server::builder()
+        .client_environment("LIBTMUX_SOCKET_PATH", "/tmp/libtmux-rs-dev/first")
+        .remove_client_environment("LIBTMUX_SOCKET_PATH")
+        .client_environment("LIBTMUX_SOCKET_PATH", "/tmp/libtmux-rs-dev/last")
+        .build()
+        .unwrap();
+    assert_eq!(
+        selected.socket_path(),
+        Path::new("/tmp/libtmux-rs-dev/last")
+    );
+    let root = tempfile::tempdir().unwrap();
+    let named = Server::builder()
+        .remove_client_environment("LIBTMUX_SOCKET_PATH")
+        .client_environment("LIBTMUX_SOCKET_NAME", "named")
+        .client_environment("TMUX_TMPDIR", root.path())
+        .client_environment("TMUX", "ignored-invalid-context")
+        .build()
+        .unwrap();
+    assert_eq!(
+        named.socket_path(),
+        root.path()
+            .canonicalize()
+            .unwrap()
+            .join(format!("tmux-{}/named", rustix::process::getuid().as_raw()))
+    );
+    assert!(
+        before.eq(&std::env::vars_os().collect::<Vec<_>>()),
+        "host environment changed"
+    );
 }

@@ -465,8 +465,9 @@ async fn load_rejects_an_out_of_range_dimension_before_any_target_lookup() {
         serde_json::json!({"session_name":"never","windows":[{"panes":["blank"]}]}).to_string(),
     )
     .unwrap();
+    let endpoint = directory.path().join("does-not-matter");
     let output = command_at(
-        &["load", "-d", "-S", "does-not-matter", "ws.json"],
+        &["load", "-d", "-S", endpoint.to_str().unwrap(), "ws.json"],
         directory.path(),
     )
     .env("TMUXP_DEFAULT_COLUMNS", "not-a-number")
@@ -474,6 +475,7 @@ async fn load_rejects_an_out_of_range_dimension_before_any_target_lookup() {
     .output()
     .unwrap();
     assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(!endpoint.exists(), "validation must not create an endpoint");
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("TMUXP_DEFAULT_COLUMNS"),
         "{output:?}"

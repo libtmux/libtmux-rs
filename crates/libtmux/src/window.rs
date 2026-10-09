@@ -113,14 +113,19 @@ impl PaneDirection {
 /// ```
 #[derive(Clone)]
 pub struct Window {
-    core: Arc<Core>,
+    pub(crate) core: Arc<Core>,
     projection: WindowProjection,
+    pub(crate) created_identity: Option<Arc<crate::lifecycle::identity::DaemonIdentity>>,
 }
 
 impl Window {
     /// Build a handle from a hydrated projection.
     pub(crate) const fn new(core: Arc<Core>, projection: WindowProjection) -> Self {
-        Self { core, projection }
+        Self {
+            core,
+            projection,
+            created_identity: None,
+        }
     }
 
     /// Find the window this process is running in.
@@ -363,11 +368,13 @@ impl Window {
     pub async fn split(&self, options: impl Into<SplitOptions>) -> Result<Pane, Error> {
         let options = options.into();
         let window = self.id().to_string();
-        let projection =
+        let (projection, generation) =
             listing::create_pane(&self.core, |format| options.into_command(&window, format))
                 .await?;
 
-        Ok(Pane::new(Arc::clone(&self.core), projection))
+        let mut created = Pane::new(Arc::clone(&self.core), projection);
+        created.created_identity = Some(Arc::new(generation));
+        Ok(created)
     }
 
     /// Rename the window and update this handle.
@@ -861,10 +868,10 @@ impl Window {
     ///
     /// # Cancel safety
     ///
-    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
+    /// Once polled, creation and cleanup run in tasks
     /// of their own, so the pane is killed even if this future is dropped or
     /// the operation panics, while the Tokio runtime is alive. A cleanup
-    /// failure then has no caller to reach; the `tracing` feature records it.
+    /// failure remains available through [`Server::drain_cleanup`](crate::Server::drain_cleanup).
     pub async fn with_pane<T, E>(
         &self,
         options: impl Into<SplitOptions>,
@@ -872,11 +879,12 @@ impl Window {
     ) -> Result<T, crate::ScopeError<T, E>> {
         let window = self.clone();
         let options = options.into();
-        scoped::run(
+        scoped::run_tracked(
+            self.core.lifecycle.clone(),
             "with-pane",
-            async move { window.split(options).await },
-            Pane::kill,
-            operation,
+            async move { window.split(options).await?.created_owner() },
+            |owner| async move { owner.close().await },
+            async |owner: &crate::lifecycle::Owned<Pane>| operation(owner.resource()).await,
         )
         .await
     }

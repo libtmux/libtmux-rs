@@ -17,249 +17,226 @@ fn hash(value: &ServerIdentity) -> u64 {
 }
 
 fn inputs<'a>(
-    cwd: &'a Path,
     socket_root: Option<&'a OsStr>,
     inherited_tmux: Option<&'a OsStr>,
 ) -> EndpointInputs<'a> {
-    EndpointInputs::new(cwd, socket_root, 1000, inherited_tmux)
+    EndpointInputs::new(socket_root, 1000, inherited_tmux)
 }
 
 #[test]
-fn captured_absolute_socket_paths_define_server_identity() {
-    let cwd = Path::new("/tmp/work");
+fn absolute_socket_paths_define_identity_without_normalising_bytes() {
     let left = resolve_server_identity(
-        Some(OsStr::new("relative/socket")),
+        Some(OsStr::new("/tmp/a/../socket")),
         None,
-        inputs(cwd, None, None),
+        inputs(None, None),
     )
     .unwrap();
-    let right = resolve_server_identity(
-        Some(OsStr::new("/tmp/work/relative/socket")),
+    let same = resolve_server_identity(
+        Some(OsStr::new("/tmp/a/../socket")),
         None,
-        inputs(Path::new("/unused"), None, None),
+        inputs(None, None),
     )
     .unwrap();
-
-    assert_eq!(left, right);
-    assert_eq!(hash(&left), hash(&right));
-    assert_eq!(left.socket_path(), Path::new("/tmp/work/relative/socket"));
-}
-
-#[test]
-fn explicit_socket_paths_preserve_parent_components() {
-    let cwd = Path::new("/tmp/work");
-    let preserved = resolve_server_identity(
-        Some(OsStr::new("relative/../socket")),
-        None,
-        inputs(cwd, None, None),
-    )
-    .unwrap();
-    let collapsed =
-        resolve_server_identity(Some(OsStr::new("socket")), None, inputs(cwd, None, None)).unwrap();
-
-    assert_eq!(
-        preserved.socket_path(),
-        Path::new("/tmp/work/relative/../socket"),
-    );
-    assert_ne!(preserved, collapsed);
+    let other =
+        resolve_server_identity(Some(OsStr::new("/tmp/socket")), None, inputs(None, None)).unwrap();
+    assert_eq!(left, same);
+    assert_eq!(hash(&left), hash(&same));
+    assert_ne!(left, other);
+    for path in ["", "relative/socket", "nul\0byte"] {
+        assert!(resolve_server_identity(Some(OsStr::new(path)), None, inputs(None, None)).is_err());
+    }
+    let raw = OsString::from_vec(b"/tmp/socket\xff".to_vec());
+    let identity = resolve_server_identity(Some(&raw), None, inputs(None, None)).unwrap();
+    assert_eq!(identity.socket_path().as_os_str(), raw);
 }
 
 #[test]
 fn explicit_socket_identity_preserves_raw_separator_spelling() {
-    let cwd = Path::new("/work");
-    let plain = resolve_server_identity(
-        Some(OsStr::new("/tmp/socket")),
-        None,
-        inputs(cwd, None, None),
-    )
-    .unwrap();
-    let trailing = resolve_server_identity(
-        Some(OsStr::new("/tmp/socket/")),
-        None,
-        inputs(cwd, None, None),
-    )
-    .unwrap();
-    let double_leading = resolve_server_identity(
-        Some(OsStr::new("//tmp/socket")),
-        None,
-        inputs(cwd, None, None),
-    )
-    .unwrap();
-
-    assert_ne!(plain, trailing);
-    assert_ne!(plain, double_leading);
+    let plain =
+        resolve_server_identity(Some(OsStr::new("/tmp/socket")), None, inputs(None, None)).unwrap();
+    for path in ["/tmp/socket/", "//tmp/socket"] {
+        let other =
+            resolve_server_identity(Some(OsStr::new(path)), None, inputs(None, None)).unwrap();
+        assert_ne!(plain, other);
+    }
 }
 
 #[test]
-fn named_and_default_sockets_include_the_resolved_root_and_real_uid() {
+fn default_resolution_needs_no_daemon_and_uses_the_real_uid_directory() {
+    for value in [None, Some(OsStr::new(""))] {
+        let context = inputs(value, value).with_defaults(value, value);
+        let identity = resolve_server_identity(None, None, context).unwrap();
+        assert_eq!(
+            identity.socket_path(),
+            Path::new("/tmp")
+                .canonicalize()
+                .unwrap()
+                .join("tmux-1000/default")
+        );
+    }
+}
+
+#[test]
+fn selectors_have_one_precedence_and_ignore_lower_invalid_values() {
     let root = tempfile::tempdir().unwrap();
-    // Resolution canonicalizes, which is what makes two selectors for one
-    // endpoint compare equal. On macOS the temporary root reaches here as
-    // `/var/...` and resolves to `/private/var/...`, so the expectation
-    // has to be canonical too or it is only testing Linux.
-    let canonical = root.path().canonicalize().unwrap();
-    let context = inputs(Path::new("/work"), Some(root.path().as_os_str()), None);
-    let named = resolve_server_identity(None, Some(OsStr::new("testing")), context).unwrap();
-    let default = resolve_server_identity(None, None, context).unwrap();
-
-    assert_eq!(named.socket_path(), canonical.join("tmux-1000/testing"),);
-    assert_eq!(default.socket_path(), canonical.join("tmux-1000/default"),);
-    assert_ne!(named, default);
+    let bad = Some(OsStr::new("malformed"));
+    let context = inputs(Some(root.path().as_os_str()), bad)
+        .with_defaults(Some(OsStr::new("/env/path")), Some(OsStr::new("bad/name")));
+    let explicit =
+        resolve_server_identity(Some(OsStr::new("/explicit/path")), None, context).unwrap();
+    assert_eq!(explicit.socket_path(), Path::new("/explicit/path"));
+    let named = resolve_server_identity(None, Some(OsStr::new("explicit-name")), context).unwrap();
+    assert_eq!(
+        named.socket_path(),
+        root.path()
+            .canonicalize()
+            .unwrap()
+            .join("tmux-1000/explicit-name")
+    );
+    let path = resolve_server_identity(None, None, context).unwrap();
+    assert_eq!(path.socket_path(), Path::new("/env/path"));
+    let env_name = resolve_server_identity(
+        None,
+        None,
+        inputs(Some(root.path().as_os_str()), bad)
+            .with_defaults(Some(OsStr::new("")), Some(OsStr::new("env-name"))),
+    )
+    .unwrap();
+    assert_eq!(
+        env_name.socket_path(),
+        root.path()
+            .canonicalize()
+            .unwrap()
+            .join("tmux-1000/env-name")
+    );
+    assert!(
+        resolve_server_identity(
+            Some(OsStr::new("/explicit/path")),
+            Some(OsStr::new("name")),
+            context
+        )
+        .is_err()
+    );
 }
 
 #[test]
-fn existing_relative_and_symlinked_socket_root_is_canonicalized() {
-    let workspace = tempfile::tempdir().unwrap();
-    let actual = workspace.path().join("actual");
-    std::fs::create_dir(&actual).unwrap();
-    symlink(&actual, workspace.path().join("link")).unwrap();
-    let identity = resolve_server_identity(
-        None,
-        None,
-        inputs(workspace.path(), Some(OsStr::new("link")), None),
-    )
-    .unwrap();
+fn invalid_selected_defaults_do_not_fall_through() {
+    let root = tempfile::tempdir().unwrap();
+    let context = inputs(
+        Some(root.path().as_os_str()),
+        Some(OsStr::new("/valid/socket,12,0")),
+    );
+    for path in ["relative", "nul\0byte"] {
+        assert!(
+            resolve_server_identity(
+                None,
+                None,
+                context.with_defaults(Some(OsStr::new(path)), Some(OsStr::new("valid")))
+            )
+            .is_err()
+        );
+    }
+    for name in [".", "..", "nested/name", "/absolute", "nul\0byte"] {
+        assert!(
+            resolve_server_identity(
+                None,
+                None,
+                context.with_defaults(None, Some(OsStr::new(name)))
+            )
+            .is_err()
+        );
+    }
+    assert!(resolve_server_identity(None, Some(OsStr::new("")), context).is_err());
+}
 
+#[test]
+fn named_sockets_preserve_spaces_and_non_utf8_components() {
+    for name in [
+        OsString::from(" name "),
+        OsString::from_vec(b"n\xff".to_vec()),
+    ] {
+        let result = resolve_server_identity(None, Some(&name), inputs(None, None)).unwrap();
+        assert_eq!(
+            result.socket_path(),
+            Path::new("/tmp")
+                .canonicalize()
+                .unwrap()
+                .join("tmux-1000")
+                .join(name)
+        );
+    }
+}
+
+#[test]
+fn selected_root_is_absolute_existing_and_captured_through_symlinks() {
+    let workspace = tempfile::tempdir().unwrap();
+    let actual = workspace.path().join(" actual ");
+    std::fs::create_dir(&actual).unwrap();
+    let link = workspace.path().join("link");
+    symlink(&actual, &link).unwrap();
+    let identity =
+        resolve_server_identity(None, None, inputs(Some(link.as_os_str()), None)).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    symlink("/different/root", &link).unwrap();
     assert_eq!(
         identity.socket_path(),
-        actual.canonicalize().unwrap().join("tmux-1000/default"),
+        actual.canonicalize().unwrap().join("tmux-1000/default")
     );
-}
-
-#[test]
-fn missing_empty_and_unset_socket_roots_fall_back_to_tmp() {
-    let workspace = tempfile::tempdir().unwrap();
-    let missing = workspace.path().join("missing");
-    let candidates = [None, Some(OsStr::new("")), Some(missing.as_os_str())];
-    let fallback = Path::new("/tmp").canonicalize().unwrap();
-
-    for candidate in candidates {
-        let identity =
-            resolve_server_identity(None, None, inputs(workspace.path(), candidate, None)).unwrap();
-        assert_eq!(identity.socket_path(), fallback.join("tmux-1000/default"),);
+    for root in [
+        Path::new("relative"),
+        workspace.path().join("missing").as_path(),
+    ] {
+        assert!(resolve_server_identity(None, None, inputs(Some(root.as_os_str()), None)).is_err());
     }
+    let ignored = resolve_server_identity(
+        Some(OsStr::new("/socket")),
+        None,
+        inputs(Some(OsStr::new("relative")), None),
+    )
+    .unwrap();
+    assert_eq!(ignored.socket_path(), Path::new("/socket"));
 }
 
 #[test]
-fn inherited_tmux_is_split_from_the_right() {
-    let identity = resolve_server_identity(
-        None,
-        None,
-        inputs(
-            Path::new("/work"),
-            None,
-            Some(OsStr::new("/tmp/od,d/socket,84215,3")),
-        ),
-    )
-    .unwrap();
-
-    assert_eq!(identity.socket_path(), Path::new("/tmp/od,d/socket"));
-}
-
-#[test]
-fn inherited_tmux_captures_relative_paths_and_validates_only_shape() {
-    let relative = resolve_server_identity(
-        None,
-        None,
-        inputs(
-            Path::new("/work"),
-            None,
-            Some(OsStr::new("relative/socket,not-a-pid,not-a-session")),
-        ),
-    )
-    .unwrap();
-
-    assert_eq!(relative.socket_path(), Path::new("/work/relative/socket"),);
-
-    let empty_suffixes = resolve_server_identity(
-        None,
-        None,
-        inputs(Path::new("/work"), None, Some(OsStr::new("/sock,,"))),
-    )
-    .unwrap();
-    assert_eq!(empty_suffixes.socket_path(), Path::new("/sock"));
-}
-
-#[test]
-fn inherited_tmux_preserves_non_utf8_socket_paths() {
-    let raw = OsString::from_vec(vec![
-        b'/', b't', b'm', b'p', b'/', 0xff, b',', b's', b'o', b'c', b'k', b'e', b't', b',', b'1',
-        b',', b'0',
-    ]);
-    let identity =
-        resolve_server_identity(None, None, inputs(Path::new("/work"), None, Some(&raw))).unwrap();
-
+fn inherited_tmux_is_split_from_the_right_and_validates_the_triple() {
+    for value in [
+        "/tmp/od,d/socket,84215,3",
+        "/tmp/od,d/socket,84215,$3",
+        "/tmp/od,d/socket,84215,-1",
+    ] {
+        let identity =
+            resolve_server_identity(None, None, inputs(None, Some(OsStr::new(value)))).unwrap();
+        assert_eq!(identity.socket_path(), Path::new("/tmp/od,d/socket"));
+    }
+    for value in [
+        ",1,0",
+        "/tmp/socket",
+        "/tmp/socket,1",
+        "/tmp/socket,,",
+        "/tmp/socket,0,1",
+        "/tmp/socket,-1,0",
+        "/tmp/socket,1,-2",
+        "/tmp/socket,1,$-1",
+        "/tmp/socket,1,$$0",
+        "relative,1,0",
+        "/tmp/socket,１２,0",
+    ] {
+        assert!(
+            resolve_server_identity(None, None, inputs(None, Some(OsStr::new(value)))).is_err(),
+            "{value:?}"
+        );
+    }
+    let raw = OsString::from_vec(b"/tmp/\xff,socket,1,0".to_vec());
+    let identity = resolve_server_identity(None, None, inputs(None, Some(&raw))).unwrap();
     assert_eq!(
         identity.socket_path().as_os_str().as_bytes(),
-        b"/tmp/\xff,socket",
+        b"/tmp/\xff,socket"
     );
-}
-
-#[test]
-fn malformed_inherited_tmux_falls_back_to_default() {
-    let malformed = [
-        None,
-        Some(OsStr::new("")),
-        Some(OsStr::new(",1,0")),
-        Some(OsStr::new("/tmp/socket,1")),
-        Some(OsStr::new("/tmp/socket")),
-    ];
-    let fallback = Path::new("/tmp").canonicalize().unwrap();
-
-    for inherited_tmux in malformed {
-        let identity =
-            resolve_server_identity(None, None, inputs(Path::new("/work"), None, inherited_tmux))
-                .unwrap();
-        assert_eq!(identity.socket_path(), fallback.join("tmux-1000/default"),);
-    }
-}
-
-#[test]
-fn named_socket_labels_cannot_escape_the_resolved_root() {
-    let invalid = [
-        "",
-        ".",
-        "..",
-        "/",
-        "/absolute",
-        "nested/socket",
-        "name/",
-        "name//",
-        "./name",
-        "name/.",
-        "nul\0byte",
-    ];
-
-    for name in invalid {
-        let result = resolve_server_identity(
-            None,
-            Some(OsStr::new(name)),
-            inputs(Path::new("/work"), None, None),
-        );
-        assert!(result.is_err(), "{name:?} must not escape the socket root");
-    }
-}
-
-#[test]
-fn named_socket_labels_accept_non_utf8_normal_components() {
-    let name = OsString::from_vec(vec![b'n', 0xff]);
-    let identity =
-        resolve_server_identity(None, Some(&name), inputs(Path::new("/work"), None, None)).unwrap();
-    let expected = Path::new("/tmp")
-        .canonicalize()
-        .unwrap()
-        .join("tmux-1000")
-        .join(&name);
-
-    assert_eq!(identity.socket_path(), expected);
 }
 
 #[test]
 fn selectors_for_the_same_endpoint_share_server_identity() {
     let root = tempfile::tempdir().unwrap();
-    // The explicit selector is compared against ones that resolve through
-    // canonicalization, so it has to name the canonical path or they
-    // differ wherever the temporary root is itself a symlink.
     let endpoint = root
         .path()
         .canonicalize()
@@ -268,16 +245,10 @@ fn selectors_for_the_same_endpoint_share_server_identity() {
     let mut inherited_bytes = endpoint.as_os_str().as_bytes().to_vec();
     inherited_bytes.extend_from_slice(b",1,0");
     let inherited = OsString::from_vec(inherited_bytes);
-    let context = inputs(
-        Path::new("/work"),
-        Some(root.path().as_os_str()),
-        Some(&inherited),
-    );
-
+    let context = inputs(Some(root.path().as_os_str()), Some(&inherited));
     let named = resolve_server_identity(None, Some(OsStr::new("default")), context).unwrap();
     let automatic = resolve_server_identity(None, None, context).unwrap();
     let explicit = resolve_server_identity(Some(endpoint.as_os_str()), None, context).unwrap();
-
     assert_eq!(named, automatic);
     assert_eq!(automatic, explicit);
     assert_eq!(hash(&named), hash(&explicit));
@@ -288,56 +259,10 @@ fn server_identity_debug_does_not_disclose_socket_paths() {
     let identity = resolve_server_identity(
         Some(OsStr::new("/private/SENTINEL/socket")),
         None,
-        inputs(Path::new("/work"), None, None),
+        inputs(None, None),
     )
     .unwrap();
-
     assert!(!format!("{identity:?}").contains("SENTINEL"));
-}
-
-#[test]
-fn socket_path_capture_rejects_empty_paths_and_relative_working_directories() {
-    let root = PathBuf::from("/tmp");
-    let nul_path = OsString::from_vec(vec![b's', b'o', b'c', b'k', b'\0', b'e', b't']);
-
-    assert!(
-        resolve_server_identity(
-            Some(OsStr::new("")),
-            None,
-            inputs(Path::new("/work"), Some(root.as_os_str()), None),
-        )
-        .is_err(),
-    );
-    assert!(
-        resolve_server_identity(
-            Some(&nul_path),
-            None,
-            inputs(Path::new("/work"), Some(root.as_os_str()), None),
-        )
-        .is_err(),
-    );
-    assert!(
-        resolve_server_identity(
-            Some(OsStr::new("socket")),
-            None,
-            inputs(Path::new("relative"), Some(root.as_os_str()), None),
-        )
-        .is_err(),
-    );
-}
-
-#[test]
-fn explicit_socket_paths_accept_non_utf8_bytes() {
-    let raw = OsString::from_vec(vec![b's', b'o', b'c', b'k', b'e', b't', 0xff]);
-    let identity =
-        resolve_server_identity(Some(&raw), None, inputs(Path::new("/work"), None, None)).unwrap();
-
-    let mut expected = b"/work/socket".to_vec();
-    expected.push(0xff);
-    assert_eq!(
-        identity.socket_path().as_os_str().as_bytes(),
-        expected.as_slice(),
-    );
 }
 
 fn winlink_hash(value: &WindowLinkIdentity) -> u64 {

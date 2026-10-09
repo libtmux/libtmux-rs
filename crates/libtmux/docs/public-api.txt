@@ -281,6 +281,9 @@ enum libtmux::WindowPlacement
 enum libtmux::WindowTarget
 enum libtmux::control::Event
 enum libtmux::control::Subscription
+enum libtmux::lifecycle::DiscoverySkip
+enum libtmux::lifecycle::DiscoveryTruncation
+enum libtmux::lifecycle::FindOrCreate<T>
 enum libtmux::plan::Attribution
 enum libtmux::plan::Op
 enum libtmux::plan::OperationKind
@@ -419,6 +422,7 @@ function libtmux::OutputLimits::max_stderr_bytes: const fn(self, bytes: usize) -
 function libtmux::OutputLimits::max_stdout_bytes: const fn(self, bytes: usize) -> Self
 function libtmux::OutputLimits::stderr_bytes: const fn(self) -> usize
 function libtmux::OutputLimits::stdout_bytes: const fn(self) -> usize
+function libtmux::Pane::adopt: async fn(&self) -> Result<libtmux::lifecycle::Owned<Self>, libtmux::Error>
 function libtmux::Pane::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Pane::break_out: async fn(self) -> Result<Self, libtmux::Error>
 function libtmux::Pane::capture: async fn(&self) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
@@ -506,6 +510,7 @@ function libtmux::ScopeError::into_operation: fn(self) -> Option<E>
 function libtmux::ScopeError::into_value: fn(self) -> Option<T>
 function libtmux::ScopeError::tmux_error: const fn(&self) -> Option<&libtmux::Error>
 function libtmux::Server::access_rules: async fn(&self) -> Result<Vec<libtmux::AccessRule>, libtmux::Error>
+function libtmux::Server::adopt: async fn(&self) -> Result<libtmux::lifecycle::Owned<Self>, libtmux::Error>
 function libtmux::Server::append_array_option: async fn(&self, name: &str, index: u32, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::array_option: async fn(&self, name: &str) -> Result<libtmux::SparseValues<libtmux::TmuxText>, libtmux::Error>
 function libtmux::Server::attached_sessions: async fn(&self) -> Result<Vec<libtmux::Session>, libtmux::Error>
@@ -529,8 +534,11 @@ function libtmux::Server::delete_buffer: async fn(&self, name: impl AsRef<[u8]>)
 function libtmux::Server::display_menu: async fn(&self, client: Option<&libtmux::Client>, title: &str, items: impl IntoIterator<Item = libtmux::MenuItem>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_panes: async fn(&self, client: Option<&libtmux::Client>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_popup: async fn(&self, client: Option<&libtmux::Client>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
+function libtmux::Server::drain_cleanup: async fn(&self) -> Vec<libtmux::Error>
 function libtmux::Server::environment: async fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
 function libtmux::Server::environment_all: async fn(&self) -> Result<BTreeMap<String, libtmux::EnvironmentEntry>, libtmux::Error>
+function libtmux::Server::find_or_create_server: async fn(&self) -> Result<libtmux::lifecycle::FindOrCreate<Self>, libtmux::Error>
+function libtmux::Server::find_or_create_session: async fn(&self, name: impl Into<OsString>) -> Result<libtmux::lifecycle::FindOrCreate<libtmux::Session>, libtmux::Error>
 function libtmux::Server::find_window: async fn(&self, client: Option<&libtmux::Client>, search: &str) -> Result<(), libtmux::Error>
 function libtmux::Server::format: async fn(&self, pane: Option<&libtmux::Pane>, format: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Server::from_env: fn() -> Result<Self, libtmux::Error>
@@ -554,6 +562,7 @@ function libtmux::Server::new_session: async fn(&self, options: impl Into<libtmu
 function libtmux::Server::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
 function libtmux::Server::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
 function libtmux::Server::over_control_mode: async fn(&self, sender: &libtmux::control::ControlSender) -> Result<Self, libtmux::Error>
+function libtmux::Server::owned_session: async fn(&self, options: impl Into<libtmux::NewSessionOptions>) -> Result<libtmux::lifecycle::Owned<libtmux::Session>, libtmux::Error>
 function libtmux::Server::owns_control_client: fn(&self, pid: u32) -> bool
 function libtmux::Server::pane_by_id: async fn(&self, id: &libtmux::PaneId) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Server::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
@@ -602,18 +611,21 @@ function libtmux::Server::windows: async fn(&self) -> Result<Vec<libtmux::Window
 function libtmux::Server::with_channel_lock: async fn<T, E>(&self, channel: &str, operation: impl AsyncFnOnce(&Self) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
 function libtmux::Server::with_session: async fn<T, E>(&self, options: impl Into<libtmux::NewSessionOptions>, operation: impl AsyncFnOnce(&libtmux::Session) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
 function libtmux::ServerBuilder::build: fn(self) -> Result<libtmux::Server, libtmux::Error>
+function libtmux::ServerBuilder::client_environment: fn(self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self
 function libtmux::ServerBuilder::colors: const fn(self, colors: u16) -> Self
 function libtmux::ServerBuilder::config_file: fn(self, path: impl Into<PathBuf>) -> Self
 function libtmux::ServerBuilder::control_client_limits: const fn(self, limits: libtmux::ControlClientLimits) -> Self
 function libtmux::ServerBuilder::default_timeout: const fn(self, timeout: Duration) -> Self
 function libtmux::ServerBuilder::dispatch_limits: const fn(self, limits: libtmux::DispatchLimits) -> Self
 function libtmux::ServerBuilder::output_limits: const fn(self, limits: libtmux::OutputLimits) -> Self
+function libtmux::ServerBuilder::remove_client_environment: fn(self, key: impl Into<OsString>) -> Self
 function libtmux::ServerBuilder::socket_name: fn(self, name: impl Into<OsString>) -> Self
 function libtmux::ServerBuilder::socket_path: fn(self, path: impl Into<PathBuf>) -> Self
 function libtmux::ServerBuilder::tmux_executable: fn(self, executable: impl Into<OsString>) -> Self
 function libtmux::ServerGeneration::pid: const fn(self) -> u32
 function libtmux::ServerGeneration::start_time: fn(self) -> SystemTime
 function libtmux::Session::active_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
+function libtmux::Session::adopt: async fn(&self) -> Result<libtmux::lifecycle::Owned<Self>, libtmux::Error>
 function libtmux::Session::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Session::attached_client_count: fn(&self) -> u32
 function libtmux::Session::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
@@ -622,6 +634,7 @@ function libtmux::Session::detach_clients: async fn(&self) -> Result<(), libtmux
 function libtmux::Session::display: async fn(&self, message: &str) -> Result<(), libtmux::Error>
 function libtmux::Session::environment: async fn(&self, name: &str) -> Result<Option<libtmux::EnvironmentEntry>, libtmux::Error>
 function libtmux::Session::environment_all: async fn(&self) -> Result<BTreeMap<String, libtmux::EnvironmentEntry>, libtmux::Error>
+function libtmux::Session::find_or_create_window: async fn(&self, name: impl Into<OsString>) -> Result<libtmux::lifecycle::FindOrCreate<libtmux::Window>, libtmux::Error>
 function libtmux::Session::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Session::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
 function libtmux::Session::from_env_value: async fn(server: &libtmux::Server, value: Option<impl AsRef<OsStr>>) -> Result<Option<Self>, libtmux::Error>
@@ -640,6 +653,7 @@ function libtmux::Session::new_window: async fn(&self, options: impl Into<libtmu
 function libtmux::Session::next_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Session::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
 function libtmux::Session::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
+function libtmux::Session::owned_window: async fn(&self, options: impl Into<libtmux::NewWindowOptions>) -> Result<libtmux::lifecycle::Owned<libtmux::Window>, libtmux::Error>
 function libtmux::Session::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
 function libtmux::Session::path: fn(&self) -> &libtmux::TmuxText
 function libtmux::Session::previous_window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
@@ -696,9 +710,11 @@ function libtmux::TmuxVersion::parse_output: fn(output: &[u8]) -> Result<Self, l
 function libtmux::TmuxVersion::raw: fn(&self) -> &str
 function libtmux::TmuxVersion::release: const fn(&self) -> Option<&libtmux::ReleaseVersion>
 function libtmux::Window::active_pane: async fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
+function libtmux::Window::adopt: async fn(&self) -> Result<libtmux::lifecycle::Owned<Self>, libtmux::Error>
 function libtmux::Window::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Window::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
 function libtmux::Window::display: async fn(&self, message: &str) -> Result<(), libtmux::Error>
+function libtmux::Window::find_or_create_pane: async fn(&self, identity: libtmux::lifecycle::PaneIdentity, options: impl Into<libtmux::SplitOptions>) -> Result<libtmux::lifecycle::FindOrCreate<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::focus_direction: async fn(&self, direction: libtmux::PaneDirection) -> Result<libtmux::Pane, libtmux::Error>
 function libtmux::Window::format: async fn(&self, template: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Window::from_env: async fn(server: &libtmux::Server) -> Result<Option<Self>, libtmux::Error>
@@ -724,6 +740,7 @@ function libtmux::Window::name: fn(&self) -> &libtmux::TmuxText
 function libtmux::Window::next_layout: async fn(&mut self) -> Result<&mut Self, libtmux::Error>
 function libtmux::Window::option_names: async fn(&self) -> Result<Vec<String>, libtmux::Error>
 function libtmux::Window::options: async fn(&self) -> Result<BTreeMap<String, libtmux::OptionValue>, libtmux::Error>
+function libtmux::Window::owned_pane: async fn(&self, options: impl Into<libtmux::SplitOptions>) -> Result<libtmux::lifecycle::Owned<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::pane_at: async fn(&self, index: u32) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::pane_count: fn(&self) -> u32
 function libtmux::Window::panes: async fn(&self) -> Result<Vec<libtmux::Pane>, libtmux::Error>
@@ -788,6 +805,17 @@ function libtmux::control::PaneOutput::sender: const fn(&self) -> &libtmux::cont
 function libtmux::control::PaneOutput::shutdown: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::control::PaneOutput::snapshot: async fn(&mut self, on_output: impl FnMut(&[u8])) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
 function libtmux::escape_format: fn(text: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
+function libtmux::lifecycle::Discovery::configured: fn() -> Result<Self, libtmux::Error>
+function libtmux::lifecycle::Discovery::new: fn(roots: impl IntoIterator<Item = PathBuf>) -> Self
+function libtmux::lifecycle::Discovery::scan: async fn(&self) -> libtmux::lifecycle::DiscoveryReport
+function libtmux::lifecycle::FindOrCreate::is_created: const fn(&self) -> bool
+function libtmux::lifecycle::FindOrCreate::resource: const fn(&self) -> &T
+function libtmux::lifecycle::Owned::close: async fn(&self) -> Result<(), libtmux::Error>
+function libtmux::lifecycle::Owned::generation: fn(&self) -> libtmux::ServerGeneration
+function libtmux::lifecycle::Owned::is_closed: fn(&self) -> bool
+function libtmux::lifecycle::Owned::resource: const fn(&self) -> &T
+function libtmux::lifecycle::Owned::scope: async fn<V, E>(&self, operation: impl AsyncFnOnce(&T) -> Result<V, E>) -> Result<V, libtmux::ScopeError<V, E>>
+function libtmux::lifecycle::PaneIdentity::new: fn(key: impl Into<String>, value: impl Into<OsString>) -> Result<Self, libtmux::Error>
 function libtmux::option_schema: fn(name: &str) -> Option<&'static libtmux::OptionSchema>
 function libtmux::plan::CapturePane::escape_sequences: const fn(self) -> Self
 function libtmux::plan::CapturePane::new: fn(target: impl Into<libtmux::plan::PaneTarget>) -> Self
@@ -1085,6 +1113,9 @@ impl Clone for libtmux::control::BlockResult
 impl Clone for libtmux::control::ControlSender
 impl Clone for libtmux::control::Event
 impl Clone for libtmux::control::Subscription
+impl Clone for libtmux::lifecycle::Discovery
+impl Clone for libtmux::lifecycle::DiscoveryTruncation
+impl Clone for libtmux::lifecycle::PaneIdentity
 impl Clone for libtmux::plan::Attribution
 impl Clone for libtmux::plan::CapturePane
 impl Clone for libtmux::plan::Effects
@@ -1167,6 +1198,7 @@ impl Copy for libtmux::ServerGoneKind
 impl Copy for libtmux::SessionNameError
 impl Copy for libtmux::SplitDirection
 impl Copy for libtmux::WindowPlacement
+impl Copy for libtmux::lifecycle::DiscoveryTruncation
 impl Copy for libtmux::plan::Attribution
 impl Copy for libtmux::plan::Effects
 impl Copy for libtmux::plan::OperationKind
@@ -1270,6 +1302,13 @@ impl Debug for libtmux::control::ControlSender
 impl Debug for libtmux::control::Event
 impl Debug for libtmux::control::PaneOutput
 impl Debug for libtmux::control::Subscription
+impl Debug for libtmux::lifecycle::DiscoveredServer
+impl Debug for libtmux::lifecycle::Discovery
+impl Debug for libtmux::lifecycle::DiscoveryDiagnostic
+impl Debug for libtmux::lifecycle::DiscoveryReport
+impl Debug for libtmux::lifecycle::DiscoverySkip
+impl Debug for libtmux::lifecycle::DiscoveryTruncation
+impl Debug for libtmux::lifecycle::PaneIdentity
 impl Debug for libtmux::plan::Attribution
 impl Debug for libtmux::plan::CapturePane
 impl Debug for libtmux::plan::Effects
@@ -1322,6 +1361,7 @@ impl Default for libtmux::ControlClientLimits
 impl Default for libtmux::ControlLimits
 impl Default for libtmux::DispatchLimits
 impl Default for libtmux::OutputLimits
+impl Default for libtmux::lifecycle::DiscoveryReport
 impl Default for libtmux::plan::Plan
 impl Default for libtmux::plan::Planner
 impl Display for libtmux::Client
@@ -1422,6 +1462,7 @@ impl Eq for libtmux::WindowTarget
 impl Eq for libtmux::control::BlockResult
 impl Eq for libtmux::control::Event
 impl Eq for libtmux::control::Subscription
+impl Eq for libtmux::lifecycle::DiscoveryTruncation
 impl Eq for libtmux::plan::Attribution
 impl Eq for libtmux::plan::Effects
 impl Eq for libtmux::plan::OperationKind
@@ -1650,6 +1691,7 @@ impl PartialEq for libtmux::WindowTarget
 impl PartialEq for libtmux::control::BlockResult
 impl PartialEq for libtmux::control::Event
 impl PartialEq for libtmux::control::Subscription
+impl PartialEq for libtmux::lifecycle::DiscoveryTruncation
 impl PartialEq for libtmux::plan::Attribution
 impl PartialEq for libtmux::plan::Effects
 impl PartialEq for libtmux::plan::OperationKind
@@ -1842,9 +1884,12 @@ impl<T, V> Eq for libtmux::query::TextField<T, V>
 impl<T, V> PartialEq for libtmux::query::TextField<T, V>
 impl<T: Clone> Clone for libtmux::Availability<T>
 impl<T: Clone> Clone for libtmux::SparseValues<T>
+impl<T: Clone> Clone for libtmux::lifecycle::FindOrCreate<T>
+impl<T: Clone> Clone for libtmux::lifecycle::Owned<T>
 impl<T: Copy> Copy for libtmux::Availability<T>
 impl<T: Debug> Debug for libtmux::Availability<T>
 impl<T: Debug> Debug for libtmux::SparseValues<T>
+impl<T: Debug> Debug for libtmux::lifecycle::FindOrCreate<T>
 impl<T: Default> Default for libtmux::SparseValues<T>
 impl<T: Eq> Eq for libtmux::Availability<T>
 impl<T: Eq> Eq for libtmux::SparseValues<T>
@@ -1858,6 +1903,7 @@ impl<T: libtmux::query::FilterSchema> JsonSchema for libtmux::query::FilterExpr<
 impl<T: libtmux::query::Filterable> Serialize for libtmux::query::FilterExpr<T>
 impl<T: libtmux::query::Filterable> libtmux::query::Matcher<T> for &libtmux::query::FilterExpr<T>
 impl<T: libtmux::query::Filterable> libtmux::query::Matcher<T> for libtmux::query::FilterExpr<T>
+impl<T: std::fmt::Debug> Debug for libtmux::lifecycle::Owned<T>
 impl<T> Clone for libtmux::plan::Slot<T>
 impl<T> Clone for libtmux::query::BoolField<T>
 impl<T> Clone for libtmux::query::FilterExpr<T>
@@ -1933,6 +1979,12 @@ struct libtmux::control::ControlEvents
 struct libtmux::control::ControlMode
 struct libtmux::control::ControlSender
 struct libtmux::control::PaneOutput
+struct libtmux::lifecycle::DiscoveredServer
+struct libtmux::lifecycle::Discovery
+struct libtmux::lifecycle::DiscoveryDiagnostic
+struct libtmux::lifecycle::DiscoveryReport
+struct libtmux::lifecycle::Owned<T>
+struct libtmux::lifecycle::PaneIdentity
 struct libtmux::plan::CapturePane
 struct libtmux::plan::Effects
 struct libtmux::plan::KillPane
@@ -1999,6 +2051,8 @@ struct_field libtmux::ClientFields::client_utf8: libtmux::query::BoolField<Targe
 struct_field libtmux::ClientFields::client_width: libtmux::query::IntegerField<Target, u32>
 struct_field libtmux::ClientFields::client_written: libtmux::query::IntegerField<Target, u64>
 struct_field libtmux::EnvironmentEntry::Set::0: libtmux::TmuxText
+struct_field libtmux::Error::AcquisitionRollback::cleanup: Box<libtmux::Error>
+struct_field libtmux::Error::AcquisitionRollback::operation: Box<libtmux::Error>
 struct_field libtmux::Error::AfterEffect::operation: &'static str
 struct_field libtmux::Error::AfterEffect::source: Box<libtmux::Error>
 struct_field libtmux::Error::AmbiguousLayout::candidates: Vec<&'static str>
@@ -2030,6 +2084,10 @@ struct_field libtmux::Error::InvalidLayout::reason: &'static str
 struct_field libtmux::Error::InvalidPlan::source: libtmux::plan::PlanValidationError
 struct_field libtmux::Error::InvalidServerConfiguration::kind: libtmux::ServerConfigurationErrorKind
 struct_field libtmux::Error::InvalidVersionOutput::output_len: usize
+struct_field libtmux::Error::LifecycleAmbiguous::kind: &'static str
+struct_field libtmux::Error::LifecycleAmbiguous::matches: usize
+struct_field libtmux::Error::LifecycleInput::reason: &'static str
+struct_field libtmux::Error::LifecycleTaskLost::detail: String
 struct_field libtmux::Error::LinkGone::kind: libtmux::ObjectKind
 struct_field libtmux::Error::LinkGone::target: String
 struct_field libtmux::Error::NoEffect::command: &'static str
@@ -2050,6 +2108,7 @@ struct_field libtmux::Error::OutputLimitExceeded::stream: &'static str
 struct_field libtmux::Error::Overloaded::command: libtmux::CommandSummary
 struct_field libtmux::Error::Overloaded::in_flight: usize
 struct_field libtmux::Error::Overloaded::request_id: u64
+struct_field libtmux::Error::OwnershipMetadata::reason: String
 struct_field libtmux::Error::ReadOutput::command: libtmux::CommandSummary
 struct_field libtmux::Error::ReadOutput::kind: io::ErrorKind
 struct_field libtmux::Error::ReadOutput::request_id: u64
@@ -2069,6 +2128,8 @@ struct_field libtmux::Error::SupervisorLost::request_id: u64
 struct_field libtmux::Error::Timeout::command: libtmux::CommandSummary
 struct_field libtmux::Error::Timeout::request_id: u64
 struct_field libtmux::Error::Timeout::timeout: std::time::Duration
+struct_field libtmux::Error::UnknownCreation::command: &'static str
+struct_field libtmux::Error::UnknownCreation::source: Box<libtmux::Error>
 struct_field libtmux::Error::UnreadableAccessRule::marker: String
 struct_field libtmux::Error::UnreadableFormatValue::detail: libtmux::IdParseError
 struct_field libtmux::Error::UnreadableFormatValue::format: &'static str
@@ -2248,6 +2309,25 @@ struct_field libtmux::control::Event::WindowRenamed::name: libtmux::TmuxText
 struct_field libtmux::control::Event::WindowRenamed::window: libtmux::WindowId
 struct_field libtmux::control::Subscription::Pane::0: libtmux::PaneId
 struct_field libtmux::control::Subscription::Window::0: libtmux::WindowId
+struct_field libtmux::lifecycle::DiscoveredServer::generation: libtmux::ServerGeneration
+struct_field libtmux::lifecycle::DiscoveredServer::server: libtmux::Server
+struct_field libtmux::lifecycle::Discovery::executable: std::ffi::OsString
+struct_field libtmux::lifecycle::Discovery::max_entries: usize
+struct_field libtmux::lifecycle::Discovery::max_probes: usize
+struct_field libtmux::lifecycle::Discovery::probe_timeout: std::time::Duration
+struct_field libtmux::lifecycle::Discovery::roots: Vec<std::path::PathBuf>
+struct_field libtmux::lifecycle::Discovery::timeout: std::time::Duration
+struct_field libtmux::lifecycle::DiscoveryDiagnostic::path: std::path::PathBuf
+struct_field libtmux::lifecycle::DiscoveryDiagnostic::reason: libtmux::lifecycle::DiscoverySkip
+struct_field libtmux::lifecycle::DiscoveryReport::diagnostics: Vec<libtmux::lifecycle::DiscoveryDiagnostic>
+struct_field libtmux::lifecycle::DiscoveryReport::entries: usize
+struct_field libtmux::lifecycle::DiscoveryReport::probes: usize
+struct_field libtmux::lifecycle::DiscoveryReport::servers: Vec<libtmux::lifecycle::DiscoveredServer>
+struct_field libtmux::lifecycle::DiscoveryReport::truncated: Option<libtmux::lifecycle::DiscoveryTruncation>
+struct_field libtmux::lifecycle::DiscoverySkip::Io::0: std::io::Error
+struct_field libtmux::lifecycle::DiscoverySkip::Probe::0: libtmux::Error
+struct_field libtmux::lifecycle::FindOrCreate::Created::0: libtmux::lifecycle::Owned<T>
+struct_field libtmux::lifecycle::FindOrCreate::Reused::0: T
 struct_field libtmux::plan::Effects::creates: Option<libtmux::plan::Scope>
 struct_field libtmux::plan::Effects::destructive: bool
 struct_field libtmux::plan::Effects::idempotent: bool
@@ -2317,6 +2397,7 @@ variant libtmux::ControlModeErrorKind::Unread
 variant libtmux::ControlModeErrorKind::UnrepresentableCommand
 variant libtmux::EnvironmentEntry::Removed
 variant libtmux::EnvironmentEntry::Set
+variant libtmux::Error::AcquisitionRollback
 variant libtmux::Error::AfterEffect
 variant libtmux::Error::AmbiguousLayout
 variant libtmux::Error::CapabilityDefective
@@ -2333,6 +2414,9 @@ variant libtmux::Error::InvalidLayout
 variant libtmux::Error::InvalidPlan
 variant libtmux::Error::InvalidServerConfiguration
 variant libtmux::Error::InvalidVersionOutput
+variant libtmux::Error::LifecycleAmbiguous
+variant libtmux::Error::LifecycleInput
+variant libtmux::Error::LifecycleTaskLost
 variant libtmux::Error::LinkGone
 variant libtmux::Error::NoEffect
 variant libtmux::Error::ObjectGone
@@ -2341,6 +2425,8 @@ variant libtmux::Error::OptionScopeMismatch
 variant libtmux::Error::OptionValueRefused
 variant libtmux::Error::OutputLimitExceeded
 variant libtmux::Error::Overloaded
+variant libtmux::Error::OwnershipMetadata
+variant libtmux::Error::OwnershipTokenChanged
 variant libtmux::Error::ReadOutput
 variant libtmux::Error::RuntimeNested
 variant libtmux::Error::RuntimeUnavailable
@@ -2351,6 +2437,7 @@ variant libtmux::Error::SessionExists
 variant libtmux::Error::Spawn
 variant libtmux::Error::SupervisorLost
 variant libtmux::Error::Timeout
+variant libtmux::Error::UnknownCreation
 variant libtmux::Error::UnreadableAccessRule
 variant libtmux::Error::UnreadableFormatValue
 variant libtmux::Error::UnrecognizedLayout
@@ -2437,6 +2524,7 @@ variant libtmux::ScopeError::Creation
 variant libtmux::ScopeError::Operation
 variant libtmux::ScopeError::OperationAndCleanup
 variant libtmux::ServerConfigurationErrorKind::ConflictingSocketSelectors
+variant libtmux::ServerConfigurationErrorKind::InvalidClientEnvironment
 variant libtmux::ServerConfigurationErrorKind::InvalidColorMode
 variant libtmux::ServerConfigurationErrorKind::InvalidConfigPath
 variant libtmux::ServerConfigurationErrorKind::InvalidSocketName
@@ -2490,6 +2578,18 @@ variant libtmux::control::Subscription::AllWindows
 variant libtmux::control::Subscription::Pane
 variant libtmux::control::Subscription::Session
 variant libtmux::control::Subscription::Window
+variant libtmux::lifecycle::DiscoverySkip::DuplicateDaemon
+variant libtmux::lifecycle::DiscoverySkip::DuplicatePath
+variant libtmux::lifecycle::DiscoverySkip::Io
+variant libtmux::lifecycle::DiscoverySkip::Probe
+variant libtmux::lifecycle::DiscoverySkip::ProbeTimeout
+variant libtmux::lifecycle::DiscoverySkip::Symlink
+variant libtmux::lifecycle::DiscoverySkip::WrongType
+variant libtmux::lifecycle::DiscoveryTruncation::Entries
+variant libtmux::lifecycle::DiscoveryTruncation::Probes
+variant libtmux::lifecycle::DiscoveryTruncation::Time
+variant libtmux::lifecycle::FindOrCreate::Created
+variant libtmux::lifecycle::FindOrCreate::Reused
 variant libtmux::plan::Attribution::Merged
 variant libtmux::plan::Attribution::PerCommand
 variant libtmux::plan::Op::CapturePane

@@ -20,6 +20,7 @@ include = [
     "/docs/design.md",
     "/docs/findings.md",
     "/docs/migration.md",
+    "/docs/lifecycle.md",
     "/docs/parity.md",
     "/benches/**/*.rs",
     "/examples/**/*.rs",
@@ -33,6 +34,18 @@ include = [
 
 [lib]
 path = "src/lib.rs"
+
+[[example]]
+name = "default_session"
+
+[[example]]
+name = "lifecycle"
+
+[[example]]
+name = "adopt_resources"
+
+[[example]]
+name = "adopt_server"
 
 [[example]]
 name = "inspect"
