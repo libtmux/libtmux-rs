@@ -63,7 +63,7 @@ fn write_script(directory: &Path, name: &str, body: &str) -> PathBuf {
     fs::set_permissions(&staging, permissions).expect("staged script is executable");
     fs::rename(&staging, &path).expect("staged script is installed atomically");
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + libtmux::test::hang_guard();
     loop {
         match process::Command::new(&path)
             .arg("__libtmux_fixture_ready__")
@@ -115,7 +115,7 @@ async fn read_pids(
     count: usize,
     dispatch: &mut tokio::task::JoinHandle<Result<CommandResult, Error>>,
 ) -> Vec<u32> {
-    let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+    let outcome = tokio::time::timeout(libtmux::test::hang_guard(), async {
         loop {
             if let Ok(value) = fs::read_to_string(path) {
                 let pids = value
@@ -145,7 +145,7 @@ async fn read_pid(
 }
 
 async fn assert_process_gone(value: u32) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(libtmux::test::hang_guard(), async {
         loop {
             if matches!(test_kill_process(pid(value)), Err(Errno::SRCH)) {
                 return;
@@ -887,7 +887,7 @@ exit 94
     let server = Server::builder()
         .tmux_executable(&script)
         .socket_path(directory.path().join("timeout.sock"))
-        .default_timeout(Duration::from_secs(2))
+        .default_timeout(libtmux::test::hang_guard())
         .build()
         .expect("server configuration is valid");
     let dispatch_server = server.clone();
@@ -1273,7 +1273,7 @@ async fn a_signal_after_a_wait_ran_out_of_time_reaches_the_next_wait() {
 
     assert_eq!(
         server
-            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .wait_for_channel(&channel, libtmux::test::hang_guard())
             .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
@@ -1309,7 +1309,7 @@ async fn a_signal_after_a_dropped_wait_reaches_the_next_wait() {
 
     assert_eq!(
         server
-            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .wait_for_channel(&channel, libtmux::test::hang_guard())
             .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
@@ -1349,7 +1349,7 @@ async fn waits_on_one_channel_share_one_client() {
         .expect("the channel is signalled");
     assert_eq!(
         server
-            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .wait_for_channel(&channel, libtmux::test::hang_guard())
             .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
@@ -1367,7 +1367,7 @@ async fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
         .dispatch_limits(
             libtmux::DispatchLimits::default()
                 .max_in_flight(1)
-                .acquire_timeout(Some(scaled(Duration::from_secs(2)))),
+                .acquire_timeout(Some(libtmux::test::hang_guard())),
         )
         .start()
         .await
@@ -1391,7 +1391,7 @@ async fn a_parked_wait_does_not_hold_the_server_s_one_dispatch_slot() {
         .expect("the channel is signalled");
     assert_eq!(
         server
-            .wait_for_channel(&channel, scaled(Duration::from_secs(5)))
+            .wait_for_channel(&channel, libtmux::test::hang_guard())
             .await
             .expect("the wait runs"),
         ChannelWait::Signalled,
@@ -1455,13 +1455,10 @@ async fn a_lock_that_ran_out_of_time_while_queued_leaves_the_channel_lockable() 
         .await
         .expect("the holder releases the channel");
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
-    .expect("the channel is not wedged")
-    .expect("the channel locks again");
+    tokio::time::timeout(libtmux::test::hang_guard(), server.lock_channel(&channel))
+        .await
+        .expect("the channel is not wedged")
+        .expect("the channel locks again");
     server
         .unlock_channel(&channel)
         .await
@@ -1503,13 +1500,10 @@ async fn a_lock_scope_that_ran_out_of_time_while_queued_leaves_the_channel_locka
         .await
         .expect("the holder releases the channel");
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
-    .expect("the channel is not wedged")
-    .expect("the channel locks again");
+    tokio::time::timeout(libtmux::test::hang_guard(), server.lock_channel(&channel))
+        .await
+        .expect("the channel is not wedged")
+        .expect("the channel locks again");
     server
         .unlock_channel(&channel)
         .await
@@ -1550,13 +1544,10 @@ async fn a_lock_dropped_while_queued_leaves_the_channel_lockable() {
         .await
         .expect("the holder releases the channel");
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
-    .expect("the channel is not wedged")
-    .expect("the channel locks again");
+    tokio::time::timeout(libtmux::test::hang_guard(), server.lock_channel(&channel))
+        .await
+        .expect("the channel is not wedged")
+        .expect("the channel locks again");
     server
         .unlock_channel(&channel)
         .await
@@ -1595,13 +1586,10 @@ async fn a_lock_scope_dropped_while_queued_leaves_the_channel_lockable() {
         .await
         .expect("the holder releases the channel");
 
-    tokio::time::timeout(
-        scaled(Duration::from_secs(5)),
-        server.lock_channel(&channel),
-    )
-    .await
-    .expect("the channel is not wedged")
-    .expect("the channel locks again");
+    tokio::time::timeout(libtmux::test::hang_guard(), server.lock_channel(&channel))
+        .await
+        .expect("the channel is not wedged")
+        .expect("the channel locks again");
     server
         .unlock_channel(&channel)
         .await

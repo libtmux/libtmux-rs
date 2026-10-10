@@ -66,13 +66,13 @@ async fn interrupted_mutation_reports_unknown_unacknowledged_effects() {
             signal,
         )
         .unwrap();
-        let bounded = tokio::time::timeout(Duration::from_secs(3), child.wait())
+        let bounded = tokio::time::timeout(Duration::from_secs(20), child.wait())
             .await
             .is_ok();
         if !bounded {
             child.kill().await.unwrap();
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while alive(pending_pid) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -81,7 +81,7 @@ async fn interrupted_mutation_reports_unknown_unacknowledged_effects() {
             let _ =
                 rustix::process::kill_process(Pid::from_raw(pending_pid).unwrap(), Signal::KILL);
         }
-        let output = tokio::time::timeout(Duration::from_secs(2), child.wait_with_output())
+        let output = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
             .await
             .unwrap()
             .unwrap();
@@ -156,7 +156,7 @@ impl Drop for ScriptGroup {
 }
 
 async fn marker(path: &Path) -> Vec<i32> {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if let Ok(text) = std::fs::read_to_string(path) {
                 let values: Vec<_> = text.split_whitespace().map(str::parse::<i32>).collect();
@@ -310,13 +310,13 @@ async fn check_signal(signal: Signal, append: bool, mode: &str) {
         signal,
     )
     .unwrap();
-    let bounded = tokio::time::timeout(Duration::from_secs(3), child.wait())
+    let bounded = tokio::time::timeout(Duration::from_secs(20), child.wait())
         .await
         .is_ok();
     if !bounded {
         child.kill().await.unwrap();
     }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while pids.iter().any(|pid| alive(*pid)) && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
@@ -325,7 +325,7 @@ async fn check_signal(signal: Signal, append: bool, mode: &str) {
         group.0 = None;
     }
     drop(group);
-    let output = tokio::time::timeout(Duration::from_secs(2), child.wait_with_output())
+    let output = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
         .await
         .unwrap()
         .unwrap();

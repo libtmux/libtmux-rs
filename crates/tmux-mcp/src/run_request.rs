@@ -522,7 +522,7 @@ mod tests {
         let socket = server.socket_path().to_path_buf();
 
         server.kill().await.expect("first daemon stops");
-        libtmux::test::retry_until(Duration::from_secs(5), async || !server.is_alive().await)
+        libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || !server.is_alive().await)
             .await
             .expect("the first daemon goes away");
         let replacement = libtmux::Server::builder()

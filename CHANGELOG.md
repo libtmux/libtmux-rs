@@ -16,6 +16,14 @@ full.
 
 ## Unreleased
 
+### Changed
+
+- `libtmux::test::TestServer` waits up to twenty seconds, not five, for a tmux
+  server to start and to shut down. The wait returns as soon as the event
+  happens; the new bound only ends a hang. `libtmux::test::HANG_GUARD` and
+  `hang_guard()` expose it for tests that bound a wait of their own, and
+  `lifecycle_timeout` still overrides it.
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;

@@ -156,18 +156,14 @@ async fn poll_until(
     server: &Server,
     ready: impl Fn(&[libtmux::Pane]) -> bool,
 ) -> Vec<libtmux::Pane> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let panes = server.panes().await.expect("panes list");
-        if ready(&panes) {
-            return panes;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "panes did not reach the expected state before the deadline",
-        );
-        tokio::task::yield_now().await;
-    }
+    let mut panes = Vec::new();
+    libtmux::test::retry_until(std::time::Duration::from_secs(20), async || {
+        panes = server.panes().await.expect("panes list");
+        ready(&panes)
+    })
+    .await
+    .expect("panes did not reach the expected state before the deadline");
+    panes
 }
 
 #[tokio::test]

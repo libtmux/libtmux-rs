@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use libtmux::test::{TestServer, retry_until, scaled};
+use libtmux::test::{TestServer, retry_until};
 use libtmux::{ErrorKind, Layout, NewSessionOptions, NewWindowOptions};
 use libtmux::{SplitDirection, SplitOptions, TmuxText};
 
@@ -366,7 +366,7 @@ async fn flag_shaped_names_layouts_and_keys_stay_literal() {
         .await
         .expect("a flag-shaped line stays literal");
 
-    retry_until(Duration::from_secs(5), async || {
+    retry_until(libtmux::test::HANG_GUARD, async || {
         pane.capture().await.is_ok_and(|lines| {
             let screen = lines
                 .iter()
@@ -616,27 +616,23 @@ async fn pane_input_and_capture_round_trip_through_a_shell() {
         .next()
         .expect("one pane");
 
-    pane.send_keys("printf marker-8fa1\n")
+    // The terminal echoes what was typed, so the marker is assembled by the
+    // shell: only its output spells it whole.
+    pane.send_keys("printf 'marker-%s' 8fa1\n")
         .await
         .expect("keys are sent");
 
-    // Wait for the shell to produce the output rather than sleeping.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let captured = loop {
-        let lines = pane.capture().await.expect("capture succeeds");
-        if lines.iter().any(|line| {
+    let mut captured = Vec::new();
+    retry_until(Duration::from_secs(20), async || {
+        captured = pane.capture().await.expect("capture succeeds");
+        captured.iter().any(|line| {
             line.as_bytes()
                 .windows(11)
                 .any(|window| window == b"marker-8fa1")
-        }) {
-            break lines;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the shell did not echo the marker before the deadline",
-        );
-        tokio::task::yield_now().await;
-    };
+        })
+    })
+    .await
+    .expect("the shell did not print the marker before the deadline");
     assert!(!captured.is_empty());
 
     // A sole pane fills its window, so there is nothing for a resize to take
@@ -693,7 +689,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
     });
     assert_eq!(
         server
-            .wait_for_channel(accepted, scaled(Duration::from_secs(5)))
+            .wait_for_channel(accepted, libtmux::test::hang_guard())
             .await
             .expect("the send can signal"),
         libtmux::ChannelWait::Signalled,
@@ -714,7 +710,7 @@ async fn cancelling_a_line_send_cannot_leave_enter_undispatched() {
 
     assert_eq!(
         server
-            .wait_for_channel(ran, scaled(Duration::from_secs(1)))
+            .wait_for_channel(ran, libtmux::test::hang_guard())
             .await
             .expect("the command signal can be read"),
         libtmux::ChannelWait::Signalled,
@@ -744,7 +740,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         .await
         .expect("the reader is started");
     assert_eq!(
-        pane.wait_for_text("reader-ready", Duration::from_secs(5))
+        pane.wait_for_text("reader-ready", libtmux::test::hang_guard())
             .await
             .expect("the reader can be watched"),
         libtmux::PaneWait::Arrived,
@@ -758,7 +754,7 @@ async fn a_line_send_preserves_adversarial_literal_text() {
         pane.send_line(payload).await.expect("the line is sent");
         let expected = format!("got:<{payload}>");
         assert_eq!(
-            pane.wait_for_text(&expected, Duration::from_secs(5))
+            pane.wait_for_text(&expected, libtmux::test::hang_guard())
                 .await
                 .expect("the reader can be watched"),
             libtmux::PaneWait::Arrived,
@@ -2015,7 +2011,7 @@ async fn a_dead_panes_pid_is_absent_rather_than_a_decode_failure() {
         .await
         .expect("the command runs and exits");
 
-    retry_until(Duration::from_secs(5), async || {
+    retry_until(libtmux::test::HANG_GUARD, async || {
         pane.refreshed()
             .await
             .is_ok_and(|refreshed| refreshed.is_dead())

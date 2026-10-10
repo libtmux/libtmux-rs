@@ -41,7 +41,7 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     // markers, so the same defect that is inert under bash runs fine there and
     // the assertion below passes either way. CI's default shell is sh.
     let mut running = String::new();
-    let ready = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let ready = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         let Ok(fresh) = pane.refreshed().await else {
             return false;
         };
@@ -60,7 +60,7 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     // Settle before pasting: a pane still drawing its prompt puts the prompt on
     // the same line as what follows, which reads like a missing line rather
     // than a late one.
-    pane.wait_for_quiet(Duration::from_millis(300), Duration::from_secs(5))
+    pane.wait_for_quiet(libtmux::test::hang_guard(), Duration::from_secs(5))
         .await
         .expect("bash settles");
 
@@ -91,7 +91,7 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
 
     // The tool reporting success is exactly what the bracketed-paste defect
     // does, so the assertion has to be the line's own output.
-    let ran = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let ran = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         pane.capture().await.is_ok_and(|screen| {
             screen
                 .iter()
