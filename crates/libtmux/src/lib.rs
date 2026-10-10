@@ -80,7 +80,10 @@
 //!
 //! [`ScopeError`] distinguishes creation, operation and cleanup failures.
 //! When both operation and cleanup fail, it retains both errors without
-//! converting the operation's error type. Cleanup errors carry
+//! converting the operation's error type. After joining cancelled scopes, await
+//! [`Server::drain_cleanup`] before shutting down the client and runtime. The
+//! drain returns failures that the cancelled caller could not receive.
+//! Cleanup errors carry
 //! [`Error::AfterEffect`] because creation already succeeded.
 //!
 //! ## Options carry types
@@ -363,6 +366,7 @@ mod formats;
 pub mod hooks;
 mod internal;
 mod layout;
+pub mod lifecycle;
 mod limits;
 mod options;
 mod pane;
@@ -405,6 +409,9 @@ pub use hooks::{IndexedHooks, ReplaceMode, SparseValues};
 #[cfg(feature = "unstable-fuzzing")]
 #[doc(hidden)]
 pub use internal::environment::__fuzz_environment_listing;
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub use internal::listing::__fuzz_lifecycle_receipts;
 #[cfg(feature = "control-mode")]
 pub use limits::{ControlClientLimits, ControlLimits};
 pub use limits::{DispatchLimits, OutputLimits};

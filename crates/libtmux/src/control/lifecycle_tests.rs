@@ -132,7 +132,6 @@ fn server(
         Some(directory.to_path_buf()),
         Some(captured_path),
         Some(OsString::from("inherited-tmux")),
-        Some(OsString::from("%41")),
         None,
         Some(PathBuf::from("/tmp")),
         rustix::process::getuid().as_raw(),

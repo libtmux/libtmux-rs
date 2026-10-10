@@ -62,7 +62,9 @@ impl Error {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::AfterEffect { .. } => ErrorKind::PartialEffect,
+            Self::AfterEffect { .. }
+            | Self::AcquisitionRollback { .. }
+            | Self::UnknownCreation { .. } => ErrorKind::PartialEffect,
             // A replaced daemon reissues ids from the start, so every handle
             // captured from the previous one names something that is not
             // there. That is the same decision as a missing object, and the
@@ -81,16 +83,20 @@ impl Error {
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
             | Self::SessionExists { .. }
-            | Self::OptionRejected { .. } => ErrorKind::Refused,
+            | Self::OptionRejected { .. }
+            | Self::OwnershipTokenChanged
+            | Self::OwnershipMetadata { .. } => ErrorKind::Refused,
             Self::Timeout { .. } => ErrorKind::Timeout,
             Self::ExecutableNotFound { .. }
             | Self::InvalidServerConfiguration { .. }
             | Self::RuntimeUnavailable { .. } => ErrorKind::Unreachable,
             // The call is wrong, not the environment: the same future awaited
             // directly would work.
-            Self::RuntimeNested | Self::UnrecognizedLayout | Self::AmbiguousLayout { .. } => {
-                ErrorKind::InvalidInput
-            }
+            Self::RuntimeNested
+            | Self::UnrecognizedLayout
+            | Self::AmbiguousLayout { .. }
+            | Self::LifecycleInput { .. }
+            | Self::LifecycleAmbiguous { .. } => ErrorKind::InvalidInput,
             Self::UnsupportedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
@@ -107,7 +113,8 @@ impl Error {
             | Self::VersionProbeFailed { .. }
             | Self::ExecutorShutdown { .. }
             | Self::DuplicateRequest { .. }
-            | Self::SupervisorLost { .. } => ErrorKind::Transport,
+            | Self::SupervisorLost { .. }
+            | Self::LifecycleTaskLost { .. } => ErrorKind::Transport,
             Self::InvalidVersionOutput { .. }
             | Self::DecodeListing { .. }
             | Self::UnreadableFormatValue { .. }
@@ -172,6 +179,13 @@ impl Error {
                 ..
             } => true,
             Self::AfterEffect { .. }
+            | Self::AcquisitionRollback { .. }
+            | Self::UnknownCreation { .. }
+            | Self::LifecycleInput { .. }
+            | Self::OwnershipTokenChanged
+            | Self::OwnershipMetadata { .. }
+            | Self::LifecycleAmbiguous { .. }
+            | Self::LifecycleTaskLost { .. }
             | Self::InvalidLayout { .. }
             | Self::InvalidServerConfiguration { .. }
             | Self::InvalidVersionOutput { .. }

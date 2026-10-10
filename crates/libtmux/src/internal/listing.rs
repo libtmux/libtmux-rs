@@ -10,12 +10,13 @@ use std::ffi::{OsStr, OsString};
 use crate::error::ListingDecodeError;
 use crate::formats::{FormatCodecError, FormatPlan, ListProfile};
 use crate::internal::core::Core;
+use crate::lifecycle::identity::{self, DaemonIdentity};
 use crate::snapshot::{
     ClientInfo, PaneProjection, SessionInfo, WindowProjection, hydrate_client_infos_from_stdout,
     hydrate_pane_projections_from_stdout, hydrate_session_infos_from_stdout,
     hydrate_window_projections_from_stdout, pane_projection_plan, window_projection_plan,
 };
-use crate::{Command, Error};
+use crate::{Command, CommandChain, Error};
 
 /// How a listing is scoped.
 ///
@@ -354,63 +355,244 @@ async fn create_one<T>(
     build: impl FnOnce(&str) -> Command,
     template: &str,
     hydrate: impl FnOnce(&[u8]) -> Result<Vec<T>, Error>,
-) -> Result<T, Error> {
+    id: impl Fn(&T) -> String,
+) -> Result<(T, DaemonIdentity), Error> {
     // The builder places `-P -F` itself, because tmux stops parsing flags at
     // the first positional and these commands end with a shell command.
-    let command = build(template);
+    let id_format = match command_name {
+        "new-session" => "#{session_id}",
+        "new-window" => "#{window_id}",
+        _ => "#{pane_id}",
+    };
+    let receipt_template = format!("#{{pid}} #{{start_time}} {id_format}\t{template}");
+    let command = build(&receipt_template);
     let target = command.target().map(OsStr::to_os_string);
-    let result = core.execute(command).await?;
-    if !result.success() {
+    let chain = CommandChain::new(command)
+        .then(identity::initialize()?)
+        .then(identity::receipt());
+    let result = core
+        .execute_chain(chain)
+        .await
+        .map_err(|source| creation_dispatch_error(command_name, source))?;
+    if !result.success() && result.stdout().is_empty() {
         return Err(Error::from_refused_result(
             command_name,
             &result,
             target.as_deref(),
         ));
     }
-    // tmux can exit 0 having done nothing: `-S <dir>/missing/sock` prints
-    // `error creating ... (No such file or directory)` on stderr and exits
-    // 0 with empty stdout, though not every build writes that line -- an
-    // empty stdout alone already means nothing was created. Either way this
-    // is a plain refusal, not a partial effect, and tmux's own reason (when
-    // it gave one) is worth more than the generic message below.
+    // A zero exit with no receipt also occurs when tmux cannot create its
+    // socket, but the absent reply alone cannot prove a mutation had no effect.
     if result.stdout().is_empty() {
         let stderr = result.stderr_lossy();
-        return Err(Error::NoEffect {
+        return Err(Error::UnknownCreation {
             command: command_name,
-            stderr: if stderr.trim().is_empty() {
-                "tmux gave no reason".to_owned()
-            } else {
-                stderr.into_owned()
-            },
+            source: Box::new(Error::CommandFailed {
+                command: command_name,
+                exit_code: result.exit_code(),
+                stderr: if stderr.trim().is_empty() {
+                    "tmux returned no creation receipt".to_owned()
+                } else {
+                    stderr.into_owned()
+                },
+            }),
         });
     }
 
-    hydrate(result.stdout())
-        .map_err(|error| error.after_effect(command_name))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            Error::CommandFailed {
+    let (identity, target, snapshot) =
+        creation_receipt(command_name, result.stdout()).map_err(|source| {
+            Error::UnknownCreation {
                 command: command_name,
-                exit_code: result.exit_code(),
-                stderr: String::from("tmux printed no object for a creating command"),
+                source: Box::new(source),
             }
             .after_effect(command_name)
+        })?;
+    let decoded = if result.success() {
+        hydrate(snapshot).and_then(|rows| {
+            let mut rows = rows.into_iter();
+            match (rows.next(), rows.next()) {
+                (Some(value), None)
+                    if target
+                        .command()
+                        .1
+                        .is_some_and(|expected| id(&value) == expected) =>
+                {
+                    Ok(value)
+                }
+                _ => Err(Error::CommandFailed {
+                    command: command_name,
+                    exit_code: result.exit_code(),
+                    stderr: "creation snapshot does not match its ID receipt".to_owned(),
+                }),
+            }
         })
+    } else {
+        Err(Error::from_refused_result(
+            command_name,
+            &result,
+            target.command().1.map(OsStr::new),
+        ))
+    };
+    match decoded {
+        Ok(value) => Ok((value, identity)),
+        Err(operation) => {
+            let operation = operation.after_effect(command_name);
+            match crate::lifecycle::guarded_kill(core, identity, &target).await {
+                Ok(()) => Err(operation),
+                Err(cleanup) => Err(Error::AcquisitionRollback {
+                    operation: Box::new(operation),
+                    cleanup: Box::new(cleanup),
+                }),
+            }
+        }
+    }
+}
+
+fn creation_dispatch_error(command: &'static str, source: Error) -> Error {
+    let uncertain = matches!(
+        source,
+        Error::Timeout { .. }
+            | Error::ReadOutput { .. }
+            | Error::WaitChild { .. }
+            | Error::SupervisorLost { .. }
+            | Error::OutputLimitExceeded { .. }
+    );
+    #[cfg(feature = "control-mode")]
+    let uncertain = uncertain
+        || matches!(
+            source,
+            Error::ControlMode {
+                kind: crate::ControlModeErrorKind::Transport
+                    | crate::ControlModeErrorKind::Closed
+                    | crate::ControlModeErrorKind::TimedOut
+                    | crate::ControlModeErrorKind::Unread,
+                ..
+            } | Error::ControlModeFrameTooLarge { .. }
+        );
+    if uncertain {
+        Error::UnknownCreation {
+            command,
+            source: Box::new(source),
+        }
+    } else {
+        source
+    }
+}
+
+fn creation_receipt<'a>(
+    command: &str,
+    stdout: &'a [u8],
+) -> Result<(DaemonIdentity, crate::lifecycle::Target, &'a [u8]), Error> {
+    let invalid = || Error::UnreadableFormatValue {
+        format: "creation receipt",
+        detail: crate::IdParseError::new('#'),
+    };
+    let marker = format!("\n{}", identity::MARKER);
+    let boundary = stdout
+        .windows(marker.len())
+        .position(|part| part == marker.as_bytes())
+        .ok_or_else(invalid)?;
+    let identity = identity::parse(&stdout[boundary + marker.len()..])?;
+    let mut receipt = stdout[..=boundary].splitn(2, |byte| *byte == b'\t');
+    let header = std::str::from_utf8(receipt.next().ok_or_else(invalid)?).map_err(|_| invalid())?;
+    let snapshot = receipt.next().ok_or_else(invalid)?;
+    let (generation, id) = header.rsplit_once(' ').ok_or_else(invalid)?;
+    let generation = crate::lifecycle::parse_generation(generation.as_bytes())?;
+    if generation != identity.generation {
+        return Err(Error::ServerGenerationChanged {
+            expected: generation,
+            found: identity.generation,
+        });
+    }
+    let target = match command {
+        "new-session" => crate::lifecycle::Target::Session(
+            id.parse::<crate::SessionId>()
+                .map_err(|_| invalid())?
+                .to_string(),
+        ),
+        "new-window" => crate::lifecycle::Target::Window(
+            id.parse::<crate::WindowId>()
+                .map_err(|_| invalid())?
+                .to_string(),
+        ),
+        _ => crate::lifecycle::Target::Pane(
+            id.parse::<crate::PaneId>()
+                .map_err(|_| invalid())?
+                .to_string(),
+        ),
+    };
+    Ok((identity, target, snapshot))
+}
+
+/// Exercise creation/ownership receipts with arbitrary bytes; not a supported API.
+///
+/// # Panics
+/// Panics when an accepted receipt does not survive reconstruction.
+#[cfg(feature = "unstable-fuzzing")]
+#[doc(hidden)]
+pub fn __fuzz_lifecycle_receipts(data: &[u8]) {
+    if let Ok(accepted) = identity::parse(data) {
+        let encoded = format!(
+            "{} {} {}\n",
+            accepted.generation.pid,
+            accepted.generation.start_time,
+            accepted.token()
+        );
+        assert!(
+            identity::parse(encoded.as_bytes())
+                .is_ok_and(|found| found.generation == accepted.generation
+                    && found.token() == accepted.token())
+        );
+    }
+    for command in ["new-session", "new-window", "split-window"] {
+        if let Ok((accepted, target, snapshot)) = creation_receipt(command, data) {
+            let mut encoded = format!(
+                "{} {} {}\t",
+                accepted.generation.pid,
+                accepted.generation.start_time,
+                target.command().1.unwrap_or_default()
+            )
+            .into_bytes();
+            encoded.extend_from_slice(snapshot);
+            encoded.extend_from_slice(
+                format!(
+                    "{}{} {} {}\n",
+                    identity::MARKER,
+                    accepted.generation.pid,
+                    accepted.generation.start_time,
+                    accepted.token()
+                )
+                .as_bytes(),
+            );
+            assert!(creation_receipt(command, &encoded).is_ok_and(
+                |(found, found_target, found_snapshot)| found.generation == accepted.generation
+                    && found.token() == accepted.token()
+                    && found_target.command() == target.command()
+                    && found_snapshot == snapshot
+            ));
+        }
+    }
 }
 
 /// Create one session and return its hydrated snapshot.
 pub(crate) async fn create_session(
     core: &Core,
     build: impl FnOnce(&str) -> Command,
-) -> Result<SessionInfo, Error> {
+) -> Result<(SessionInfo, DaemonIdentity), Error> {
     let version = core.capabilities().await?.tmux_version().clone();
     let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
     let template = plan.template().to_owned();
 
-    create_one(core, "new-session", build, &template, |stdout| {
-        hydrate_session_infos_from_stdout(&plan, stdout).map_err(decode_error("new-session"))
-    })
+    create_one(
+        core,
+        "new-session",
+        build,
+        &template,
+        |stdout| {
+            hydrate_session_infos_from_stdout(&plan, stdout).map_err(decode_error("new-session"))
+        },
+        |info| info.session_id().to_string(),
+    )
     .await
 }
 
@@ -418,16 +600,23 @@ pub(crate) async fn create_session(
 pub(crate) async fn create_window(
     core: &Core,
     build: impl FnOnce(&str) -> Command,
-) -> Result<WindowProjection, Error> {
+) -> Result<(WindowProjection, DaemonIdentity), Error> {
     let version = core.capabilities().await?.tmux_version().clone();
     let plan = window_projection_plan(&version).map_err(decode_error("new-window"))?;
     let template = plan.template().to_owned();
     let identity = core.configuration().identity();
 
-    create_one(core, "new-window", build, &template, |stdout| {
-        hydrate_window_projections_from_stdout(identity, &plan, stdout)
-            .map_err(decode_error("new-window"))
-    })
+    create_one(
+        core,
+        "new-window",
+        build,
+        &template,
+        |stdout| {
+            hydrate_window_projections_from_stdout(identity, &plan, stdout)
+                .map_err(decode_error("new-window"))
+        },
+        |projection| projection.window().window_id().to_string(),
+    )
     .await
 }
 
@@ -435,16 +624,23 @@ pub(crate) async fn create_window(
 pub(crate) async fn create_pane(
     core: &Core,
     build: impl FnOnce(&str) -> Command,
-) -> Result<PaneProjection, Error> {
+) -> Result<(PaneProjection, DaemonIdentity), Error> {
     let version = core.capabilities().await?.tmux_version().clone();
     let plan = pane_projection_plan(&version).map_err(decode_error("split-window"))?;
     let template = plan.template().to_owned();
     let identity = core.configuration().identity();
 
-    create_one(core, "split-window", build, &template, |stdout| {
-        hydrate_pane_projections_from_stdout(identity, &plan, stdout)
-            .map_err(decode_error("split-window"))
-    })
+    create_one(
+        core,
+        "split-window",
+        build,
+        &template,
+        |stdout| {
+            hydrate_pane_projections_from_stdout(identity, &plan, stdout)
+                .map_err(decode_error("split-window"))
+        },
+        |projection| projection.pane().pane_id().to_string(),
+    )
     .await
 }
 
@@ -677,14 +873,9 @@ mod tests {
         ));
     }
 
-    /// Output tmux could not decode is a partial effect: something was made and
-    /// this cannot say what. No output at all is not, and the difference is not
-    /// cosmetic -- a caller told an effect may be outstanding cannot safely
-    /// retry. A creating command that worked always prints the object it made,
-    /// so nothing printed means nothing made, which is what every tmux does for
-    /// a socket path under a directory that does not exist.
+    /// An empty successful reply carries no proof that creation had no effect.
     #[tokio::test]
-    async fn creation_that_printed_nothing_is_a_refusal_not_a_partial_effect() {
+    async fn creation_that_printed_nothing_has_an_unknown_result() {
         let executor = Arc::new(CreationExecutor {
             calls: AtomicUsize::new(0),
             stdout: b"".as_slice(),
@@ -695,10 +886,10 @@ mod tests {
             .await
             .expect_err("tmux succeeded but described no session");
 
-        assert_ne!(error.kind(), ErrorKind::PartialEffect);
+        assert_eq!(error.kind(), ErrorKind::PartialEffect);
         assert!(matches!(
             error,
-            Error::NoEffect {
+            Error::UnknownCreation {
                 command: "new-session",
                 ..
             }
