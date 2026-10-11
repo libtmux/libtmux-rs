@@ -19,8 +19,8 @@ use crate::{DispatchLimits, Error, OutputLimits, ServerConfigurationErrorKind};
 /// use libtmux::{DispatchLimits, OutputLimits, Server};
 /// use std::time::Duration;
 ///
-/// // Naming a socket and a budget is the whole of the configuration; everything
-/// // else is per-command.
+/// // Naming a socket and a budget is the whole of the configuration;
+/// // everything else is per-command.
 /// let server = Server::builder()
 ///     .socket_name("builder-example")
 ///     .default_timeout(Duration::from_secs(5))
@@ -109,7 +109,9 @@ impl ServerBuilder {
     /// use libtmux::OutputLimits;
     ///
     /// let server = libtmux::Server::builder()
-    ///     .output_limits(OutputLimits::default().max_stdout_bytes(1024 * 1024))
+    ///     .output_limits(
+    ///         OutputLimits::default().max_stdout_bytes(1024 * 1024),
+    ///     )
     ///     .build()?;
     /// # let _ = server;
     /// # Ok::<(), libtmux::Error>(())
@@ -230,7 +232,8 @@ impl ServerBuilder {
     /// # Examples
     ///
     /// ```
-    /// let server = libtmux::Server::builder().tmux_executable("tmux").build()?;
+    /// let server =
+    ///     libtmux::Server::builder().tmux_executable("tmux").build()?;
     /// assert_eq!(server.tmux_executable(), std::ffi::OsStr::new("tmux"));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
@@ -252,7 +255,8 @@ impl ServerBuilder {
     ///
     /// ```
     /// let timeout = std::time::Duration::from_secs(4);
-    /// let server = libtmux::Server::builder().default_timeout(timeout).build()?;
+    /// let server =
+    ///     libtmux::Server::builder().default_timeout(timeout).build()?;
     /// assert_eq!(server.default_timeout(), timeout);
     /// # Ok::<(), libtmux::Error>(())
     /// ```

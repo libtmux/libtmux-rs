@@ -104,7 +104,8 @@ impl Window {
     ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let session = guard.server().new_session("directions").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let window =
+    ///     session.active_window().await?.expect("a session has a window");
     ///
     /// // Splitting leaves focus where it was, so the top pane is still active.
     /// let lower = window.split(SplitDirection::Below).await?;

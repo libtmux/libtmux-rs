@@ -50,7 +50,8 @@ impl Error {
     /// let mut stale = window.clone();
     /// window.kill().await?;
     ///
-    /// let error = stale.rename("gone").await.expect_err("the window was killed");
+    /// let error =
+    ///     stale.rename("gone").await.expect_err("the window was killed");
     /// assert_eq!(error.kind(), ErrorKind::ObjectGone);
     /// assert!(error.is_object_gone());
     /// # guard.shutdown().await?;

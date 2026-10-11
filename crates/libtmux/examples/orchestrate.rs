@@ -37,7 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // project owns rather than straight into the temporary directory.
     let root = std::path::Path::new("/tmp/libtmux-rs-dev");
     std::fs::create_dir_all(root)?;
-    let socket = root.join(format!("{}.sock", unique_name("libtmux-orchestrate")));
+    let socket =
+        root.join(format!("{}.sock", unique_name("libtmux-orchestrate")));
     let server = Server::builder().socket_path(&socket).build()?;
     println!("server on {}", socket.display());
 

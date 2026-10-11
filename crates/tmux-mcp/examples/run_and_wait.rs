@@ -24,22 +24,22 @@ fn args<T: serde::de::DeserializeOwned>(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
+    let toolsets = Some("inspect,manage,execute");
+    let selection = Selection::parse(toolsets, None, None)?;
     let tools = TmuxTools::builder(guard.server().clone())
         // Not the caller's own tmux: this example has none to protect.
         .caller(None)
-        .selection(Selection::parse(Some("inspect,manage,execute"), None, None)?)
+        .selection(selection)
         .build();
 
     tools.create_session(args(json!({"name": "demo"}))?).await?;
     let pane = tools.list_panes().await?.0.panes.remove(0).id;
 
     // A real exit status, not a guess from the text on screen.
+    let ls =
+        json!({"pane": pane, "command": "ls /no/such/path", "seconds": 10});
     let run = tools
-        .run_command(
-            args(json!({"pane": pane, "command": "ls /no/such/path", "seconds": 10}))?,
-            CancellationToken::new(),
-            Reporter::none(),
-        )
+        .run_command(args(ls)?, CancellationToken::new(), Reporter::none())
         .await?
         .0;
     println!("ls exited {:?}: {}", run.exit_status, run.output.trim());
@@ -53,12 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "enter": true
         }))?)
         .await?;
+    let ready =
+        json!({"pane": pane, "patterns": ["server is ready"], "seconds": 10});
     let wait = tools
-        .wait_for_text(
-            args(json!({"pane": pane, "patterns": ["server is ready"], "seconds": 10}))?,
-            CancellationToken::new(),
-            Reporter::none(),
-        )
+        .wait_for_text(args(ready)?, CancellationToken::new(), Reporter::none())
         .await?
         .0;
     println!("waited: {:?} on {:?}", wait.outcome, wait.matched_pattern);

@@ -7,7 +7,9 @@
 use std::time::Duration;
 
 use libtmux::test::unique_name;
-use libtmux::{NewWindowOptions, PaneWait, Server, SplitDirection, SplitOptions};
+use libtmux::{
+    NewWindowOptions, PaneWait, Server, SplitDirection, SplitOptions,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -56,7 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // region: capture
             let lines = pane.capture().await?;
-            for line in lines.iter().filter(|line| !line.as_bytes().is_empty()) {
+            let nonblank =
+                lines.iter().filter(|line| !line.as_bytes().is_empty());
+            for line in nonblank {
                 println!("  | {}", line.to_string_lossy());
             }
             // endregion

@@ -741,8 +741,8 @@ impl From<SessionName> for OsString {
 /// ```
 /// use libtmux::{SessionName, SessionNameError};
 ///
-/// // tmux splits a target on `:` and `.`, so a name holding either would not be
-/// // addressable by name afterwards.
+/// // tmux splits a target on `:` and `.`, so a name holding either would not
+/// // be addressable by name afterwards.
 /// assert!(matches!(
 ///     SessionName::new("build:release"),
 ///     Err(SessionNameError::Separator { separator: ':' }),

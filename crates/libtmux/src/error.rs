@@ -23,7 +23,8 @@ pub use scoped::ScopeError;
 /// use libtmux::{Error, ServerConfigurationErrorKind};
 ///
 /// // A socket name and a socket path are two ways to say the same thing, and
-/// // tmux has no rule for which wins, so the builder refuses rather than picks.
+/// // tmux has no rule for which wins, so the builder refuses rather than
+/// // picks.
 /// let failure = libtmux::Server::builder()
 ///     .socket_name("named")
 ///     .socket_path("/tmp/libtmux-rs-dev/explicit")
@@ -247,7 +248,9 @@ pub enum OptionErrorKind {
 ///         Error::ServerGone { kind, .. } => match kind {
 ///             ServerGoneKind::NotRunning => "start one",
 ///             ServerGoneKind::Unreachable => "check the socket path",
-///             ServerGoneKind::Lost | ServerGoneKind::Stopped => "it went away mid-command",
+///             ServerGoneKind::Lost | ServerGoneKind::Stopped => {
+///                 "it went away mid-command"
+///             }
 ///             _ => "there is no server",
 ///         },
 ///         _ => "not a server problem",
@@ -415,7 +418,8 @@ impl std::error::Error for IdParseError {}
 ///
 /// // A handle outliving its object is the normal way this fails, so
 /// // `is_object_gone` is the branch most callers write.
-/// let failure = stale.rename("renamed").await.expect_err("the session is gone");
+/// let failure =
+///     stale.rename("renamed").await.expect_err("the session is gone");
 /// assert!(failure.is_object_gone());
 /// assert_eq!(failure.kind(), ErrorKind::ObjectGone);
 ///
@@ -1347,7 +1351,8 @@ impl Error {
     /// use libtmux::TmuxVersion;
     ///
     /// let output = b"invalid\n";
-    /// let error = TmuxVersion::parse_output(output).expect_err("output is invalid");
+    /// let error =
+    ///     TmuxVersion::parse_output(output).expect_err("output is invalid");
     /// assert_eq!(error.invalid_version_output_len(), Some(output.len()));
     /// ```
     #[must_use]

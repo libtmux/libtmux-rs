@@ -27,7 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder().socket_path(&socket).build()?;
 
     let session = server.new_session(unique_name("watched").as_str()).await?;
-    let (commands, mut events) = ControlMode::attach(&server, session.id()).await?.split();
+    let (commands, mut events) =
+        ControlMode::attach(&server, session.id()).await?.split();
     println!("one connection to {}", socket.display());
 
     // The watcher gets its own task. Sending and watching are separate
@@ -42,7 +43,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     seen.push(window.to_string());
                 }
                 Event::WindowRenamed { window, name } => {
-                    println!("  <- window {window} is now {}", name.to_string_lossy());
+                    println!(
+                        "  <- window {window} is now {}",
+                        name.to_string_lossy()
+                    );
                     seen.push(window.to_string());
                 }
                 Event::Exit { .. } => break,
@@ -79,9 +83,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // teardown below still runs on that path instead of leaking the
     // throwaway server and its socket file.
     let outcome: Result<usize, Box<dyn std::error::Error>> = async {
-        let (seen, events) = tokio::time::timeout(Duration::from_secs(10), watcher).await???;
+        let limit = Duration::from_secs(10);
+        let (seen, events) = tokio::time::timeout(limit, watcher).await???;
         println!(
-            "{} events arrived while those commands were being sent, on the same socket",
+            "{} events arrived while those commands were being sent, on the \
+             same socket",
             seen.len()
         );
         drop(commands);

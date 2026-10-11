@@ -39,8 +39,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match server.window_by_id(&doomed_id).await {
         Ok(Some(_)) => println!("  still there, which would be a bug"),
-        Ok(None) => println!("  {doomed_id} is gone: look it up again or give up"),
-        Err(error) if error.is_transient() => println!("  worth retrying: {error}"),
+        Ok(None) => {
+            println!("  {doomed_id} is gone: look it up again or give up");
+        }
+        Err(error) if error.is_transient() => {
+            println!("  worth retrying: {error}");
+        }
         Err(error) => return Err(error.into()),
     }
 
@@ -86,7 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // running under the other session's link, so an error that read as "gone"
     // here would tell a caller to discard a handle that still works.
     match same_link.unlink().await {
-        Ok(()) => println!("  unlinked the same link twice, which would be a bug"),
+        Ok(()) => {
+            println!("  unlinked the same link twice, which would be a bug");
+        }
         Err(error) => {
             println!("  second unlink says: {error}");
             println!("    debug:          {error:?}");

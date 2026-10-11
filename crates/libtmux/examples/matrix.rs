@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use libtmux::plan::{
-    Attribution, NewSession, NewWindow, Outcome, Plan, Planner, SelectPane, SendKeys, SetOption,
+    Attribution, NewSession, NewWindow, Outcome, Plan, Planner, SelectPane,
+    SendKeys, SetOption,
 };
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::test::{TestServer, TestServerBuilder};
@@ -56,9 +57,13 @@ impl Witness {
             log = witness.log().display(),
             real = real.display(),
         );
-        std::fs::write(witness.executable(), script).expect("the wrapper is written");
-        std::fs::set_permissions(witness.executable(), std::fs::Permissions::from_mode(0o755))
-            .expect("the wrapper is executable");
+        std::fs::write(witness.executable(), script)
+            .expect("the wrapper is written");
+        std::fs::set_permissions(
+            witness.executable(),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("the wrapper is executable");
         std::fs::write(witness.log(), "").expect("the log starts empty");
         witness
     }
@@ -147,7 +152,10 @@ async fn query(server: &Server, session: &str) -> String {
 }
 
 /// How each outcome column is summarised.
-fn fidelity(outcomes: impl IntoIterator<Item = Outcome>, attribution: Attribution) -> &'static str {
+fn fidelity(
+    outcomes: impl IntoIterator<Item = Outcome>,
+    attribution: Attribution,
+) -> &'static str {
     if outcomes
         .into_iter()
         .any(|outcome| outcome == Outcome::Unknown)
@@ -160,7 +168,11 @@ fn fidelity(outcomes: impl IntoIterator<Item = Outcome>, attribution: Attributio
     }
 }
 
-async fn run_subprocess(mode: &'static str, planner: Planner, name: &str) -> Row {
+async fn run_subprocess(
+    mode: &'static str,
+    planner: Planner,
+    name: &str,
+) -> Row {
     let witness = Witness::new();
     let guard = witness.server().start().await.expect("tmux starts");
     let server = guard.server();
@@ -288,9 +300,11 @@ fn run_blocking(name: &str) -> Row {
 #[tokio::main]
 async fn main() {
     let mut rows = vec![
-        run_subprocess("async/sequential", Planner::Sequential, "async-seq").await,
+        run_subprocess("async/sequential", Planner::Sequential, "async-seq")
+            .await,
         run_subprocess("async/folded", Planner::Folding, "async-fold").await,
-        run_subprocess("async/marked-fold", Planner::Marked, "async-marked").await,
+        run_subprocess("async/marked-fold", Planner::Marked, "async-marked")
+            .await,
         run_control_mode(Connection::Streaming, "control").await,
         run_control_mode(Connection::Routed, "routed").await,
     ];
@@ -320,7 +334,8 @@ async fn main() {
         );
     }
 
-    let queries: Vec<&str> = rows.iter().map(|row| row.query.as_str()).collect();
+    let queries: Vec<&str> =
+        rows.iter().map(|row| row.query.as_str()).collect();
     println!();
     println!(
         "every mode built the same thing: {}",
@@ -366,7 +381,9 @@ async fn what_a_fold_costs_when_something_fails() {
                 .collect::<Vec<_>>(),
         );
     }
-    println!("  Sequential names the failing operation; Folding cannot, because tmux");
+    println!(
+        "  Sequential names the failing operation; Folding cannot, because tmux"
+    );
     println!("  reports one status for the group whichever member failed.");
 
     guard.shutdown().await.expect("tmux shuts down");

@@ -148,7 +148,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Signalling first is safe: tmux keeps it for the next waiter.
     server.signal_channel("build-done").await?;
 
-    match server.wait_for_channel("build-done", Duration::from_secs(60)).await? {
+    match server.wait_for_channel("build-done", Duration::from_secs(60)).await?
+    {
         ChannelWait::Signalled => println!("the build ended"),
         // Running out of time is an outcome, not an error, so this stays
         // distinguishable from tmux being unreachable.
@@ -235,9 +236,8 @@ use libtmux::test::TestServer;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let session = guard.server().new_session("watching").await?;
-    let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
-        .await?
-        .split();
+    let (commands, mut events) =
+        ControlMode::attach(guard.server(), session.id()).await?.split();
 
     commands
         .subscribe("windows", &Subscription::Session, "#{session_windows}")
@@ -248,7 +248,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reports = 0;
     while let Some(event) = events.next_event().await {
         if let Event::SubscriptionChanged { name, value, .. } = event? {
-            println!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
+            println!(
+                "{} = {}",
+                name.to_string_lossy(),
+                value.to_string_lossy()
+            );
             reports += 1;
             if reports == 1 {
                 break;
