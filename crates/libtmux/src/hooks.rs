@@ -32,7 +32,8 @@ use crate::formats::TmuxText;
 /// let server = guard.server();
 ///
 /// server.set_hook("after-new-window", "display-message built").await?;
-/// let hooks = server.hook("after-new-window").await?.expect("the hook is set");
+/// let hooks =
+///     server.hook("after-new-window").await?.expect("the hook is set");
 ///
 /// assert_eq!(hooks.len(), 1);
 /// assert_eq!(
@@ -74,10 +75,15 @@ pub struct SparseValues<T> {
 /// entries.insert(0, TmuxText::from("display-message first"));
 /// entries.insert(4, TmuxText::from("display-message fifth"));
 /// server
-///     .set_hooks("after-new-window", &IndexedHooks::from(entries), ReplaceMode::Replace)
+///     .set_hooks(
+///         "after-new-window",
+///         &IndexedHooks::from(entries),
+///         ReplaceMode::Replace,
+///     )
 ///     .await?;
 ///
-/// let hooks: IndexedHooks = server.hook("after-new-window").await?.expect("just written");
+/// let hooks: IndexedHooks =
+///     server.hook("after-new-window").await?.expect("just written");
 /// assert_eq!(hooks.len(), 2);
 /// assert_eq!(hooks.indices().copied().collect::<Vec<_>>(), vec![0, 4]);
 ///
@@ -185,14 +191,22 @@ impl<'values, T> IntoIterator for &'values SparseValues<T> {
 /// first.insert(0, TmuxText::from("display-message one"));
 /// first.insert(1, TmuxText::from("display-message two"));
 /// server
-///     .set_hooks("after-new-window", &IndexedHooks::from(first), ReplaceMode::Replace)
+///     .set_hooks(
+///         "after-new-window",
+///         &IndexedHooks::from(first),
+///         ReplaceMode::Replace,
+///     )
 ///     .await?;
 ///
 /// // `Merge` writes the indices it names and leaves the rest alone.
 /// let mut second = BTreeMap::new();
 /// second.insert(1, TmuxText::from("display-message replaced"));
 /// server
-///     .set_hooks("after-new-window", &IndexedHooks::from(second), ReplaceMode::Merge)
+///     .set_hooks(
+///         "after-new-window",
+///         &IndexedHooks::from(second),
+///         ReplaceMode::Merge,
+///     )
 ///     .await?;
 ///
 /// let hooks = server.hook("after-new-window").await?.expect("just written");

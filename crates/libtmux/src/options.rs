@@ -23,11 +23,17 @@ use crate::formats::TmuxText;
 /// use libtmux::{OptionKind, option_schema};
 ///
 /// // `mouse` is a real flag: on or off.
-/// assert_eq!(option_schema("mouse").map(OptionSchema::kind), Some(OptionKind::Flag));
+/// assert_eq!(
+///     option_schema("mouse").map(OptionSchema::kind),
+///     Some(OptionKind::Flag)
+/// );
 ///
 /// // `status` looks like one and is not: it also accepts a count of status
 /// // lines, so reading it as a boolean discards those values.
-/// assert_eq!(option_schema("status").map(OptionSchema::kind), Some(OptionKind::Choice));
+/// assert_eq!(
+///     option_schema("status").map(OptionSchema::kind),
+///     Some(OptionKind::Choice)
+/// );
 /// # use libtmux::OptionSchema;
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,8 +64,13 @@ pub enum OptionKind {
 ///
 /// // The scope says which handle can set an option, which is not guessable
 /// // from the name: `mouse` is per-session, and `exit-empty` is server-wide.
-/// assert!(option_schema("mouse").is_some_and(|o| o.accepts(OptionScope::Session)));
-/// assert!(option_schema("exit-empty").is_some_and(|o| o.accepts(OptionScope::Server)));
+/// assert!(
+///     option_schema("mouse").is_some_and(|o| o.accepts(OptionScope::Session))
+/// );
+/// assert!(
+///     option_schema("exit-empty")
+///         .is_some_and(|o| o.accepts(OptionScope::Server))
+/// );
 ///
 /// // Some options live in two tables at once, and tmux takes a write at
 /// // either. Asking for one scope would have to pick, and picking is wrong.
@@ -92,8 +103,8 @@ pub enum OptionScope {
 /// assert_eq!(schema.scopes(), [OptionScope::Session]);
 /// assert!(schema.accepts(OptionScope::Session));
 ///
-/// // An option tmux does not have has no schema, which catches a typo before it
-/// // reaches the server.
+/// // An option tmux does not have has no schema, which catches a typo before
+/// // it reaches the server.
 /// assert!(option_schema("history-limits").is_none());
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,7 +187,8 @@ impl OptionSchema {
     /// let keys = option_schema("mode-keys").expect("a documented option");
     /// assert_eq!(keys.choices(), ["emacs", "vi"]);
     ///
-    /// let limit = option_schema("history-limit").expect("a documented option");
+    /// let limit =
+    ///     option_schema("history-limit").expect("a documented option");
     /// assert!(limit.choices().is_empty());
     /// ```
     #[must_use]
@@ -253,9 +265,15 @@ impl OptionSchema {
 ///
 /// fn advise(refusal: &OptionValueRefusal) -> String {
 ///     match refusal {
-///         OptionValueRefusal::WrongKind { expected } => format!("pass a {expected:?}"),
-///         OptionValueRefusal::NotAChoice { choices } => format!("pick one of {choices:?}"),
-///         OptionValueRefusal::OutOfRange { range } => format!("stay within {range:?}"),
+///         OptionValueRefusal::WrongKind { expected } => {
+///             format!("pass a {expected:?}")
+///         }
+///         OptionValueRefusal::NotAChoice { choices } => {
+///             format!("pick one of {choices:?}")
+///         }
+///         OptionValueRefusal::OutOfRange { range } => {
+///             format!("stay within {range:?}")
+///         }
 ///         _ => "check the value".to_owned(),
 ///     }
 /// }
@@ -333,10 +351,22 @@ impl fmt::Display for OptionValueRefusal {
 ///
 /// // `status` looks like a flag but accepts on, off, and 2 through 5, so
 /// // tmux declares it a choice. The schema records that rather than guessing.
-/// assert_eq!(option_schema("status").map(|o| o.kind()), Some(OptionKind::Choice));
-/// assert_eq!(option_schema("mouse").map(|o| o.kind()), Some(OptionKind::Flag));
-/// assert_eq!(option_schema("history-limit").map(|o| o.kind()), Some(OptionKind::Number));
-/// assert_eq!(option_schema("after-new-window[0]").map(|o| o.kind()), Some(OptionKind::Command));
+/// assert_eq!(
+///     option_schema("status").map(|o| o.kind()),
+///     Some(OptionKind::Choice)
+/// );
+/// assert_eq!(
+///     option_schema("mouse").map(|o| o.kind()),
+///     Some(OptionKind::Flag)
+/// );
+/// assert_eq!(
+///     option_schema("history-limit").map(|o| o.kind()),
+///     Some(OptionKind::Number)
+/// );
+/// assert_eq!(
+///     option_schema("after-new-window[0]").map(|o| o.kind()),
+///     Some(OptionKind::Command)
+/// );
 /// assert_eq!(option_schema("@mine"), None);
 /// ```
 #[must_use]
@@ -428,13 +458,17 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
 ///
 /// // `mouse` is a flag, so it is written and read back as one.
 /// server.set_typed_global_option("mouse", true).await?;
-/// assert_eq!(server.typed_global_option("mouse").await?, Some(OptionValue::Flag(true)));
+/// assert_eq!(
+///     server.typed_global_option("mouse").await?,
+///     Some(OptionValue::Flag(true))
+/// );
 ///
 /// // `status` also reads `on`, and is *not* a flag: tmux accepts `on`, `off`,
 /// // and `2` through `5`. Inferring the type from the value would call this a
 /// // boolean and then fail on a value that is not one, which is why the
 /// // schema is generated from tmux's own option table instead.
-/// let status = server.typed_global_option("status").await?.expect("status is set");
+/// let status =
+///     server.typed_global_option("status").await?.expect("status is set");
 /// assert!(matches!(status, OptionValue::Text(_)));
 ///
 /// // A word tmux's table does not list for a choice is refused unsent.
@@ -444,7 +478,10 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
 ///     .expect_err("not a position tmux has");
 /// assert!(matches!(
 ///     refused,
-///     Error::OptionValueRefused { reason: OptionValueRefusal::NotAChoice { .. }, .. },
+///     Error::OptionValueRefused {
+///         reason: OptionValueRefusal::NotAChoice { .. },
+///         ..
+///     },
 /// ));
 ///
 /// guard.shutdown().await?;

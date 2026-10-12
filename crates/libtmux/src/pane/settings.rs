@@ -53,7 +53,8 @@ impl Pane {
     /// # runtime.block_on(async {
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let session = guard.server().new_session("opts").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let window =
+    ///     session.active_window().await?.expect("a session has a window");
     /// let pane = window.active_pane().await?.expect("a window has a pane");
     ///
     /// pane.set_option("@marker", "set").await?;
@@ -212,7 +213,8 @@ impl Pane {
     /// # runtime.block_on(async {
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let session = guard.server().new_session("hooked").await?;
-    /// let window = session.active_window().await?.expect("a session has a window");
+    /// let window =
+    ///     session.active_window().await?.expect("a session has a window");
     /// let pane = window.active_pane().await?.expect("a window has a pane");
     ///
     /// assert!(pane.hook("pane-died").await?.is_none());

@@ -176,7 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sessions = SessionTree::filter_fields();
     let windows = WindowTree::filter_fields();
-    let has_build = sessions.windows.any(windows.window.window_name.eq("build"));
+    let has_build =
+        sessions.windows.any(windows.window.window_name.eq("build"));
 
     // `hierarchy` gathers the whole tree in three tmux commands, not one
     // per object.

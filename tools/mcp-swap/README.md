@@ -66,7 +66,9 @@ $ cargo run --locked --package mcp-swap -- use --source run
 Install and select a version-isolated published release:
 
 ```console
-$ cargo run --locked --package mcp-swap -- use --source published --version 0.1.0-alpha.10
+$ cargo run --locked --package mcp-swap -- use \
+    --source published \
+    --version 0.1.0-alpha.10
 ```
 
 Restore every recorded client layer:
@@ -80,7 +82,10 @@ deduplicated into the fixed transaction order; `antigravity` is an alias for
 `agy`.
 
 ```console
-$ cargo run --locked --package mcp-swap -- use --cli cursor,pi --cli antigravity --env LIBTMUX_TOOLSETS=standard
+$ cargo run --locked --package mcp-swap -- use \
+    --cli cursor,pi \
+    --cli antigravity \
+    --env LIBTMUX_TOOLSETS=standard
 ```
 
 The swap preserves each entry's existing environment, with explicit `--env`

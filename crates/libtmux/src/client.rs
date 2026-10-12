@@ -297,10 +297,13 @@ impl Client {
     /// // A control-mode connection is a client, so the server has one to find.
     /// # #[cfg(feature = "control-mode")]
     /// # {
-    /// let control = libtmux::control::ControlMode::attach(server, session.id()).await?;
-    /// let client = server.clients().await?.into_iter().next().expect("one client");
+    /// use libtmux::control::ControlMode;
     ///
-    /// let attached = client.attached_session().await?.expect("it is attached");
+    /// let control = ControlMode::attach(server, session.id()).await?;
+    /// let clients = server.clients().await?;
+    /// let client = clients.into_iter().next().expect("one client");
+    ///
+    /// let attached = client.attached_session().await?.expect("attached");
     /// assert_eq!(attached.id(), session.id());
     /// control.shutdown().await?;
     /// # }
@@ -525,8 +528,9 @@ impl Client {
     ///
     /// let fields = Client::filter_fields();
     /// for client in server.clients().await? {
-    ///     // The key table a client is in: `prefix` right after the prefix key.
-    ///     if let Some(table) = client.get(fields.client_key_table).available() {
+    ///     // The key table the client is in; `prefix` after the prefix key.
+    ///     let table = client.get(fields.client_key_table).available();
+    ///     if let Some(table) = table {
     ///         println!("{client}: {}", table.to_string_lossy());
     ///     }
     /// }

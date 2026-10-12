@@ -217,7 +217,9 @@ two-window load takes about 150 ms against 205 (one Linux machine, tmux 3.7d,
 tmuxp 1.74.0, medians of 20 starts and 5 loads). To measure your own:
 
 ```console
-$ just bench-cli --binary target/release/tmux-workspace --tmuxp "$(command -v tmuxp)"
+$ just bench-cli \
+    --binary target/release/tmux-workspace \
+    --tmuxp "$(command -v tmuxp)"
 ```
 
 ## Scripting

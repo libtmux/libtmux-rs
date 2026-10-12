@@ -24,7 +24,9 @@
 //! let watcher = tokio::spawn(async move {
 //!     while let Some(event) = events.next_event().await {
 //!         match event? {
-//!             Event::Output { pane, bytes } => println!("{pane}: {} bytes", bytes.len()),
+//!             Event::Output { pane, bytes } => {
+//!                 println!("{pane}: {} bytes", bytes.len())
+//!             }
 //!             Event::Exit { .. } => break,
 //!             other => println!("{other:?}"),
 //!         }
@@ -960,9 +962,8 @@ impl ControlSender {
     ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let session = guard.server().new_session("watched").await?;
-    /// let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
-    ///     .await?
-    ///     .split();
+    /// let (commands, mut events) =
+    ///     ControlMode::attach(guard.server(), session.id()).await?.split();
     ///
     /// commands
     ///     .subscribe("title", &Subscription::Session, "#{session_name}")
@@ -1441,11 +1442,14 @@ impl PaneOutput {
     /// # async fn inspect(pane: &libtmux::Pane) -> Result<(), libtmux::Error> {
     /// let mut output = pane.stream_output().await?;
     /// let mut preceding = Vec::new();
-    /// let visible = output
-    ///     .snapshot(|chunk| preceding.extend_from_slice(chunk))
-    ///     .await?;
+    /// let visible =
+    ///     output.snapshot(|chunk| preceding.extend_from_slice(chunk)).await?;
     ///
-    /// println!("{} visible lines after {} raw bytes", visible.len(), preceding.len());
+    /// println!(
+    ///     "{} visible lines after {} raw bytes",
+    ///     visible.len(),
+    ///     preceding.len()
+    /// );
     /// output.shutdown().await
     /// # }
     /// ```

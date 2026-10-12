@@ -211,7 +211,9 @@ impl SplitWindow {
     ///
     /// let mut plan = Plan::new();
     /// let session = plan.add(NewSession::new("above"));
-    /// plan.add(SplitWindow::new(session.window()).direction(SplitDirection::Above));
+    /// plan.add(
+    ///     SplitWindow::new(session.window()).direction(SplitDirection::Above),
+    /// );
     ///
     /// assert_eq!(plan.len(), 2);
     /// ```

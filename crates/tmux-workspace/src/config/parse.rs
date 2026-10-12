@@ -78,8 +78,10 @@ impl Workspace {
     /// ```
     /// use tmux_workspace::Workspace;
     ///
-    /// let error = Workspace::from_yaml_strict("session_name: demo\nwindows: []\nfrobnicate: 1\n")
-    ///     .expect_err("an unrecognized key is refused");
+    /// let error = Workspace::from_yaml_strict(
+    ///     "session_name: demo\nwindows: []\nfrobnicate: 1\n",
+    /// )
+    /// .expect_err("an unrecognized key is refused");
     /// assert!(error.to_string().contains("frobnicate"));
     /// ```
     pub fn from_yaml_strict(source: &str) -> Result<Self, ConfigError> {
@@ -105,7 +107,8 @@ impl Workspace {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let project = tempfile::tempdir()?;
     /// let file = project.path().join(".tmuxp.yaml");
-    /// std::fs::write(&file, "session_name: project\nstart_directory: ./\nwindows: []\n")?;
+    /// let yaml = "session_name: project\nstart_directory: ./\nwindows: []\n";
+    /// std::fs::write(&file, yaml)?;
     ///
     /// let workspace = Workspace::from_file(&file)?;
     /// assert_eq!(workspace.start_directory.as_deref(), Some(project.path()));

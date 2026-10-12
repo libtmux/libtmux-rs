@@ -27,12 +27,20 @@ fn main() {
         Ok(reaped) if reaped.is_empty() => {
             // The usual answer, and the one that teaches least, so say what
             // would have shown up here rather than stopping at "nothing".
-            println!("nothing to reap: every fixture under {ROOT} has a living owner");
+            println!(
+                "nothing to reap: every fixture under {ROOT} has a living owner"
+            );
             println!();
             println!("A fixture cleans up after itself. One whose process was");
-            println!("killed -- SIGKILL, a crashed runner, a closed laptop lid --");
-            println!("cannot, and the tmux daemon it left keeps a pseudo-terminal");
-            println!("per pane. Run this after a test run that died and it lists");
+            println!(
+                "killed -- SIGKILL, a crashed runner, a closed laptop lid --"
+            );
+            println!(
+                "cannot, and the tmux daemon it left keeps a pseudo-terminal"
+            );
+            println!(
+                "per pane. Run this after a test run that died and it lists"
+            );
             println!("what it removed.");
         }
         Ok(reaped) => {

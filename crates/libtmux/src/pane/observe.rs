@@ -149,7 +149,8 @@ impl Pane {
     /// let everything = pane.capture_with(CaptureOptions::history()).await?;
     /// assert!(everything.len() >= visible.len());
     ///
-    /// let last_ten = pane.capture_with(CaptureOptions::visible().start(-10)).await?;
+    /// let last_ten =
+    ///     pane.capture_with(CaptureOptions::visible().start(-10)).await?;
     /// assert!(last_ten.len() >= visible.len());
     /// # guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -215,10 +216,16 @@ impl Pane {
     /// let session = server.new_session("prompts").await?;
     /// let pane = session.panes().await?.remove(0);
     ///
-    /// if server.capabilities().await?.tmux_version().has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS) {
+    /// if server
+    ///     .capabilities()
+    ///     .await?
+    ///     .tmux_version()
+    ///     .has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS)
+    /// {
     ///     let lines = pane.capture_lines(CaptureOptions::history()).await?;
     ///     // Without shell integration nothing is marked, which is an answer.
-    ///     let prompts = lines.iter().filter(|line| line.starts_prompt).count();
+    ///     let prompts =
+    ///         lines.iter().filter(|line| line.starts_prompt).count();
     ///     assert!(prompts <= lines.len());
     /// }
     ///
@@ -422,7 +429,8 @@ impl Pane {
     /// # let pane = session.panes().await?.remove(0);
     /// pane.send_line("for n in 1 2 3; do echo tick; done").await?;
     ///
-    /// // The echoed command contains `tick`; only the output is a line equal to it.
+    /// // The echoed command contains `tick`; only the output is a line equal
+    /// // to it.
     /// let ticked = pane
     ///     .wait_until(Duration::from_secs(10), |lines| {
     ///         lines.iter().filter(|line| **line == "tick").count() == 3

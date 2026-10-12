@@ -141,7 +141,8 @@ impl Session {
     /// let pane = session.panes().await?.remove(0);
     ///
     /// // Standing in for the environment tmux gives a process it starts.
-    /// let found = Session::from_env_value(server, Some(pane.id().as_ref())).await?;
+    /// let found =
+    ///     Session::from_env_value(server, Some(pane.id().as_ref())).await?;
     ///
     /// assert_eq!(found.expect("the session exists").id(), session.id());
     /// # guard.shutdown().await?;
@@ -305,7 +306,8 @@ impl Session {
     /// session.new_window("build").await?;
     ///
     /// let fields = libtmux::Window::filter_fields();
-    /// let found = session.search_windows(&fields.window_name.eq("build")).await?;
+    /// let found =
+    ///     session.search_windows(&fields.window_name.eq("build")).await?;
     /// assert_eq!(found.len(), 1);
     ///
     /// guard.shutdown().await?;
@@ -569,7 +571,11 @@ impl Session {
     /// let session = guard.server().new_session("raw").await?;
     ///
     /// let result = session
-    ///     .cmd(libtmux::Command::new("display-message").arg("-p").arg("#{session_name}"))
+    ///     .cmd(
+    ///         libtmux::Command::new("display-message")
+    ///             .arg("-p")
+    ///             .arg("#{session_name}"),
+    ///     )
     ///     .await?;
     /// assert_eq!(result.stdout_lossy().trim(), "raw");
     ///
@@ -892,8 +898,14 @@ impl Session {
     /// let fields = Session::filter_fields();
     ///
     /// // Nobody is attached, so nobody is attached twice.
-    /// assert_eq!(session.get(fields.session_many_attached), Availability::Available(false));
-    /// assert_eq!(session.get(fields.session_id), Availability::Available(session.id()));
+    /// assert_eq!(
+    ///     session.get(fields.session_many_attached),
+    ///     Availability::Available(false)
+    /// );
+    /// assert_eq!(
+    ///     session.get(fields.session_id),
+    ///     Availability::Available(session.id())
+    /// );
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())

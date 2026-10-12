@@ -99,9 +99,9 @@ impl<'server> WorkspaceBuilder<'server> {
     /// let plan = WorkspaceBuilder::new(&server).plan(&workspace);
     ///
     /// // Nothing has run, but the first command is already known.
-    /// assert!(plan.preview()[0]
-    ///     .as_ref()
-    ///     .is_some_and(|command| command.summary().to_string().contains("new-session")));
+    /// assert!(plan.preview()[0].as_ref().is_some_and(|command| {
+    ///     command.summary().to_string().contains("new-session")
+    /// }));
     /// # Ok::<(), tmux_workspace::BuildError>(())
     /// ```
     #[must_use]

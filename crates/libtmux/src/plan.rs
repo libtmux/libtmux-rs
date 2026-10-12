@@ -304,7 +304,8 @@ pub enum Safety {
 /// use libtmux::SessionId;
 ///
 /// let mut plan = Plan::new();
-/// let window = plan.add(NewWindow::new("$0".parse::<SessionId>()?).name("build"));
+/// let window =
+///     plan.add(NewWindow::new("$0".parse::<SessionId>()?).name("build"));
 /// // A new window owns a first pane, reachable without listing anything.
 /// plan.add(SendKeys::new(window.pane()).text("just check").enter());
 /// # Ok::<(), libtmux::IdParseError>(())
@@ -643,8 +644,14 @@ macro_rules! operation_set {
             /// ```
             /// use libtmux::plan::{OperationKind, Safety};
             ///
-            /// assert_eq!(OperationKind::CapturePane.safety(), Safety::ReadOnly);
-            /// assert_eq!(OperationKind::KillPane.safety(), Safety::Destructive);
+            /// assert_eq!(
+            ///     OperationKind::CapturePane.safety(),
+            ///     Safety::ReadOnly
+            /// );
+            /// assert_eq!(
+            ///     OperationKind::KillPane.safety(),
+            ///     Safety::Destructive
+            /// );
             /// ```
             #[must_use]
             pub const fn safety(self) -> Safety {
@@ -885,7 +892,11 @@ impl Op {
 /// // Nothing has run: the plan can be read first.
 /// let rendered = plan.preview();
 /// assert_eq!(rendered.len(), 2);
-/// assert!(rendered[0].as_ref().is_some_and(|c| c.summary().to_string().contains("send-keys")));
+/// assert!(
+///     rendered[0]
+///         .as_ref()
+///         .is_some_and(|c| c.summary().to_string().contains("send-keys"))
+/// );
 /// # Ok::<(), libtmux::IdParseError>(())
 /// ```
 #[derive(Clone, Default)]
