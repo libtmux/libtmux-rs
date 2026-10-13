@@ -1,0 +1,11 @@
+[package]
+name = "libtmux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Dependency-free tmux values and capture requests"
+
+[lints]
+workspace = true
