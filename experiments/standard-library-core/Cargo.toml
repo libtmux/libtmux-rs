@@ -1,0 +1,22 @@
+[workspace]
+members = ["core", "tokio", "demo"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+libtmux = { path = "core" }
+libtmux-tokio = { path = "tokio" }
+tokio = { version = "1.40", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
