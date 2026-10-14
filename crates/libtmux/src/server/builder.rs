@@ -39,6 +39,7 @@ pub struct ServerBuilder {
     socket_path: Option<PathBuf>,
     config_file: Option<PathBuf>,
     colors: Option<u16>,
+    client_environment: Vec<(OsString, Option<OsString>)>,
     executable: OsString,
     timeout: Duration,
     output_limits: OutputLimits,
@@ -85,6 +86,7 @@ impl ServerBuilder {
             socket_path: None,
             config_file: None,
             colors: None,
+            client_environment: Vec::new(),
             executable: OsString::from("tmux"),
             timeout: CoreConfiguration::default_timeout(),
             output_limits: OutputLimits::default(),
@@ -173,8 +175,8 @@ impl ServerBuilder {
 
     /// Select an explicit tmux socket path.
     ///
-    /// Relative paths are joined to the working directory captured by
-    /// [`ServerBuilder::build`].
+    /// Paths must be absolute. An explicit selector takes precedence over
+    /// environment defaults; combining it with `socket_name` is an error.
     ///
     /// # Examples
     ///
@@ -188,6 +190,45 @@ impl ServerBuilder {
     #[must_use = "use the returned builder to retain the socket path"]
     pub fn socket_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.socket_path = Some(path.into());
+        self
+    }
+
+    /// Override the captured client environment without changing the host.
+    ///
+    /// Repeated edits to a key use the last value. `build` resolves endpoint
+    /// defaults from this effective environment; explicit socket selectors
+    /// take precedence. Launches then remove `TMUX`, `TMUX_PANE`, and
+    /// `TMUX_TMPDIR` because the endpoint has been captured as a path.
+    /// This issues no `set-environment` command. tmux may inherit the values
+    /// when it starts a daemon or updates a session's environment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::Server;
+    ///
+    /// let server = Server::builder().client_environment("LANG", "C.UTF-8").build()?;
+    /// # let _ = server;
+    /// # Ok::<(), libtmux::Error>(())
+    /// ```
+    #[must_use = "use the returned builder to retain the child environment"]
+    pub fn client_environment(
+        mut self,
+        key: impl Into<OsString>,
+        value: impl Into<OsString>,
+    ) -> Self {
+        self.client_environment
+            .push((key.into(), Some(value.into())));
+        self
+    }
+
+    /// Remove a variable from each tmux client without changing the host.
+    ///
+    /// A later `client_environment` call for the same key replaces this edit.
+    /// The removal also applies before endpoint defaults are resolved.
+    #[must_use = "use the returned builder to retain the child environment"]
+    pub fn remove_client_environment(mut self, key: impl Into<OsString>) -> Self {
+        self.client_environment.push((key.into(), None));
         self
     }
 
@@ -273,7 +314,7 @@ impl ServerBuilder {
     /// # Errors
     ///
     /// Returns [`Error::InvalidServerConfiguration`] for invalid selector,
-    /// path, color, working-directory, or socket-root inputs.
+    /// path, color, working-directory, socket-root, or client-environment inputs.
     ///
     /// # Examples
     ///
@@ -299,8 +340,9 @@ impl ServerBuilder {
             self.colors,
             self.executable,
             self.timeout,
-            BuildContext::capture(),
+            BuildContext::capture().with_environment(&self.client_environment),
         )
+        .and_then(|configuration| configuration.with_client_environment(self.client_environment))
         .map_err(Error::invalid_server_configuration)?
         .with_limits(self.output_limits, self.dispatch_limits);
         #[cfg(feature = "control-mode")]

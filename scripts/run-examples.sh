@@ -44,6 +44,10 @@ libtmux  | api_query | query | | | query: prod-api
 libtmux  | api_cardinality | query | | | cardinality: none, one, multiple
 libtmux  | api_input | query | | | input: C-c is text
 libtmux  | api_capture | query | | | capture: first line, second line
+libtmux  | lifecycle |                                               |    | lifecycle_harness | PASS unchanged lifecycle example
+libtmux  | adopt_resources |                                         |    | lifecycle_harness | PASS ordinary session/window/pane adoption example
+libtmux  | adopt_server |                                            |    | lifecycle_harness | PASS explicit server adoption example
+libtmux  | default_session |                                         |    |               | windows: 1
 libtmux  | inspect  |                                               |    |               | examples
 libtmux  | find     | query                                         | sh |               | in window
 libtmux  | scratch  | test-support                                  |    |               | hello from tmux
@@ -121,6 +125,8 @@ tmux -S "$socket" new-session -d -s examples
 tmux -S "$socket" new-window -d -n second sh
 server_pid=$(tmux -S "$socket" display-message -p '#{pid}')
 export TMUX="$socket,$server_pid,0"
+export LIBTMUX_SOCKET_PATH="$socket"
+unset LIBTMUX_SOCKET_NAME TMUX_PANE
 
 # Whatever nobody is still using. A directory belonging to a run in progress is
 # not a leak even though it is new, and one belonging to a run that is gone is
@@ -185,12 +191,20 @@ while IFS='|' read -r crate name features args driver expect; do
 done < <(rows)
 
 failures=()
+lifecycle_checked=false
 while IFS='|' read -r crate name features args driver expect; do
     printf '\n=== example %s/%s\n' "$crate" "$name"
     opts=(--quiet --manifest-path "crates/$crate/Cargo.toml" --example "$name")
     if [ -n "$features" ]; then opts+=(--features "$features"); fi
     # shellcheck disable=SC2086 # arguments are a field, and are meant to split
-    if [ -z "$driver" ]; then
+    if [ "$driver" = lifecycle_harness ]; then
+        if [ "$lifecycle_checked" = false ]; then
+            lifecycle_checked=true
+            if ! python3 scripts/test-lifecycle-examples.py; then
+                failures+=("libtmux/lifecycle" "libtmux/adopt_resources" "libtmux/adopt_server")
+            fi
+        fi
+    elif [ -z "$driver" ]; then
         out="$run_dir/$name.out"
         if cargo run "${opts[@]}" -- $args </dev/null | tee "$out"; then
             if [ -n "$expect" ] && ! grep -qF "$expect" "$out"; then

@@ -138,6 +138,7 @@ jobs:
           - list_keys
           - workspace_yaml
           - layout
+          - lifecycle_receipts
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1

@@ -59,8 +59,9 @@ const fn pane_mode_is_active(count: u32) -> bool {
 /// ```
 #[derive(Clone)]
 pub struct Pane {
-    core: Arc<Core>,
+    pub(crate) core: Arc<Core>,
     projection: PaneProjection,
+    pub(crate) created_identity: Option<Arc<crate::lifecycle::identity::DaemonIdentity>>,
 }
 
 fn send_line_command(target: &PaneId, mut text: OsString) -> Command {
@@ -76,7 +77,11 @@ fn send_line_command(target: &PaneId, mut text: OsString) -> Command {
 impl Pane {
     /// Build a handle from a hydrated projection.
     pub(crate) const fn new(core: Arc<Core>, projection: PaneProjection) -> Self {
-        Self { core, projection }
+        Self {
+            core,
+            projection,
+            created_identity: None,
+        }
     }
 
     /// Find the pane this process is running in.
@@ -511,10 +516,12 @@ impl Pane {
     pub async fn split(&self, options: impl Into<crate::SplitOptions>) -> Result<Self, Error> {
         let options = options.into();
         let pane = self.id().to_string();
-        let projection =
+        let (projection, generation) =
             listing::create_pane(&self.core, |format| options.into_command(&pane, format)).await?;
 
-        Ok(Self::new(Arc::clone(&self.core), projection))
+        let mut created = Self::new(Arc::clone(&self.core), projection);
+        created.created_identity = Some(Arc::new(generation));
+        Ok(created)
     }
 
     /// Move one edge of the pane by a number of cells.

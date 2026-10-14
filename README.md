@@ -83,34 +83,46 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 ## Drive tmux
 
-```rust
-use libtmux::test::TestServer;
+```rust,no_run
+use libtmux::{Error, ScopeError, Server};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // This example runs. `TestServer` is an isolated tmux on its own socket
-    // under `/tmp/libtmux-rs-test/`, torn down at the end, so it cannot touch
-    // sessions you are using. In your own code, that line is
-    // `let server = libtmux::Server::new()?;` and the rest is unchanged.
-    let guard = TestServer::new().await?;
-    let server = guard.server();
-
-    let session = server.new_session("work").await?;
-    let window = session.new_window("editor").await?;
-    let pane = window.active_pane().await?.expect("the new window has a pane");
-
-    pane.send_line("echo built").await?;
-
-    assert_eq!(server.sessions().await?.len(), 1);
-
-    guard.shutdown().await?;
-    Ok(())
+    let server = Server::new()?;
+    let name = format!("libtmux-example-{}", std::process::id());
+    let outcome = server
+        .with_session(name, async |session| {
+            println!("created scoped session {}", session.id());
+            println!("windows: {}", session.windows().await?.len());
+            Ok::<(), Error>(())
+        })
+        .await;
+    let shutdown = server.shutdown().await;
+    match (outcome, shutdown) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(operation), Ok(())) => Err(operation.into()),
+        (Ok(()), Err(cleanup)) => Err(cleanup.into()),
+        (Err(operation), Err(cleanup)) => {
+            Err(ScopeError::<(), _>::OperationAndCleanup { operation, cleanup }.into())
+        }
+    }
 }
 ```
 
-The examples on this page run as written, against a throwaway tmux. To run
-them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.0-alpha.15", features = ["test-support"] }`.
+This program uses the ordinary tmux endpoint and kills its own session at
+scope exit. It is the same source as [`default_session.rs`](crates/libtmux/examples/default_session.rs).
+
+Use [owned scopes, discovery and find-or-create](crates/libtmux/docs/lifecycle.md) when your program
+accepts destruction responsibility or searches several endpoints. Reused
+resources remain borrowed, and cancelled scopes expose cleanup failures through
+`Server::drain_cleanup`.
+The external example harness supplies a private endpoint through the child
+environment and runs this file unchanged, including an injected body failure.
+It checks session cleanup, then shuts down its daemon and removes its files.
+
+The fixture examples below use `libtmux::test::TestServer`; enable
+`test-support` for those examples. The ordinary program needs no fixture
+feature.
 
 Everything that reaches tmux is `async`. Everything that reads an
 already-taken snapshot is not, so walking a tree you already have costs no

@@ -359,7 +359,7 @@ impl PromptKind {
 /// ```
 #[derive(Clone)]
 pub struct Server {
-    core: Arc<Core>,
+    pub(crate) core: Arc<Core>,
 }
 
 /// What came of waiting on a `wait-for` channel.
@@ -450,10 +450,14 @@ impl Server {
 
     /// Construct a server from the captured default endpoint context.
     ///
+    /// `LIBTMUX_SOCKET_PATH` precedes `LIBTMUX_SOCKET_NAME`, then `TMUX`,
+    /// then tmux's named default. Empty environment selectors are absent;
+    /// invalid selected values are errors. See the crate's endpoint defaults.
+    ///
     /// # Errors
     ///
     /// Returns an error when the working directory or socket root cannot be
-    /// captured.
+    /// captured, or a selected path, socket name, or `TMUX` context is invalid.
     ///
     /// # Examples
     ///
@@ -803,8 +807,8 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when `TMUX` is unset, empty, or not shaped like that
-    /// triple, and when the socket path it names is unusable.
+    /// Returns `NotInsideTmux` when `TMUX` is absent or empty, and a
+    /// configuration error for an invalid triple or non-absolute socket path.
     ///
     /// # Examples
     ///
@@ -828,36 +832,22 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns an error when the value is absent, empty, or not shaped like
-    /// tmux's triple, and when the socket path it names is unusable.
+    /// Returns `NotInsideTmux` for an absent or empty value. The shared
+    /// right-split parser rejects invalid PID/session fields and paths.
+    /// Other endpoint environment defaults do not override this value.
     pub fn from_env_value(value: Option<impl Into<OsString>>) -> Result<Self, Error> {
-        use std::os::unix::ffi::OsStrExt as _;
+        use crate::target::endpoint_resolution::inherited_socket_path;
 
-        let value: OsString = value.map(Into::into).ok_or_else(|| {
-            Error::invalid_server_configuration(ServerConfigurationErrorKind::NotInsideTmux)
-        })?;
-
-        // The socket path is everything before the first comma. tmux writes a
-        // path, and a path may itself contain commas only before that split
-        // point is reached, so splitting on the first comma is what tmux's own
-        // consumers do.
-        let bytes = value.as_bytes();
-        let socket = bytes
-            .iter()
-            .position(|byte| *byte == b',')
-            .map(|index| &bytes[..index])
-            .filter(|socket| !socket.is_empty())
+        let value = value
+            .map(Into::into)
+            .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                // The variable exists and does not say what tmux says, which
-                // is a different problem from not being inside tmux at all.
-                Error::invalid_server_configuration(
-                    ServerConfigurationErrorKind::MalformedTmuxVariable,
-                )
+                Error::invalid_server_configuration(ServerConfigurationErrorKind::NotInsideTmux)
             })?;
-
-        Self::builder()
-            .socket_path(PathBuf::from(OsString::from_vec(socket.to_vec())))
-            .build()
+        let socket = inherited_socket_path(&value).map_err(|_| {
+            Error::invalid_server_configuration(ServerConfigurationErrorKind::MalformedTmuxVariable)
+        })?;
+        Self::builder().socket_path(PathBuf::from(socket)).build()
     }
 
     /// List the sessions that have at least one client attached.
@@ -894,10 +884,12 @@ impl Server {
         options: impl Into<NewSessionOptions>,
     ) -> Result<Session, Error> {
         let options = options.into();
-        let info =
+        let (info, generation) =
             listing::create_session(&self.core, |format| options.into_command(format)).await?;
 
-        Ok(Session::new(Arc::clone(&self.core), info))
+        let mut created = Session::new(Arc::clone(&self.core), info);
+        created.created_identity = Some(Arc::new(generation));
+        Ok(created)
     }
 
     /// Lock every client on the server.
@@ -1492,10 +1484,10 @@ impl Server {
     ///
     /// # Cancel safety
     ///
-    /// Nothing is left behind. Once polled, creation and cleanup run in tasks
+    /// Once polled, creation and cleanup run in tasks
     /// of their own, so the session is killed even if this future is dropped
     /// or the operation panics, while the Tokio runtime is alive. A cleanup
-    /// failure then has no caller to reach; the `tracing` feature records it.
+    /// failure remains available through [`Server::drain_cleanup`](crate::Server::drain_cleanup).
     pub async fn with_session<T, E>(
         &self,
         options: impl Into<NewSessionOptions>,
@@ -1503,11 +1495,12 @@ impl Server {
     ) -> Result<T, crate::ScopeError<T, E>> {
         let server = self.clone();
         let options = options.into();
-        scoped::run(
+        scoped::run_tracked(
+            self.core.lifecycle.clone(),
             "with-session",
-            async move { server.new_session(options).await },
-            Session::kill,
-            operation,
+            async move { server.new_session(options).await?.created_owner() },
+            |owner| async move { owner.close().await },
+            async |owner: &crate::lifecycle::Owned<Session>| operation(owner.resource()).await,
         )
         .await
     }

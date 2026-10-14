@@ -33,35 +33,46 @@ and panes.**
 
 See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
 
-```rust
-use libtmux::test::TestServer;
+```rust,no_run
+use libtmux::{Error, ScopeError, Server};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Runs for real. `TestServer` is an isolated tmux on its own socket under
-    // `/tmp/libtmux-rs-test/`, torn down at the end. Your own code says
-    // `let server = libtmux::Server::new()?;` instead; nothing else changes.
-    let guard = TestServer::new().await?;
-    let server = guard.server();
-
-    let session = server.new_session("work").await?;
-    let window = session.new_window("editor").await?;
-    let pane = window.active_pane().await?.expect("a window has a pane");
-
-    pane.send_line("echo hello").await?;
-
-    for line in pane.capture().await? {
-        println!("{}", line.to_string_lossy());
+    let server = Server::new()?;
+    let name = format!("libtmux-example-{}", std::process::id());
+    let outcome = server
+        .with_session(name, async |session| {
+            println!("created scoped session {}", session.id());
+            println!("windows: {}", session.windows().await?.len());
+            Ok::<(), Error>(())
+        })
+        .await;
+    let shutdown = server.shutdown().await;
+    match (outcome, shutdown) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(operation), Ok(())) => Err(operation.into()),
+        (Ok(()), Err(cleanup)) => Err(cleanup.into()),
+        (Err(operation), Err(cleanup)) => {
+            Err(ScopeError::<(), _>::OperationAndCleanup { operation, cleanup }.into())
+        }
     }
-
-    guard.shutdown().await?;
-    Ok(())
 }
 ```
 
-The examples on this page run as written, against a throwaway tmux. To run
-them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.0-alpha.15", features = ["test-support"] }`.
+This program uses the ordinary tmux endpoint and kills its own session at
+scope exit. It is the same source as [`default_session.rs`](examples/default_session.rs).
+
+Use [owned scopes, discovery and find-or-create](docs/lifecycle.md) when your program
+accepts destruction responsibility or searches several endpoints. Reused
+resources remain borrowed, and cancelled scopes expose cleanup failures through
+`Server::drain_cleanup`.
+The external example harness supplies a private endpoint through the child
+environment and runs this file unchanged, including an injected body failure.
+It checks session cleanup, then shuts down its daemon and removes its files.
+
+The fixture examples below use `libtmux::test::TestServer`; enable
+`test-support` for those examples. The ordinary program needs no fixture
+feature.
 
 Every accessor that reaches tmux is `async`; everything that reads an
 already-taken snapshot is not. Commands run without a shell, and results keep
@@ -86,6 +97,62 @@ Async operations need an entered Tokio runtime. The default executable is
 2024. It is checked in CI against the whole test suite, not just a build. A
 raise is a minor version bump and is called out in the release notes, so a
 patch release never moves it.
+
+## Endpoint defaults and child environments
+
+`Server::new()` and `ServerBuilder::build()` capture one endpoint. Selection
+uses the first configured input:
+
+1. An explicit `socket_path` or `socket_name`; supplying both is an error.
+2. Nonempty `LIBTMUX_SOCKET_PATH`.
+3. Nonempty `LIBTMUX_SOCKET_NAME`.
+4. Nonempty `TMUX`, split from the right as `socket,pid,session`.
+5. The named socket `default`.
+
+Empty environment selectors count as absent. A selected invalid value returns
+`Error::InvalidServerConfiguration`; lower-priority inputs cannot redirect it.
+Paths must be absolute. Names must be nonempty leaf names; `/`, NUL, and the
+names `.` or `..` are rejected. Nonempty values keep their spaces and non-UTF-8 path bytes.
+`TMUX` requires a positive ASCII decimal PID and a nonnegative ASCII decimal
+session field, optionally prefixed with `$`, or the no-session sentinel `-1`.
+Commas within the path survive parsing. `Server::from_env_value` uses the same
+parser for supplied context and ignores other endpoint defaults.
+
+Named sockets use the captured, canonical `TMUX_TMPDIR`, or `/tmp` when it is
+absent or empty, followed by `tmux-<real uid>/<name>`. A supplied root must be an
+existing absolute directory. Commands use the resolved `-S` path. Before
+launching a named-socket client, the library creates the per-user directory
+with mode 0700 if needed and checks its ownership and permissions. A missing
+root fails; tmux cannot redirect the command to its `/tmp` fallback. Explicit
+socket paths create no parent directories.
+
+`ServerBuilder::client_environment` and `remove_client_environment` edit each
+client's environment without changing the host. Repeated edits to a key use
+the last edit. Endpoint selection uses this effective environment at
+construction; explicit socket selectors take precedence. The launched client
+receives neither `TMUX` nor `TMUX_PANE`; `TMUX_TMPDIR` is removed because the
+path has been captured. Changing the input map afterwards cannot retarget the
+handle; there is no host-environment mutation or restoration step.
+Explicit `Pane::from_env_value`, `Window::from_env_value` and
+`Session::from_env_value` still accept pane context for lookups.
+
+Creation options' `environment` methods affect the new pane process.
+Server/session `set_environment` affects tmux's stored environment. Client
+options issue no `set-environment` command, though tmux may inherit client
+variables when starting a daemon or updating a session. These operations do
+not mutate or restore the Rust host's environment.
+
+Run the external example harness from the repository root:
+
+```console
+$ python3 scripts/test-default-example.py
+```
+
+It requires Python 3.11 or newer, Cargo, and tmux on `PATH`. It compiles the
+ordinary example, checks that both opening README blocks match that source,
+and tests success and body failure under `/tmp/libtmux-rs-dev/`. Its child
+environments leave the caller's variables unchanged; cleanup failures cause
+a nonzero exit.
 
 ## Features
 

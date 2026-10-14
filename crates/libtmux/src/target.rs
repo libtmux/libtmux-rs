@@ -444,27 +444,38 @@ pub(crate) mod endpoint_resolution {
 
     #[derive(Clone, Copy)]
     pub(crate) struct EndpointInputs<'a> {
-        cwd: &'a Path,
         socket_root: Option<&'a OsStr>,
         real_uid: u32,
         inherited_tmux: Option<&'a OsStr>,
+        default_socket_path: Option<&'a OsStr>,
+        default_socket_name: Option<&'a OsStr>,
         fallback_socket_root: FallbackSocketRoot<'a>,
     }
 
     impl<'a> EndpointInputs<'a> {
         pub(crate) const fn new(
-            cwd: &'a Path,
             socket_root: Option<&'a OsStr>,
             real_uid: u32,
             inherited_tmux: Option<&'a OsStr>,
         ) -> Self {
             Self {
-                cwd,
                 socket_root,
                 real_uid,
                 inherited_tmux,
+                default_socket_path: None,
+                default_socket_name: None,
                 fallback_socket_root: FallbackSocketRoot::SystemTmp,
             }
+        }
+
+        pub(crate) const fn with_defaults(
+            mut self,
+            path: Option<&'a OsStr>,
+            name: Option<&'a OsStr>,
+        ) -> Self {
+            self.default_socket_path = path;
+            self.default_socket_name = name;
+            self
         }
 
         pub(crate) const fn with_captured_fallback_socket_root(
@@ -477,15 +488,8 @@ pub(crate) mod endpoint_resolution {
     }
 
     pub(crate) enum ResolvedSocketSelector {
-        Path {
-            path: PathBuf,
-            inherited: bool,
-        },
-        Name {
-            name: OsString,
-            socket_root: PathBuf,
-            configured: bool,
-        },
+        Path,
+        Name { name: OsString, configured: bool },
     }
 
     pub(crate) struct ResolvedEndpoint {
@@ -499,17 +503,19 @@ pub(crate) mod endpoint_resolution {
         EmptySocketPath,
         #[error("tmux socket path contains a NUL byte")]
         SocketPathContainsNul,
-        #[error("working directory is not absolute")]
-        RelativeWorkingDirectory,
+        #[error("tmux socket path must be absolute")]
+        RelativeSocketPath,
         #[error("socket path and socket name are mutually exclusive")]
         ConflictingSelectors,
         #[error("tmux socket name is not one normal path component")]
         InvalidSocketName,
-        #[error("no tmux socket root could be resolved")]
+        #[error("tmux socket root must be an existing absolute directory")]
         NoSocketRoot,
+        #[error("TMUX must contain an absolute socket path, PID and session field")]
+        MalformedTmux,
     }
 
-    fn capture_endpoint(path: &OsStr, cwd: &Path) -> Result<ServerIdentity, IdentityError> {
+    fn capture_endpoint(path: &OsStr) -> Result<ServerIdentity, IdentityError> {
         let bytes = path.as_bytes();
         if bytes.is_empty() {
             return Err(IdentityError::EmptySocketPath);
@@ -517,52 +523,47 @@ pub(crate) mod endpoint_resolution {
         if bytes.contains(&b'\0') {
             return Err(IdentityError::SocketPathContainsNul);
         }
-
         let path = Path::new(path);
-        let socket_path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            if !cwd.is_absolute() {
-                return Err(IdentityError::RelativeWorkingDirectory);
-            }
-            cwd.join(path)
-        };
-
-        Ok(ServerIdentity { socket_path })
+        if !path.is_absolute() {
+            return Err(IdentityError::RelativeSocketPath);
+        }
+        Ok(ServerIdentity {
+            socket_path: path.to_path_buf(),
+        })
     }
 
-    fn inherited_socket_path(value: &OsStr) -> Option<&OsStr> {
+    pub(crate) fn inherited_socket_path(value: &OsStr) -> Result<&OsStr, IdentityError> {
         let mut fields = value.as_bytes().rsplitn(3, |byte| *byte == b',');
-        fields.next()?;
-        fields.next()?;
-        let path = fields.next()?;
-        if path.is_empty() {
-            return None;
+        let session = fields.next().ok_or(IdentityError::MalformedTmux)?;
+        let pid = fields.next().ok_or(IdentityError::MalformedTmux)?;
+        let path = fields.next().ok_or(IdentityError::MalformedTmux)?;
+        let no_session = session == b"-1";
+        let session = session.strip_prefix(b"$").unwrap_or(session);
+        let digits = |value: &[u8]| !value.is_empty() && value.iter().all(u8::is_ascii_digit);
+        if !digits(pid) || pid.iter().all(|byte| *byte == b'0') || !(no_session || digits(session))
+        {
+            return Err(IdentityError::MalformedTmux);
         }
-        Some(OsStr::from_bytes(path))
+        let path = OsStr::from_bytes(path);
+        capture_endpoint(path).map_err(|_| IdentityError::MalformedTmux)?;
+        Ok(path)
+    }
+
+    fn nonempty(value: Option<&OsStr>) -> Option<&OsStr> {
+        value.filter(|value| !value.as_bytes().is_empty())
     }
 
     fn resolved_socket_root(
         candidate: Option<&OsStr>,
-        cwd: &Path,
         fallback: FallbackSocketRoot<'_>,
     ) -> Result<PathBuf, IdentityError> {
-        if let Some(candidate) = candidate.filter(|value| !value.as_bytes().is_empty()) {
-            let candidate = Path::new(candidate);
-            let captured = if candidate.is_absolute() {
-                candidate.to_path_buf()
-            } else if cwd.is_absolute() {
-                cwd.join(candidate)
-            } else {
-                PathBuf::new()
-            };
-            if !captured.as_os_str().is_empty() {
-                if let Ok(resolved) = captured.canonicalize() {
-                    return Ok(resolved);
-                }
+        if let Some(candidate) = nonempty(candidate) {
+            let path = Path::new(candidate);
+            if !path.is_absolute() || !path.is_dir() {
+                return Err(IdentityError::NoSocketRoot);
             }
+            return path.canonicalize().map_err(|_| IdentityError::NoSocketRoot);
         }
-
         match fallback {
             FallbackSocketRoot::SystemTmp => Path::new("/tmp")
                 .canonicalize()
@@ -589,48 +590,40 @@ pub(crate) mod endpoint_resolution {
         if explicit_path.is_some() && socket_name.is_some() {
             return Err(IdentityError::ConflictingSelectors);
         }
-        if let Some(path) = explicit_path {
-            let identity = capture_endpoint(path, inputs.cwd)?;
+        let path = explicit_path.or_else(|| {
+            socket_name
+                .is_none()
+                .then(|| nonempty(inputs.default_socket_path))
+                .flatten()
+        });
+        if let Some(path) = path {
             return Ok(ResolvedEndpoint {
-                selector: ResolvedSocketSelector::Path {
-                    path: identity.socket_path.clone(),
-                    inherited: false,
-                },
-                identity,
+                identity: capture_endpoint(path)?,
+                selector: ResolvedSocketSelector::Path,
             });
         }
-
-        let (name, configured) = if let Some(name) = socket_name {
+        let name = socket_name.or_else(|| nonempty(inputs.default_socket_name));
+        let (name, configured) = if let Some(name) = name {
             if !valid_socket_name(name) {
                 return Err(IdentityError::InvalidSocketName);
             }
             (name, true)
-        } else if let Some(path) = inputs
-            .inherited_tmux
-            .and_then(inherited_socket_path)
-            .and_then(|path| capture_endpoint(path, inputs.cwd).ok())
-        {
+        } else if let Some(value) = nonempty(inputs.inherited_tmux) {
             return Ok(ResolvedEndpoint {
-                selector: ResolvedSocketSelector::Path {
-                    path: path.socket_path.clone(),
-                    inherited: true,
-                },
-                identity: path,
+                identity: capture_endpoint(inherited_socket_path(value)?)?,
+                selector: ResolvedSocketSelector::Path,
             });
         } else {
             (OsStr::new("default"), false)
         };
-
-        let socket_root =
-            resolved_socket_root(inputs.socket_root, inputs.cwd, inputs.fallback_socket_root)?;
-        let mut socket_path = socket_root.clone();
-        socket_path.push(format!("tmux-{}", inputs.real_uid));
-        socket_path.push(name);
+        let socket_root = resolved_socket_root(inputs.socket_root, inputs.fallback_socket_root)?;
+        let socket_path = socket_root
+            .join(format!("tmux-{}", inputs.real_uid))
+            .join(name);
         Ok(ResolvedEndpoint {
             identity: ServerIdentity { socket_path },
             selector: ResolvedSocketSelector::Name {
                 name: name.to_os_string(),
-                socket_root,
                 configured,
             },
         })

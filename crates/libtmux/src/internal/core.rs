@@ -39,7 +39,8 @@ pub(crate) struct BuildContext {
     working_directory: Option<PathBuf>,
     path: Option<OsString>,
     inherited_tmux: Option<OsString>,
-    inherited_tmux_pane: Option<OsString>,
+    default_socket_path: Option<OsString>,
+    default_socket_name: Option<OsString>,
     socket_root: Option<OsString>,
     fallback_socket_root: Option<PathBuf>,
     real_uid: u32,
@@ -50,7 +51,6 @@ impl BuildContext {
         working_directory: Option<PathBuf>,
         path: Option<OsString>,
         inherited_tmux: Option<OsString>,
-        inherited_tmux_pane: Option<OsString>,
         socket_root: Option<OsString>,
         fallback_socket_root: Option<PathBuf>,
         real_uid: u32,
@@ -59,7 +59,8 @@ impl BuildContext {
             working_directory,
             path,
             inherited_tmux,
-            inherited_tmux_pane,
+            default_socket_path: None,
+            default_socket_name: None,
             socket_root,
             fallback_socket_root,
             real_uid,
@@ -71,11 +72,34 @@ impl BuildContext {
             env::current_dir().ok(),
             env::var_os("PATH"),
             env::var_os("TMUX"),
-            env::var_os("TMUX_PANE"),
             env::var_os("TMUX_TMPDIR"),
             Path::new("/tmp").canonicalize().ok(),
             rustix::process::getuid().as_raw(),
         )
+        .with_defaults(
+            env::var_os("LIBTMUX_SOCKET_PATH"),
+            env::var_os("LIBTMUX_SOCKET_NAME"),
+        )
+    }
+
+    pub(crate) fn with_environment(mut self, environment: &[(OsString, Option<OsString>)]) -> Self {
+        for (key, value) in environment {
+            match key.to_str() {
+                Some("PATH") => self.path.clone_from(value),
+                Some("TMUX") => self.inherited_tmux.clone_from(value),
+                Some("TMUX_TMPDIR") => self.socket_root.clone_from(value),
+                Some("LIBTMUX_SOCKET_PATH") => self.default_socket_path.clone_from(value),
+                Some("LIBTMUX_SOCKET_NAME") => self.default_socket_name.clone_from(value),
+                _ => {}
+            }
+        }
+        self
+    }
+
+    fn with_defaults(mut self, path: Option<OsString>, name: Option<OsString>) -> Self {
+        self.default_socket_path = path;
+        self.default_socket_name = name;
+        self
     }
 }
 
@@ -137,33 +161,31 @@ impl CoreConfiguration {
             SocketSelection::Path(path) => (Some(path.as_os_str()), None),
         };
         let inputs = EndpointInputs::new(
-            &working_directory,
             context.socket_root.as_deref(),
             context.real_uid,
             context.inherited_tmux.as_deref(),
+        )
+        .with_defaults(
+            context.default_socket_path.as_deref(),
+            context.default_socket_name.as_deref(),
         )
         .with_captured_fallback_socket_root(context.fallback_socket_root.as_deref());
         let endpoint = resolve_server_endpoint(explicit_path, socket_name, inputs)
             .map_err(|error| map_identity_error(&error))?;
         let identity = endpoint.identity;
-        let (socket_name, mut global_argv, inherited, socket_root) = match endpoint.selector {
-            ResolvedSocketSelector::Path { path, inherited } => (
-                None,
-                vec![OsString::from("-S"), path.into_os_string()],
-                inherited,
-                None,
-            ),
+        let (socket_name, socket_directory) = match endpoint.selector {
+            ResolvedSocketSelector::Path => (None, None),
             ResolvedSocketSelector::Name {
-                name,
-                socket_root,
-                configured,
+                name, configured, ..
             } => (
-                configured.then(|| name.clone()),
-                vec![OsString::from("-L"), name],
-                false,
-                Some(socket_root),
+                configured.then_some(name),
+                identity.socket_path().parent().map(Path::to_path_buf),
             ),
         };
+        let mut global_argv = vec![
+            OsString::from("-S"),
+            identity.socket_path().as_os_str().to_os_string(),
+        ];
 
         let config_file = config_file
             .map(|path| capture_config_path(&path, &working_directory))
@@ -183,26 +205,19 @@ impl CoreConfiguration {
         // a name and no error. `-u` says it directly instead of hoping.
         global_argv.push(OsString::from("-u"));
 
-        let pane = if inherited {
-            context.inherited_tmux_pane
-        } else {
-            None
-        };
         let mut launch = LaunchContext::new(executable).with_current_dir(&working_directory);
         launch = match context.path {
             Some(path) => launch.with_environment("PATH", path),
             None => launch.with_environment_removed("PATH"),
         };
-        launch = launch.with_environment_removed("TMUX");
-        launch = match pane {
-            Some(pane) => launch.with_environment("TMUX_PANE", pane),
-            None => launch.with_environment_removed("TMUX_PANE"),
-        };
-        launch = match socket_root {
-            Some(root) => launch.with_environment("TMUX_TMPDIR", root.into_os_string()),
-            None => launch.with_environment_removed("TMUX_TMPDIR"),
-        };
+        launch = launch
+            .with_environment_removed("TMUX")
+            .with_environment_removed("TMUX_PANE")
+            .with_environment_removed("TMUX_TMPDIR");
 
+        if let Some(directory) = socket_directory {
+            launch = launch.with_socket_directory(directory);
+        }
         Ok(Self {
             identity,
             socket_name,
@@ -218,6 +233,33 @@ impl CoreConfiguration {
             #[cfg(feature = "test-support")]
             synchronous_reap_on_supervisor_drop: false,
         })
+    }
+
+    pub(crate) fn with_client_environment(
+        mut self,
+        environment: Vec<(OsString, Option<OsString>)>,
+    ) -> Result<Self, ServerConfigurationErrorKind> {
+        for (key, value) in environment {
+            if key.is_empty()
+                || key.as_bytes().contains(&b'=')
+                || key.as_bytes().contains(&0)
+                || value
+                    .as_ref()
+                    .is_some_and(|value| value.as_bytes().contains(&0))
+            {
+                return Err(ServerConfigurationErrorKind::InvalidClientEnvironment);
+            }
+            self.launch = match value {
+                Some(value) => self.launch.with_environment(key, value),
+                None => self.launch.with_environment_removed(key),
+            };
+        }
+        self.launch = self
+            .launch
+            .with_environment_removed("TMUX")
+            .with_environment_removed("TMUX_PANE")
+            .with_environment_removed("TMUX_TMPDIR");
+        Ok(self)
     }
 
     pub(crate) fn default_timeout() -> Duration {
@@ -299,21 +341,21 @@ fn capture_config_path(
 
 fn map_identity_error(error: &IdentityError) -> ServerConfigurationErrorKind {
     match error {
-        IdentityError::EmptySocketPath | IdentityError::SocketPathContainsNul => {
-            ServerConfigurationErrorKind::InvalidSocketPath
-        }
-        IdentityError::RelativeWorkingDirectory => {
-            ServerConfigurationErrorKind::WorkingDirectoryUnavailable
-        }
+        IdentityError::EmptySocketPath
+        | IdentityError::SocketPathContainsNul
+        | IdentityError::RelativeSocketPath => ServerConfigurationErrorKind::InvalidSocketPath,
         IdentityError::ConflictingSelectors => {
             ServerConfigurationErrorKind::ConflictingSocketSelectors
         }
         IdentityError::InvalidSocketName => ServerConfigurationErrorKind::InvalidSocketName,
         IdentityError::NoSocketRoot => ServerConfigurationErrorKind::SocketRootUnavailable,
+        IdentityError::MalformedTmux => ServerConfigurationErrorKind::MalformedTmuxVariable,
     }
 }
 
 pub(crate) struct Core {
+    pub(crate) lifecycle: crate::lifecycle::jobs::Journal,
+    pub(crate) lifecycle_lock: tokio::sync::Semaphore,
     configuration: CoreConfiguration,
     executor: Arc<dyn Executor>,
     capabilities: OnceCell<EngineCapabilities>,
@@ -356,6 +398,8 @@ impl Core {
         #[cfg(feature = "control-mode")]
         let control_client_limits = configuration.control_client_limits;
         Self {
+            lifecycle: crate::lifecycle::jobs::Journal::default(),
+            lifecycle_lock: tokio::sync::Semaphore::new(1),
             configuration,
             executor,
             capabilities: OnceCell::new(),
@@ -382,6 +426,8 @@ impl Core {
         let executor = crate::internal::control_executor::ControlModeExecutor::new(sender);
 
         Self {
+            lifecycle: self.lifecycle.clone(),
+            lifecycle_lock: tokio::sync::Semaphore::new(1),
             configuration: self.configuration.clone(),
             executor: Arc::new(executor),
             capabilities: OnceCell::new_with(Some(capabilities)),
@@ -433,6 +479,30 @@ impl Core {
             &self.configuration.global_argv,
             command,
         );
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
+        self.executor.execute(request).await
+    }
+
+    pub(crate) fn startup_child(&self, nonce: &str) -> Self {
+        let mut configuration = self.configuration.clone();
+        configuration.launch = configuration
+            .launch
+            .with_environment("LIBTMUX_LIFECYCLE_NONCE", nonce);
+        Self::new(configuration)
+    }
+
+    pub(crate) async fn execute_no_start(&self, command: Command) -> Result<CommandResult, Error> {
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| command.control_mode_line());
+        let mut arguments = self.configuration.global_argv.clone();
+        if !arguments.iter().any(|arg| arg == "-N") {
+            arguments.insert(0, OsString::from("-N"));
+        }
+        let request = CommandRequest::with_global_argv(self.next_request_id(), &arguments, command);
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
         self.executor.execute(request).await
@@ -491,6 +561,26 @@ impl Core {
             &self.configuration.global_argv,
             chain,
         );
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
+        self.executor.execute(request).await
+    }
+
+    pub(crate) async fn execute_chain_no_start(
+        &self,
+        chain: CommandChain,
+    ) -> Result<CommandResult, Error> {
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| chain.control_mode_line());
+        let mut arguments = self.configuration.global_argv.clone();
+        if !arguments.iter().any(|arg| arg == "-N") {
+            arguments.insert(0, OsString::from("-N"));
+        }
+        let request =
+            CommandRequest::chain_with_global_argv(self.next_request_id(), &arguments, chain);
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
         self.executor.execute(request).await
@@ -600,6 +690,7 @@ mod tests {
 
     use std::error::Error as StdError;
     use std::ffi::{OsStr, OsString};
+    use std::os::unix::ffi::OsStrExt as _;
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
     use std::process;
@@ -648,7 +739,6 @@ mod tests {
         cwd: Option<&Path>,
         path: Option<&OsStr>,
         tmux: Option<&OsStr>,
-        pane: Option<&OsStr>,
         socket_root: Option<&OsStr>,
         fallback_root: Option<&Path>,
     ) -> BuildContext {
@@ -656,7 +746,6 @@ mod tests {
             cwd.map(Path::to_path_buf),
             path.map(OsStr::to_os_string),
             tmux.map(OsStr::to_os_string),
-            pane.map(OsStr::to_os_string),
             socket_root.map(OsStr::to_os_string),
             fallback_root.map(Path::to_path_buf),
             1000,
@@ -692,14 +781,13 @@ mod tests {
     #[test]
     fn explicit_paths_freeze_cwd_and_remove_unrelated_tmux_context() {
         let configuration = resolve(
-            &SocketSelection::Path(PathBuf::from("relative-socket;")),
+            &SocketSelection::Path(PathBuf::from("/captured/work/relative-socket;")),
             Some(PathBuf::from("relative-config;")),
             Some(256),
             context(
                 Some(Path::new("/captured/work")),
                 Some(OsStr::new("/captured/bin")),
                 Some(OsStr::new("/live/socket,1,0")),
-                Some(OsStr::new("%99")),
                 Some(OsStr::new("/ignored/root")),
                 Some(Path::new("/fallback")),
             ),
@@ -755,7 +843,6 @@ mod tests {
                 Some(OsStr::new("/captured/bin")),
                 None,
                 None,
-                None,
                 Some(Path::new("/fallback")),
             ),
         )
@@ -798,7 +885,6 @@ mod tests {
                 Some(workspace.path()),
                 Some(OsStr::new("/captured/bin")),
                 None,
-                Some(OsStr::new("%8")),
                 Some(root.as_os_str()),
                 Some(Path::new("/fallback")),
             ),
@@ -811,9 +897,8 @@ mod tests {
             context(
                 Some(workspace.path()),
                 None,
-                Some(OsStr::new("malformed")),
-                Some(OsStr::new("%7")),
-                Some(OsStr::new("/missing/socket-root")),
+                None,
+                None,
                 Some(Path::new("/fallback")),
             ),
         )
@@ -821,7 +906,11 @@ mod tests {
 
         assert_eq!(
             argv(&named),
-            [b"-L".as_slice(), b"named;".as_slice(), b"-u".as_slice()]
+            [
+                b"-S".as_slice(),
+                canonical.join("tmux-1000/named;").as_os_str().as_bytes(),
+                b"-u".as_slice()
+            ]
         );
         assert_eq!(
             named.identity().socket_path(),
@@ -829,16 +918,20 @@ mod tests {
         );
         assert_eq!(
             named.environment_value(OsStr::new("TMUX_TMPDIR")),
-            Some(Some(canonical.as_os_str()))
+            Some(None)
         );
         assert_eq!(named.environment_value(OsStr::new("TMUX_PANE")), Some(None));
         assert_eq!(
             argv(&fallback),
-            [b"-L".as_slice(), b"default".as_slice(), b"-u".as_slice()]
+            [
+                b"-S".as_slice(),
+                b"/fallback/tmux-1000/default".as_slice(),
+                b"-u".as_slice()
+            ]
         );
         assert_eq!(
             fallback.environment_value(OsStr::new("TMUX_TMPDIR")),
-            Some(Some(OsStr::new("/fallback")))
+            Some(None)
         );
         assert_eq!(
             fallback.identity().socket_path(),
@@ -853,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn inherited_endpoint_becomes_explicit_and_freezes_only_its_pane_context() {
+    fn inherited_endpoint_becomes_explicit_and_clears_child_context() {
         let configuration = resolve(
             &SocketSelection::Automatic,
             None,
@@ -861,8 +954,7 @@ mod tests {
             context(
                 Some(Path::new("/captured/work")),
                 Some(OsStr::new("/captured/bin")),
-                Some(OsStr::new("relative/socket,10,4")),
-                Some(OsStr::new("%4")),
+                Some(OsStr::new("/captured/work/relative/socket,10,4")),
                 Some(OsStr::new("/unrelated/root")),
                 Some(Path::new("/fallback")),
             ),
@@ -887,11 +979,146 @@ mod tests {
         );
         assert_eq!(
             configuration.environment_value(OsStr::new("TMUX_PANE")),
-            Some(Some(OsStr::new("%4")))
+            Some(None)
         );
         assert_eq!(
             configuration.environment_value(OsStr::new("TMUX_TMPDIR")),
             Some(None)
+        );
+    }
+
+    #[test]
+    fn configuration_owns_defaults_after_the_input_map_changes() {
+        let mut environment = std::collections::HashMap::from([
+            (
+                "LIBTMUX_SOCKET_PATH",
+                OsString::from("/tmp/libtmux-rs-dev/before"),
+            ),
+            ("LIBTMUX_SOCKET_NAME", OsString::from("ignored/invalid")),
+        ]);
+        let captured = context(
+            Some(Path::new("/")),
+            None,
+            None,
+            None,
+            Some(Path::new("/tmp")),
+        )
+        .with_defaults(
+            environment.get("LIBTMUX_SOCKET_PATH").cloned(),
+            environment.get("LIBTMUX_SOCKET_NAME").cloned(),
+        );
+        let configuration = resolve(&SocketSelection::Automatic, None, None, captured).unwrap();
+        environment.insert(
+            "LIBTMUX_SOCKET_PATH",
+            OsString::from("/tmp/libtmux-rs-dev/after"),
+        );
+        environment.remove("LIBTMUX_SOCKET_NAME");
+        assert_eq!(
+            configuration.identity().socket_path(),
+            Path::new("/tmp/libtmux-rs-dev/before")
+        );
+        assert_eq!(
+            argv(&configuration),
+            [
+                b"-S".as_slice(),
+                b"/tmp/libtmux-rs-dev/before".as_slice(),
+                b"-u".as_slice()
+            ]
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn named_socket_startup_prepares_a_fresh_root_and_checks_permissions() {
+        let namespace = Path::new("/tmp/libtmux-rs-dev");
+        std::fs::create_dir_all(namespace).unwrap();
+        for mode in [None, Some(0o750), Some(0o705)] {
+            let root = tempfile::Builder::new()
+                .prefix("named-default-")
+                .tempdir_in(namespace)
+                .unwrap();
+            let uid_directory = root
+                .path()
+                .join(format!("tmux-{}", rustix::process::getuid().as_raw()));
+            if let Some(mode) = mode {
+                std::fs::create_dir(&uid_directory).unwrap();
+                std::fs::set_permissions(&uid_directory, std::fs::Permissions::from_mode(mode))
+                    .unwrap();
+            }
+            let context = BuildContext::new(
+                Some(root.path().to_path_buf()),
+                std::env::var_os("PATH"),
+                None,
+                Some(root.path().as_os_str().to_os_string()),
+                Some(PathBuf::from("/tmp")),
+                rustix::process::getuid().as_raw(),
+            );
+            let configuration = resolve(
+                &SocketSelection::Name(root.path().file_name().unwrap().to_os_string()),
+                None,
+                None,
+                context,
+            )
+            .unwrap();
+            let server = crate::Server::from_core(std::sync::Arc::new(Core::new(configuration)));
+            let result = server
+                .with_session("example", async |session| {
+                    Ok::<_, Error>((session.id().to_string(), server.socket_path().exists()))
+                })
+                .await;
+            let cleanup = server.kill().await;
+            let shutdown = server.shutdown().await;
+            if mode == Some(0o705) {
+                assert!(matches!(
+                    result,
+                    Err(crate::ScopeError::Creation(Error::Spawn { .. }))
+                ));
+                assert!(!server.socket_path().exists());
+            } else {
+                assert!(result.is_ok(), "{result:?}");
+                assert!(
+                    result.unwrap().1,
+                    "tmux did not start on the captured endpoint"
+                );
+                assert!(cleanup.is_ok(), "{cleanup:?}");
+                assert!(uid_directory.is_dir());
+            }
+            assert!(shutdown.is_ok());
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[tokio::test]
+    async fn removed_named_root_cannot_fall_back_to_another_endpoint() {
+        let namespace = Path::new("/tmp/libtmux-rs-dev");
+        std::fs::create_dir_all(namespace).unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("removed-default-")
+            .tempdir_in(namespace)
+            .unwrap();
+        let name = root.path().file_name().unwrap().to_os_string();
+        let context = BuildContext::new(
+            Some(namespace.to_path_buf()),
+            std::env::var_os("PATH"),
+            None,
+            Some(root.path().as_os_str().to_os_string()),
+            Some(PathBuf::from("/tmp")),
+            rustix::process::getuid().as_raw(),
+        );
+        let configuration =
+            resolve(&SocketSelection::Name(name.clone()), None, None, context).unwrap();
+        let server = crate::Server::from_core(std::sync::Arc::new(Core::new(configuration)));
+        let captured = server.socket_path().to_path_buf();
+        drop(root);
+        let result = server.new_session("example").await;
+        server.shutdown().await.unwrap();
+        assert!(matches!(result, Err(Error::Spawn { .. })), "{result:?}");
+        assert!(!captured.exists());
+        assert!(
+            !Path::new("/tmp")
+                .join(format!("tmux-{}", rustix::process::getuid().as_raw()))
+                .join(name)
+                .exists()
         );
     }
 
@@ -901,7 +1128,7 @@ mod tests {
             &SocketSelection::Path(PathBuf::from("relative")),
             None,
             None,
-            context(None, None, None, None, None, Some(Path::new("/fallback"))),
+            context(None, None, None, None, Some(Path::new("/fallback"))),
         );
         assert!(matches!(
             missing_cwd,
@@ -914,7 +1141,6 @@ mod tests {
             None,
             context(
                 Some(Path::new("/captured/work")),
-                None,
                 None,
                 None,
                 Some(OsStr::new("/missing/root")),
@@ -983,7 +1209,7 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
         }
 
         let configuration = CoreConfiguration::resolve(
-            &SocketSelection::Path(PathBuf::from("socket;")),
+            &SocketSelection::Path(workspace.path().join("socket;")),
             Some(PathBuf::from("config;")),
             Some(256),
             OsString::from("fake-tmux"),
@@ -992,7 +1218,6 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
                 Some(workspace.path()),
                 Some(bin.as_os_str()),
                 Some(OsStr::new("/live/socket,2,1")),
-                Some(OsStr::new("%9")),
                 Some(OsStr::new("/live/root")),
                 Some(Path::new("/fallback")),
             ),
@@ -1037,7 +1262,6 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
             context(
                 Some(&working_directory),
                 Some(OsStr::new("/captured/bin")),
-                None,
                 None,
                 None,
                 Some(Path::new("/fallback")),

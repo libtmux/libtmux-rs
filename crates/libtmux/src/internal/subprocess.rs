@@ -281,6 +281,10 @@ impl SubprocessExecutor {
             return Err(error);
         }
 
+        if let Err(error) = self.configuration.launch.prepare_endpoint(&request) {
+            trace_failed(&context, &error);
+            return Err(error);
+        }
         let mut process = self.configuration.launch.command(request.argv());
         process
             .stdin(Stdio::null())

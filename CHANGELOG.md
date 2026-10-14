@@ -16,6 +16,36 @@ full.
 
 ## Unreleased
 
+### Changed
+
+- **Breaking.** `libtmux` captures endpoint defaults in this order: explicit
+  selector, `LIBTMUX_SOCKET_PATH`, `LIBTMUX_SOCKET_NAME`, `TMUX`, default.
+  Empty environment selectors are absent; invalid selected values fail.
+  Socket paths and supplied socket roots must be absolute. A missing named
+  root fails without tmux's fallback to `/tmp`.
+- `Server::from_env_value` shares the right-split `TMUX` parser with
+  `Server::new`, preserving commas in socket paths and validating the final
+  fields. Empty supplied context reports `NotInsideTmux`.
+- Client launches clear `TMUX` and `TMUX_PANE` after capturing the endpoint.
+  `ServerBuilder::client_environment` and `remove_client_environment` apply
+  ordered child overrides without host mutation.
+- The opening Rust examples use ordinary defaults and scoped session cleanup.
+  An external harness runs the unchanged example on a private endpoint and
+  checks cleanup after both success and a body failure.
+- `Owned<T>` adds explicit adoption and awaited scopes for servers, sessions,
+  windows and panes. Cleanup checks daemon identity inside tmux before killing
+  the captured ID, and `drain_cleanup` reports failures after cancellation.
+- Creation receipts retain daemon and object IDs separately from snapshots.
+  Decode failures roll back known IDs; rollback failures and unknown results
+  remain typed and visible.
+- `Discovery` scans configured or explicit socket roots with entry, probe and
+  time bounds, skipped/failed-probe diagnostics and truncation information.
+- Find-or-create APIs return `Created(Owned<T>)` or borrowed `Reused(T)` for all
+  four object types. They state exact matching rules, reject ambiguous matches
+  and serialize competing calls that share a server core. Final window and
+  pane identity writes check the creation receipt's daemon identity before
+  changing the target; replacement refusal preserves any rollback failure.
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;

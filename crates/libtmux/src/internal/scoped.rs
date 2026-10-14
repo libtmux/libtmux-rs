@@ -1,12 +1,10 @@
 use std::future::Future;
+use std::sync::Arc;
 
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 
+use crate::lifecycle::jobs::{Job, Journal};
 use crate::{Error, ScopeError};
-
-#[cfg(feature = "tracing")]
-use tracing::instrument::WithSubscriber as _;
 
 pub(crate) async fn run<R, T, E, Create, Cleanup, CleanupFuture, Operation>(
     operation_name: &'static str,
@@ -21,11 +19,34 @@ where
     CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
     Operation: AsyncFnOnce(&R) -> Result<T, E>,
 {
-    let (created, cleanup) = acquire(create, cleanup)
+    run_tracked(
+        Journal::default(),
+        operation_name,
+        create,
+        cleanup,
+        operation,
+    )
+    .await
+}
+
+pub(crate) async fn run_tracked<R, T, E, Create, Cleanup, CleanupFuture, Operation>(
+    journal: Journal,
+    operation_name: &'static str,
+    create: Create,
+    cleanup: Cleanup,
+    operation: Operation,
+) -> Result<T, ScopeError<T, E>>
+where
+    R: Clone + Send + 'static,
+    Create: Future<Output = Result<R, Error>> + Send + 'static,
+    Cleanup: FnOnce(R) -> CleanupFuture + Send + 'static,
+    CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
+    Operation: AsyncFnOnce(&R) -> Result<T, E>,
+{
+    let (created, cleanup) = acquire(journal, create, cleanup)
         .await
         .map_err(ScopeError::Creation)?;
     let outcome = operation(&created).await;
-
     match (outcome, cleanup.finish().await) {
         (outcome, Ok(())) => outcome.map_err(ScopeError::Operation),
         (Ok(value), Err(error)) => Err(ScopeError::Cleanup {
@@ -39,7 +60,34 @@ where
     }
 }
 
+pub(crate) async fn handoff<R, Create, Cleanup, CleanupFuture>(
+    journal: Journal,
+    create: Create,
+    cleanup: Cleanup,
+) -> Result<R, Error>
+where
+    R: Clone + Send + 'static,
+    Create: Future<Output = Result<R, Error>> + Send + 'static,
+    Cleanup: FnOnce(R) -> CleanupFuture + Send + 'static,
+    CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
+{
+    let (resource, cleanup) = acquire(journal, create, cleanup).await?;
+    cleanup.disarm();
+    Ok(resource)
+}
+
+pub(crate) async fn acquire_owned<T: Clone + Send + Sync + 'static>(
+    journal: Journal,
+    create: impl Future<Output = Result<crate::lifecycle::Owned<T>, Error>> + Send + 'static,
+) -> Result<crate::lifecycle::Owned<T>, Error> {
+    let (owner, cleanup) =
+        acquire(journal, create, |owner| async move { owner.close().await }).await?;
+    cleanup.disarm();
+    Ok(owner)
+}
+
 async fn acquire<R, Create, Cleanup, CleanupFuture>(
+    journal: Journal,
     create: Create,
     cleanup: Cleanup,
 ) -> Result<(R, ScopeCleanup), Error>
@@ -50,93 +98,96 @@ where
     CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
 {
     let (handoff, receive) = oneshot::channel();
-    let supervisor = async move {
-        let outcome = create.await.map(|created| {
-            let cleanup = ScopeCleanup::new(cleanup(created.clone()));
+    let acquisition = journal.begin();
+    tokio::spawn(async move {
+        let outcome = match tokio::spawn(create).await {
+            Ok(outcome) => outcome,
+            Err(error) => Err(Error::LifecycleTaskLost {
+                detail: error.to_string(),
+            }),
+        }
+        .map(|created| {
+            let cleanup = ScopeCleanup::new(&journal, cleanup(created.clone()));
             (created, cleanup)
         });
-        let _ = handoff.send(outcome);
-    };
-    #[cfg(feature = "tracing")]
-    let supervisor = tokio::spawn(supervisor.with_current_subscriber());
-    #[cfg(not(feature = "tracing"))]
-    let supervisor = tokio::spawn(supervisor);
-
-    match receive.await {
-        Ok(outcome) => outcome,
-        Err(_) => match supervisor.await {
-            Err(error) => std::panic::resume_unwind(error.into_panic()),
-            Ok(()) => unreachable!("the creation supervisor ended without a handoff"),
-        },
-    }
+        let unobserved = match handoff.send(outcome) {
+            Err(Err(error)) => Err(error),
+            _ => Ok(()),
+        };
+        acquisition.complete(unobserved);
+        acquisition.discard_success();
+    });
+    receive.await.map_err(|error| Error::LifecycleTaskLost {
+        detail: error.to_string(),
+    })?
 }
 
 struct ScopeCleanup {
-    release: oneshot::Sender<()>,
-    outcome: oneshot::Receiver<Result<(), Error>>,
-    #[cfg(feature = "tracing")]
+    release: oneshot::Sender<bool>,
+    outcome: Arc<Job>,
     observed: oneshot::Sender<()>,
-    supervisor: JoinHandle<()>,
 }
 
 impl ScopeCleanup {
-    fn new(cleanup: impl Future<Output = Result<(), Error>> + Send + 'static) -> Self {
+    fn new(
+        journal: &Journal,
+        cleanup: impl Future<Output = Result<(), Error>> + Send + 'static,
+    ) -> Self {
         let (release, released) = oneshot::channel();
-        let (outcome_sender, outcome) = oneshot::channel();
-        #[cfg(feature = "tracing")]
         let (observed, observation) = oneshot::channel();
+        let outcome = journal.begin();
+        let result = Arc::clone(&outcome);
         let supervisor = async move {
-            let _ = released.await;
-            let outcome = cleanup.await;
-
-            #[cfg(feature = "tracing")]
-            let failure = outcome.as_ref().err().map(ToString::to_string);
-            #[cfg(feature = "tracing")]
-            let delivered = outcome_sender.send(outcome).is_ok();
-            #[cfg(not(feature = "tracing"))]
-            let _ = outcome_sender.send(outcome);
-
-            #[cfg(feature = "tracing")]
-            if let Some(error) = failure {
-                let acknowledged = delivered && observation.await.is_ok();
-                if !acknowledged {
-                    trace_cleanup_failure(&error);
+            let disarmed = released.await == Ok(false);
+            let outcome = if disarmed {
+                Ok(())
+            } else {
+                match tokio::spawn(cleanup).await {
+                    Ok(outcome) => outcome,
+                    Err(error) => Err(Error::LifecycleTaskLost {
+                        detail: error.to_string(),
+                    }),
                 }
+            };
+            result.complete(outcome);
+            let acknowledged = observation.await;
+            if disarmed || acknowledged.is_err() {
+                #[cfg(feature = "tracing")]
+                result.trace_failure();
+                result.discard_success();
             }
         };
         #[cfg(feature = "tracing")]
-        let supervisor = tokio::spawn(supervisor.with_current_subscriber());
+        {
+            use tracing::instrument::WithSubscriber as _;
+            tokio::spawn(supervisor.with_current_subscriber());
+        }
         #[cfg(not(feature = "tracing"))]
-        let supervisor = tokio::spawn(supervisor);
-
+        tokio::spawn(supervisor);
         Self {
             release,
             outcome,
-            #[cfg(feature = "tracing")]
             observed,
-            supervisor,
         }
+    }
+
+    fn disarm(self) {
+        let _ = self.release.send(false);
+        let _ = self.observed.send(());
     }
 
     async fn finish(self) -> Result<(), Error> {
-        let _ = self.release.send(());
-        match self.outcome.await {
-            Ok(outcome) => {
-                #[cfg(feature = "tracing")]
-                let _ = self.observed.send(());
-                outcome
-            }
-            Err(_) => match self.supervisor.await {
-                Err(error) => std::panic::resume_unwind(error.into_panic()),
-                Ok(()) => unreachable!("the cleanup supervisor ended without an outcome"),
-            },
-        }
+        let _ = self.release.send(true);
+        self.outcome.wait().await;
+        let outcome = self
+            .outcome
+            .take()
+            .ok_or_else(|| Error::LifecycleTaskLost {
+                detail: "cleanup was drained while its scope was still running".to_owned(),
+            })?;
+        let _ = self.observed.send(());
+        outcome
     }
-}
-
-#[cfg(feature = "tracing")]
-fn trace_cleanup_failure(error: &impl std::fmt::Display) {
-    tracing::debug!(error = %error, "scoped operation cleanup failed");
 }
 
 #[cfg(test)]

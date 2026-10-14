@@ -51,6 +51,7 @@ api-examples:
 # Run every example and check it cleaned up
 [group: 'test']
 examples:
+    python3 scripts/test-default-example.py
     bash scripts/run-examples.sh
 
 # Ownership, not tidiness, is what this decides. A directory belonging to a run

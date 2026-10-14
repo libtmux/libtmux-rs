@@ -363,6 +363,37 @@ impl CommandChain {
         self
     }
 
+    /// Encode a nested command list for tmux's own command parser.
+    ///
+    /// Octal escapes preserve arbitrary Unix bytes without letting argument
+    /// quotes, separators, environment references or directives become syntax.
+    /// This is for an `if-shell` branch, not a shell command or a diagnostic.
+    pub(crate) fn command_string(&self) -> String {
+        let mut text = String::new();
+        for command in std::iter::once(&self.first).chain(&self.rest) {
+            if !text.is_empty() {
+                text.push_str(" ; ");
+            }
+            for (index, argument) in std::iter::once(&command.subcommand)
+                .chain(&command.arguments)
+                .enumerate()
+            {
+                if index != 0 {
+                    text.push(' ');
+                }
+                text.push('"');
+                for byte in argument.value.as_bytes() {
+                    text.push('\\');
+                    text.push(char::from(b'0' + (byte >> 6)));
+                    text.push(char::from(b'0' + ((byte >> 3) & 7)));
+                    text.push(char::from(b'0' + (byte & 7)));
+                }
+                text.push('"');
+            }
+        }
+        text
+    }
+
     /// Return the number of commands in the chain, always at least one.
     ///
     /// # Examples

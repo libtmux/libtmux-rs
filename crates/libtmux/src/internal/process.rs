@@ -1,11 +1,10 @@
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStrExt as _;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(feature = "control-mode")]
 use std::io;
 #[cfg(feature = "control-mode")]
 use std::process::Stdio;
@@ -32,6 +31,7 @@ pub(crate) struct LaunchContext {
     executable: OsString,
     current_dir: Option<PathBuf>,
     environment: Vec<(OsString, Option<OsString>)>,
+    socket_directory: Option<PathBuf>,
 }
 
 impl LaunchContext {
@@ -40,7 +40,53 @@ impl LaunchContext {
             executable: executable.into(),
             current_dir: None,
             environment: Vec::new(),
+            socket_directory: None,
         }
+    }
+
+    pub(crate) fn with_socket_directory(mut self, directory: PathBuf) -> Self {
+        self.socket_directory = Some(directory);
+        self
+    }
+
+    fn prepare_socket_directory(&self) -> io::Result<()> {
+        let Some(directory) = &self.socket_directory else {
+            return Ok(());
+        };
+        match std::fs::DirBuilder::new().mode(0o700).create(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        let metadata = std::fs::symlink_metadata(directory)?;
+        if !metadata.is_dir()
+            || metadata.uid() != rustix::process::getuid().as_raw()
+            || metadata.permissions().mode() & 0o007 != 0
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "tmux socket directory must be owned by this user without other-user access",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_endpoint(&self, request: &CommandRequest) -> Result<(), Error> {
+        if request
+            .argv()
+            .get(request.logical_subcommand_index())
+            .is_some_and(|name| name != "-V")
+        {
+            self.prepare_socket_directory().map_err(|source| {
+                Error::spawn(
+                    request.request_id().get(),
+                    request.summary().clone(),
+                    source,
+                    false,
+                )
+            })?;
+        }
+        Ok(())
     }
 
     pub(crate) fn with_current_dir(mut self, current_dir: impl Into<PathBuf>) -> Self {
@@ -443,6 +489,7 @@ impl PersistentChild {
         control_client_pids: Arc<Mutex<std::collections::HashSet<u32>>>,
     ) -> Result<Self, Error> {
         validate_request(launch, request)?;
+        launch.prepare_endpoint(request)?;
         let mut command = launch.command(request.argv());
         command
             .stdin(Stdio::piped())
@@ -534,6 +581,7 @@ fn lock_persistent(shared: &PersistentShared) -> MutexGuard<'_, PersistentLifecy
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
+    use std::io;
     use std::os::unix::ffi::OsStringExt as _;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::{Path, PathBuf};
@@ -555,6 +603,20 @@ mod tests {
             Some(path) => launch.with_environment("PATH", path),
             None => launch.with_environment_removed("PATH"),
         }
+    }
+
+    #[test]
+    fn socket_directory_rejects_a_symlink_without_following_it() {
+        let root = tempfile::tempdir().unwrap();
+        let actual = root.path().join("actual");
+        let link = root.path().join("link");
+        std::fs::create_dir(&actual).unwrap();
+        symlink(&actual, &link).unwrap();
+        let launch = LaunchContext::new("tmux").with_socket_directory(link);
+        assert_eq!(
+            launch.prepare_socket_directory().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]
