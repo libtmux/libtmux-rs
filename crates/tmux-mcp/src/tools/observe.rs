@@ -645,13 +645,13 @@ mod tests {
             if transition == "dead" {
                 assert_eq!(
                     server
-                        .wait_for_channel("mcp-final-pane-died", Duration::from_secs(2))
+                        .wait_for_channel("mcp-final-pane-died", libtmux::test::hang_guard())
                         .await
                         .expect("pane-died notification answers"),
                     libtmux::ChannelWait::Signalled
                 );
             } else {
-                libtmux::test::retry_until(Duration::from_secs(2), async || {
+                libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
                     server
                         .pane_by_id(&pane_id)
                         .await

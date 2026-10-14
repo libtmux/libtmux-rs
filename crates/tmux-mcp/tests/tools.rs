@@ -125,7 +125,7 @@ async fn capture_can_include_scrollback() {
         })))
         .await
         .expect("input is sent");
-    libtmux::test::retry_until(std::time::Duration::from_secs(2), async || {
+    libtmux::test::retry_until(libtmux::test::hang_guard(), async || {
         tools
             .capture_pane(args(serde_json::json!({"pane": pane, "history": true})))
             .await

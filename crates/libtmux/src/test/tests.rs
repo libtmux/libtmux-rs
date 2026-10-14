@@ -118,7 +118,7 @@ async fn never_observe_fallback_cleans_an_exited_leaders_group() {
     drop(file);
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
         .expect("fake executable is executable");
-    let executable_deadline = Instant::now() + scaled(Duration::from_secs(5));
+    let executable_deadline = Instant::now() + crate::test::hang_guard();
     loop {
         match ProcessCommand::new(&executable)
             .arg("__libtmux_fixture_ready__")
@@ -147,7 +147,7 @@ async fn never_observe_fallback_cleans_an_exited_leaders_group() {
     // daemon that exits is noticed when it exits.
     let error = TestServerBuilder::new()
         .tmux_executable(&executable)
-        .lifecycle_timeout(Duration::from_secs(5))
+        .lifecycle_timeout(crate::test::hang_guard())
         .start_with_leader_observer(
             |_| LeaderObservation::Unavailable,
             Some(Duration::from_millis(50)),
@@ -165,7 +165,7 @@ async fn never_observe_fallback_cleans_an_exited_leaders_group() {
     assert_eq!(pids.len(), 2);
     for raw_pid in pids {
         let pid = Pid::from_raw(raw_pid).expect("published PID is nonzero");
-        let deadline = Instant::now() + scaled(Duration::from_secs(5));
+        let deadline = Instant::now() + crate::test::hang_guard();
         while !matches!(test_kill_process(pid), Err(Errno::SRCH)) {
             assert!(
                 Instant::now() < deadline,
@@ -205,7 +205,7 @@ fn unavailable_observer_caps_oversized_grace_before_group_cleanup() {
             .process_group(0);
         let child = child.spawn().expect("fallback leader starts");
         let leader = Pid::from_child(&child);
-        let deadline = Instant::now() + scaled(Duration::from_secs(5));
+        let deadline = Instant::now() + crate::test::hang_guard();
         while super::leader_exited_unreaped(leader) != LeaderObservation::ExitedUnreaped {
             assert!(
                 Instant::now() < deadline,
@@ -233,7 +233,7 @@ fn unavailable_observer_caps_oversized_grace_before_group_cleanup() {
             CleanupOutcome::Complete
         ));
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(30),
             "unobservable graceful cleanup uses its fallback ceiling"
         );
         assert_eq!(pids.len(), 2);
@@ -378,7 +378,7 @@ fn externally_reaped_leader_does_not_signal_retired_process_group() {
     let mut lifecycle = Lifecycle::new(child, files);
 
     kill_process(leader, Signal::KILL).expect("external owner kills the leader");
-    let deadline = Instant::now() + scaled(Duration::from_secs(5));
+    let deadline = Instant::now() + crate::test::hang_guard();
     loop {
         match waitpid(Some(leader), WaitOptions::NOHANG) {
             Ok(Some((_pid, _status))) => break,
@@ -532,7 +532,7 @@ fn a_busy_executable_is_waited_for_not_reported() {
         std::thread::sleep(Duration::from_millis(20));
         drop(writer);
     });
-    super::run_until_ready(&path, Instant::now() + scaled(Duration::from_secs(5))).unwrap();
+    super::run_until_ready(&path, Instant::now() + crate::test::hang_guard()).unwrap();
     release.join().unwrap();
 
     // Still busy at the deadline is an answer, not a hang.

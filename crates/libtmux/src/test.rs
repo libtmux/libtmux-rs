@@ -80,9 +80,8 @@ const CONTAINMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Widen every fixture deadline by `LIBTMUX_TEST_TIMEOUT_SCALE`.
 ///
-/// Five seconds bounds a tmux that starts on a machine with a core to spare.
-/// It stops bounding one on a machine running several times its cores in
-/// work, and a deadline that fires on a healthy fixture reports the load
+/// A fixture deadline is a hang guard, [`HANG_GUARD`] by default. A machine
+/// running several times its cores in work can still outlast it, and a deadline that fires on a healthy fixture reports the load
 /// rather than the thing under test -- which is the failure [findings.md]
 /// already describes and the rule it draws from it.
 ///
@@ -139,6 +138,21 @@ pub fn scaled(base: Duration) -> Duration {
     // overflow: a deadline no clock will reach is the answer a caller asking
     // for one that long already wanted.
     Duration::try_from_secs_f64(base.as_secs_f64() * timeout_scale()).unwrap_or(Duration::MAX)
+}
+
+/// The bound a test puts on a step that waits for something to happen.
+///
+/// A wait that returns the moment its event arrives costs nothing when the
+/// bound is high, so this is a hang guard: it exists to end a test that would
+/// otherwise wait for ever, and it is sized for a process start on the slowest
+/// runner, not for the usual one. A test that asserts speed, or that a
+/// deadline fires, states its own short bound instead.
+pub const HANG_GUARD: Duration = Duration::from_secs(20);
+
+/// [`HANG_GUARD`], widened by `LIBTMUX_TEST_TIMEOUT_SCALE`.
+#[must_use]
+pub fn hang_guard() -> Duration {
+    scaled(HANG_GUARD)
 }
 
 /// The grace ceiling this platform uses, widened like every other deadline.
@@ -364,7 +378,7 @@ impl TestServerBuilder {
     fn new() -> Self {
         Self {
             executable: default_executable(),
-            lifecycle_timeout: scaled(Duration::from_secs(5)),
+            lifecycle_timeout: hang_guard(),
             output_limits: OutputLimits::default(),
             dispatch_limits: DispatchLimits::default(),
             #[cfg(feature = "control-mode")]
@@ -1082,7 +1096,7 @@ pub fn unique_name(prefix: &str) -> String {
 ///
 /// Returns [`std::io::ErrorKind::InvalidInput`] for a script without a `#!`
 /// line, [`std::io::ErrorKind::TimedOut`] when it still cannot run after a
-/// [`scaled`] five seconds, and any error writing it or running it.
+/// [`hang_guard`], and any error writing it or running it.
 ///
 /// # Examples
 ///
@@ -1121,7 +1135,7 @@ pub fn install_executable(path: &Path, script: &str) -> std::io::Result<()> {
     drop(file);
     fs::set_permissions(&staged, fs::Permissions::from_mode(0o700))?;
     fs::rename(&staged, path)?;
-    run_until_ready(path, Instant::now() + scaled(Duration::from_secs(5)))
+    run_until_ready(path, Instant::now() + hang_guard())
 }
 
 /// Run `path` with `LIBTMUX_EXECUTABLE_READY` set until it can be executed,

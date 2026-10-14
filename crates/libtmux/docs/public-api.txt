@@ -244,6 +244,7 @@ constant libtmux::since::PANE_BORDER_FORMAT_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PROMPT_HISTORY: libtmux::ReleaseVersion
 constant libtmux::since::SERVER_ACCESS: libtmux::ReleaseVersion
+constant libtmux::test::HANG_GUARD: std::time::Duration
 enum libtmux::AccessMode
 enum libtmux::Availability<T>
 enum libtmux::ChannelWait
@@ -1002,6 +1003,7 @@ function libtmux::test::TestServerBuilder::start: async fn(self) -> Result<libtm
 function libtmux::test::TestServerBuilder::tmux_executable: fn(self, executable: impl Into<OsString>) -> Self
 function libtmux::test::TestServerError::kind: const fn(&self) -> libtmux::test::TestServerErrorKind
 function libtmux::test::TestServerError::stage: fn(&self) -> Option<&str>
+function libtmux::test::hang_guard: fn() -> std::time::Duration
 function libtmux::test::install_executable: fn(path: &std::path::Path, script: &str) -> std::io::Result<()>
 function libtmux::test::reap_abandoned_servers: fn(older_than: std::time::Duration) -> Result<Vec<std::path::PathBuf>, libtmux::test::TestServerError>
 function libtmux::test::retry_until: async fn(within: std::time::Duration, condition: impl AsyncFnMut() -> bool) -> Result<(), libtmux::test::RetryTimeout>

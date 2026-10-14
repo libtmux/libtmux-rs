@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use libtmux::test::TestServer;
+use libtmux::test::{TestServer, scaled};
 use libtmux::{Command, DispatchLimits, OutputLimits};
 
 #[tokio::test]
@@ -130,17 +130,32 @@ async fn a_full_server_says_so_instead_of_waiting_forever() {
     let server = guard.server();
     server.new_session("overload").await.expect("session");
 
-    // One long dispatch holds the only permit.
+    // One long dispatch holds the only permit. It announces itself from inside
+    // tmux, so the next call is made once the permit is known to be held
+    // rather than after a guess at how long taking it needs.
+    let root = std::path::Path::new("/tmp/libtmux-rs-test");
+    std::fs::create_dir_all(root).expect("the fixture root is writable");
+    let held = root.join(format!("limits-held-{}", std::process::id()));
+    let _ = std::fs::remove_file(&held);
     let holder = {
         let server = server.clone();
+        let script = format!("touch '{}'; sleep 1", held.display());
         tokio::spawn(async move {
             server
-                .cmd(Command::new("run-shell").arg("sleep 1"))
+                .cmd(Command::new("run-shell").arg(script))
                 .await
                 .map(|_| ())
         })
     };
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    let deadline = Instant::now() + scaled(Duration::from_secs(20));
+    while !held.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the holding dispatch never reached tmux"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let _ = std::fs::remove_file(&held);
 
     let error = server
         .cmd(Command::new("display-message").arg("-p").arg("hello"))

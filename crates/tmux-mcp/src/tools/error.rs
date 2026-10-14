@@ -343,7 +343,7 @@ mod tests {
             })
         };
         let held = coordinator
-            .wait_for_channel("retry-refused-held", Duration::from_secs(2))
+            .wait_for_channel("retry-refused-held", libtmux::test::hang_guard())
             .await
             .expect("the holding dispatch starts");
 

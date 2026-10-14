@@ -923,18 +923,17 @@ async fn a_started_process_gets_the_server_and_session_environments_merged() {
         .expect("one pane");
 
     let mut captured = String::new();
-    for _ in 0..50 {
+    libtmux::test::retry_until(std::time::Duration::from_secs(20), async || {
         let lines = pane.capture().await.expect("capture");
         captured = lines
             .iter()
             .map(|line| line.to_string_lossy().into_owned())
             .collect::<Vec<_>>()
             .join("\n");
-        if captured.contains('|') {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-    }
+        captured.contains('|')
+    })
+    .await
+    .expect("the pane printed the merged environment");
 
     // The session's value wins, a server-only name still arrives, and a
     // globally hidden name is missing rather than empty.

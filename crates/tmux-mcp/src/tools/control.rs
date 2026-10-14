@@ -852,7 +852,7 @@ mod tests {
             .await;
         let held = guard
             .server()
-            .wait_for_channel("retry-send-held", Duration::from_secs(2))
+            .wait_for_channel("retry-send-held", libtmux::test::hang_guard())
             .await
             .expect("the hook channel is readable");
         guard

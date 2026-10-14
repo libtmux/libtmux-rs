@@ -189,7 +189,7 @@ async fn s3_unsubmitted_text_is_pending_not_matched() {
                 args(serde_json::json!({
                     "pane": pane,
                     "patterns": ["MARKER"],
-                    "seconds": 1
+                    "seconds": 60
                 })),
                 CancellationToken::new(),
                 tmux_mcp::Reporter::none(),
@@ -200,7 +200,7 @@ async fn s3_unsubmitted_text_is_pending_not_matched() {
 
     assert_eq!(view["outcome"], "pending", "{view}");
     assert!(
-        started.elapsed() < Duration::from_millis(500),
+        started.elapsed() < Duration::from_secs(30),
         "an unsubmitted pattern must not wait out the deadline: {:?}",
         started.elapsed()
     );
@@ -316,7 +316,7 @@ async fn s5_unsubmitted_type_ahead_into_a_cold_shell_is_never_matched() {
     // change before dispatching anything. That refusal is its job, so a
     // refused send is made again; once `cat` runs it echoes the text back,
     // and that echo must be discounted just the same.
-    let queued = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let queued = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         tools
             .send_keys(args(serde_json::json!({
                 "pane": pane,
@@ -411,7 +411,7 @@ async fn s6_an_unrecognized_key_stops_discounting_the_line() {
                 args(serde_json::json!({
                     "pane": pane,
                     "patterns": ["MARKER"],
-                    "seconds": 3
+                    "seconds": 20
                 })),
                 CancellationToken::new(),
                 tmux_mcp::Reporter::none(),

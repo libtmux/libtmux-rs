@@ -78,11 +78,11 @@ Every test runs against whatever `tmux` resolves to, unless
 $ LIBTMUX_TEST_TMUX=/path/to/tmux-3.5a just test
 ```
 
-Fixture deadlines bound a tmux that starts with a core to spare. On a machine
-running several times its cores in work -- a shared runner, or a laptop with
-another suite on it -- five seconds stops bounding startup and starts deciding
-results, and tests that wait on a fixture fail in a set that moves between
-runs. `LIBTMUX_TEST_TIMEOUT_SCALE` widens every fixture deadline by a factor,
+Fixture deadlines are hang guards, twenty seconds by default, and a wait
+returns as soon as its event does. On a machine running several times its cores
+in work -- a shared runner, or a laptop with another suite on it -- even that
+can stop bounding startup and start deciding results, and tests that wait on a
+fixture fail in a set that moves between runs. `LIBTMUX_TEST_TIMEOUT_SCALE` widens every fixture deadline by a factor,
 read once and never below `1`:
 
 ```console
@@ -257,10 +257,9 @@ and diffs what tmux itself reports. A documented, deliberate difference from
 tmuxp -- see `scripts/tmuxp-parity.py`'s `ALLOWLIST` -- is reported but does
 not fail the run; anything else that differs does.
 
-CI also runs the suite on macOS, but only on `master` or manual dispatch: a
-macOS runner bills at ten times a Linux one and the lints are
-platform-independent. On a pull request, `tests on macOS`, `fuzz parsers`,
-`benchmarks` and `tmuxp parity` report as skipping. That is the design, not a failure.
+CI also runs the suite on macOS, on pull requests as well as `master`. See
+[`MACOS_CI.md`](MACOS_CI.md). On a pull request, `fuzz parsers`, `benchmarks`
+and `tmuxp parity` report as skipping. That is the design, not a failure.
 
 `just parity-claims` fails when a row of `parity.md` marked `implemented` or
 `verified` names no caller-reachable Rust path, or puts an associated item on

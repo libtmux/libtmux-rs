@@ -70,7 +70,7 @@ async fn settle_stream(
         .await
         .expect("a settle command is sent");
     loop {
-        let chunk = tokio::time::timeout(Duration::from_secs(5), output.next_chunk())
+        let chunk = tokio::time::timeout(libtmux::test::hang_guard(), output.next_chunk())
             .await
             .expect("settle output arrives")
             .expect("the stream is alive");
@@ -159,7 +159,7 @@ async fn owns_control_client_reports_its_own_spawned_connections() {
 
     control.shutdown().await.expect("control mode shuts down");
 
-    libtmux::test::retry_until(Duration::from_secs(5), async || {
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         !server.owns_control_client(pid)
     })
     .await
@@ -177,7 +177,7 @@ async fn stream_reports_server_shutdown_once_before_eof() {
         .expect("control mode attaches")
         .split();
     guard.server().shutdown().await.expect("client shuts down");
-    let error = tokio::time::timeout(Duration::from_secs(5), async {
+    let error = tokio::time::timeout(libtmux::test::hang_guard(), async {
         loop {
             let item: Result<Event, libtmux::Error> = events
                 .next()
@@ -460,7 +460,7 @@ async fn shutting_down_does_not_wait_for_a_sender_that_is_still_alive() {
 
     // Shutting down means now, not once every other handle agrees. A caller
     // holding a live sender in another task must not be able to hang this.
-    tokio::time::timeout(Duration::from_secs(5), events.shutdown())
+    tokio::time::timeout(libtmux::test::hang_guard(), events.shutdown())
         .await
         .expect("shutdown does not wait on the sender")
         .expect("control mode shuts down");
@@ -900,7 +900,7 @@ async fn watching_one_pane_does_not_touch_an_unrelated_session() {
         .await
         .expect("the unrelated session's pane runs a command");
 
-    let arrived = libtmux::test::retry_until(Duration::from_secs(5), async || {
+    let arrived = libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
         other.capture().await.is_ok_and(|lines| {
             lines.iter().any(|line| {
                 line.to_string_lossy()
@@ -1010,7 +1010,12 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
         .split(SplitOptions::new(SplitDirection::Below).command("seq 1 20000"))
         .await
         .expect("pane is created");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The flood is over when the pane running it has exited.
+    libtmux::test::retry_until(libtmux::test::HANG_GUARD, async || {
+        window.panes().await.is_ok_and(|panes| panes.len() == 1)
+    })
+    .await
+    .expect("the flooding pane exits");
 
     // `events` is held and never polled, which is what a caller awaiting a
     // reply does for as long as the await lasts.
@@ -1259,7 +1264,7 @@ async fn observed_pane_death_ends_the_stream_via_layout_change() {
 
     watched.kill().await.expect("the watched pane is killed");
 
-    let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
+    let ended = tokio::time::timeout(libtmux::test::hang_guard(), output.next_chunk()).await;
     assert_eq!(
         ended,
         Ok(None),
@@ -1317,7 +1322,7 @@ async fn observed_pane_death_ends_the_stream_via_window_close() {
 
     watched.kill().await.expect("the watched pane is killed");
 
-    let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
+    let ended = tokio::time::timeout(libtmux::test::hang_guard(), output.next_chunk()).await;
     assert_eq!(
         ended,
         Ok(None),
@@ -1367,7 +1372,7 @@ async fn observed_pane_death_in_a_never_active_window_ends_the_stream() {
 
     watched.kill().await.expect("the watched pane is killed");
 
-    let ended = tokio::time::timeout(Duration::from_secs(8), output.next_chunk()).await;
+    let ended = tokio::time::timeout(libtmux::test::hang_guard(), output.next_chunk()).await;
     assert_eq!(
         ended,
         Ok(None),
@@ -1441,7 +1446,7 @@ async fn pane_output_sender_reaches_the_streams_own_connection() {
         .await
         .expect("the unmuted marker is sent");
 
-    let resumed = tokio::time::timeout(Duration::from_secs(5), async {
+    let resumed = tokio::time::timeout(libtmux::test::hang_guard(), async {
         loop {
             let chunk = output.next_chunk().await.expect("the stream is still open");
             if String::from_utf8_lossy(&chunk).contains("unmuted-via-sender") {

@@ -954,7 +954,7 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
             .permissions();
         permissions.set_mode(0o700);
         std::fs::set_permissions(&executable, permissions).expect("fake executable is runnable");
-        let readiness_deadline = Instant::now() + Duration::from_secs(5);
+        let readiness_deadline = Instant::now() + crate::test::hang_guard();
         loop {
             match process::Command::new(&executable)
                 .arg("__libtmux_fixture_ready__")

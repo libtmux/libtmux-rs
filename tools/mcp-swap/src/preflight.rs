@@ -25,7 +25,7 @@ use crate::fs::FsError;
 /// Per-stream preflight output ceiling.
 pub const PREFLIGHT_MAX_BYTES: usize = 1024 * 1024;
 
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(5);
 #[cfg(target_os = "linux")]
 const OWNER_ENV: &str = "LIBTMUX_MCP_PREFLIGHT_OWNER";
@@ -132,7 +132,7 @@ pub fn preflight(spec: &ServerSpec, timeout: Duration) -> Result<(), FsError> {
 /// and the `exec` that would close it. Waiting is what resolves it, so a
 /// bounded wait belongs here rather than in every caller.
 fn spawn_once_writable(command: &mut Command) -> std::io::Result<Child> {
-    const BUSY_ATTEMPTS: u32 = 50;
+    const BUSY_ATTEMPTS: u32 = 500;
     const BUSY_DELAY: Duration = Duration::from_millis(20);
 
     for _ in 1..BUSY_ATTEMPTS {

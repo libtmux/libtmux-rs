@@ -62,11 +62,12 @@ jobs:
   # tmux's habitat is not only Linux, and the parts most likely to differ are
   # exactly the ones this crate leans on: process groups, Unix sockets,
   # `waitid`, and temporary paths. Scoped to the test suite rather than the
-  # whole gate, and to master rather than every push, because a macOS runner
-  # bills at ten times a Linux one and the lints are platform-independent.
+  # whole gate, because the lints are platform-independent.
+  #
+  # It runs on pull requests so a Linux-only test fails before merge.
+  # `stress.yml` reports its failure rate.
   macos:
     name: tests on macOS
-    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
@@ -84,9 +85,8 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # `--no-fail-fast` because this lane runs only on master and bills at ten
-      # times a Linux runner. Stopping at the first failing test binary hides
-      # every later one, so a platform difference costs one full run per
+      # `--no-fail-fast` because stopping at the first failing test binary
+      # hides every later one, so a platform difference costs one full run per
       # failure to find; reporting them together costs one run for all of them.
       - run: cargo test --locked --workspace --all-targets --all-features --no-fail-fast
 
