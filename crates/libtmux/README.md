@@ -80,6 +80,11 @@ guard refuses a daemon replacement with a different version.
 The admitted version is cached; every dispatch checks it in tmux's queue, and
 a mismatch invalidates the cache for a fresh probe on the next operation.
 
+The configured executable and library-owned metadata and guard commands must
+retain tmux's native built-in semantics. Owner-defined `command-alias`
+redefinitions of those commands are outside this qualification; their contents
+run with tmux's own semantics.
+
 `Server::capabilities` reports the configured executable and caches that
 result, including versions below the floor. Standalone `Server::cmd` calls
 with `-V` or `-h` also retain native executable diagnostics. Client flags have

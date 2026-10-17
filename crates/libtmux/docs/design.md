@@ -131,6 +131,11 @@ cold startup. An owned kill clears admission immediately. A cold metadata probe
 never grants cached startup permission. Undated `master` reports remain
 available diagnostically and cannot qualify hard admission.
 
+The configured executable and library-owned metadata and guard commands must
+retain tmux's native built-in semantics. Owner-defined `command-alias`
+redefinitions of those commands are outside this qualification; their contents
+run with tmux's own semantics.
+
 Workspace layout preflight checks the core floor even with no pending layouts,
 so extension builders cannot begin after an unsupported endpoint was mistaken
 for an absent daemon. The test fixture's private PID bootstrap and an absent
