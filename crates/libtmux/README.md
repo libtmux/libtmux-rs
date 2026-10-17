@@ -80,6 +80,22 @@ guard refuses a daemon replacement with a different version.
 The daemon's version is cached; every dispatch checks it in tmux's queue, and
 a mismatch invalidates the cache for a fresh probe on the next operation.
 
+A refusal means nothing was sent to the daemon. A daemon older than 3.3a
+(including 3.1 and older, which cannot answer the probe at all) is refused as
+`Error::UnsupportedTmuxVersion`. A report that names no release, such as a bare
+`master`, `openbsd-*` or `3.3a-dev`, is refused as
+`Error::UnrecognizedTmuxVersion`. The same holds when the probe fails
+(`Error::VersionProbeFailed`), when its output is not a version report
+(`Error::InvalidVersionOutput`), and when the deadline passes during the check
+(`Error::Timeout` with `before_dispatch` set). A daemon replaced between the
+check and the request fails with `Error::ServerReplaced`, and nothing ran.
+Upgrade tmux and restart the server, or pin the previous release of libtmux.
+
+The configured executable and library-owned metadata and guard commands must
+retain tmux's native built-in semantics. Owner-defined `command-alias`
+redefinitions of those commands are outside this qualification; their contents
+run with tmux's own semantics.
+
 `Server::capabilities` reports the configured executable and caches that
 result, including versions below the floor. Standalone `Server::cmd` calls
 with `-V` or `-h` also retain native executable diagnostics. Client flags have
