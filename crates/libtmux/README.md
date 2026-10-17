@@ -116,6 +116,33 @@ nothing. To fix it, upgrade tmux and restart its server, or pin the previous
 release. [The contract][contract-version] covers unrecognized versions, failed
 probes, and the calls that skip the check.
 
+Optional operations have narrower daemon requirements:
+
+| Operation | Qualified daemon |
+| --- | --- |
+| Ordinary subprocess operations and polling waits | 3.3a or newer |
+| Named-buffer deletion or rename, including managed paste cleanup | 3.4 or newer |
+| Captured `run-shell` output | 3.5 or newer |
+| Control acquisition, pane streams and subscriptions | A daemon ranking at or above 3.7 final |
+| Literal `break-pane` | Refused on exact 3.7; available again on 3.7a |
+| Literal `split-window -p` | Refused on 3.4; typed percentages use `-l N%` |
+| Literal `select-layout` with a layout operand | On 3.3a, a unique preset or standard serialized header; unsafe operands refuse |
+| Capture flags `-T` / `-F` | 3.4 / 3.7 or newer |
+
+Development and release-candidate daemons refuse managed control acquisition.
+Eligibility comes from the checked daemon and assumes a natively compatible
+client/daemon pair. Direct literal argv commands and
+flat batches are checked before dispatch; `Command::requires_tmux` carries a
+managed staging requirement across the whole chain. The guard checks the
+command it is given. It does not look inside tmux command strings nested in
+another command (`if-shell`, `run-shell -C`, brace blocks) or inside alias
+bodies, and shell programs keep native semantics. Do not nest a command a gate
+refuses; on an affected release it is sent as written. On the
+pinned Linux builds, 3.3a, 3.4 and 3.5 clients cannot register a control connection to
+an exact 3.7 daemon; 3.7d can. Those older clients exit without changing the
+daemon, including on a plain native attachment. Use a compatible client for
+control; this does not raise the 3.3a subprocess baseline.
+
 Async operations need an entered Tokio runtime. The default executable is
 `tmux`, resolved through the `PATH` captured when the [`Server`] is built; use
 [`ServerBuilder::tmux_executable`] to select another.

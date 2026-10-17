@@ -238,8 +238,9 @@ project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
 - [`freeze`][cli-freeze] saves only where `-o` says, or prints with
   [`--json`].
 - [`plugins`] and custom `workspace_builder`s run through tmuxp itself, so they
-  need tmuxp 1.74.x and a Python libtmux that requires tmux 3.3a or newer.
-  Select that environment with [`TMUX_WORKSPACE_PYTHON`].
+  need tmuxp 1.74.x and a Python libtmux that requires tmux 3.3a or newer,
+  plus `libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION >= 2`. Select that
+  environment with [`TMUX_WORKSPACE_PYTHON`].
 
 [The command reference](docs/cli.md) has the complete list, and its
 [Python extensions](docs/cli.md#python-extensions) section names the Python
