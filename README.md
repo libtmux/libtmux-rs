@@ -244,7 +244,7 @@ The result is the same and the cost differs, and so does the *evidence*:
   and attribution degrades to `unknown` rather than guessing.
 - **[Control mode]** keeps per-command evidence over one persistent connection
   after its version probes. Run the example without `-- --baseline` to include
-  control rows with a compatible client and a stable numbered daemon at 3.7 or
+  control rows with a compatible client and a daemon ranking at 3.7 or
   newer.
 
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)

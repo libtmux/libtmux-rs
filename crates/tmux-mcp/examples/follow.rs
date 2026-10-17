@@ -5,7 +5,7 @@
 //! on the next call, everything the pane wrote after it. Here 200 lines go
 //! through a 24-row pane between two calls, and all 200 come back.
 //!
-//! Requires stable numbered tmux 3.7 or newer for control acquisition.
+//! Requires tmux 3.7 or newer for control acquisition.
 //!
 //! ```console
 //! $ cargo run --example follow

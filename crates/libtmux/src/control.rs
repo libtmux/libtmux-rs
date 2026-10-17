@@ -476,7 +476,7 @@ impl ControlMode {
     ///
     /// # Errors
     ///
-    /// Refuses a daemon that is not a stable numbered release at least 3.7.
+    /// Refuses a daemon ranking below 3.7 final (`next-3.7`, `3.7-rc*`).
     /// Capacity, metadata, socket pinning and the opening handshake share one
     /// deadline from attach entry. Process, pipe and framing failures also
     /// refuse the attachment.

@@ -555,7 +555,7 @@ default every sender starts from.
 
 The lanes, and the tmux release each one builds, are defined in
 `scripts/test-tmux-format-compat.sh`. Each runs the workspace.
-Positive control fixtures require stable numbered 3.7 or newer, while ordinary
+Positive control fixtures require 3.7 or newer, while ordinary
 operations, codecs and
 polling still run on the older supported daemons. Separate 3.2a and raw 3.3
 lanes prove the core refusal boundary. An exact 3.7 lane proves the known

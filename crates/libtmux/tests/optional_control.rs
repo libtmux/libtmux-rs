@@ -127,7 +127,7 @@ fn carriers(socket: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-async fn preview_control_refuses_before_identification(reported: &str) {
+async fn control_acquisition_rank(reported: &str, refused: bool) {
     let Some(guard) = qualified_fixture().await else {
         return;
     };
@@ -166,32 +166,54 @@ os.execv(binary,[binary,*sys.argv[1:]])
         .expect("client");
     let result = ControlMode::attach(&server, session.id()).await;
     let identified = marker.exists();
+    let rank_refused = matches!(
+        &result,
+        Err(Error::UnsupportedCapability { found, .. }) if found.raw() == reported
+    );
+    let any_refusal = matches!(&result, Err(Error::UnsupportedCapability { .. }));
+    let failure = result.as_ref().err().map(ToString::to_string);
+    // A daemon that really is the reported build passes the version fence and
+    // attaches, so close that connection before sampling what it leaves behind.
+    if let Ok(mode) = result {
+        let (_commands, events) = mode.split();
+        events.shutdown().await.expect("attached control closes");
+    }
     let aliases = carriers(guard.socket_path());
     let clients = guard.server().clients().await.expect("native clients");
     let ordinary = guard.server().sessions().await.expect("ordinary listing");
     server.shutdown().await.expect("client closes");
     guard.shutdown().await.expect("fixture closes");
-    assert!(
-        matches!(&result, Err(Error::UnsupportedCapability { found, .. }) if found.raw() == reported),
-        "preview metadata must refuse before acquisition: {reported}: {result:?}; control_started={identified}"
-    );
-    assert!(!identified, "no -C process was invoked for {reported}");
-    assert!(aliases.is_empty(), "no carrier was created for {reported}");
+    if refused {
+        assert!(
+            rank_refused,
+            "a build ranking below 3.7 refuses before acquisition: {reported}: {failure:?}; control_started={identified}"
+        );
+        assert!(!identified, "no -C process was invoked for {reported}");
+    } else {
+        // A real daemon that is not the reported build fails the version
+        // fence; what matters is that rank did not refuse the attach.
+        assert!(
+            !any_refusal,
+            "a build ranking above 3.7 is not refused on rank: {reported}: {failure:?}"
+        );
+        assert!(identified, "the -C process was invoked for {reported}");
+    }
+    assert!(aliases.is_empty(), "no carrier was left for {reported}");
     assert!(clients.is_empty(), "no client registered for {reported}");
     assert_eq!(ordinary.len(), 1);
 }
 
 #[tokio::test]
-async fn real_tmux_compat_optional_control_refuses_development_before_identification() {
-    for reported in ["next-3.7", "next-3.9"] {
-        preview_control_refuses_before_identification(reported).await;
+async fn real_tmux_compat_optional_control_refuses_builds_ranking_below_3_7() {
+    for reported in ["next-3.7", "3.7-rc1", "3.7-rc2"] {
+        control_acquisition_rank(reported, true).await;
     }
 }
 
 #[tokio::test]
-async fn real_tmux_compat_optional_control_refuses_release_candidates_before_identification() {
-    for reported in ["3.7-rc1", "3.8-rc2"] {
-        preview_control_refuses_before_identification(reported).await;
+async fn real_tmux_compat_optional_control_accepts_builds_ranking_above_3_7() {
+    for reported in ["3.8-rc2", "next-3.8", "next-3.9"] {
+        control_acquisition_rank(reported, false).await;
     }
 }
 
