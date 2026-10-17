@@ -18,6 +18,24 @@ full.
 
 ### Changed
 
+- Control acquisition, pane streams, subscriptions and the MCP tools that
+  require them need tmux 3.7 or newer and a compatible native
+  client. A daemon ranking below 3.7 final (`next-3.7`, `3.7-rc*`) refuses
+  acquisition; `3.8-rc2` and `next-3.8` are admitted.
+  Ordinary subprocess operations and polling retain the tmux 3.3a minimum.
+  Acquisition pins the admitted Unix socket through initialization and bounds
+  capacity, endpoint checks and attachment with one deadline.
+
+- Named-buffer deletion, rename and managed paste staging require tmux 3.4.
+  Captured `run-shell` output requires 3.5. Literal command chains refuse
+  exact-3.7 `break-pane`, 3.4 `split-window -p` and unsafe 3.3a layout operands
+  before any command runs; typed percentage splits keep using `-l N%`.
+
+- `tmux-workspace` Python extensions and `shell` require
+  `libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION` to be an integer of
+  at least 2. Runtime discovery and builder children refuse an older backend
+  before importing extension hooks.
+
 - **Breaking.** `libtmux`, `tmux-mcp`, and `tmux-workspace` require tmux 3.3a
   or newer. Raw commands, chains and scoped operations check the connected
   daemon before effects; an absent endpoint checks the executable that would
