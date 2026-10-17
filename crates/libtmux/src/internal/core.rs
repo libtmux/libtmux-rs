@@ -384,6 +384,10 @@ impl Core {
         sender: crate::control::ControlSender,
         capabilities: EngineCapabilities,
     ) -> Self {
+        // A version cannot be asked over the connection without a hook:
+        // `run-shell -C` reports its answer outside any block. The attach
+        // already admitted the daemon this connection reaches, so carry that.
+        self.admitted_version.remember(sender.version().clone());
         let executor = crate::internal::control_executor::ControlModeExecutor::new(sender);
 
         Self {
@@ -633,7 +637,7 @@ impl Core {
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
-    ) -> Result<PersistentChild, Error> {
+    ) -> Result<(PersistentChild, TmuxVersion), Error> {
         let version = self.endpoint_version().await?;
         version.ensure_supported()?;
         let mut global_argv = self.configuration.global_argv.clone();
@@ -658,12 +662,13 @@ impl Core {
                 tokio::time::Instant::now().checked_add(self.configuration.timeout),
             )
             .await?;
-        PersistentChild::spawn(
+        let child = PersistentChild::spawn(
             &self.configuration.launch,
             &request,
             reservation,
             Arc::clone(&self.control_client_pids),
-        )
+        )?;
+        Ok((child, version))
     }
 
     /// Report whether this process itself spawned the control client with

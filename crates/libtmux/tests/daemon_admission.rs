@@ -334,6 +334,14 @@ async fn real_tmux_compat_minimum_daemon_accepts_newer_clients() {
     guard.shutdown().await.expect("fixture shuts down");
 }
 
+/// Shell that answers the hook-free version probe the way tmux does: it
+/// refuses the marker string and reports the format-expanded text on stderr.
+fn probe_report(version: &str) -> String {
+    format!(
+        "for a; do case $a in libtmux-version-*) m=${{a%%#*}};; esac; done; printf 'unknown command: %s{version}\\n' \"$m\" >&2; exit 1"
+    )
+}
+
 fn wrapper(directory: &Path, body: &str) -> PathBuf {
     // Installing through the fixture helper waits out the `ETXTBSY` a process
     // forked by a parallel test can cause while the script is open for write.
@@ -356,13 +364,13 @@ fn shell_quote(value: &OsStr) -> String {
 #[tokio::test]
 async fn malformed_and_failed_probes_refuse_without_dispatching() {
     for output in [
-        "printf 'tmux unknown\\n'",
-        "printf 'tmux 3.3rc1\\n'",
-        "printf 'tmux 3.3a-rc1\\n'",
-        "printf 'tmux next-3.3a\\n'",
-        "printf 'tmux 3.3a-extra\\n'",
-        "printf 'tmux 3.3a-master\\n'",
-        "exit 23",
+        probe_report("unknown"),
+        probe_report("3.3rc1"),
+        probe_report("3.3a-rc1"),
+        probe_report("next-3.3a"),
+        probe_report("3.3a-extra"),
+        probe_report("3.3a-master"),
+        "exit 23".to_owned(),
     ] {
         std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
         let directory =
@@ -371,7 +379,7 @@ async fn malformed_and_failed_probes_refuse_without_dispatching() {
         let executable = wrapper(
             directory.path(),
             &format!(
-                "case \"$*\" in *'tmux '#*) {output};; *) touch {}; exit 0;; esac",
+                "case \"$*\" in *libtmux-version-*) {output};; *) touch {}; exit 0;; esac",
                 shell_quote(marker.as_os_str())
             ),
         );
@@ -427,7 +435,10 @@ async fn admission_and_dispatch_share_one_deadline() {
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
     let executable = wrapper(
         directory.path(),
-        "case \"$*\" in -V) printf 'tmux 3.7d\\n';; *'tmux '#*) sleep 0.2; printf 'tmux 3.7d\\n';; *) exec sleep 0.2;; esac",
+        &format!(
+            "case \"$*\" in -V) printf 'tmux 3.7d\\n';; *libtmux-version-*) sleep 0.2; {};; *) exec sleep 0.2;; esac",
+            probe_report("3.7d")
+        ),
     );
     let server = Server::builder()
         .socket_path(directory.path().join("s"))
@@ -580,14 +591,14 @@ async fn assert_undated_master_refused(cold: bool) {
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned directory");
     let marker = directory.path().join("effect");
     let endpoint = if cold {
-        "printf 'no server running on fixture\\n' >&2; exit 1"
+        "printf 'no server running on fixture\\n' >&2; exit 1".to_owned()
     } else {
-        "printf 'tmux master\\n'"
+        probe_report("master")
     };
     let executable = wrapper(
         directory.path(),
         &format!(
-            "case \"$*\" in *-V) printf 'tmux master\\n';; *'tmux '#*) {endpoint};; *) touch {};; esac",
+            "case \"$*\" in *-V) printf 'tmux master\\n';; *libtmux-version-*) {endpoint};; *) touch {};; esac",
             shell_quote(marker.as_os_str())
         ),
     );
@@ -804,14 +815,14 @@ async fn strict_probe_program_prefixes_refuse_unrelated_reports_before_effects()
         let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture");
         let marker = directory.path().join("effect");
         let endpoint = if cold {
-            "printf 'no server running on missing\\n' >&2; exit 1"
+            "printf 'no server running on missing\\n' >&2; exit 1".to_owned()
         } else {
-            "printf 'unrelated 3.7d\\n'"
+            "printf 'unrelated 3.7d\\n'".to_owned()
         };
         let executable = wrapper(
             directory.path(),
             &format!(
-                "case \"$*\" in *-V) printf 'unrelated 3.7d\\n';; *'tmux '#*) {endpoint};; *) touch {};; esac",
+                "case \"$*\" in *-V) printf 'unrelated 3.7d\\n';; *libtmux-version-*) {endpoint};; *) touch {};; esac",
                 shell_quote(marker.as_os_str())
             ),
         );
@@ -874,4 +885,144 @@ async fn strict_probe_accepts_the_actual_3_3a_creating_executable_basename() {
     let _ = server.kill().await;
     server.shutdown().await.expect("client closes");
     result.expect("renamed supported executable can explicitly start its daemon");
+}
+
+fn hook_marker(binary: &Path, socket: &Path, name: &str) -> String {
+    let output = native(
+        binary,
+        socket,
+        &[
+            OsStr::new("show-options"),
+            OsStr::new("-gqv"),
+            OsStr::new(name),
+        ],
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+fn reset_hook_marker(binary: &Path, socket: &Path, name: &str) {
+    native(
+        binary,
+        socket,
+        &[
+            OsStr::new("set-option"),
+            OsStr::new("-g"),
+            OsStr::new(name),
+            OsStr::new(""),
+        ],
+    );
+}
+
+/// The probe that admits a daemon must not have effects of its own.
+/// `display-message` fires `after-display-message` on every release, so a
+/// hook configured by the daemon's owner ran before admission had decided
+/// anything.
+#[tokio::test]
+async fn admission_probe_fires_no_user_hook() {
+    let binary = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&binary)
+        .start()
+        .await
+        .expect("daemon starts");
+    let socket = guard.socket_path();
+    // Hooks resolve against a session; a bare server runs none of them.
+    assert!(
+        native(
+            &binary,
+            socket,
+            &[
+                OsStr::new("new-session"),
+                OsStr::new("-d"),
+                OsStr::new("-s"),
+                OsStr::new("hooked"),
+                OsStr::new("sh"),
+            ],
+        )
+        .status
+        .success()
+    );
+    let set = |event: &str, option: &str| {
+        native(
+            &binary,
+            socket,
+            &[
+                OsStr::new("set-hook"),
+                OsStr::new("-g"),
+                OsStr::new(event),
+                OsStr::new(&format!("set-option -g {option} fired")),
+            ],
+        )
+        .status
+        .success()
+    };
+    assert!(
+        set("after-display-message", "@after_display_message"),
+        "after-display-message exists on every supported release"
+    );
+    // `command-error` arrived in tmux 3.5; older releases refuse the hook.
+    let has_command_error = set("command-error", "@command_error");
+
+    // Controls: each hook is live, so an empty marker below means the probe
+    // did not fire it rather than that the hook never worked.
+    native(
+        &binary,
+        socket,
+        &[
+            OsStr::new("display-message"),
+            OsStr::new("-p"),
+            OsStr::new("x"),
+        ],
+    );
+    assert_eq!(
+        hook_marker(&binary, socket, "@after_display_message"),
+        "fired",
+        "control: display-message fires its hook"
+    );
+    reset_hook_marker(&binary, socket, "@after_display_message");
+    if has_command_error {
+        native(
+            &binary,
+            socket,
+            &[
+                OsStr::new("kill-session"),
+                OsStr::new("-t"),
+                OsStr::new("=absent"),
+            ],
+        );
+        assert_eq!(
+            hook_marker(&binary, socket, "@command_error"),
+            "fired",
+            "control: a failing command fires command-error"
+        );
+        reset_hook_marker(&binary, socket, "@command_error");
+    }
+
+    // A fresh client handle has no admitted version, so this dispatch runs the
+    // endpoint probe.
+    let server = Server::builder()
+        .socket_path(socket)
+        .tmux_executable(&binary)
+        .build()
+        .expect("client configured");
+    let result = server
+        .cmd(Command::new("list-sessions"))
+        .await
+        .expect("admitted dispatch runs");
+    assert!(result.success(), "{result:?}");
+
+    assert_eq!(
+        hook_marker(&binary, socket, "@after_display_message"),
+        "",
+        "admission must not fire after-display-message"
+    );
+    if has_command_error {
+        assert_eq!(
+            hook_marker(&binary, socket, "@command_error"),
+            "",
+            "admission must not fire command-error"
+        );
+    }
+    server.shutdown().await.expect("client shuts down");
+    guard.shutdown().await.expect("fixture shuts down");
 }

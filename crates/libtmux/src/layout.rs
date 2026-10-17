@@ -105,11 +105,55 @@ pub(crate) async fn version(server: &Server) -> Result<TmuxVersion, Error> {
     server.endpoint_version().await
 }
 
-pub(crate) fn version_command() -> Command {
-    Command::new("display-message")
-        .arg("-p")
-        .arg("--")
-        .arg("tmux #{version}")
+/// A version probe that fires no user hook.
+///
+/// `display-message` runs the `after-display-message` hook on every release,
+/// so asking the daemon its version with it already had effects. `run-shell
+/// -C` has no `after-` hook, and it parses its argument in a timer callback
+/// after `exec` returned, so tmux never queues `command-error` for it either.
+/// The argument is not a command: tmux expands the format, fails to parse
+/// `<marker><version>`, and reports `unknown command: <marker><version>` on
+/// stderr with exit status 1.
+pub(crate) struct VersionProbe {
+    marker: String,
+}
+
+impl VersionProbe {
+    pub(crate) fn new() -> Self {
+        use std::hash::{BuildHasher as _, Hasher as _};
+
+        // `RandomState` is seeded by the operating system, so a hook, alias
+        // or session name cannot guess the marker to forge a version report.
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u32(std::process::id());
+        Self {
+            marker: format!("libtmux-version-{:016x}-", hasher.finish()),
+        }
+    }
+
+    pub(crate) fn command(&self) -> Command {
+        Command::new("run-shell")
+            .arg("-C")
+            .arg(format!("{}#{{version}}", self.marker))
+    }
+
+    /// Read the daemon's version from the probe's refusal.
+    ///
+    /// Returns `Ok(None)` when `stderr` is not this probe's report, so the
+    /// caller can tell an unrelated failure from an unparseable version.
+    pub(crate) fn parse(&self, stderr: &[u8]) -> Result<Option<TmuxVersion>, Error> {
+        let Some(version) = stderr
+            .trim_ascii()
+            .strip_prefix(b"unknown command: ")
+            .and_then(|rest| rest.strip_prefix(self.marker.as_bytes()))
+        else {
+            return Ok(None);
+        };
+        let mut framed = b"tmux ".to_vec();
+        framed.extend_from_slice(version);
+        framed.push(b'\n');
+        TmuxVersion::parse_output(&framed).map(Some)
+    }
 }
 
 struct Parser<'a> {
