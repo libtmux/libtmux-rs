@@ -195,6 +195,34 @@ run_lane() {
         return 1
     fi
 
+    if [[ "$source_contract" == "reject-core" ]]; then
+        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+            cargo test --locked --package libtmux --all-features \
+            --test daemon_admission -- --test-threads=1
+        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+            cargo test --locked --package tmux-workspace --all-features \
+            --test cli old_daemon_refuses_load_before_scripts_or_mutation \
+            -- --exact --test-threads=1
+        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+            cargo test --locked --package tmux-workspace --all-features \
+            --test cli the_attach_handoff -- --test-threads=1
+        return
+    fi
+    if [[ "$source_contract" == "reject-boundary" ]]; then
+        LIBTMUX_TEST_BOUNDARY_TMUX="$tmux_binary" \
+            cargo test --locked --package libtmux --all-features \
+            --test daemon_admission -- --test-threads=1
+        return
+    fi
+
+    if [[ "$tag" == "3.3a" ]]; then
+        LIBTMUX_TEST_MINIMUM_TMUX="$tmux_binary" \
+            cargo test --locked --package libtmux --all-features \
+            --test daemon_admission \
+            real_tmux_compat_minimum_daemon_accepts_newer_clients \
+            -- --test-threads=1
+    fi
+
     {
         local lane_path
         local selected_version
@@ -250,7 +278,8 @@ run_lane() {
         --test-threads=1
 }
 
-# Every lane runs the whole workspace against the tmux it built. The crate's
+# Supported lanes run the whole workspace against their build. The two
+# older lanes prove refusal without effects. The crate's
 # version sensitivity is not confined to the codec: flags, control mode, and
 # the stderr wording that separates a missing target from a refusal all differ
 # by release in principle, and asserting them on one version proves nothing
@@ -259,6 +288,18 @@ run_lane \
     "3.2a" \
     "3b929f332aafa7f1080eacc31feb11ffbb1d1841" \
     "tmux 3.2a" \
+    "reject-core"
+
+run_lane \
+    "3.3" \
+    "87fe00e8b44901240fc22d7120c1b31e4331f6f5" \
+    "tmux 3.3" \
+    "reject-boundary"
+
+run_lane \
+    "3.3a" \
+    "0b355ae8114511e1ff6359272b164f1cdf718e80" \
+    "tmux 3.3a" \
 
 # 3.4 and 3.5a are the releases that wrapped command output in
 # VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH. They are the reason the codec has a second
@@ -274,7 +315,7 @@ run_lane \
     "549c35b06165f6ae023115eb76f83f2cbf945395" \
     "tmux 3.5a" \
 
-# The final patch of each series rather than its first: 3.2a, 3.5a, 3.6b, and
+# The final patch of each supported series: 3.3a, 3.5a, 3.6b, and
 # 3.7b are what a distribution ships and what a user runs. 3.4 is the
 # exception because that series has no later patch.
 run_lane \
