@@ -4,6 +4,40 @@ Each section is one release: what a caller has to change to build against it.
 Start at the section for the version you are on and work up. Changes that
 need no edit on your side are in the changelog, not here.
 
+## Unreleased
+
+### Select a qualified daemon for optional operations
+
+Control connections, pane streams and subscriptions require stable numbered
+tmux 3.7 or newer and a compatible native client. Development and
+release-candidate daemons refuse acquisition. MCP `capture_since`,
+`wait_for_text` and `run_shell_command` have the same requirement. Use ordinary
+capture, `Pane::wait_for_text` polling and direct input on older supported daemons.
+
+Named-buffer deletion, rename and managed paste staging require tmux 3.4 or
+newer; captured `run-shell` output requires 3.5 or newer. Refused operations
+return an error before creating temporary buffers or running an earlier
+command in the same flat chain.
+
+Exact tmux 3.7 refuses `break-pane`; upgrade that daemon to 3.7a or newer.
+On 3.4, replace a literal `split-window -p N` with `split-window -l N%`.
+Typed percentage splits already use that spelling. On 3.3a, use a unique
+layout preset, a serialized layout with a four-hex header and nonempty body,
+or the validated `Window::select_layout` API. The guard checks the command
+it is given. It does not look inside tmux command strings nested in another
+command (`if-shell`, `run-shell -C`, brace blocks) or inside alias bodies, so
+do not nest a command a gate refuses: on an affected release it is sent as
+written.
+
+### Upgrade the workspace Python backend
+
+Python extension hooks and `shell` require tmuxp 1.74.x with a Python libtmux
+backend declaring both a hard tmux minimum of 3.3a and
+`TMUX_OPTIONAL_FEATURE_POLICY_VERSION >= 2`. These coordinated Python changes
+are unreleased. Select the compatible environment with
+`TMUX_WORKSPACE_PYTHON`; installing released tmuxp 1.74.0 alone does not
+qualify it.
+
 ## From 0.1.0-alpha.12 to 0.1.0-alpha.13
 
 ### `ServerBuilder::colors` refuses 88
