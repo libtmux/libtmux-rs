@@ -8,9 +8,9 @@ need no edit on your side are in the changelog, not here.
 
 ### Select a qualified daemon for optional operations
 
-Control connections, pane streams and subscriptions require stable numbered
-tmux 3.7 or newer and a compatible native client. Development and
-release-candidate daemons refuse acquisition. MCP `capture_since`,
+Control connections, pane streams and subscriptions require tmux 3.7 or
+newer (a build ranking at or above 3.7 final) and a compatible native client.
+`next-3.7` and `3.7-rc*` rank below it and refuse acquisition. MCP `capture_since`,
 `wait_for_text` and `run_shell_command` have the same requirement. Use ordinary
 capture, `Pane::wait_for_text` polling and direct input on older supported daemons.
 

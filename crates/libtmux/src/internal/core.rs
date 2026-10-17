@@ -745,17 +745,6 @@ impl Core {
         report.push(b'\n');
         let version = TmuxVersion::parse_output(&report)?;
         version.ensure_supported()?;
-        if version.is_development()
-            || version
-                .release()
-                .is_some_and(|release| release.suffix().is_release_candidate())
-        {
-            return Err(Error::UnsupportedCapability {
-                capability: "managed control acquisition on a stable numbered daemon",
-                needs: crate::since::CONTROL_ACQUISITION,
-                found: version,
-            });
-        }
         version.require(
             "managed control acquisition",
             crate::since::CONTROL_ACQUISITION,

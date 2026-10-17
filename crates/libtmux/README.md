@@ -103,7 +103,9 @@ Optional operations have narrower daemon requirements:
 | Literal `select-layout` with a layout operand | On 3.3a, a unique preset or standard serialized header; unsafe operands refuse |
 | Capture flags `-T` / `-F` | 3.4 / 3.7 or newer |
 
-Development and release-candidate daemons refuse managed control acquisition.
+Managed control acquisition admits a daemon ranking at or above 3.7 final,
+including `3.8-rc2` and `next-3.8`; `next-3.7` and `3.7-rc*` rank below it and
+refuse.
 Eligibility comes from the admitted daemon and assumes a natively compatible
 client/daemon pair. Direct literal argv commands and
 flat batches are checked before dispatch; `Command::requires_tmux` carries a

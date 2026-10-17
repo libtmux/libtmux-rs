@@ -234,7 +234,7 @@ group, so a failure cannot be blamed on a member: attribution degrades to
 `unknown` by design rather than guessing. Control mode keeps per-command
 evidence over one persistent connection after its admission probes. Run the
 example without `-- --baseline` to include control rows with a compatible
-client and a stable numbered daemon at 3.7 or newer.
+client and a daemon ranking at 3.7 or newer.
 
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
 has the behavior table, the how-to-turn-it-on table, and the named presets.

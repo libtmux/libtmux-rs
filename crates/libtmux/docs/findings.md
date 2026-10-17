@@ -554,7 +554,7 @@ default every sender starts from.
 ## Which tmux releases the lanes build
 
 Supported lanes build 3.3a, 3.4, 3.5a, 3.6b and 3.7b and run the workspace.
-Positive control fixtures require stable numbered 3.7 or newer, while ordinary
+Positive control fixtures require 3.7 or newer, while ordinary
 operations, codecs and
 polling still run on the older supported daemons. Separate 3.2a and raw 3.3
 lanes prove the core refusal boundary. An exact 3.7 lane proves the known
