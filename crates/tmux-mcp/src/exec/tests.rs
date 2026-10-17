@@ -48,6 +48,30 @@ impl Drop for NativeFrameFixture {
     }
 }
 
+/// `kill` returns while the daemon is still exiting; a client that starts the
+/// replacement in that window fails with `server exited unexpectedly`.
+fn wait_until_gone(binary: &OsStr, socket: &Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let probe = Command::new(binary)
+            .arg("-N")
+            .arg("-S")
+            .arg(socket)
+            .arg("list-sessions")
+            .output()
+            .expect("exit probe starts");
+        let stderr = String::from_utf8_lossy(&probe.stderr);
+        if stderr.contains("no server running") || stderr.contains("error connecting") {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "original daemon still answering: {stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 async fn native_frame_generation_case(replacement: Option<OsString>) {
     let fixture = NativeFrameFixture::new();
     let server = libtmux::Server::builder()
@@ -64,6 +88,7 @@ async fn native_frame_generation_case(replacement: Option<OsString>) {
     let replaced = replacement.is_some();
     if let Some(binary) = replacement {
         server.kill().await.expect("original daemon ends");
+        wait_until_gone(&binary, &fixture.socket);
         let started = Command::new(&binary)
             .arg("-S")
             .arg(&fixture.socket)
