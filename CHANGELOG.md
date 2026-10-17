@@ -16,6 +16,20 @@ full.
 
 ## Unreleased
 
+### Changed
+
+- **Breaking.** `libtmux`, `tmux-mcp`, and `tmux-workspace` require tmux 3.3a
+  or newer. Raw commands, chains and scoped operations check the connected
+  daemon before effects; an absent endpoint checks the executable that would
+  start it. Ordinary listings use the daemon's format catalog, and older
+  clients cannot restart their unsupported executable after a supported
+  daemon disappears. Upgrade older daemons before using these operations.
+
+- **Breaking.** `tmux-workspace` Python extensions and `shell` require a
+  Python libtmux backend declaring a hard tmux minimum of 3.3a or newer with
+  per-command daemon admission. Select a compatible tmuxp 1.74.x environment
+  through `TMUX_WORKSPACE_PYTHON`.
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;
