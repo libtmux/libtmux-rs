@@ -27,7 +27,15 @@ fn executable(guard: &TestServer) -> PathBuf {
 }
 
 fn minimum() -> Option<PathBuf> {
-    std::env::var_os("LIBTMUX_TEST_MINIMUM_TMUX").map(PathBuf::from)
+    let variable = "LIBTMUX_TEST_MINIMUM_TMUX";
+    let found = std::env::var_os(variable);
+    assert!(
+        found.is_some()
+            || !std::env::var("LIBTMUX_REQUIRE_NATIVE")
+                .is_ok_and(|required| required.split(',').any(|name| name == variable)),
+        "{variable} is listed in LIBTMUX_REQUIRE_NATIVE but is unset"
+    );
+    found.map(PathBuf::from)
 }
 
 #[path = "support/versions.rs"]

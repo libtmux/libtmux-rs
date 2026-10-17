@@ -248,9 +248,11 @@ run_lane() {
     fi
 
     if [[ "$source_contract" == "feature-boundary" ]]; then
-        LIBTMUX_TEST_BROKEN_BREAK_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_BROKEN_BREAK_TMUX,LIBTMUX_TEST_MINIMUM_TMUX,LIBTMUX_TEST_NEWER_TMUX \
+            LIBTMUX_TEST_BROKEN_BREAK_TMUX="$tmux_binary" \
             LIBTMUX_TEST_MINIMUM_TMUX="$build_root/tmux-3.3a-install/bin/tmux" \
             LIBTMUX_TEST_NEWER_TMUX="$build_root/tmux-3.7b-install/bin/tmux" \
+            bash scripts/require-tests.sh \
             cargo test --locked --package libtmux --all-features \
             --test optional_features \
             -- --test-threads=1
@@ -272,9 +274,9 @@ run_lane() {
         local selected_version
         local -a feature_environment=()
         if [[ "$tag" == "3.3a" ]]; then
-            feature_environment+=("LIBTMUX_TEST_MINIMUM_TMUX=$tmux_binary")
+            feature_environment+=("LIBTMUX_TEST_MINIMUM_TMUX=$tmux_binary" "LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_MINIMUM_TMUX")
         elif [[ "$tag" == "3.4" ]]; then
-            feature_environment+=("LIBTMUX_TEST_SAFE_BUFFER_TMUX=$tmux_binary")
+            feature_environment+=("LIBTMUX_TEST_SAFE_BUFFER_TMUX=$tmux_binary" "LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_SAFE_BUFFER_TMUX")
         fi
 
         if [[ -z "${PATH:-}" ]]; then

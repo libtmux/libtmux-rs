@@ -8,8 +8,18 @@ use std::path::PathBuf;
 use libtmux::test::TestServer;
 use libtmux::{Command, CommandChain, Error, ReleaseSuffix, ReleaseVersion};
 
+/// Read a native-binary variable. A lane that lists the variable in
+/// `LIBTMUX_REQUIRE_NATIVE` must have set it: skipping there would pass
+/// without exercising the boundary the lane exists to test.
 fn binary(variable: &str) -> Option<PathBuf> {
-    std::env::var_os(variable).map(PathBuf::from)
+    let found = std::env::var_os(variable);
+    assert!(
+        found.is_some()
+            || !std::env::var("LIBTMUX_REQUIRE_NATIVE")
+                .is_ok_and(|required| required.split(',').any(|name| name == variable)),
+        "{variable} is listed in LIBTMUX_REQUIRE_NATIVE but is unset"
+    );
+    found.map(PathBuf::from)
 }
 
 #[tokio::test]
