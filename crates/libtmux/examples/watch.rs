@@ -27,7 +27,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder().socket_path(&socket).build()?;
 
     let session = server.new_session(unique_name("watched").as_str()).await?;
-    let (commands, mut events) = ControlMode::attach(&server, session.id()).await?.split();
+    let control = match ControlMode::attach(&server, session.id()).await {
+        Ok(control) => control,
+        Err(error @ libtmux::Error::UnsupportedCapability { .. }) => {
+            println!("{error}");
+            server.kill().await?;
+            server.shutdown().await?;
+            std::fs::remove_file(&socket)?;
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let (commands, mut events) = control.split();
     println!("one connection to {}", socket.display());
 
     // The watcher gets its own task. Sending and watching are separate
