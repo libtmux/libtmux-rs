@@ -6,6 +6,8 @@ use crate::{Error, ReleaseSuffix, ReleaseVersion, TmuxVersion};
 const SAFE_NAMED_BUFFERS: ReleaseVersion = crate::since::NAMED_BUFFER_IDENTITY;
 const BREAK_BROKEN: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 const BREAK_FIXED: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::PATCH_A);
+const NAME_CHARACTERS_BROKEN: ReleaseVersion = BREAK_BROKEN;
+const NAME_CHARACTERS_FIXED: ReleaseVersion = BREAK_FIXED;
 const LAYOUT_ERRORS_FIXED: ReleaseVersion = ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
 
 struct Arguments<'a, T> {
@@ -53,6 +55,19 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
                 ReleaseVersion::new(3, 5, ReleaseSuffix::FINAL),
             )?;
         }
+    } else if native(name, b"new-session", b"new", 3) {
+        let found = flags(arguments, b"cefFnstxy");
+        refuse_name_characters(version, &found, b"sn")?;
+    } else if native(name, b"new-window", b"neww", 5) {
+        let found = flags(arguments, b"cenFt");
+        refuse_name_characters(version, &found, b"n")?;
+    } else if native(name, b"rename-session", b"rename", 7)
+        || native(name, b"rename-window", b"renamew", 8)
+    {
+        let Arguments { positional, .. } = scan(arguments, b"t");
+        if let Some(new_name) = positional.first() {
+            refuse_name_bytes(version, new_name.as_ref().as_bytes())?;
+        }
     } else if native(name, b"select-layout", b"selectl", 8) {
         if version
             .behavior_release()
@@ -93,6 +108,36 @@ pub(crate) fn require(command: &[impl AsRef<OsStr>], version: &TmuxVersion) -> R
                 _ => {}
             }
         }
+    }
+    Ok(())
+}
+
+/// Exactly tmux 3.7 rejects a session or window name holding `:` or `.`
+/// after the command has partly run; 3.7a and every other release accept or
+/// refuse it cleanly. Refused before dispatch so nothing runs.
+fn refuse_name_characters(
+    version: &TmuxVersion,
+    found: &[(u8, Option<&[u8]>)],
+    naming: &[u8],
+) -> Result<(), Error> {
+    for (flag, value) in found {
+        if naming.contains(flag) {
+            if let Some(value) = value {
+                refuse_name_bytes(version, value)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn refuse_name_bytes(version: &TmuxVersion, name: &[u8]) -> Result<(), Error> {
+    if name.iter().any(|byte| matches!(byte, b':' | b'.')) {
+        refuse_interval(
+            version,
+            "session or window name containing ':' or '.'",
+            NAME_CHARACTERS_BROKEN,
+            NAME_CHARACTERS_FIXED,
+        )?;
     }
     Ok(())
 }
@@ -162,5 +207,63 @@ fn scan<'a, T: AsRef<OsStr>>(arguments: &'a [T], valued: &[u8]) -> Arguments<'a,
     Arguments {
         flags,
         positional: &arguments[position..],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require;
+    use crate::TmuxVersion;
+
+    fn version(raw: &str) -> TmuxVersion {
+        TmuxVersion::parse_output(format!("tmux {raw}\n").as_bytes()).expect("version")
+    }
+
+    /// The guard checks the command it is given and nothing nested in it, as
+    /// the documentation says. This pins that limit: a refused command
+    /// reaches the daemon when it sits inside `if-shell` or `run-shell -C`.
+    #[test]
+    fn commands_nested_in_another_command_are_not_inspected() {
+        assert!(require(&["break-pane"], &version("3.7")).is_err());
+        for nested in [
+            &["if-shell", "true", "break-pane"][..],
+            &["run-shell", "-C", "break-pane"],
+            &["if-shell", "-F", "1", "{ break-pane }"],
+        ] {
+            assert!(require(nested, &version("3.7")).is_ok(), "{nested:?}");
+        }
+    }
+
+    #[test]
+    fn colon_and_dot_names_are_refused_on_exactly_3_7() {
+        let commands: [&[&str]; 8] = [
+            &["new-session", "-d", "-s", "a:b"],
+            &["new", "-s", "ok", "-n", "w.x"],
+            &["new-window", "-n", "a.b"],
+            &["neww", "-t", "$1", "-n", "a:b"],
+            &["rename-session", "-t", "$1", "x.y"],
+            &["rename", "x.y"],
+            &["rename-window", "-t", "@1", "x:y"],
+            &["renamew", "x:y"],
+        ];
+        for command in commands {
+            assert!(
+                require(command, &version("3.7")).is_err(),
+                "{command:?} on 3.7"
+            );
+            for raw in ["3.7a", "3.8", "3.6b", "3.3a", "next-3.7", "3.7-rc2"] {
+                assert!(
+                    require(command, &version(raw)).is_ok(),
+                    "{command:?} on {raw}"
+                );
+            }
+        }
+        for command in [
+            &["new-session", "-d", "-s", "plain"][..],
+            &["rename-window", "plain"],
+            &["new-window", "-t", "a:1", "-n", "plain"],
+        ] {
+            assert!(require(command, &version("3.7")).is_ok(), "{command:?}");
+        }
     }
 }

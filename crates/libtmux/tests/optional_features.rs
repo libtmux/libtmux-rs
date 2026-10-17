@@ -813,3 +813,78 @@ async fn real_tmux_compat_optional_control_uses_daemon_defects_with_a_newer_clie
     );
     assert_eq!(windows, 1, "refused break did not create a window");
 }
+
+/// Exactly 3.7 mishandles a session or window name holding `:` or `.`; every
+/// command that sets one is refused before it runs, and the same names are
+/// accepted where the release handles them.
+#[tokio::test]
+async fn real_tmux_compat_optional_exact_3_7_refuses_colon_and_dot_names() {
+    let Some(binary) = binary("LIBTMUX_TEST_BROKEN_BREAK_TMUX") else {
+        return;
+    };
+    let guard = TestServer::builder()
+        .tmux_executable(binary)
+        .start()
+        .await
+        .expect("exact 3.7 starts");
+    let server = guard.server();
+    let session = server.new_session("keeper").await.expect("session");
+    let window = session.windows().await.expect("windows").remove(0);
+    let windows_before = session.windows().await.expect("windows").len();
+    let sessions_before = server.sessions().await.expect("sessions").len();
+    let target = session.id().to_string();
+    let attempts = [
+        Command::new("new-session").arg("-d").arg("-s").arg("a:b"),
+        Command::new("new-session")
+            .arg("-d")
+            .arg("-s")
+            .arg("ok")
+            .arg("-n")
+            .arg("w.x"),
+        Command::new("new-window")
+            .arg("-d")
+            .arg("-t")
+            .arg(&target)
+            .arg("-n")
+            .arg("a.b"),
+        Command::new("neww").arg("-d").arg("-n").arg("a:b"),
+        Command::new("rename-session")
+            .arg("-t")
+            .arg(&target)
+            .arg("x.y"),
+        Command::new("rename-window")
+            .arg("-t")
+            .arg(window.id().to_string())
+            .arg("x:y"),
+    ];
+    for command in attempts {
+        let shown = command.summary().to_string();
+        let result = server.cmd(command).await;
+        assert!(
+            matches!(result, Err(Error::CapabilityDefective { .. })),
+            "{shown}: {result:?}"
+        );
+    }
+    assert_eq!(
+        server.sessions().await.expect("sessions").len(),
+        sessions_before
+    );
+    assert_eq!(
+        session.windows().await.expect("windows").len(),
+        windows_before
+    );
+    assert_eq!(session.name().to_string_lossy(), "keeper");
+    let control = server
+        .cmd(
+            Command::new("new-window")
+                .arg("-d")
+                .arg("-t")
+                .arg(&target)
+                .arg("-n")
+                .arg("plain"),
+        )
+        .await
+        .expect("an ordinary name is accepted");
+    assert!(control.success());
+    guard.shutdown().await.expect("fixture closes");
+}
