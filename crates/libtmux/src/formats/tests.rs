@@ -3,9 +3,9 @@
 #[cfg(feature = "test-support")]
 use super::decode_text;
 use super::{
-    CLIENT_INFO_DESCRIPTORS, CLIENT_INFO_SUPPLEMENTS, CLIENT_NAME, DecoderKind, EmptyPolicy,
-    FormatCodecError, FormatCodecErrorKind, FormatCodecPhase, FormatDescriptor, FormatPlan,
-    GROUPED_CATALOG, InfoPlacement, ListProfile, PANE_ID, PANE_INFO_DESCRIPTORS,
+    CATALOG_BASELINE, CLIENT_INFO_DESCRIPTORS, CLIENT_INFO_SUPPLEMENTS, CLIENT_NAME, DecoderKind,
+    EmptyPolicy, FormatCodecError, FormatCodecErrorKind, FormatCodecPhase, FormatDescriptor,
+    FormatPlan, GROUPED_CATALOG, InfoPlacement, ListProfile, PANE_ID, PANE_INFO_DESCRIPTORS,
     PANE_INFO_SUPPLEMENTS, ParsedRow, ParsedSlot, PlanFieldState, PlanPurpose, PlanVersion,
     ProfileSet, QUOTE_SHELL_SPECIALS, RequiredContext, SESSION_ID, SESSION_INFO_DESCRIPTORS,
     SESSION_INFO_SUPPLEMENTS, SemanticOwner, TransportDialect, WINDOW_ID, WINDOW_INFO_DESCRIPTORS,
@@ -330,10 +330,7 @@ fn format_codec_private_metadata_signatures_are_exact() {
         .into_iter()
         .all(|profile| TEST_DESCRIPTOR.profiles().contains(profile))
     );
-    assert_eq!(
-        TEST_DESCRIPTOR.minimum_release(),
-        TmuxVersion::MIN_SUPPORTED
-    );
+    assert_eq!(TEST_DESCRIPTOR.minimum_release(), CATALOG_BASELINE);
     assert_eq!(TEST_DESCRIPTOR.empty_policy(), EmptyPolicy::Available);
     assert_eq!(TEST_DESCRIPTOR.placement(), InfoPlacement::CatalogOnly);
 
@@ -458,7 +455,7 @@ fn format_codec_normal_profiles_store_exact_identity_and_version_evidence() {
         );
         assert_eq!(baseline.owner(), owner);
         assert_eq!(baseline.required_context(), required_context);
-        assert_eq!(baseline.minimum_release(), TmuxVersion::MIN_SUPPORTED);
+        assert_eq!(baseline.minimum_release(), CATALOG_BASELINE);
         assert_eq!(baseline.decoder(), decoder);
         assert_eq!(baseline.empty_policy(), EmptyPolicy::Required);
         assert_eq!(plan.descriptors.len(), selected_count);
@@ -1154,7 +1151,7 @@ fn profiles_token(profiles: ProfileSet) -> &'static str {
 }
 
 fn minimum_token(minimum: ReleaseVersion) -> &'static str {
-    if minimum == TmuxVersion::MIN_SUPPORTED {
+    if minimum == CATALOG_BASELINE {
         "3.2a"
     } else if minimum == ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL) {
         "3.3"
@@ -1545,7 +1542,7 @@ fn format_catalog_numbered_and_development_availability_is_exact() {
 
     for descriptor in catalog()
         .into_iter()
-        .filter(|descriptor| descriptor.minimum_release() > TmuxVersion::MIN_SUPPORTED)
+        .filter(|descriptor| descriptor.minimum_release() > CATALOG_BASELINE)
     {
         let profile = if descriptor.profiles().contains(ListProfile::Sessions) {
             ListProfile::Sessions
@@ -1587,7 +1584,7 @@ fn format_catalog_numbered_and_development_availability_is_exact() {
     }
 
     for descriptor in catalog().into_iter().filter(|descriptor| {
-        descriptor.minimum_release() == TmuxVersion::MIN_SUPPORTED
+        descriptor.minimum_release() == CATALOG_BASELINE
             && profiles_token(descriptor.profiles()) != "none"
     }) {
         let profile = if descriptor.profiles().contains(ListProfile::Sessions) {

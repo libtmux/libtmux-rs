@@ -51,7 +51,7 @@ impl ReleaseSuffix {
     /// A final release with no suffix.
     pub const FINAL: Self = Self(SuffixKind::Final);
 
-    const PATCH_A: Self = Self(SuffixKind::Patch(b'a'));
+    pub(crate) const PATCH_A: Self = Self(SuffixKind::Patch(b'a'));
 
     /// Construct a numbered release-candidate suffix.
     ///
@@ -320,8 +320,8 @@ pub struct TmuxVersion {
 }
 
 impl TmuxVersion {
-    /// The minimum supported tmux release, 3.2a.
-    pub const MIN_SUPPORTED: ReleaseVersion = ReleaseVersion::new(3, 2, ReleaseSuffix::PATCH_A);
+    /// The minimum supported tmux release, 3.3a.
+    pub const MIN_SUPPORTED: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::PATCH_A);
 
     /// Parse the exact output from `tmux -V`.
     ///
@@ -444,7 +444,7 @@ impl TmuxVersion {
     /// ```
     /// use libtmux::TmuxVersion;
     ///
-    /// let version = TmuxVersion::parse_output(b"tmux 3.2a\n")?;
+    /// let version = TmuxVersion::parse_output(b"tmux 3.3a\n")?;
     /// assert!(version.meets(&TmuxVersion::MIN_SUPPORTED));
     /// # Ok::<(), libtmux::Error>(())
     /// ```
@@ -555,14 +555,14 @@ impl TmuxVersion {
     /// # Errors
     ///
     /// Returns [`Error::UnsupportedTmuxVersion`] when the detected version does
-    /// not establish support for tmux 3.2a.
+    /// not establish support for tmux 3.3a.
     ///
     /// # Examples
     ///
     /// ```
     /// use libtmux::TmuxVersion;
     ///
-    /// let version = TmuxVersion::parse_output(b"tmux 3.2a\n")?;
+    /// let version = TmuxVersion::parse_output(b"tmux 3.3a\n")?;
     /// version.ensure_supported()?;
     /// # Ok::<(), libtmux::Error>(())
     /// ```
@@ -751,8 +751,7 @@ pub mod since {
     /// width. The option string is `ab:CeE:JNpPqS:t:` on 3.2a and gains `T`
     /// by 3.5a; tmux's own CHANGES puts it in the 3.3a-to-3.4 section.
     ///
-    /// `-N` and `-P` need no such gate: both are present at 3.2a, which is
-    /// [`crate::TmuxVersion::MIN_SUPPORTED`].
+    /// `-N` and `-P` are available on every supported release.
     pub const CAPTURE_TRIM_BLANK_CELLS: ReleaseVersion =
         ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
 
