@@ -98,6 +98,19 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         vec!["-V".to_owned()],
         "only the release probe ran as a process",
     );
+    for flag in ["-V", "-h"] {
+        let error = routed
+            .cmd(Command::new(flag))
+            .await
+            .expect_err("client flags have no control protocol representation");
+        assert!(matches!(
+            error,
+            libtmux::Error::ControlMode {
+                kind: libtmux::ControlModeErrorKind::UnrepresentableCommand,
+                ..
+            }
+        ));
+    }
 
     // A listing: the typed call renders a format plan and decodes rows.
     let names: Vec<String> = routed

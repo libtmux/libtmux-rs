@@ -1,3 +1,4 @@
+pub(crate) mod admission;
 #[cfg(feature = "control-mode")]
 pub(crate) mod control_executor;
 pub(crate) mod core;

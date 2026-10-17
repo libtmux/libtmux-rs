@@ -72,7 +72,7 @@ fn write_script_with_version(directory: &Path, body: &str, version: &str) -> Pat
     let mut file = fs::File::create(&staging).expect("staged script is creatable");
     writeln!(
         file,
-        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\n{body}"
+        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\nfor argument do\n    if [ \"$argument\" = 'tmux #{{version}}' ]; then\n        {version}\n        exit 0\n    fi\ndone\n{body}"
     )
     .expect("script is writable");
     file.sync_all().expect("script contents are durable");
@@ -256,7 +256,7 @@ async fn attach_uses_the_cores_captured_launch_context() {
         .canonicalize()
         .expect("fixture directory resolves");
     let expected = format!(
-        "{}\n/captured/path\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<-C>\n<attach>\n<-E>\n<-t>\n<$1>\n",
+        "{}\n/captured/path\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<-N>\n<-C>\n<if-shell>\n<-F>\n<#{{==:#{{version}},3.5a}}>\n<>\n<libtmux-core-version-changed>\n<;>\n<attach>\n<-E>\n<-t>\n<$1>\n",
         physical_directory.display(),
         fixture.path().join("socket;").display(),
         fixture.path().join("config;").display(),

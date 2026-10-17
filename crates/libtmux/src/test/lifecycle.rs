@@ -17,7 +17,7 @@ use super::{
     FIXTURE_ROOT, LOCK_NAME, LeaderObservation, LeaderObserver, OWNER_NAME, SOCKET_NAME,
     TestServer, TestServerError, TestServerErrorKind, scaled,
 };
-use crate::{Command, Server};
+use crate::Server;
 
 pub(super) struct OwnedFiles {
     pub(super) socket_path: PathBuf,
@@ -663,10 +663,7 @@ fn unlink_fixed(directory: &OwnedFd, name: &OsStr) -> bool {
 }
 
 async fn readiness_probe(server: &Server) -> Result<Option<u32>, ()> {
-    let output = server
-        .cmd(Command::new("display-message").arg("-p").arg("#{pid}"))
-        .await
-        .map_err(|_| ())?;
+    let output = server.fixture_pid().await.map_err(|_| ())?;
     if !output.success() {
         return Ok(None);
     }
