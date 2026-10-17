@@ -10,6 +10,9 @@
 // in-test exemptions, and this file has them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+#[path = "support/versions.rs"]
+mod versions;
+
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -89,6 +92,9 @@ async fn layout_preflight_counts_the_panes_a_plan_creates() {
 #[tokio::test]
 async fn layout_preflight_precedes_control_plan_mutation() {
     let guard = TestServer::new().await.unwrap();
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let session = guard.session("layout-control-keeper").await.unwrap();
     let window = session.active_window().await.unwrap().unwrap();
     let (sender, _events) = libtmux::control::ControlMode::attach(guard.server(), session.id())
@@ -118,6 +124,9 @@ async fn layout_preflight_precedes_control_plan_mutation() {
 #[tokio::test]
 async fn real_tmux_compat_layout_preflight_control_version() {
     let guard = TestServer::new().await.unwrap();
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let session = guard.session("layout-control-version").await.unwrap();
     let window = session.active_window().await.unwrap().unwrap();
     let version = guard.server().capabilities().await.unwrap().tmux_version();
@@ -693,6 +702,9 @@ async fn a_pause_is_refused_over_control_mode() {
     use libtmux::{ControlModeErrorKind, Error};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("paused-control")
@@ -731,6 +743,9 @@ async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
     use libtmux::control::ControlMode;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("control-plan-refusal")
@@ -995,6 +1010,9 @@ async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
     use libtmux::control::ControlMode;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("layout-control")

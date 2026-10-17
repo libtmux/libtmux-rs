@@ -182,6 +182,33 @@ fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
     }
 }
 
+#[tokio::test]
+async fn feature_requirements_refuse_before_control_queueing() {
+    let (commands, mut requests) = mpsc::channel(1);
+    let mut sender = sender(commands, Duration::from_secs(1));
+    let result = sender
+        .send(Command::new("display-message").requires_tmux(
+            "staged cleanup",
+            crate::ReleaseVersion::new(3, 8, crate::ReleaseSuffix::FINAL),
+        ))
+        .await;
+    assert!(matches!(result, Err(Error::UnsupportedCapability { .. })));
+    assert!(matches!(
+        requests.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    sender.version = crate::TmuxVersion::parse_output(b"tmux 3.7\n").expect("exact 3.7");
+    let result = sender
+        .send(Command::new("breakp").arg("-n").arg("requested-name"))
+        .await;
+    assert!(matches!(result, Err(Error::CapabilityDefective { .. })));
+    assert!(matches!(
+        requests.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+}
+
 fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> Error {
     answer
         .try_recv()

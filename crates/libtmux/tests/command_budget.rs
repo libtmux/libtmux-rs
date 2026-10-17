@@ -5,6 +5,9 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+#[path = "support/versions.rs"]
+mod versions;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -172,6 +175,9 @@ async fn asking_a_client_what_it_is_attached_to_costs_one_command_each() {
     let _guard = tracing::subscriber::set_default(subscriber);
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("attached").await.expect("session");
 

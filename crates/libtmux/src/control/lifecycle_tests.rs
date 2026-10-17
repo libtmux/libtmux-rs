@@ -8,7 +8,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write as _;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
@@ -44,6 +44,23 @@ const REPLY_TIMEOUT: Duration = Duration::from_millis(100);
 /// expose the way `internal::subprocess` does for its own tests.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
 
+#[cfg(feature = "test-support")]
+async fn control_qualified(server: &Server) -> bool {
+    let report = server
+        .format(None, "tmux #{version}")
+        .await
+        .expect("daemon release");
+    let mut report = report.as_bytes().to_vec();
+    report.push(b'\n');
+    crate::TmuxVersion::parse_output(&report)
+        .expect("daemon release parses")
+        .release()
+        .is_some_and(|release| {
+            *release >= crate::since::CONTROL_ACQUISITION
+                && !release.suffix().is_release_candidate()
+        })
+}
+
 fn fixture_root() -> PathBuf {
     let root = PathBuf::from("/tmp/libtmux-rs-test");
     fs::create_dir_all(&root).expect("fixture root is creatable");
@@ -64,10 +81,10 @@ fn shell_quote(path: &Path) -> String {
 
 /// How a fixture answers the hook-free version probe: tmux refuses the marker
 /// string as a command and reports it, version appended, on stderr.
-const PROBE_AS_3_5A: &str = "printf 'unknown command: %s3.5a\\n' \"${argument%%#*}\" >&2; exit 1";
+const PROBE_AS_3_7B: &str = "printf 'unknown command: %s3.7b\\n' \"${argument%%#*}\" >&2; exit 1";
 
 fn write_script(directory: &Path, body: &str) -> PathBuf {
-    write_script_with_version(directory, body, "printf 'tmux 3.5a\\n'", PROBE_AS_3_5A)
+    write_script_with_version(directory, body, "printf 'tmux 3.7b\\n'", PROBE_AS_3_7B)
 }
 
 fn write_script_with_version(directory: &Path, body: &str, version: &str, probe: &str) -> PathBuf {
@@ -76,7 +93,7 @@ fn write_script_with_version(directory: &Path, body: &str, version: &str, probe:
     let mut file = fs::File::create(&staging).expect("staged script is creatable");
     writeln!(
         file,
-        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\nfor argument do\n    case \"$argument\" in\n    libtmux-version-*)\n        {probe}\n        ;;\n    esac\ndone\n{body}"
+        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\nfor argument do\n    case \"$argument\" in\n    libtmux-version-*)\n        {probe}\n        ;;\n    esac\n    if [ \"$argument\" = 'tmux #{{version}} #{{pid}} #{{start_time}}' ]; then\n        report=\"$({version})\"\n        printf '%s 123 456\\n' \"$report\"\n        exit 0\n    fi\ndone\n{body}"
     )
     .expect("script is writable");
     file.sync_all().expect("script contents are durable");
@@ -132,6 +149,9 @@ fn server(
     colors: Option<u16>,
 ) -> Server {
     let socket = directory.join("socket;");
+    if !socket.exists() {
+        std::os::unix::net::UnixListener::bind(&socket).expect("owned socket inode");
+    }
     let context = BuildContext::new(
         Some(directory.to_path_buf()),
         Some(captured_path),
@@ -239,7 +259,7 @@ async fn attach_uses_the_cores_captured_launch_context() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{{\n    pwd\n    printf '%s\\n' \"$PATH\"\n    for argument in \"$@\"; do printf '<%s>\\n' \"$argument\"; done\n}} > {}\n{}\nprintf '%%exit done\\n'",
+            "{{\n    pwd\n    printf '%s\\n' \"$PATH\"\n    for argument in \"$@\"; do printf '<%s>\\n' \"$argument\"; done\n}} > {}\n{}\nwhile IFS= read -r line; do :; done",
             shell_quote(&record),
             opening_success(),
         ),
@@ -259,10 +279,29 @@ async fn attach_uses_the_cores_captured_launch_context() {
         .path()
         .canonicalize()
         .expect("fixture directory resolves");
+    let alias = PathBuf::from(
+        captured
+            .lines()
+            .nth(3)
+            .and_then(|line| line.strip_prefix('<'))
+            .and_then(|line| line.strip_suffix('>'))
+            .expect("captured socket argument"),
+    );
+    assert_eq!(alias.file_name().expect("alias name"), "s");
+    assert_eq!(
+        alias.parent().and_then(Path::parent),
+        Some(physical_directory.as_path())
+    );
+    let original = fs::metadata(fixture.path().join("socket;")).expect("original socket");
+    let linked = fs::metadata(&alias).expect("pinned socket");
+    assert_eq!(
+        (original.dev(), original.ino()),
+        (linked.dev(), linked.ino())
+    );
     let expected = format!(
-        "{}\n/captured/path\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<-N>\n<-C>\n<if-shell>\n<-F>\n<#{{==:#{{version}},3.5a}}>\n<>\n<libtmux-core-version-changed>\n<;>\n<attach>\n<-E>\n<-t>\n<$1>\n",
+        "{}\n/captured/path\n<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<-N>\n<-C>\n<if-shell>\n<-F>\n<#{{==:#{{version}},3.7b}}>\n<>\n<libtmux-core-version-changed>\n<;>\n<attach>\n<-E>\n<-t>\n<$1>\n",
         physical_directory.display(),
-        fixture.path().join("socket;").display(),
+        alias.display(),
         fixture.path().join("config;").display(),
     );
     assert_eq!(captured, expected);
@@ -1053,6 +1092,10 @@ async fn real_tmux_bootstrap_cleanup_preserves_frame_failure() {
         .await
         .expect("tmux starts");
     let server = guard.server();
+    if !control_qualified(server).await {
+        guard.shutdown().await.expect("ineligible fixture closes");
+        return;
+    }
     let session = server
         .new_session("frame-closed")
         .await
@@ -1120,6 +1163,7 @@ async fn initial_watch_failure_preserves_the_connection_error() {
         .start()
         .await
         .expect("tmux starts");
+    let eligible = control_qualified(guard.server()).await;
     let session = guard
         .server()
         .new_session("initial-watch")
@@ -1155,13 +1199,17 @@ async fn initial_watch_failure_preserves_the_connection_error() {
     wrapped.shutdown().await.expect("wrapper shuts down");
     guard.shutdown().await.expect("fixture shuts down");
     assert!(
-        matches!(
-            error,
-            Error::ControlModeFrameTooLarge {
-                frame: "line",
-                limit: 64
-            }
-        ),
+        if eligible {
+            matches!(
+                error,
+                Error::ControlModeFrameTooLarge {
+                    frame: "line",
+                    limit: 64
+                }
+            )
+        } else {
+            matches!(error, Error::UnsupportedCapability { .. })
+        },
         "got {error:?}"
     );
 }
