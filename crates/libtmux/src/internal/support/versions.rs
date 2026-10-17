@@ -13,7 +13,6 @@ use crate::{Command, Error, TmuxVersion};
 pub(crate) struct VersionCache {
     version: Mutex<Option<TmuxVersion>>,
     initializing: tokio::sync::Mutex<()>,
-    startup_allowed: tokio::sync::OnceCell<bool>,
 }
 
 impl VersionCache {
@@ -62,29 +61,31 @@ pub(crate) fn dispatch(
         let unbounded = request.is_unbounded();
         let version_check = async {
             if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
-                return Ok(Some(version));
+                return Ok(Some((version, false)));
             }
             let _initialization = versions.initializing.lock().await;
             if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
-                return Ok(Some(version));
+                return Ok(Some((version, false)));
             }
             let live = live_version(&executor, &configuration, endpoint_probe).await?;
             if absent_cleanup && live.is_none() {
+                if let Some(version) = versions.get() {
+                    versions.forget(&version);
+                }
                 return Ok(None);
             }
-            let version = if let Some(version) = live {
-                version
-            } else {
-                let version = binary_version(&executor, binary_probe).await?;
-                version.ensure_supported()?;
-                let _ = versions.startup_allowed.set(true);
-                version
+            let allow_start = live.is_none();
+            let version = match live {
+                Some(version) => version,
+                None => binary_version(&executor, binary_probe).await?,
             };
             version.ensure_supported()?;
-            versions.remember(version.clone());
-            Ok(Some(version))
+            if !allow_start {
+                versions.remember(version.clone());
+            }
+            Ok(Some((version, allow_start)))
         };
-        let Some(version) = within(
+        let Some((version, allow_start)) = within(
             version_check,
             deadline,
             request_id,
@@ -101,24 +102,7 @@ pub(crate) fn dispatch(
                 Vec::new(),
             ));
         };
-        let startup_allowed = within(
-            async {
-                Ok(*versions
-                    .startup_allowed
-                    .get_or_init(|| async {
-                        binary_version(&executor, binary_probe)
-                            .await
-                            .is_ok_and(|version| version.ensure_supported().is_ok())
-                    })
-                    .await)
-            },
-            deadline,
-            request_id,
-            &summary,
-            configuration.timeout(),
-        )
-        .await?;
-        let request = if startup_allowed {
+        let request = if allow_start {
             request
         } else {
             request.live_only()
@@ -144,6 +128,11 @@ pub(crate) fn dispatch(
                 result.exit_code(),
                 result.signal(),
             ));
+        }
+        if (absent_cleanup && result.success()) || (!result.success() && is_cold(result.stderr())) {
+            versions.forget(&version);
+        } else if allow_start && result.success() {
+            versions.remember(version);
         }
         Ok(result)
     })
@@ -186,10 +175,14 @@ pub(crate) async fn format_version(
     if let Some(version) = versions.get() {
         return Ok(version);
     }
-    let version = endpoint_version(executor, configuration, endpoint_probe, binary_probe).await?;
-    version.ensure_supported()?;
-    versions.remember(version.clone());
-    Ok(version)
+    endpoint_version(
+        executor,
+        configuration,
+        endpoint_probe,
+        binary_probe,
+        versions,
+    )
+    .await
 }
 
 pub(crate) async fn endpoint_version(
@@ -197,10 +190,16 @@ pub(crate) async fn endpoint_version(
     configuration: &CoreConfiguration,
     endpoint_probe: RequestId,
     binary_probe: RequestId,
+    versions: &VersionCache,
 ) -> Result<TmuxVersion, Error> {
-    match live_version(executor, configuration, endpoint_probe).await? {
-        Some(version) => Ok(version),
-        None => binary_version(executor, binary_probe).await,
+    if let Some(version) = live_version(executor, configuration, endpoint_probe).await? {
+        version.ensure_supported()?;
+        versions.remember(version.clone());
+        Ok(version)
+    } else {
+        let version = binary_version(executor, binary_probe).await?;
+        version.ensure_supported()?;
+        Ok(version)
     }
 }
 

@@ -369,3 +369,39 @@ fn walk(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     found
 }
+
+#[test]
+fn undated_diagnostics_do_not_qualify_hard_version_check() {
+    let version = TmuxVersion::parse_output(b"tmux master\n").unwrap();
+    assert!(version.meets(&TmuxVersion::MIN_SUPPORTED));
+    assert!(matches!(
+        version.ensure_supported(),
+        Err(Error::UnrecognizedTmuxVersion { .. })
+    ));
+}
+
+/// A gate at or below the supported floor is always true, so it only hides
+/// that the code it guards is unconditional.
+#[test]
+fn no_since_gate_sits_at_or_below_the_supported_floor() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/version.rs"))
+        .expect("version.rs is readable");
+    let module = source
+        .split("pub mod since {")
+        .nth(1)
+        .expect("the since module exists");
+    let mut gates = 0;
+    for piece in module.split("ReleaseVersion::new(").skip(1) {
+        let mut numbers = piece
+            .split(',')
+            .take(2)
+            .map(|number| number.trim().parse::<u8>().expect("a numeric release"));
+        let (major, minor) = (numbers.next().unwrap(), numbers.next().unwrap());
+        assert!(
+            (major, minor) > (3, 3),
+            "a gate for {major}.{minor} is always true on a 3.3a floor"
+        );
+        gates += 1;
+    }
+    assert!(gates > 0, "the scan found no gates");
+}

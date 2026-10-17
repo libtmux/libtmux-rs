@@ -596,7 +596,10 @@ impl TmuxVersion {
         Ok(())
     }
 
-    /// Require this version to meet the crate's minimum supported release.
+    /// Require a numbered release to meet the minimum supported version.
+    ///
+    /// A numbered `next-X.Y` report can establish the floor. An undated
+    /// `master` report remains diagnostic and cannot qualify dispatch.
     ///
     /// # Errors
     ///

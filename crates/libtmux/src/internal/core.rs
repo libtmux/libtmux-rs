@@ -571,16 +571,14 @@ impl Core {
                 format!("tmux {}\n", TmuxVersion::MIN_SUPPORTED).as_bytes(),
             );
         }
-        let version = crate::internal::support::versions::endpoint_version(
+        crate::internal::support::versions::endpoint_version(
             &self.executor,
             &self.configuration,
             self.next_request_id(),
             self.next_request_id(),
+            &self.server_version,
         )
-        .await?;
-        version.ensure_supported()?;
-        self.server_version.remember(version.clone());
-        Ok(version)
+        .await
     }
 
     pub(crate) async fn kill_server(&self) -> Result<CommandResult, Error> {
