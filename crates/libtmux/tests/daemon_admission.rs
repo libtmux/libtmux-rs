@@ -35,6 +35,30 @@ fn native(binary: &Path, socket: &Path, args: &[&OsStr]) -> Output {
         .expect("native tmux client starts")
 }
 
+/// A native `kill-server` returns while the daemon is still exiting. A client
+/// that connects in that window sees `server exited unexpectedly` or an empty
+/// success, neither of which admission may read as a version, so wait until
+/// the socket reports no server before the next library call.
+fn wait_until_gone(binary: &Path, socket: &Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = native(
+            binary,
+            socket,
+            &[OsStr::new("-N"), OsStr::new("list-sessions")],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("no server running") || stderr.contains("error connecting") {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "daemon still answering after kill-server: {stderr}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn assert_unsupported(error: &Error, version: &str) {
     assert!(
         matches!(error, Error::UnsupportedTmuxVersion { .. }),
@@ -693,6 +717,7 @@ async fn strict_admission_does_not_reuse_creating_executable_permission() {
             .status
             .success()
     );
+    wait_until_gone(&current, guard.socket_path());
     std::fs::write(&old_mode, "old").expect("configured executable changes");
     let first = server.new_session("must-not-start").await;
     let second = server.new_session("still-must-not-start").await;
@@ -730,8 +755,10 @@ async fn strict_admission_supports_explicit_restarts_on_a_warmed_handle() {
         .await
         .expect("admission warms");
     server.kill().await.expect("owned kill succeeds");
+    wait_until_gone(&current, guard.socket_path());
     let owned_restart = server.new_session("after-owned-kill").await;
     let _ = native(&current, guard.socket_path(), &[OsStr::new("kill-server")]);
+    wait_until_gone(&current, guard.socket_path());
     let disappeared = server.new_session("disappeared").await;
     let explicit_restart = server.new_session("after-disappearance").await;
     let _ = native(&current, guard.socket_path(), &[OsStr::new("kill-server")]);
