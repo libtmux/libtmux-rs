@@ -196,27 +196,32 @@ run_lane() {
     fi
 
     if [[ "$source_contract" == "reject-core" ]]; then
-        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
             cargo test --locked --package libtmux --all-features \
             --test daemon_admission -- --test-threads=1
-        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
             cargo test --locked --package tmux-workspace --all-features \
             --test cli old_daemon_refuses_load_before_scripts_or_mutation \
             -- --exact --test-threads=1
-        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
             cargo test --locked --package tmux-workspace --all-features \
             --test cli the_attach_handoff -- --test-threads=1
         return
     fi
     if [[ "$source_contract" == "reject-boundary" ]]; then
-        LIBTMUX_TEST_BOUNDARY_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_BOUNDARY_TMUX \
+            LIBTMUX_TEST_BOUNDARY_TMUX="$tmux_binary" \
             cargo test --locked --package libtmux --all-features \
             --test daemon_admission -- --test-threads=1
         return
     fi
 
     if [[ "$source_contract" == "feature-boundary" ]]; then
-        LIBTMUX_TEST_BROKEN_BREAK_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_BROKEN_BREAK_TMUX,LIBTMUX_TEST_MINIMUM_TMUX,LIBTMUX_TEST_NEWER_TMUX \
+            LIBTMUX_TEST_BROKEN_BREAK_TMUX="$tmux_binary" \
             LIBTMUX_TEST_MINIMUM_TMUX="$build_root/tmux-3.3a-install/bin/tmux" \
             LIBTMUX_TEST_NEWER_TMUX="$build_root/tmux-3.7b-install/bin/tmux" \
             cargo test --locked --package libtmux --all-features \
@@ -226,7 +231,8 @@ run_lane() {
     fi
 
     if [[ "$tag" == "3.3a" ]]; then
-        LIBTMUX_TEST_MINIMUM_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_MINIMUM_TMUX \
+            LIBTMUX_TEST_MINIMUM_TMUX="$tmux_binary" \
             cargo test --locked --package libtmux --all-features \
             --test daemon_admission \
             real_tmux_compat_minimum_daemon_accepts_newer_clients \
@@ -238,9 +244,9 @@ run_lane() {
         local selected_version
         local -a feature_environment=()
         if [[ "$tag" == "3.3a" ]]; then
-            feature_environment+=("LIBTMUX_TEST_MINIMUM_TMUX=$tmux_binary")
+            feature_environment+=("LIBTMUX_TEST_MINIMUM_TMUX=$tmux_binary" "LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_MINIMUM_TMUX")
         elif [[ "$tag" == "3.4" ]]; then
-            feature_environment+=("LIBTMUX_TEST_SAFE_BUFFER_TMUX=$tmux_binary")
+            feature_environment+=("LIBTMUX_TEST_SAFE_BUFFER_TMUX=$tmux_binary" "LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_SAFE_BUFFER_TMUX")
         fi
 
         if [[ -z "${PATH:-}" ]]; then

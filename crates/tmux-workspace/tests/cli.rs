@@ -5,9 +5,23 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// Read a native-binary variable. A lane that lists the variable in
+/// `LIBTMUX_REQUIRE_NATIVE` must have set it: skipping there would pass
+/// without exercising the boundary the lane exists to test.
+fn native_binary(variable: &str) -> Option<std::ffi::OsString> {
+    let found = std::env::var_os(variable);
+    assert!(
+        found.is_some()
+            || !std::env::var("LIBTMUX_REQUIRE_NATIVE")
+                .is_ok_and(|required| required.split(',').any(|name| name == variable)),
+        "{variable} is listed in LIBTMUX_REQUIRE_NATIVE but is unset"
+    );
+    found
+}
+
 #[tokio::test]
 async fn old_daemon_refuses_load_before_scripts_or_mutation() {
-    let Some(binary) = std::env::var_os("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
+    let Some(binary) = native_binary("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
         return;
     };
     let guard = libtmux::test::TestServer::builder()
@@ -5009,7 +5023,7 @@ exec "$WORKSPACE_REAL_TMUX" "$@"
 
 #[tokio::test]
 async fn the_attach_handoff_refuses_daemon_replacement() {
-    let Some(old) = std::env::var_os("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
+    let Some(old) = native_binary("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
         return;
     };
     let (output, started, attached) = guarded_handoff(Some(old)).await;

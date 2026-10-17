@@ -8,9 +8,23 @@ use libtmux::test::TestServer;
 mod support;
 use support::{args, bare_tools, prompt_ready};
 
+/// Read a native-binary variable. A lane that lists the variable in
+/// `LIBTMUX_REQUIRE_NATIVE` must have set it: skipping there would pass
+/// without exercising the boundary the lane exists to test.
+fn native_binary(variable: &str) -> Option<std::ffi::OsString> {
+    let found = std::env::var_os(variable);
+    assert!(
+        found.is_some()
+            || !std::env::var("LIBTMUX_REQUIRE_NATIVE")
+                .is_ok_and(|required| required.split(',').any(|name| name == variable)),
+        "{variable} is listed in LIBTMUX_REQUIRE_NATIVE but is unset"
+    );
+    found
+}
+
 #[tokio::test]
 async fn paste_staging_refuses_3_3a_while_basic_tools_remain_available() {
-    let Some(binary) = std::env::var_os("LIBTMUX_TEST_MINIMUM_TMUX") else {
+    let Some(binary) = native_binary("LIBTMUX_TEST_MINIMUM_TMUX") else {
         return;
     };
     let guard = TestServer::builder()
@@ -71,7 +85,7 @@ async fn paste_staging_refuses_3_3a_while_basic_tools_remain_available() {
 
 #[tokio::test]
 async fn paste_staging_works_on_3_4_without_acquiring_control() {
-    let Some(binary) = std::env::var_os("LIBTMUX_TEST_SAFE_BUFFER_TMUX") else {
+    let Some(binary) = native_binary("LIBTMUX_TEST_SAFE_BUFFER_TMUX") else {
         return;
     };
     let guard = TestServer::builder()
