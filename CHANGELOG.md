@@ -36,6 +36,19 @@ full.
   generation. Replacing the daemon before the opening frame refuses the user
   job, including when the replacement has the same tmux version. (#70)
 
+- Admission asks the daemon for its version with `run-shell -C` instead of
+  `display-message`, so a user's `after-display-message` hook no longer runs
+  before a refusal. The version arrives on stderr as the refused command's
+  text, and `Connection refused` on the socket now reads as an absent daemon.
+  (#70)
+
+- A `Server` routed over a control-mode connection reads the daemon version
+  the connection attached under instead of asking over it, so plans with
+  layouts and other version-sensitive calls run on it. (#70)
+
+- `next-X.Y` development builds rank below `X.Y-rc` and `X.Y`, so they no
+  longer pass gates for the release they precede. (#70)
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;
