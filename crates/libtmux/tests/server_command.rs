@@ -53,7 +53,7 @@ fn write_script_for_version(directory: &Path, name: &str, body: &str, version: &
     let mut file = fs::File::create(&staging).expect("staged script is creatable");
     file.write_all(
         format!(
-            "#!/bin/sh\nif [ \"${{1-}}\" = __libtmux_fixture_ready__ ]; then\n    exit 0\nfi\nset -eu\nfor argument do\n    if [ \"$argument\" = 'tmux #{{version}}' ]; then\n        printf 'tmux {version}\\n'\n        exit 0\n    fi\ndone\n{body}\n"
+            "#!/bin/sh\nif [ \"${{1-}}\" = __libtmux_fixture_ready__ ]; then\n    exit 0\nfi\nset -eu\nfor argument do\n    case \"$argument\" in\n    libtmux-version-*)\n        printf 'unknown command: %s{version}\\n' \"${{argument%%#*}}\" >&2\n        exit 1\n        ;;\n    esac\ndone\n{body}\n"
         )
         .as_bytes(),
     )

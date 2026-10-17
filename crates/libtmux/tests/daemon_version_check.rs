@@ -372,6 +372,14 @@ async fn real_tmux_compat_minimum_daemon_accepts_newer_clients() {
     guard.shutdown().await.expect("fixture shuts down");
 }
 
+/// Shell that answers the hook-free version probe the way tmux does: it
+/// refuses the marker string and reports the format-expanded text on stderr.
+fn probe_report(version: &str) -> String {
+    format!(
+        "for a; do case $a in libtmux-version-*) m=${{a%%#*}};; esac; done; printf 'unknown command: %s{version}\\n' \"$m\" >&2; exit 1"
+    )
+}
+
 fn wrapper(directory: &Path, body: &str) -> PathBuf {
     // Installing through the fixture helper waits out the `ETXTBSY` a process
     // forked by a parallel test can cause while the script is open for write.
@@ -391,47 +399,96 @@ fn shell_quote(value: &OsStr) -> String {
     )
 }
 
+/// What the version check answers for each thing a daemon's probe can say.
+#[derive(Clone, Copy, Debug)]
+enum Refusal {
+    /// A well-framed report that names no release.
+    Unrecognized,
+    /// Output that is not a version report, with the bytes the check read.
+    Invalid(usize),
+    /// The probe exited with a status and no report.
+    ProbeFailed,
+}
+
+/// Run `new-session` against a wrapper whose probe answers `probe`, and
+/// return the refusal together with whether the effect ever ran.
+async fn refusal_for(probe: &str) -> (Error, bool) {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+    let marker = directory.path().join("effect");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "case \"$*\" in *libtmux-version-*) {probe};; *) touch {}; exit 0;; esac",
+            shell_quote(marker.as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(executable)
+        .build()
+        .expect("client configured");
+    let error = server
+        .cmd(Command::new("new-session").arg("-d"))
+        .await
+        .expect_err("unproved endpoint refuses");
+    let ran = marker.exists();
+    server.shutdown().await.expect("client shuts down");
+    (error, ran)
+}
+
+fn assert_refusal(error: &Error, expected: Refusal, input: &str) {
+    let matches = match (expected, error) {
+        (Refusal::Unrecognized, Error::UnrecognizedTmuxVersion { .. })
+        | (Refusal::ProbeFailed, Error::VersionProbeFailed { .. }) => true,
+        (Refusal::Invalid(len), Error::InvalidVersionOutput { output_len }) => *output_len == len,
+        _ => false,
+    };
+    assert!(matches, "{input}: expected {expected:?}, got {error:?}");
+}
+
 #[tokio::test]
 async fn malformed_and_failed_probes_refuse_without_dispatching() {
-    for output in [
-        "printf 'tmux unknown\\n'",
-        "printf 'tmux 3.3rc1\\n'",
-        "printf 'tmux 3.3a-rc1\\n'",
-        "printf 'tmux next-3.3a\\n'",
-        "printf 'tmux 3.3a-extra\\n'",
-        "printf 'tmux 3.3a-master\\n'",
-        "exit 23",
+    // The probe prints `unknown command: <marker><token>\n`; the check reads
+    // the whole of stderr, so `output_len` counts the marker and the prefix.
+    let probe_len =
+        |token: &str| "unknown command: libtmux-version-0000000000000000-".len() + token.len() + 1;
+    for (token, expected) in [
+        ("unknown", Refusal::Unrecognized),
+        ("3.3rc1", Refusal::Unrecognized),
+        ("3.3a-rc1", Refusal::Unrecognized),
+        ("next-3.3a", Refusal::Unrecognized),
+        ("3.3a-extra", Refusal::Unrecognized),
+        ("3.3a-master", Refusal::Unrecognized),
+        ("openbsd-7.5", Refusal::Unrecognized),
+        ("master", Refusal::Unrecognized),
+        ("3.3a-dev", Refusal::Unrecognized),
+        (
+            "3.3a trailing",
+            Refusal::Invalid(probe_len("3.3a trailing")),
+        ),
     ] {
-        std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
-        let directory =
-            tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
-        let marker = directory.path().join("effect");
-        let executable = wrapper(
-            directory.path(),
-            &format!(
-                "case \"$*\" in *'tmux '#*) {output};; *) touch {}; exit 0;; esac",
-                shell_quote(marker.as_os_str())
-            ),
-        );
-        let server = Server::builder()
-            .socket_path(directory.path().join("s"))
-            .tmux_executable(executable)
-            .build()
-            .expect("client configured");
-        let error = server
-            .cmd(Command::new("new-session").arg("-d"))
-            .await
-            .expect_err("unproved endpoint refuses");
-        assert!(
-            matches!(
-                error,
-                Error::InvalidVersionOutput { .. } | Error::VersionProbeFailed { .. }
-            ),
-            "{error:?}"
-        );
-        assert!(!marker.exists(), "the effect was never dispatched");
-        server.shutdown().await.expect("client shuts down");
+        let (error, ran) = refusal_for(&probe_report(token)).await;
+        assert_refusal(&error, expected, token);
+        assert!(!ran, "{token}: the effect was never dispatched");
     }
+    let (error, ran) = refusal_for("exit 23").await;
+    assert_refusal(&error, Refusal::ProbeFailed, "exit 23");
+    assert!(!ran, "a failed probe dispatched nothing");
+}
+
+/// A stdout success is another program answering in tmux's place. The check
+/// reads stderr, so that is the length it reports.
+#[tokio::test]
+async fn invalid_version_output_counts_the_bytes_the_check_read() {
+    // Silent success: nothing on the stream that was read.
+    let (error, ran) = refusal_for("printf 'tmux 3.3a\\n'").await;
+    assert_refusal(&error, Refusal::Invalid(0), "stdout success");
+    assert!(!ran);
+    // Success with a stderr line: that line's length, not the framed copy.
+    let (error, ran) = refusal_for("printf 'twelve bytes\\n' >&2").await;
+    assert_refusal(&error, Refusal::Invalid(13), "stderr success");
+    assert!(!ran);
 }
 
 /// `run-shell -C` arrived in tmux 3.2: a 3.1 daemon answers the probe with a
@@ -526,20 +583,25 @@ async fn real_tmux_compat_pre_probe_daemon_is_refused_as_unsupported() {
 /// refused as unrecognized rather than described as too old.
 #[tokio::test]
 async fn a_version_that_names_no_release_is_refused_as_unrecognized() {
-    for reported in ["master", "openbsd-7.5", "3.3a-dev"] {
-        let Ok(version) =
-            libtmux::TmuxVersion::parse_output(format!("tmux {reported}\n").as_bytes())
-        else {
-            continue;
-        };
-        let error = version
-            .ensure_supported()
-            .expect_err("no release to compare");
+    for reported in [
+        "master",
+        "openbsd-7.5",
+        "3.3a-dev",
+        "3.3a-master",
+        "next-3.3a",
+        "3.3a-extra",
+    ] {
+        let (error, ran) = refusal_for(&probe_report(reported)).await;
+        assert!(!ran, "{reported}: nothing was sent");
         assert!(
             matches!(error, Error::UnrecognizedTmuxVersion { .. }),
             "{reported}: {error:?}"
         );
         assert_eq!(error.kind(), libtmux::ErrorKind::UnsupportedVersion);
+        assert_eq!(
+            error.found_version().expect("found version").raw(),
+            reported
+        );
         let message = error.to_string();
         assert!(
             !message.contains("below") && !message.contains("needs"),
@@ -548,11 +610,47 @@ async fn a_version_that_names_no_release_is_refused_as_unrecognized() {
         assert!(message.contains("released tmux build"), "{message}");
     }
     // The control: a plain old release still reads as too old.
-    let old = libtmux::TmuxVersion::parse_output(b"tmux 3.2a\n").expect("parses");
-    assert!(matches!(
-        old.ensure_supported(),
-        Err(Error::UnsupportedTmuxVersion { .. })
-    ));
+    let (error, ran) = refusal_for(&probe_report("3.2a")).await;
+    assert!(!ran);
+    assert_unsupported(&error, "3.2a");
+}
+
+/// `tmux -V` is the report for a daemon that is not running. Its token is
+/// held to the same rule as the probe's.
+#[tokio::test]
+async fn a_cold_executable_naming_no_release_is_refused_as_unrecognized() {
+    for (reported, expected) in [
+        ("openbsd-7.5", Refusal::Unrecognized),
+        ("3.3a-dev", Refusal::Unrecognized),
+        (
+            "3.3a trailing",
+            Refusal::Invalid("tmux 3.3a trailing\n".len()),
+        ),
+    ] {
+        std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+        let directory =
+            tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+        let marker = directory.path().join("effect");
+        let executable = wrapper(
+            directory.path(),
+            &format!(
+                "case \"$*\" in *-V) printf 'tmux {reported}\\n';; *libtmux-version-*) printf 'no server running on fixture\\n' >&2; exit 1;; *) touch {};; esac",
+                shell_quote(marker.as_os_str())
+            ),
+        );
+        let server = Server::builder()
+            .socket_path(directory.path().join("s"))
+            .tmux_executable(executable)
+            .build()
+            .expect("client configured");
+        let error = server
+            .cmd(Command::new("new-session").arg("-d"))
+            .await
+            .expect_err("a cold executable naming no release is refused");
+        assert_refusal(&error, expected, reported);
+        assert!(!marker.exists(), "{reported}: nothing was sent");
+        server.shutdown().await.expect("client shuts down");
+    }
 }
 
 #[tokio::test]
@@ -586,7 +684,10 @@ async fn version_check_and_dispatch_share_one_deadline() {
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
     let executable = wrapper(
         directory.path(),
-        "case \"$*\" in -V) printf 'tmux 3.7d\\n';; *'tmux '#*) sleep 0.2; printf 'tmux 3.7d\\n';; *) exec sleep 0.2;; esac",
+        &format!(
+            "case \"$*\" in -V) printf 'tmux 3.7d\\n';; *libtmux-version-*) sleep 0.2; {};; *) exec sleep 0.2;; esac",
+            probe_report("3.7d")
+        ),
     );
     let server = Server::builder()
         .socket_path(directory.path().join("s"))
@@ -739,14 +840,14 @@ async fn assert_undated_master_refused(cold: bool) {
     let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned directory");
     let marker = directory.path().join("effect");
     let endpoint = if cold {
-        "printf 'no server running on fixture\\n' >&2; exit 1"
+        "printf 'no server running on fixture\\n' >&2; exit 1".to_owned()
     } else {
-        "printf 'tmux master\\n'"
+        probe_report("master")
     };
     let executable = wrapper(
         directory.path(),
         &format!(
-            "case \"$*\" in *-V) printf 'tmux master\\n';; *'tmux '#*) {endpoint};; *) touch {};; esac",
+            "case \"$*\" in *-V) printf 'tmux master\\n';; *libtmux-version-*) {endpoint};; *) touch {};; esac",
             shell_quote(marker.as_os_str())
         ),
     );
@@ -971,14 +1072,14 @@ async fn strict_probe_program_prefixes_refuse_unrelated_reports_before_effects()
         let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture");
         let marker = directory.path().join("effect");
         let endpoint = if cold {
-            "printf 'no server running on missing\\n' >&2; exit 1"
+            "printf 'no server running on missing\\n' >&2; exit 1".to_owned()
         } else {
-            "printf 'unrelated 3.7d\\n'"
+            "printf 'unrelated 3.7d\\n'".to_owned()
         };
         let executable = wrapper(
             directory.path(),
             &format!(
-                "case \"$*\" in *-V) printf 'unrelated 3.7d\\n';; *'tmux '#*) {endpoint};; *) touch {};; esac",
+                "case \"$*\" in *-V) printf 'unrelated 3.7d\\n';; *libtmux-version-*) {endpoint};; *) touch {};; esac",
                 shell_quote(marker.as_os_str())
             ),
         );
@@ -1041,4 +1142,173 @@ async fn strict_probe_accepts_the_actual_3_3a_creating_executable_basename() {
     let _ = server.kill().await;
     server.shutdown().await.expect("client closes");
     result.expect("renamed supported executable can explicitly start its daemon");
+}
+
+fn hook_marker(binary: &Path, socket: &Path, name: &str) -> String {
+    let output = native(
+        binary,
+        socket,
+        &[
+            OsStr::new("show-options"),
+            OsStr::new("-gqv"),
+            OsStr::new(name),
+        ],
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+fn reset_hook_marker(binary: &Path, socket: &Path, name: &str) {
+    native(
+        binary,
+        socket,
+        &[
+            OsStr::new("set-option"),
+            OsStr::new("-g"),
+            OsStr::new(name),
+            OsStr::new(""),
+        ],
+    );
+}
+
+/// The probe that checks a daemon must not have effects of its own.
+/// `display-message` fires `after-display-message` on every release, so a
+/// hook configured by the daemon's owner ran before the version check had decided
+/// anything.
+#[tokio::test]
+async fn version_check_probe_fires_no_user_hook() {
+    let binary = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&binary)
+        .start()
+        .await
+        .expect("daemon starts");
+    let socket = guard.socket_path();
+    // Hooks resolve against a session; a bare server runs none of them.
+    assert!(
+        native(
+            &binary,
+            socket,
+            &[
+                OsStr::new("new-session"),
+                OsStr::new("-d"),
+                OsStr::new("-s"),
+                OsStr::new("hooked"),
+                OsStr::new("sh"),
+            ],
+        )
+        .status
+        .success()
+    );
+    let set = |event: &str, option: &str| {
+        native(
+            &binary,
+            socket,
+            &[
+                OsStr::new("set-hook"),
+                OsStr::new("-g"),
+                OsStr::new(event),
+                OsStr::new(&format!("set-option -g {option} fired")),
+            ],
+        )
+        .status
+        .success()
+    };
+    assert!(
+        set("after-display-message", "@after_display_message"),
+        "after-display-message exists on every supported release"
+    );
+    // `command-error` arrived in tmux 3.5; older releases refuse the hook.
+    let has_command_error = set("command-error", "@command_error");
+    // Controls: each hook is live, so an empty marker below means the probe
+    // did not fire it rather than that the hook never worked.
+    native(
+        &binary,
+        socket,
+        &[
+            OsStr::new("display-message"),
+            OsStr::new("-p"),
+            OsStr::new("x"),
+        ],
+    );
+    assert_eq!(
+        hook_marker(&binary, socket, "@after_display_message"),
+        "fired",
+        "control: display-message fires its hook"
+    );
+    reset_hook_marker(&binary, socket, "@after_display_message");
+    if has_command_error {
+        native(
+            &binary,
+            socket,
+            &[
+                OsStr::new("kill-session"),
+                OsStr::new("-t"),
+                OsStr::new("=absent"),
+            ],
+        );
+        assert_eq!(
+            hook_marker(&binary, socket, "@command_error"),
+            "fired",
+            "control: a failing command fires command-error"
+        );
+        reset_hook_marker(&binary, socket, "@command_error");
+    }
+
+    // A fresh client handle has no cached version, so this dispatch runs the
+    // endpoint probe.
+    let server = Server::builder()
+        .socket_path(socket)
+        .tmux_executable(&binary)
+        .build()
+        .expect("client configured");
+    let result = server
+        .cmd(Command::new("list-sessions"))
+        .await
+        .expect("checked dispatch runs");
+    assert!(result.success(), "{result:?}");
+
+    assert_eq!(
+        hook_marker(&binary, socket, "@after_display_message"),
+        "",
+        "the version probe must not fire after-display-message"
+    );
+    if has_command_error {
+        assert_eq!(
+            hook_marker(&binary, socket, "@command_error"),
+            "",
+            "the version probe must not fire command-error"
+        );
+    }
+    server.shutdown().await.expect("client shuts down");
+    guard.shutdown().await.expect("fixture shuts down");
+}
+
+/// The probe is `run-shell` and the request fence is `if-shell`. Neither has
+/// an `after-` hook in tmux's table. A release that adds one would fire it
+/// from every check, so this fails the day that happens.
+#[tokio::test]
+async fn the_probe_and_the_fence_have_no_after_hook_to_fire() {
+    let binary = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&binary)
+        .start()
+        .await
+        .expect("daemon starts");
+    for hook in ["after-run-shell", "after-if-shell"] {
+        let set = native(
+            &binary,
+            guard.socket_path(),
+            &[
+                OsStr::new("set-hook"),
+                OsStr::new("-g"),
+                OsStr::new(hook),
+                OsStr::new("set-option -g @fired yes"),
+            ],
+        );
+        assert!(
+            !set.status.success(),
+            "tmux gained {hook}; the version check now fires it: {set:?}"
+        );
+    }
+    guard.shutdown().await.expect("fixture shuts down");
 }

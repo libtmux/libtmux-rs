@@ -67,7 +67,7 @@ pub(crate) fn dispatch(
             if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
                 return Ok(Some((version, false)));
             }
-            let live = live_version(&executor, &configuration, endpoint_probe).await?;
+            let live = live_version(&executor, &configuration, endpoint_probe, &versions).await?;
             if absent_cleanup && live.is_none() {
                 if let Some(version) = versions.get() {
                     versions.forget(&version);
@@ -124,7 +124,7 @@ pub(crate) fn dispatch(
             versions.forget(&version);
             return Err(Error::version_probe_failed(
                 request_id.get(),
-                crate::layout::version_command().summary(),
+                summary.clone(),
                 result.exit_code(),
                 result.signal(),
             ));
@@ -145,14 +145,13 @@ async fn within<T>(
     summary: &CommandSummary,
     budget: Duration,
 ) -> Result<T, Error> {
+    let expired = || Error::timeout(request_id.get(), summary.clone(), budget);
     let result = match deadline {
-        Some(deadline) => timeout_at(deadline, future)
-            .await
-            .map_err(|_| Error::timeout(request_id.get(), summary.clone(), budget))?,
+        Some(deadline) => timeout_at(deadline, future).await.map_err(|_| expired())?,
         None => future.await,
     };
     result.map_err(|error| match error {
-        Error::Timeout { .. } => Error::timeout(request_id.get(), summary.clone(), budget),
+        Error::Timeout { .. } => expired(),
         other => other,
     })
 }
@@ -192,7 +191,7 @@ pub(crate) async fn endpoint_version(
     binary_probe: RequestId,
     versions: &VersionCache,
 ) -> Result<TmuxVersion, Error> {
-    if let Some(version) = live_version(executor, configuration, endpoint_probe).await? {
+    if let Some(version) = live_version(executor, configuration, endpoint_probe, versions).await? {
         version.ensure_supported()?;
         versions.remember(version.clone());
         Ok(version)
@@ -207,22 +206,39 @@ async fn live_version(
     executor: &Arc<dyn Executor>,
     configuration: &CoreConfiguration,
     request_id: RequestId,
+    #[cfg_attr(not(feature = "control-mode"), allow(unused_variables))] versions: &VersionCache,
 ) -> Result<Option<TmuxVersion>, Error> {
-    let command = crate::layout::version_command();
+    // Over a control connection the probe's refusal is printed outside any
+    // block, so it cannot be read back. A routed handle is seeded with the
+    // version its connection attached under, and has no other source.
+    #[cfg(feature = "control-mode")]
+    if executor.renders_control_line() {
+        return versions.get().map(Some).ok_or_else(|| {
+            Error::control_mode(std::io::Error::other(
+                "a control-routed handle holds no checked daemon version",
+            ))
+        });
+    }
+    let probe = crate::layout::VersionProbe::new();
+    let command = probe.command();
     #[cfg(feature = "control-mode")]
     let line = executor
         .renders_control_line()
         .then(|| command.control_mode_line());
-    let request =
-        CommandRequest::with_global_argv(request_id, configuration.global_argv(), command);
+    // `-N` keeps a vanished daemon from being restarted by this client.
+    let mut global_argv = configuration.global_argv().to_vec();
+    global_argv.push(std::ffi::OsString::from("-N"));
+    let request = CommandRequest::with_global_argv(request_id, &global_argv, command);
     #[cfg(feature = "control-mode")]
     let request = request.with_control_line(line.flatten());
     let result = executor.execute(request).await?;
     if result.success() {
-        if !result.stdout().starts_with(b"tmux ") {
-            return Err(Error::from_invalid_version_output(result.stdout().len()));
-        }
-        return TmuxVersion::parse_output(result.stdout()).map(Some);
+        // `run-shell -C` of a non-command always fails; success is another
+        // program answering in tmux's place.
+        return Err(Error::from_invalid_version_output(result.stderr().len()));
+    }
+    if let Some(version) = probe.parse(result.stderr())? {
+        return Ok(Some(version));
     }
     if is_cold(result.stderr()) {
         return Ok(None);
@@ -291,7 +307,8 @@ fn is_cold(stderr: &[u8]) -> bool {
     let reason = stderr.trim_ascii();
     reason.starts_with(b"no server running on ")
         || (reason.starts_with(b"error connecting to ")
-            && reason.ends_with(b" (No such file or directory)"))
+            && (reason.ends_with(b" (No such file or directory)")
+                || reason.ends_with(b" (Connection refused)")))
 }
 
 #[cfg(test)]
@@ -323,6 +340,7 @@ mod tests {
         for reason in [
             b"no server running on /socket\n".as_slice(),
             b"error connecting to /socket (No such file or directory)\n",
+            b"error connecting to /socket (Connection refused)\n",
         ] {
             assert!(is_cold(reason));
         }

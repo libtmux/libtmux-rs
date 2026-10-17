@@ -353,8 +353,9 @@ async fn a_sender_for_another_server_is_refused() {
 }
 
 /// A routed handle has no process to ask for the daemon's version, and asking
-/// over the connection would run a hook. Version-sensitive work such as layout
-/// validation must read what the connection attached under.
+/// over the connection would run a hook (or, for the hook-free probe, come
+/// back as an empty block). Version-sensitive work such as layout validation
+/// must read what the connection attached under.
 #[cfg(feature = "plan")]
 #[tokio::test]
 async fn a_routed_plan_validates_layouts_without_asking_the_connection() {

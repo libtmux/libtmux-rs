@@ -129,6 +129,16 @@ timeout, and a native queue guard verifies the same version immediately before
 the request's effects. A daemon replaced in between refuses with
 `ServerReplaced`, and nothing runs.
 
+The probe is `-N run-shell -C '<marker>#{version}'`. tmux fails to parse the
+expanded string as a command and reports `unknown command: <marker><version>`
+on stderr with exit status 1. `display-message` would answer too, but it runs
+the owner's `after-display-message` hook on every release, so the probe would
+have effects before the check had decided anything. `run-shell` has no
+`after-` hook, and with `-C` it parses its argument after `exec` returned, so
+tmux queues no `command-error` either. The marker is random per probe, so
+nothing configured on the daemon can forge a report, and a probe that succeeds
+is another program answering in tmux's place.
+
 Every refusal happens before the request is sent:
 
 - A release below the floor is `UnsupportedTmuxVersion`. A daemon older than

@@ -398,7 +398,7 @@ fn blocking_exposed_client_tmux_script(pid_file: &Path, client_pid_file: &Path) 
          socket=''\n\
          previous=''\n\
          for argument in \"$@\"; do\n\
-           if [ \"$argument\" = 'tmux #{{version}}' ]; then version=1; fi\n\
+           case \"$argument\" in libtmux-version-*) version=1; marker=${{argument%%#*}};; esac\n\
            if [ \"$argument\" = '-D' ]; then daemon=1; fi\n\
            if [ \"$argument\" = 'libtmux-block-client' ]; then block=1; fi\n\
            if [ \"$previous\" = '-S' ]; then socket=$argument; fi\n\
@@ -412,7 +412,7 @@ fn blocking_exposed_client_tmux_script(pid_file: &Path, client_pid_file: &Path) 
            while :; do sleep 1; done\n\
          fi\n\
          while [ ! -s {pid_file} ]; do :; done\n\
-         if [ \"$version\" = 1 ]; then printf 'tmux 3.3a\\n'; exit 0; fi\n\
+         if [ \"$version\" = 1 ]; then printf 'unknown command: %s3.3a\\n' \"$marker\" >&2; exit 1; fi\n\
          if [ \"$block\" = 1 ]; then\n\
            printf '%s' \"$$\" > {client_pid_file}.new\n\
            mv {client_pid_file}.new {client_pid_file}\n\
@@ -742,7 +742,7 @@ async fn exposed_no_start_clients_use_the_isolated_environment_inner() {
              socket=''\n\
              previous=''\n\
              for argument in \"$@\"; do\n\
-               if [ \"$argument\" = 'tmux #{{version}}' ]; then version=1; fi\n\
+               case \"$argument\" in libtmux-version-*) version=1; marker=${{argument%%#*}};; esac\n\
                if [ \"$argument\" = '-D' ]; then daemon=1; fi\n\
                if [ \"$previous\" = '-S' ]; then socket=$argument; fi\n\
                previous=$argument\n\
@@ -757,7 +757,7 @@ async fn exposed_no_start_clients_use_the_isolated_environment_inner() {
              test \"${{TERM:-}}\" = xterm-256color || exit 41\n\
              test -z \"${{TMUX:-}}\" || exit 42\n\
              test -z \"${{TMUX_PANE:-}}\" || exit 43\n\
-             if [ \"$version\" = 1 ]; then printf 'tmux 3.3a\\n'; exit 0; fi\n\
+             if [ \"$version\" = 1 ]; then printf 'unknown command: %s3.3a\\n' \"$marker\" >&2; exit 1; fi\n\
              cat {pid}\n",
             pid = shell_literal(&pid_file),
         ),

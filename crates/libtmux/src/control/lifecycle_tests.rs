@@ -62,17 +62,21 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+/// How a fixture answers the hook-free version probe: tmux refuses the marker
+/// string as a command and reports it, version appended, on stderr.
+const PROBE_AS_3_5A: &str = "printf 'unknown command: %s3.5a\\n' \"${argument%%#*}\" >&2; exit 1";
+
 fn write_script(directory: &Path, body: &str) -> PathBuf {
-    write_script_with_version(directory, body, "printf 'tmux 3.5a\\n'")
+    write_script_with_version(directory, body, "printf 'tmux 3.5a\\n'", PROBE_AS_3_5A)
 }
 
-fn write_script_with_version(directory: &Path, body: &str, version: &str) -> PathBuf {
+fn write_script_with_version(directory: &Path, body: &str, version: &str, probe: &str) -> PathBuf {
     let path = directory.join("fake-tmux");
     let staging = directory.join(format!(".fake-tmux.{}.tmp", process::id()));
     let mut file = fs::File::create(&staging).expect("staged script is creatable");
     writeln!(
         file,
-        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\nfor argument do\n    if [ \"$argument\" = 'tmux #{{version}}' ]; then\n        {version}\n        exit 0\n    fi\ndone\n{body}"
+        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\nfor argument do\n    case \"$argument\" in\n    libtmux-version-*)\n        {probe}\n        ;;\n    esac\ndone\n{body}"
     )
     .expect("script is writable");
     file.sync_all().expect("script contents are durable");
@@ -1130,6 +1134,7 @@ async fn initial_watch_failure_preserves_the_connection_error() {
             shell_quote(&payload),
         ),
         &format!("exec {tmux} -V"),
+        &format!("exec {tmux} \"$@\""),
     );
     let wrapped = Server::builder()
         .socket_path(guard.socket_path())
