@@ -209,12 +209,16 @@ project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
 - `freeze` saves only where `-o` says, or prints with `--json`.
 - `plugins` and custom `workspace_builder`s run through tmuxp itself, so they
   need tmuxp 1.74.x and Python libtmux declaring a hard tmux minimum of 3.3a
-  or newer with per-command daemon admission. Runtime discovery and the
-  builder child check this before importing extension hooks.
+  or newer with per-command daemon admission, plus
+  `libtmux.common.TMUX_OPTIONAL_FEATURE_POLICY_VERSION >= 2`. Runtime discovery
+  and the builder child check both contracts before importing extension hooks.
+  The Python backend then enforces each operation's daemon requirements.
 
 The Python bridge depends on the coordinated
-[Python libtmux admission change](https://github.com/tmux-python/libtmux/pull/779),
-which has not been released. CI qualifies its pinned source with tmux 3.3a.
+[Python libtmux admission change](https://github.com/tmux-python/libtmux/pull/779)
+and [optional-feature policy](https://github.com/tmux-python/libtmux/pull/780),
+which have not been released.
+CI qualifies the pinned feature-policy source with tmux 3.3a.
 Released tmuxp 1.74.0 pins libtmux below 0.62; installing that release alone
 does not qualify the bridge. Use a compatible tmuxp environment carrying the
 updated Python library and select it with `TMUX_WORKSPACE_PYTHON`.
