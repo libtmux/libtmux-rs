@@ -457,15 +457,24 @@ pub fn option_schema(name: &str) -> Option<&'static OptionSchema> {
 #[non_exhaustive]
 pub enum OptionValue {
     /// A flag tmux wrote as `on` or `off`.
-    Flag(bool),
+    Flag(
+        /// `true` for `on`, `false` for `off`.
+        bool,
+    ),
     /// A number.
-    Number(i64),
+    Number(
+        /// The option's numeric value, encoded as decimal for tmux.
+        i64,
+    ),
     /// Text, which covers choices, colours, keys, commands, and user options.
     ///
     /// tmux validates a choice when it is set, so a value read back is one
     /// tmux accepted. [`OptionSchema::choices`] lists the words a choice
     /// takes.
-    Text(TmuxText),
+    Text(
+        /// The option's bytes, preserved without UTF-8 conversion.
+        TmuxText,
+    ),
 }
 
 impl From<bool> for OptionValue {
