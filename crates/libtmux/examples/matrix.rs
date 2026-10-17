@@ -226,11 +226,9 @@ async fn run_control_mode(connection: Connection, name: &str) -> Option<Row> {
     let mut report = report.as_bytes().to_vec();
     report.push(b'\n');
     let version = libtmux::TmuxVersion::parse_output(&report).expect("daemon release parses");
-    if !version.release().is_some_and(|release| {
-        *release >= libtmux::since::CONTROL_ACQUISITION && !release.suffix().is_release_candidate()
-    }) {
+    if !version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
         println!(
-            "control rows require stable tmux {}",
+            "control rows require tmux {}",
             libtmux::since::CONTROL_ACQUISITION
         );
         guard.shutdown().await.expect("fixture closes");

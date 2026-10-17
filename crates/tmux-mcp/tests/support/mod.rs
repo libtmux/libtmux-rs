@@ -119,11 +119,7 @@ pub(crate) async fn supports(server: &Server, needs: &ReleaseVersion) -> bool {
 pub(crate) async fn supports_control(server: &Server) -> bool {
     daemon_version(server)
         .await
-        .release()
-        .is_some_and(|release| {
-            *release >= libtmux::since::CONTROL_ACQUISITION
-                && !release.suffix().is_release_candidate()
-        })
+        .has_behavior(&libtmux::since::CONTROL_ACQUISITION)
 }
 
 pub(crate) async fn feature_fixture(
@@ -143,7 +139,7 @@ pub(crate) async fn control_fixture(guard: TestServer) -> Option<TestServer> {
     if supports_control(guard.server()).await {
         Some(guard)
     } else {
-        eprintln!("positive control fixture needs stable tmux 3.7 or newer");
+        eprintln!("positive control fixture needs tmux 3.7 or newer");
         guard.shutdown().await.expect("ineligible fixture closes");
         None
     }

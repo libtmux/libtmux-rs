@@ -12,9 +12,7 @@ pub(crate) async fn control_fixture(guard: TestServer) -> Option<TestServer> {
     let mut report = report.as_bytes().to_vec();
     report.push(b'\n');
     let version = TmuxVersion::parse_output(&report).expect("daemon release parses");
-    if version.release().is_some_and(|release| {
-        *release >= libtmux::since::CONTROL_ACQUISITION && !release.suffix().is_release_candidate()
-    }) {
+    if version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
         Some(guard)
     } else {
         guard

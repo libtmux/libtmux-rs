@@ -179,11 +179,7 @@ fn waits(criterion: &mut Criterion) {
     report.push(b'\n');
     let eligible = libtmux::TmuxVersion::parse_output(&report)
         .expect("daemon release parses")
-        .release()
-        .is_some_and(|release| {
-            *release >= libtmux::since::CONTROL_ACQUISITION
-                && !release.suffix().is_release_candidate()
-        });
+        .has_behavior(&libtmux::since::CONTROL_ACQUISITION);
 
     let mut group = criterion.benchmark_group("marker");
     // Every sample dispatches a command into a real shell, so the default

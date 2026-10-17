@@ -778,10 +778,11 @@ pub mod since {
     pub const NAMED_BUFFER_IDENTITY: ReleaseVersion =
         ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
 
-    /// Managed control acquisition on stable numbered daemons, before `-C`.
+    /// Managed control acquisition, decided before `-C`.
     ///
-    /// Development and release-candidate reports remain ineligible even when
-    /// [`crate::TmuxVersion::has_behavior`] reports this floor.
+    /// Any build ranking at or above 3.7 final is eligible, including
+    /// `3.8-rc2` and `next-3.8`; `next-3.7` and `3.7-rc*` rank below it.
+    /// [`crate::TmuxVersion::has_behavior`] answers by that ranking.
     pub const CONTROL_ACQUISITION: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
 
     /// `pane-border-style` and `pane-active-border-style` becoming pane

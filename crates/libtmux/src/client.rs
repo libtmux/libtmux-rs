@@ -298,9 +298,7 @@ impl Client {
     /// # #[cfg(feature = "control-mode")]
     /// # {
     /// # let version = server.capabilities().await?.tmux_version().clone();
-    /// # let eligible = version.release().is_some_and(|release| {
-    /// #     *release >= libtmux::since::CONTROL_ACQUISITION && !release.suffix().is_release_candidate()
-    /// # });
+    /// # let eligible = version.has_behavior(&libtmux::since::CONTROL_ACQUISITION);
     /// # if eligible {
     /// let control = libtmux::control::ControlMode::attach(server, session.id()).await?;
     /// let client = server.clients().await?.into_iter().next().expect("one client");

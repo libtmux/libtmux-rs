@@ -54,11 +54,7 @@ async fn control_qualified(server: &Server) -> bool {
     report.push(b'\n');
     crate::TmuxVersion::parse_output(&report)
         .expect("daemon release parses")
-        .release()
-        .is_some_and(|release| {
-            *release >= crate::since::CONTROL_ACQUISITION
-                && !release.suffix().is_release_candidate()
-        })
+        .has_behavior(&crate::since::CONTROL_ACQUISITION)
 }
 
 fn fixture_root() -> PathBuf {
