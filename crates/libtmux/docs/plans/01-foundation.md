@@ -1,5 +1,8 @@
 # Crate foundation implementation plan
 
+> Historical plan. The tmux minimum it fixes is superseded: libtmux requires
+> tmux 3.3a (see [design.md](../design.md)).
+
 ## Goal
 
 Create the publishable Rust crate foundation, typed command and connection

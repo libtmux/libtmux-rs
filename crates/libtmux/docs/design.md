@@ -54,7 +54,7 @@ knows nothing about either.
 `libtmux` presents `Server`, `Session`, `Window`, `Pane`, and `Client`
 handles, hierarchy listings, refresh, options, hooks, buffers, key bindings,
 and the local typed filtering kernel, keeping Python libtmux's object
-vocabulary and the same tmux floor of 3.2a. The format catalog, intrinsic
+vocabulary and a tmux floor of 3.3a. The format catalog, intrinsic
 snapshots, and winlink projections back those handles and stay crate-private.
 Optional features add control mode, a blocking runtime, portable expression
 serialization, tracing, and the real-tmux test guard.
@@ -74,7 +74,7 @@ so either serves the same object APIs.
 - Reach behavioral feature parity with the pinned Python public API baseline.
 - Keep familiar names and hierarchy while using Rust ownership, errors,
   builders, iterators, and async methods naturally.
-- Preserve tmux 3.2a compatibility and gate newer format fields and flags by
+- Preserve tmux 3.3a compatibility and gate newer format fields and flags by
   detected capabilities.
 - Make IDs, targets, fields, option scopes, directions, flags, and query
   cardinality statically meaningful.
@@ -112,11 +112,26 @@ so either serves the same object APIs.
 
 ## Compatibility contract
 
-The target compatibility surface is tmux 3.2a and newer on Linux, macOS, and
+The target compatibility surface is tmux 3.3a and newer on Linux, macOS, and
 WSL. Native Windows is unsupported because tmux is unavailable there. The
 initial Rust MSRV is 1.85, the first stable compiler supporting Edition 2024.
 The Foundation gate verifies Linux with both Rust 1.85 and the pinned
 development toolchain; the release slice adds the remaining platform matrix.
+
+Every ordinary dispatch checks the connected daemon, including commands,
+chains, scoped handles and parked channel clients. An absent daemon checks the
+executable that would start it. The version probe shares the logical request's timeout;
+a native queue guard verifies the same version immediately before its effects.
+Unknown versions and failed probes refuse dispatch. Executable capabilities
+remain a separate cached description of the configured binary. Ordinary format
+catalogs follow the admitted daemon. If the configured executable is older or
+cannot prove its version, native `-N` prevents it from starting a replacement
+server after the admitted daemon disappears.
+
+Workspace layout preflight checks the core floor even with no pending layouts,
+so extension builders cannot begin after an unsupported endpoint was mistaken
+for an absent daemon. The test fixture's private PID bootstrap and an absent
+`Server::kill` cleanup have no requested library effects.
 
 The compatibility baseline for the first Rust release is the Python package at
 commit
@@ -960,8 +975,8 @@ UTF-8, non-zero status with stdout, stderr without failure, absent daemons,
 task abort during a command, cancellation during scoped shutdown, redaction on
 every diagnostic surface, daemon PID disappearance, and cleanup after panics.
 
-The Foundation workflow runs the pinned tmux 3.2a floor on Linux. The format
-slice adds a dedicated Linux harness that builds pinned 3.2a and 3.6 commits,
+The compatibility workflow runs the pinned tmux 3.3a floor on Linux. The
+format harness builds pinned 3.3a and 3.6 commits,
 supplies each binary directly to `TestServer`, and exercises both sides of the
 3.6 linked-window callback transition. An unpinned distro tmux cannot
 substitute for either endpoint. The harness also builds pinned 3.4 and 3.5a,
@@ -1026,10 +1041,14 @@ here publishes: a path-only dependency cannot be published at all.
 
 `scripts/test-tmux-format-compat.sh` builds each pinned tmux from source and
 runs the whole workspace against it, all targets and all features. The lanes
-are 3.2a, 3.4, 3.5a, 3.6b, and 3.7b: the floor, the ceiling, and the releases
+are 3.3a, 3.4, 3.5a, 3.6b, and 3.7b: the floor, the ceiling, and the releases
 in between that are known to differ. 3.4 and 3.5a are the two that wrapped
 command output in `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH`, and are the reason the
 codec has a second dialect at all.
+
+Additional 3.2a and exact 3.3 lanes prove refusal before effects. A real 3.3a
+daemon accepts a newer client, and a replacement between the version check and dispatch
+is fenced before mutations.
 
 Running only the codec tests on the middle lanes was tempting and wrong. The
 crate's version sensitivity is not confined to the codec: command flags,
@@ -1265,7 +1284,7 @@ The crate is complete only when:
   corrections rather than missing behavior;
 - the full Rust format, Clippy, test, doctest, docs, feature, and MSRV gates
   pass;
-- real-tmux tests pass on tmux 3.2a and the maintained compatibility matrix;
+- real-tmux tests pass on tmux 3.3a and the maintained compatibility matrix;
 - socket isolation and cleanup pass under parallel tests and panic paths;
 - timeout, dropped-future, and task-abort tests prove process-group termination
   and direct-child reaping;

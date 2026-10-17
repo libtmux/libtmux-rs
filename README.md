@@ -271,14 +271,13 @@ it into an MCP client.
 
 ## Requirements
 
-Rust 1.85 or newer, tmux 3.2a or newer, and a Unix target. Native Windows is
+Rust 1.85 or newer, tmux 3.3a or newer, and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
-Every supported tmux release — 3.2a, 3.4, 3.5a, 3.6b, and 3.7b — is built from
-source in CI and runs the whole workspace, because tmux's own output and error
-wording change between releases. Where a release is wrong rather than merely
-old, the crate says so: `run_shell` refuses on 3.3 through 3.4, which drop the
-command's output instead of returning it.
+CI builds pinned tmux 3.3a, 3.4, 3.5a, 3.6b, and 3.7b from source and runs the
+whole workspace against each, because tmux's output and error wording change
+between releases. `run_shell` refuses on 3.3a and 3.4, which drop the command's
+output instead of returning it.
 
 ## Crates
 
