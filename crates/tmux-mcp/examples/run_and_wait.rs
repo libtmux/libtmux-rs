@@ -5,6 +5,8 @@
 //! built from JSON as the protocol delivers them, against an isolated tmux
 //! under `/tmp/libtmux-rs-test/` that is removed at the end.
 //!
+//! Requires stable numbered tmux 3.7 or newer for control acquisition.
+//!
 //! ```console
 //! $ cargo run --example run_and_wait
 //! ```
