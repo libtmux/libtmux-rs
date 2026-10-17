@@ -132,9 +132,24 @@ impl VersionProbe {
     }
 
     pub(crate) fn command(&self) -> Command {
+        self.command_for("#{version}")
+    }
+
+    /// The probe for a format of the caller's own. tmux reports only the first
+    /// word of what it fails to parse, so the format must contain no space.
+    pub(crate) fn command_for(&self, format: &str) -> Command {
         Command::new("run-shell")
             .arg("-C")
-            .arg(format!("{}#{{version}}", self.marker))
+            .arg(format!("{}{format}", self.marker))
+    }
+
+    /// The text tmux expanded after the marker, when `stderr` is this probe's
+    /// refusal.
+    pub(crate) fn report<'a>(&self, stderr: &'a [u8]) -> Option<&'a [u8]> {
+        stderr
+            .trim_ascii()
+            .strip_prefix(b"unknown command: ")?
+            .strip_prefix(self.marker.as_bytes())
     }
 
     /// Read the daemon's version from the probe's refusal.
@@ -143,11 +158,7 @@ impl VersionProbe {
     /// caller can tell an unrelated failure from an unparseable version. A
     /// report that names no release is [`Error::UnrecognizedTmuxVersion`].
     pub(crate) fn parse(&self, stderr: &[u8]) -> Result<Option<TmuxVersion>, Error> {
-        let Some(version) = stderr
-            .trim_ascii()
-            .strip_prefix(b"unknown command: ")
-            .and_then(|rest| rest.strip_prefix(self.marker.as_bytes()))
-        else {
+        let Some(version) = self.report(stderr) else {
             return Ok(None);
         };
         let mut framed = b"tmux ".to_vec();
