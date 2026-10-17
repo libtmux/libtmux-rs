@@ -212,15 +212,15 @@ each start. `routed` is `Plan::run` on a `Server::over_control_mode` handle:
 ```text
 mode                     feature            dispatches processes      wall  attribution  query output
 ----------------------------------------------------------------------------------------------------------------------
-blocking/sequential      plan                        6         6     16ms  per-command  2 panes, 2 windows, 2 active
-async/sequential         plan                        6         6     16ms  per-command  2 panes, 2 windows, 2 active
-async/folded             plan                        3         3      9ms  merged       2 panes, 2 windows, 2 active
-async/marked-fold        plan                        3         3     10ms  merged       2 panes, 2 windows, 2 active
-control-mode/streaming   plan,control-mode           6         1     10ms  per-command  2 panes, 2 windows, 2 active
-control-mode/routed      plan,control-mode           6         1      6ms  per-command  2 panes, 2 windows, 2 active
+blocking/sequential      plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
+async/sequential         plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
+async/folded             plan                        3         4      9ms  merged       2 panes, 2 windows, 2 active
+async/marked-fold        plan                        3         4     10ms  merged       2 panes, 2 windows, 2 active
+control-mode/streaming   plan,control-mode           6         3     10ms  per-command  2 panes, 2 windows, 2 active
+control-mode/routed      plan,control-mode           6         3      6ms  per-command  2 panes, 2 windows, 2 active
 
 every mode built the same thing: true
-dispatches ranged 3..6, processes ranged 1..6
+dispatches ranged 3..6, processes ranged 3..7
 
 the same failure, dispatched two ways:
   Sequential   1 dispatch(es) -> [Failed, Skipped]
