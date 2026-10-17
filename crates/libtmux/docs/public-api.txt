@@ -521,6 +521,7 @@ function libtmux::Server::cmd: async fn(&self, command: libtmux::Command) -> Res
 function libtmux::Server::colors: fn(&self) -> Option<u16>
 function libtmux::Server::command_prompt: async fn(&self, client: Option<&libtmux::Client>, prompt: Option<&str>, command: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Server::config_file: fn(&self) -> Option<&Path>
+function libtmux::Server::daemon_version: async fn(&self) -> Result<libtmux::TmuxVersion, libtmux::Error>
 function libtmux::Server::default_timeout: fn(&self) -> Duration
 function libtmux::Server::delete_buffer: async fn(&self, name: impl AsRef<[u8]>) -> Result<(), libtmux::Error>
 function libtmux::Server::display_menu: async fn(&self, client: Option<&libtmux::Client>, title: &str, items: impl IntoIterator<Item = libtmux::MenuItem>) -> Result<(), libtmux::Error>

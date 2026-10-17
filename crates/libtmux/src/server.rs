@@ -648,6 +648,40 @@ impl Server {
         self.core.capabilities().await
     }
 
+    /// Return the version of the daemon this handle reaches.
+    ///
+    /// The version has passed the supported-minimum check. A cold endpoint
+    /// reports the executable that would start the daemon. The answer is
+    /// cached with the handle's other version checks, so asking costs one
+    /// probe at most, and no user hook runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedTmuxVersion`] or
+    /// [`Error::UnrecognizedTmuxVersion`] for a daemon libtmux refuses,
+    /// [`Error::InvalidVersionOutput`] or [`Error::VersionProbeFailed`] when
+    /// no version can be read, and a transport error when tmux cannot be run.
+    /// Nothing is sent to the daemon in any of those cases.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let version = guard.server().daemon_version().await?;
+    /// assert!(version.meets(&libtmux::TmuxVersion::MIN_SUPPORTED));
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn daemon_version(&self) -> Result<TmuxVersion, Error> {
+        self.core.format_version().await
+    }
+
     /// Execute one raw logical tmux command.
     ///
     /// A non-zero process exit status is returned in [`CommandResult`]. The

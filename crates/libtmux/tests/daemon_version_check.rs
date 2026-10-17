@@ -579,6 +579,67 @@ async fn real_tmux_compat_pre_probe_daemon_is_refused_as_unsupported() {
     server.shutdown().await.expect("client shuts down");
 }
 
+/// `Server::daemon_version` is the checked version, asked once per handle.
+#[tokio::test]
+async fn daemon_version_reports_the_checked_version_once() {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+    let log = directory.path().join("probes");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "case \"$*\" in *libtmux-version-*) echo probe >> {}; {};; *) exit 0;; esac",
+            shell_quote(log.as_os_str()),
+            probe_report("3.7d")
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(executable)
+        .build()
+        .expect("client configured");
+    for _ in 0..2 {
+        let version = server.daemon_version().await.expect("a supported daemon");
+        assert_eq!(version.raw(), "3.7d");
+    }
+    let probes = std::fs::read_to_string(&log).expect("probe log");
+    assert_eq!(probes.lines().count(), 1, "the second ask was cached");
+    server.shutdown().await.expect("client shuts down");
+}
+
+/// The accessor refuses what the version check refuses.
+#[tokio::test]
+async fn daemon_version_refuses_what_the_check_refuses() {
+    for (reported, unrecognized) in [("3.2a", false), ("openbsd-7.5", true)] {
+        std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+        let directory =
+            tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+        let executable = wrapper(
+            directory.path(),
+            &format!(
+                "case \"$*\" in *libtmux-version-*) {};; *) exit 0;; esac",
+                probe_report(reported)
+            ),
+        );
+        let server = Server::builder()
+            .socket_path(directory.path().join("s"))
+            .tmux_executable(executable)
+            .build()
+            .expect("client configured");
+        let error = server
+            .daemon_version()
+            .await
+            .expect_err("the daemon is refused");
+        assert_eq!(
+            matches!(error, Error::UnrecognizedTmuxVersion { .. }),
+            unrecognized,
+            "{reported}: {error:?}"
+        );
+        assert_eq!(error.kind(), libtmux::ErrorKind::UnsupportedVersion);
+        server.shutdown().await.expect("client shuts down");
+    }
+}
+
 /// A report that names no release cannot be compared with the floor, so it is
 /// refused as unrecognized rather than described as too old.
 #[tokio::test]
