@@ -4,7 +4,6 @@
 #![allow(clippy::expect_used)]
 
 use std::ffi::OsStr;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Output};
 use std::time::Duration;
@@ -336,10 +335,11 @@ async fn real_tmux_compat_minimum_daemon_accepts_newer_clients() {
 }
 
 fn wrapper(directory: &Path, body: &str) -> PathBuf {
+    // Installing through the fixture helper waits out the `ETXTBSY` a process
+    // forked by a parallel test can cause while the script is open for write.
     let path = directory.join("tmux-wrapper");
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("wrapper written");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-        .expect("wrapper executable");
+    libtmux::test::install_executable(&path, &format!("#!/bin/sh\n{body}\n"))
+        .expect("wrapper installed");
     path
 }
 
