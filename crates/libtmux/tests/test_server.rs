@@ -1781,12 +1781,21 @@ async fn every_exposed_server_command_refuses_to_bootstrap_a_replacement() {
     kill_process(pid(daemon_pid), Signal::TERM).expect("retained daemon receives SIGTERM");
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
-            let probe = escaped_server
+            match escaped_server
                 .cmd(Command::new("display-message").arg("-p").arg("#{pid}"))
                 .await
-                .expect("no-start probe process executes");
-            if !probe.success() {
-                break;
+            {
+                Ok(probe) if !probe.success() => break,
+                // A client that connects while the daemon is still exiting
+                // sees an empty answer or a bare failure, which admission
+                // refuses to read as a version. That is the daemon going,
+                // not a client starting a replacement.
+                Ok(_)
+                | Err(
+                    libtmux::Error::InvalidVersionOutput { .. }
+                    | libtmux::Error::VersionProbeFailed { .. },
+                ) => {}
+                Err(error) => panic!("no-start probe process executes: {error:?}"),
             }
             tokio::task::yield_now().await;
         }
