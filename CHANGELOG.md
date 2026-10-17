@@ -30,6 +30,12 @@ full.
   per-command daemon admission. Select a compatible tmuxp 1.74.x environment
   through `TMUX_WORKSPACE_PYTHON`.
 
+### Fixed
+
+- MCP completion helpers accept markers only from the admitted daemon
+  generation. Replacing the daemon before the opening frame refuses the user
+  job, including when the replacement has the same tmux version. (#70)
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;
