@@ -16,16 +16,20 @@ def terminal():
     fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
 
+hold = sys.argv[1:2] == ["--hold"]
+argv = sys.argv[2:] if hold else sys.argv[1:]
 master, slave = pty.openpty()
-child = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=slave,
+child = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
                          preexec_fn=terminal)
 os.close(slave)
 output = bytearray()
 try:
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        ready, _, _ = select.select([master], [], [], 0.05)
-        if ready:
+    while hold or time.monotonic() < deadline:
+        ready, _, _ = select.select([master, 0] if hold else [master], [], [], 0.05)
+        if hold and 0 in ready and not os.read(0, 1):
+            break
+        if master in ready:
             try:
                 data = os.read(master, 65536)
             except OSError as error:
@@ -34,7 +38,8 @@ try:
                 raise
             if not data:
                 break
-            output.extend(data)
+            if not hold:
+                output.extend(data)
         elif child.poll() is not None:
             break
     if child.poll() is None:

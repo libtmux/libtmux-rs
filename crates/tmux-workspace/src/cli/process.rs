@@ -173,7 +173,7 @@ pub(super) async fn python() -> Result<OsString> {
     if !output.status.success() || !is_supported_tmuxp_version(&version) {
         return Err(CliError::new(
             "python_runtime",
-            "Python bridge requires tmuxp 1.74.x and libtmux with a hard tmux minimum of 3.3a or newer; upgrade Python libtmux and set TMUX_WORKSPACE_PYTHON to the compatible environment",
+            "Python bridge requires tmuxp 1.74.x, libtmux with a hard tmux minimum of 3.3a or newer, and optional feature policy version 2 or newer; upgrade Python libtmux and set TMUX_WORKSPACE_PYTHON to the compatible environment",
         ));
     }
     Ok(python)
