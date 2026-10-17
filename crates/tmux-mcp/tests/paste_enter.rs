@@ -21,6 +21,8 @@ use rmcp::{RoleClient, ServiceExt as _, serve_server};
 use serde_json::json;
 use tmux_mcp::{Selection, TmuxTools};
 
+mod support;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     let Ok(bash) = which_bash() else {
@@ -29,6 +31,10 @@ async fn paste_text_with_enter_runs_the_line_in_a_bracketing_shell() {
     };
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::feature_fixture(guard, &libtmux::since::NAMED_BUFFER_IDENTITY).await
+    else {
+        return;
+    };
     let session = guard
         .server()
         .new_session(libtmux::NewSessionOptions::new("paste-enter").command(bash.as_str()))

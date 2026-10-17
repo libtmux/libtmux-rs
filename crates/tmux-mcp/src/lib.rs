@@ -49,6 +49,8 @@ mod retained;
 mod run_request;
 mod schema;
 mod tail;
+#[cfg(test)]
+mod test_support;
 mod text;
 mod tools;
 mod views;
