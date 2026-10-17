@@ -260,7 +260,10 @@ impl Pane {
     /// arrives split, so a needle spanning the wrap point would never match.
     ///
     /// A pane whose process ends answers [`PaneWait::Dead`] rather than
-    /// running to the deadline, because waiting longer cannot change it.
+    /// running to the deadline, because waiting longer cannot change it. So
+    /// does a pane that tmux removes mid-wait and a server that exits
+    /// mid-wait. The answer carries no text: the wait keeps none, so output seen
+    /// before the pane or server ended is not recoverable from it.
     ///
     /// A [`Pane::capture`] called immediately after this returns can
     /// occasionally miss the very output that satisfied the wait: tmux's own
@@ -272,7 +275,8 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be reached or refuses a capture.
+    /// Returns an error when tmux cannot be reached or refuses a capture for a
+    /// reason other than the pane or server ending, which is [`PaneWait::Dead`].
     /// Running out of time is [`PaneWait::TimedOut`], not an error.
     ///
     /// # Cancel safety
@@ -477,13 +481,19 @@ impl Pane {
         let deadline = tokio::time::Instant::now().checked_add(within);
 
         loop {
-            let result = self.core.execute_chain(look.clone()).await?;
+            let result = match self.core.execute_chain(look.clone()).await {
+                Ok(result) => result,
+                Err(error) if is_gone(&error) => return Ok(PaneWait::Dead),
+                Err(error) => return Err(error),
+            };
             if !result.success() {
-                return Err(Error::from_refused_result(
-                    "capture-pane",
-                    &result,
-                    Some(OsStr::new(&target)),
-                ));
+                let error =
+                    Error::from_refused_result("capture-pane", &result, Some(OsStr::new(&target)));
+                return if is_gone(&error) {
+                    Ok(PaneWait::Dead)
+                } else {
+                    Err(error)
+                };
             }
             let (dead, text) = split_look(result.stdout());
 
@@ -506,6 +516,13 @@ impl Pane {
             tokio::time::sleep(POLL_INTERVAL.min(within)).await;
         }
     }
+}
+
+/// Whether a failed look means the pane, or the server holding it, ended.
+///
+/// Waiting longer cannot change either, so both answer [`PaneWait::Dead`].
+fn is_gone(error: &Error) -> bool {
+    error.is_object_gone() || matches!(error, Error::ServerGone { .. })
 }
 
 /// Split `capture-pane` output into lines.
