@@ -1202,6 +1202,9 @@ async fn wait_for_text_surfaces_a_frame_budget_error_instead_of_tolerating_it() 
     use libtmux::test::TestServer;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = crate::test_support::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("wait-frame-budget")
@@ -1284,6 +1287,9 @@ async fn a_wait_attached_before_the_send_matches_output_not_its_submitted_echo()
         .start()
         .await
         .expect("tmux starts");
+    let Some(guard) = crate::test_support::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("echo-contract-s2-before")

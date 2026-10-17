@@ -654,11 +654,19 @@ impl TmuxTools {
             PASTE_BUFFER_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
 
-        if let Err(error) = self
-            .server
-            .set_buffer(Some(&buffer), OsString::from(payload))
-            .await
-        {
+        let staging = Command::new("set-buffer")
+            .arg("-b")
+            .arg(&buffer)
+            .arg("--")
+            .sensitive_arg(OsString::from(payload))
+            .requires_tmux("paste_text", libtmux::since::NAMED_BUFFER_IDENTITY);
+        let staged = self.server.cmd(staging).await.and_then(|result| {
+            match result.refusal_for("set-buffer") {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
+        });
+        if let Err(error) = staged {
             let primary = tmux_error(&error);
             return Err(cleanup_after_refusal(
                 primary,

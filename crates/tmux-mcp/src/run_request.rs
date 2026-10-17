@@ -442,6 +442,9 @@ mod tests {
             .start()
             .await
             .expect("tmux starts");
+        let Some(guard) = crate::test_support::control_fixture(guard).await else {
+            return;
+        };
         let session = guard
             .server()
             .new_session("prepared-cleanup")

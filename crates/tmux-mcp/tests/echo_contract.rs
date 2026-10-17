@@ -27,6 +27,9 @@ use support::{args, bare_tools, json, prompt_ready};
 #[tokio::test]
 async fn s1_a_pending_answer_never_hides_real_output_containing_it() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": "s1"})))
@@ -98,6 +101,9 @@ async fn s1_a_pending_answer_never_hides_real_output_containing_it() {
 #[tokio::test]
 async fn s2_after_a_submitted_commands_echo_is_not_the_match() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": "s2-after"})))
@@ -162,6 +168,9 @@ async fn s2_after_a_submitted_commands_echo_is_not_the_match() {
 #[tokio::test]
 async fn s3_unsubmitted_text_is_pending_not_matched() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": "s3"})))
@@ -217,6 +226,9 @@ async fn s3_unsubmitted_text_is_pending_not_matched() {
 #[tokio::test]
 async fn s4_edits_are_applied_before_a_line_is_submitted() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": "s4"})))
@@ -288,6 +300,9 @@ async fn s4_edits_are_applied_before_a_line_is_submitted() {
 #[tokio::test]
 async fn s5_unsubmitted_type_ahead_into_a_cold_shell_is_never_matched() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     // A shell that reads nothing for a moment: this server's own type-ahead
     // can arrive on the live stream looking exactly like fresh output once
     // the pane's process starts reading it.
@@ -361,6 +376,9 @@ async fn s5_unsubmitted_type_ahead_into_a_cold_shell_is_never_matched() {
 #[tokio::test]
 async fn s6_an_unrecognized_key_stops_discounting_the_line() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     guard
         .server()
         .cmd(
@@ -446,6 +464,9 @@ async fn s6_an_unrecognized_key_stops_discounting_the_line() {
 #[tokio::test]
 async fn a_resize_between_submit_and_output_does_not_defeat_the_mask() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": "resize"})))
@@ -512,6 +533,9 @@ async fn a_resize_between_submit_and_output_does_not_defeat_the_mask() {
 #[tokio::test]
 async fn s2_pasted_text_with_enter_is_not_the_match() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": "s2-paste"})))
@@ -581,6 +605,9 @@ async fn s2_pasted_text_with_enter_is_not_the_match() {
 #[tokio::test]
 async fn s2_run_shell_commands_dispatch_line_is_not_the_match() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = support::control_fixture(guard).await else {
+        return;
+    };
     let tools = bare_tools(guard.server());
     tools
         .create_session(args(serde_json::json!({"name": "s2-run"})))
