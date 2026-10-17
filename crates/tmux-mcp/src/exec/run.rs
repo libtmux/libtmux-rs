@@ -415,13 +415,27 @@ pub(crate) fn route_is_terminal_safe(executable: &OsStr, socket: &Path) -> bool 
     route_path_is_terminal_safe(executable) && route_path_is_terminal_safe(socket.as_os_str())
 }
 
-fn display_client(executable: &OsStr, socket: &Path, message: &[u8]) -> Vec<u8> {
+fn display_client(
+    executable: &OsStr,
+    socket: &Path,
+    generation: &str,
+    nonce: &str,
+    message: &[u8],
+) -> Vec<u8> {
     let mut client = Vec::new();
     client.extend_from_slice(br"( \exec ");
     client.extend_from_slice(quote_shell_word(executable).as_bytes());
     client.extend_from_slice(br" -N -S ");
     client.extend_from_slice(quote_shell_word(socket.as_os_str()).as_bytes());
-    client.extend_from_slice(b" display-message -p ");
+    // The helpers authorize the job and its completion, so a replacement
+    // daemon cannot acknowledge either, even when its version is supported.
+    let condition = format!("#{{==:pid #{{pid}} started #{{start_time}},{generation}}}");
+    let refused = format!("libtmux-mcp-generation-changed-{nonce}");
+    client.extend_from_slice(b" if-shell -F ");
+    client.extend_from_slice(quote_shell_word(OsStr::new(&condition)).as_bytes());
+    client.extend_from_slice(b" '' ");
+    client.extend_from_slice(quote_shell_word(OsStr::new(&refused)).as_bytes());
+    client.extend_from_slice(b" ';' display-message -p ");
     client.extend_from_slice(message);
     client.extend_from_slice(b" )");
     client
@@ -630,14 +644,27 @@ fn render_trapped_payload(
 pub(super) fn render_payload(
     executable: &OsStr,
     socket: &Path,
+    generation: &str,
     nonce: &str,
     shell: &[u8],
     command: &OsStr,
     suppress_history: bool,
 ) -> OsString {
-    let separator = display_client(executable, socket, b"''");
-    let opening = display_client(executable, socket, &marker_message(nonce, false));
-    let closing = display_client(executable, socket, &marker_message(nonce, true));
+    let separator = display_client(executable, socket, generation, nonce, b"''");
+    let opening = display_client(
+        executable,
+        socket,
+        generation,
+        nonce,
+        &marker_message(nonce, false),
+    );
+    let closing = display_client(
+        executable,
+        socket,
+        generation,
+        nonce,
+        &marker_message(nonce, true),
+    );
     let trap_capture = inherited_trap_capture(shell, nonce);
     if let Some(capture) = trap_capture.as_ref() {
         return render_trapped_payload(
@@ -698,13 +725,22 @@ pub(super) fn render_payload(
 fn frame_with_nonce(
     executable: &OsStr,
     socket: &Path,
+    generation: &str,
     nonce: &str,
     shell: &[u8],
     command: &OsStr,
     suppress_history: bool,
 ) -> Option<Frame> {
     let marker = format!("{MARKER_PREFIX}{nonce}__").into_bytes();
-    let payload = render_payload(executable, socket, nonce, shell, command, suppress_history);
+    let payload = render_payload(
+        executable,
+        socket,
+        generation,
+        nonce,
+        shell,
+        command,
+        suppress_history,
+    );
     if find(payload.as_bytes(), &marker).is_some() {
         return None;
     }
@@ -723,6 +759,7 @@ fn frame_with_nonce(
 pub(super) fn frame_with_random(
     executable: &OsStr,
     socket: &Path,
+    generation: &str,
     shell: &[u8],
     command: &OsStr,
     suppress_history: bool,
@@ -735,9 +772,15 @@ pub(super) fn frame_with_random(
         let mut random = [0_u8; 16];
         fill(&mut random).map_err(|_| FrameError::Entropy)?;
         let nonce = format!("{:032x}", u128::from_be_bytes(random));
-        if let Some(frame) =
-            frame_with_nonce(executable, socket, &nonce, shell, command, suppress_history)
-        {
+        if let Some(frame) = frame_with_nonce(
+            executable,
+            socket,
+            generation,
+            &nonce,
+            shell,
+            command,
+            suppress_history,
+        ) {
             return Ok(frame);
         }
     }
@@ -755,6 +798,7 @@ pub(crate) async fn prepare_run(
     suppress_history: bool,
     executable: &OsStr,
     socket: &Path,
+    generation: ServerGeneration,
     shell: &[u8],
 ) -> Result<PreparedRun, PrepareRunError> {
     let Frame {
@@ -765,6 +809,7 @@ pub(crate) async fn prepare_run(
     } = frame_with_random(
         executable,
         socket,
+        &generation.to_string(),
         shell,
         OsStr::new(command),
         suppress_history,

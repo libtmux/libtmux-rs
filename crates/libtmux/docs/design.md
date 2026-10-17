@@ -6,6 +6,8 @@
 - [Goals](#goals)
 - [Non-goals](#non-goals)
 - [Compatibility contract](#compatibility-contract)
+  - [Version check](#version-check)
+  - [Cache and cold start](#cache-and-cold-start)
 - [Evaluated architectures](#evaluated-architectures)
   - [Literal Python-shaped port](#literal-python-shaped-port)
   - [Runtime-generic core and adapter workspace](#runtime-generic-core-and-adapter-workspace)
@@ -118,20 +120,49 @@ initial Rust MSRV is 1.85, the first stable compiler supporting Edition 2024.
 The Foundation gate verifies Linux with both Rust 1.85 and the pinned
 development toolchain; the release slice adds the remaining platform matrix.
 
+### Version check
+
 Every ordinary dispatch checks the connected daemon, including commands,
 chains, scoped handles and parked channel clients. An absent daemon checks the
-executable that would start it. The version probe shares the logical request's timeout;
-a native queue guard verifies the same version immediately before its effects.
-Unknown versions and failed probes refuse dispatch. Executable capabilities
-remain a separate cached description of the configured binary. Ordinary format
-catalogs follow the checked daemon. Live and cached version checks use native
-`-N`, so disappearance is reported without restarting the configured executable.
-That failure clears the cached version; the next explicit call can freshly qualify a
-cold startup. An owned kill clears the cached version immediately. A cold metadata probe
-never grants cached startup permission. Undated `master` reports remain
-available diagnostically and cannot pass the version check. Creating executable
-reports may use `tmux` or its exact captured basename; controlled daemon
-metadata requires the literal `tmux` prefix.
+executable that would start it. The check shares the logical request's
+timeout, and a native queue guard verifies the same version immediately before
+the request's effects. A daemon replaced in between refuses with
+`ServerReplaced`, and nothing runs.
+
+Every refusal happens before the request is sent:
+
+- A release below the floor is `UnsupportedTmuxVersion`. A daemon older than
+  3.2 cannot run the probe at all: 3.1 answers with `run-shell`'s usage, 3.0
+  reports `server version is too old for client`, and a 3.1 or older client
+  rejects `-N`. Each is refused as "older than 3.2".
+- A well-framed report that names no release (a bare `master`, `openbsd-*`,
+  `3.3a-dev`) is `UnrecognizedTmuxVersion`. It cannot be compared with the
+  floor, so it is never described as too old.
+- Output that is not a version report is `InvalidVersionOutput`, and a probe
+  that exits without one is `VersionProbeFailed`.
+- A `Timeout` raised while the check still ran has `before_dispatch` set.
+
+### Cache and cold start
+
+Live and cached version checks use native `-N`, so a vanished daemon is
+reported without restarting the configured executable. That failure clears the
+cached version, and the next explicit call can freshly qualify a cold startup.
+An owned kill clears the cached version immediately. A cold metadata probe
+never grants cached startup permission.
+
+Executable capabilities remain a separate cached description of the configured
+binary, and ordinary format catalogs follow the checked daemon. The catalog
+keeps 3.2a as its recorded baseline, so introduction floors at or below the
+supported minimum are history rather than live gates.
+
+Undated `master` reports remain available diagnostically and cannot pass the
+version check. Creating executable reports may use `tmux` or its exact
+captured basename; controlled daemon metadata requires the literal `tmux`
+prefix.
+
+MCP completion helpers carry the checked daemon's generation into a native
+queue guard before printing their markers. A replacement, including one on the
+same version, cannot acknowledge the opening frame and authorize its user job.
 
 The configured executable and library-owned metadata and guard commands must
 retain tmux's native built-in semantics. Owner-defined `command-alias`
@@ -209,8 +240,8 @@ tmux. Its source is not copied into the crate.
   `.matching(expr)` accepts portable expressions and named matchers. No
   collection wrapper or duplicate closure method is needed.
 - Single-evaluation `q`-quoted tmux formats round-tripped delimiter bytes,
-  embedded newlines, and invalid UTF-8 on tmux 3.2a (measured before the floor
-  moved to 3.3a; the supported releases behave the same). Delimiter
+  embedded newlines, and invalid UTF-8 on tmux 3.2a, the oldest release
+  measured; the supported releases behave the same. Delimiter
   splitting and separately sampled length prefixes did not work.
 - tmux 3.4 and 3.5 wrap that output in `VIS_OCTAL | VIS_CSTYLE | VIS_NOSLASH`,
   so the transport carries two escaping layers rather than one. The layers do
@@ -854,13 +885,12 @@ What the earlier framing was right about is kept:
   only while nothing is waiting for a reply. A reply arrives on the connection
   the events arrive on, so pausing with one outstanding would be waiting for
   something this end had stopped listening for, and it deadlocked: measured
-  identically on every release tried, 3.2a (below the current floor) through
-  3.7c, with no error and `is_closed` reporting
-  false. While a reply is outstanding the connection keeps reading and holds
-  a fixed maximum of what the consumer has not taken. At that ceiling it
-  refuses live replies but retains their correlation slots; an absolute reply
-  deadline bounds the write through the complete block. Pausing resumes the
-  moment no live reply remains;
+  identically on every release tried, 3.2a through 3.7c, with no error and
+  `is_closed` reporting false. While a reply is outstanding the connection keeps
+  reading and holds a fixed maximum of what the consumer has not taken. At that
+  ceiling it refuses live replies but retains their correlation slots; an
+  absolute reply deadline bounds the write through the complete block. Pausing
+  resumes the moment no live reply remains;
 - the connection lives while either handle is in use and ends when both are
   gone, so a caller who only watches and a caller who only sends are both
   ordinary;
@@ -1056,9 +1086,10 @@ in between that are known to differ. 3.4 and 3.5a are the two that wrapped
 command output in `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH`, and are the reason the
 codec has a second dialect at all.
 
-Additional 3.2a and exact 3.3 lanes prove refusal before effects. A real 3.3a
-daemon accepts a newer client, and a replacement between the version check and dispatch
-is fenced before mutations.
+Additional lanes prove refusal before effects: 3.0a and 3.1c daemons behind a
+3.3a client, 3.2a, and the unpatched 3.3. A real 3.3a daemon accepts a newer
+client, and a replacement between the version check and dispatch is fenced
+before mutations.
 
 Running only the codec tests on the middle lanes was tempting and wrong. The
 crate's version sensitivity is not confined to the codec: command flags,
