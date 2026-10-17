@@ -102,6 +102,7 @@ pub(crate) fn dispatch(
                 Vec::new(),
             ));
         };
+        request.require_features(&version)?;
         let request = if allow_start {
             request
         } else {
@@ -138,7 +139,7 @@ pub(crate) fn dispatch(
     })
 }
 
-async fn within<T>(
+pub(super) async fn within<T>(
     future: impl Future<Output = Result<T, Error>>,
     deadline: Option<Instant>,
     request_id: RequestId,

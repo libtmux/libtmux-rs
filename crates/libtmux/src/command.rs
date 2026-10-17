@@ -114,6 +114,8 @@ impl SummaryArgument {
 pub struct Command {
     subcommand: CommandArg,
     arguments: Vec<CommandArg>,
+    requirement: Option<(&'static str, crate::ReleaseVersion)>,
+    refused_intervals: Vec<(&'static str, crate::ReleaseVersion, crate::ReleaseVersion)>,
 }
 
 impl Command {
@@ -132,7 +134,64 @@ impl Command {
         Self {
             subcommand: CommandArg::public(subcommand.into()),
             arguments: Vec::new(),
+            requirement: None,
+            refused_intervals: Vec::new(),
         }
+    }
+
+    /// Require a daemon release before dispatching this command.
+    ///
+    /// Use this when a command starts work whose later cleanup needs a newer
+    /// tmux. The requirement travels with the command and its chain; refusal
+    /// happens before any member runs. Repeated calls retain the higher floor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use libtmux::{Command, ReleaseSuffix, ReleaseVersion};
+    ///
+    /// let command = Command::new("set-buffer")
+    ///     .arg("-b").arg("temporary").sensitive_arg("payload")
+    ///     .requires_tmux("temporary buffer cleanup",
+    ///         ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL));
+    /// assert_eq!(command.summary().sensitive_argument_count(), 1);
+    /// ```
+    #[must_use = "use the returned command to retain its version requirement"]
+    pub fn requires_tmux(mut self, capability: &'static str, needs: crate::ReleaseVersion) -> Self {
+        if self
+            .requirement
+            .is_none_or(|(_, existing)| needs > existing)
+        {
+            self.requirement = Some((capability, needs));
+        }
+        self
+    }
+
+    pub(crate) fn refusing_interval(
+        mut self,
+        capability: &'static str,
+        broken: crate::ReleaseVersion,
+        fixed: crate::ReleaseVersion,
+    ) -> Self {
+        self.refused_intervals.push((capability, broken, fixed));
+        self
+    }
+
+    #[cfg(feature = "control-mode")]
+    pub(crate) fn require_features(
+        &self,
+        version: &crate::TmuxVersion,
+    ) -> Result<(), crate::Error> {
+        if let Some((capability, needs)) = self.requirement {
+            version.require(capability, needs)?;
+        }
+        for (capability, broken, fixed) in &self.refused_intervals {
+            crate::internal::feature_policy::refuse_interval(version, capability, *broken, *fixed)?;
+        }
+        let mut words = Vec::with_capacity(self.arguments.len() + 1);
+        words.push(self.subcommand.value());
+        words.extend(self.arguments.iter().map(CommandArg::value));
+        crate::internal::feature_policy::require(&words, version)
     }
 
     /// Append one public logical argument.
@@ -750,9 +809,27 @@ pub(crate) struct CommandRequest {
     /// the channel's next signal or its next lock. Such a request ends when
     /// tmux answers or the executor shuts down.
     unbounded: bool,
+    requirement: Option<(&'static str, crate::ReleaseVersion)>,
+    refused_intervals: Vec<(&'static str, crate::ReleaseVersion, crate::ReleaseVersion)>,
 }
 
 impl CommandRequest {
+    pub(crate) fn require_features(
+        &self,
+        version: &crate::TmuxVersion,
+    ) -> Result<(), crate::Error> {
+        if let Some((capability, needs)) = self.requirement {
+            version.require(capability, needs)?;
+        }
+        for (capability, broken, fixed) in &self.refused_intervals {
+            crate::internal::feature_policy::refuse_interval(version, capability, *broken, *fixed)?;
+        }
+        for command in self.argv[self.logical_subcommand_index..].split(|word| word == ";") {
+            crate::internal::feature_policy::require(command, version)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn is_client_diagnostic(&self) -> bool {
         matches!(
             &self.argv[self.logical_subcommand_index..],
@@ -807,6 +884,8 @@ impl CommandRequest {
         let Command {
             subcommand,
             arguments,
+            requirement,
+            refused_intervals,
         } = command;
         let mut argv = Vec::with_capacity(global_argv.len() + arguments.len() + 1);
         argv.extend_from_slice(global_argv);
@@ -824,6 +903,8 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count: 1,
             unbounded: false,
+            requirement,
+            refused_intervals,
         }
     }
 
@@ -835,6 +916,14 @@ impl CommandRequest {
         let command = chain.summary();
         #[cfg(feature = "control-mode")]
         let command_count = chain.command_count();
+        let requirement = std::iter::once(&chain.first)
+            .chain(&chain.rest)
+            .filter_map(|command| command.requirement)
+            .max_by_key(|(_, needs)| *needs);
+        let refused_intervals = std::iter::once(&chain.first)
+            .chain(&chain.rest)
+            .flat_map(|command| command.refused_intervals.iter().copied())
+            .collect();
         let (argv, logical_subcommand_index) = chain.into_argv(global_argv);
 
         Self {
@@ -847,6 +936,8 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count,
             unbounded: false,
+            requirement,
+            refused_intervals,
         }
     }
 

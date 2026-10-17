@@ -177,7 +177,6 @@ fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     }
 }
 
@@ -231,7 +230,6 @@ async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     };
     let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
 
@@ -287,7 +285,6 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     };
     let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
 
@@ -578,7 +575,6 @@ async fn mute_pane_reports_a_control_error_block() {
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     };
     let pane: PaneId = "%1".parse().expect("a pane id");
     let mute = tokio::spawn(async move { sender.mute_pane(&pane).await });

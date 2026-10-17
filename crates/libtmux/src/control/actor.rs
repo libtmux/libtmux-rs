@@ -42,6 +42,7 @@ pub(super) async fn open(
     mut child: PersistentChild,
     limits: ControlLimits,
     timeout: Duration,
+    opening_deadline: Option<Instant>,
 ) -> Result<OpenedConnection, Error> {
     let Some(stdin) = child.take_stdin() else {
         let _ = child.terminate().await;
@@ -62,6 +63,7 @@ pub(super) async fn open(
         stdout: BufReader::new(stdout),
         limits,
         timeout,
+        opening_deadline,
         line: Vec::new(),
         commands: queue,
         events,
@@ -405,6 +407,7 @@ struct Connection {
     /// What one line and one block may accumulate before this gives up.
     limits: ControlLimits,
     timeout: Duration,
+    opening_deadline: Option<Instant>,
     /// Bytes of a line that is not complete yet.
     ///
     /// This outlives one read because a cancelled read leaves what it got
@@ -430,9 +433,8 @@ struct Connection {
 
 impl Connection {
     async fn run(mut self, mut ready: oneshot::Sender<()>) -> Result<(), Error> {
-        let opening_deadline = Instant::now().checked_add(self.timeout);
         let (outcome, established) = match self
-            .discard_opening_block(&mut ready, opening_deadline)
+            .discard_opening_block(&mut ready, self.opening_deadline)
             .await
         {
             Ok(true) if ready.send(()).is_ok() => (self.serve().await, true),
