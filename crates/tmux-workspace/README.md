@@ -1,10 +1,10 @@
 <!-- libtmux-logo -->
-<p align="center">
+<div align="center">
   <picture>
-    <source srcset="assets/logo.svg" type="image/svg+xml">
-    <img src="assets/logo.png" width="128" height="128" alt="libtmux for Rust workspace">
+    <source srcset="https://raw.githubusercontent.com/libtmux/libtmux-rs/HEAD/crates/tmux-workspace/assets/logo.svg" type="image/svg+xml">
+    <img src="https://raw.githubusercontent.com/libtmux/libtmux-rs/HEAD/crates/tmux-workspace/assets/logo.png" width="128" height="128" alt="libtmux for Rust workspace">
   </picture>
-</p>
+</div>
 <!-- /libtmux-logo -->
 
 <div align="center">
