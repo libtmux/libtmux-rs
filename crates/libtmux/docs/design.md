@@ -133,6 +133,10 @@ available diagnostically and cannot qualify hard admission. Creating executable
 reports may use `tmux` or its exact captured basename; controlled daemon
 metadata requires the literal `tmux` prefix.
 
+MCP completion helpers carry the admitted daemon's generation into a native
+queue guard before printing their markers. A replacement, including one on the
+same version, cannot acknowledge the opening frame and authorize its user job.
+
 The configured executable and library-owned metadata and guard commands must
 retain tmux's native built-in semantics. Owner-defined `command-alias`
 redefinitions of those commands are outside this qualification; their contents

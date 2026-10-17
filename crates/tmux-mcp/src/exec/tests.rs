@@ -9,6 +9,164 @@ use std::process::{Command, Stdio};
 
 const FRAME_PREFIX: &str = "__LIBTMUX_MCP_DONE_";
 
+struct NativeFrameFixture {
+    root: std::path::PathBuf,
+    socket: std::path::PathBuf,
+    executable: OsString,
+}
+
+impl NativeFrameFixture {
+    fn new() -> Self {
+        let executable = std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into());
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).expect("fixture entropy");
+        let root = Path::new("/tmp/libtmux-rs-test").join(format!(
+            "frame-generation-{}-{:032x}",
+            std::process::id(),
+            u128::from_be_bytes(random)
+        ));
+        std::fs::create_dir_all(root.parent().expect("fixture parent"))
+            .expect("fixture parent exists");
+        std::fs::create_dir(&root).expect("fixture owns a fresh directory");
+        Self {
+            socket: root.join("s"),
+            root,
+            executable,
+        }
+    }
+}
+
+impl Drop for NativeFrameFixture {
+    fn drop(&mut self) {
+        let _ = Command::new(&self.executable)
+            .arg("-N")
+            .arg("-S")
+            .arg(&self.socket)
+            .arg("kill-server")
+            .output();
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+async fn native_frame_generation_case(replacement: Option<OsString>) {
+    let fixture = NativeFrameFixture::new();
+    let server = libtmux::Server::builder()
+        .socket_path(&fixture.socket)
+        .tmux_executable(&fixture.executable)
+        .config_file("/dev/null")
+        .build()
+        .expect("server handle");
+    server
+        .new_session(libtmux::NewSessionOptions::new("original").command("exec sleep 60"))
+        .await
+        .expect("admitted original daemon starts");
+    let generation = server.generation().await.expect("admitted generation");
+    let replaced = replacement.is_some();
+    if let Some(binary) = replacement {
+        server.kill().await.expect("original daemon ends");
+        let started = Command::new(&binary)
+            .arg("-S")
+            .arg(&fixture.socket)
+            .args(["-f", "/dev/null", "new-session", "-d", "-s", "replacement"])
+            .arg("exec sleep 60")
+            .output()
+            .expect("replacement client starts");
+        assert!(
+            started.status.success(),
+            "replacement starts: {}",
+            String::from_utf8_lossy(&started.stderr)
+        );
+        let identity = Command::new(&binary)
+            .arg("-N")
+            .arg("-S")
+            .arg(&fixture.socket)
+            .args(["display-message", "-p", "#{pid}"])
+            .output()
+            .expect("replacement identity");
+        assert!(identity.status.success());
+        assert_ne!(
+            String::from_utf8_lossy(&identity.stdout).trim(),
+            generation.pid().to_string(),
+            "the owned replacement has a different daemon process"
+        );
+    }
+    let marker = fixture.root.join("forbidden-user-job");
+    let mut command = OsString::from("printf executed > ");
+    command.push(quote_shell_word(marker.as_os_str()));
+    let payload = render_payload(
+        &fixture.executable,
+        &fixture.socket,
+        &generation.to_string(),
+        "nativegeneration",
+        b"sh",
+        &command,
+        false,
+    );
+    let mut child = Command::new("/bin/sh")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("frame shell starts");
+    child
+        .stdin
+        .take()
+        .expect("frame stdin")
+        .write_all(payload.as_bytes())
+        .expect("actual generated frame is written");
+    let output = child.wait_with_output().expect("frame completes");
+    let job_ran = marker.exists();
+    server.shutdown().await.expect("executor shuts down");
+    drop(fixture);
+
+    assert_eq!(
+        job_ran,
+        !replaced,
+        "replacement={replaced}; stdout={:?}; stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        find(
+            &output.stdout,
+            b"__LIBTMUX_MCP_DONE_nativegeneration__:BEGIN"
+        )
+        .is_some(),
+        !replaced,
+        "only the admitted generation may acknowledge the opening frame"
+    );
+    if replaced {
+        assert!(output.stdout.is_empty(), "no helper reports success");
+        assert!(
+            find(
+                &output.stderr,
+                b"unknown command: libtmux-mcp-generation-changed-nativegeneration"
+            )
+            .is_some(),
+            "native queue guard rejected the replacement"
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_frame_generation_accepts_the_admitted_daemon() {
+    native_frame_generation_case(None).await;
+}
+
+#[tokio::test]
+async fn native_frame_generation_refuses_an_older_replacement_before_the_user_job() {
+    let Some(binary) = std::env::var_os("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
+        return;
+    };
+    native_frame_generation_case(Some(binary)).await;
+}
+
+#[tokio::test]
+async fn native_frame_generation_refuses_a_same_version_replacement_before_the_user_job() {
+    let binary = std::env::var_os("LIBTMUX_TEST_TMUX").unwrap_or_else(|| "tmux".into());
+    native_frame_generation_case(Some(binary)).await;
+}
+
 #[test]
 fn finding_a_needle_reports_where_it_starts() {
     assert_eq!(find(b"abcdef", b"cd"), Some(2));
@@ -92,6 +250,7 @@ fn terminal_control_routes_fail_before_entropy() {
         let error = frame_with_random(
             &executable,
             Path::new(&socket),
+            "pid 123 started 456",
             b"sh",
             OsStr::new("true"),
             false,
@@ -116,6 +275,7 @@ fn rendered_frame_is_raw_variable_free_and_posix_syntax() {
     let payload = render_payload(
         &executable,
         Path::new(&socket),
+        "pid 123 started 456",
         "nonce",
         b"sh",
         OsStr::new("printf body # trailing comment"),
@@ -182,14 +342,15 @@ fn rendered_frame_matches_the_exact_four_branch_snapshot() {
     let actual = render_payload(
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
+        "pid 123 started 456",
         "nonce",
         b"sh",
         OsStr::new("printf body # trailing comment"),
         false,
     );
-    let separator = r"( \exec '/tmp/tmux' -N -S '/tmp/socket' display-message -p '' )";
-    let opening = r"( \exec '/tmp/tmux' -N -S '/tmp/socket' display-message -p '__LIBTMUX_MCP_DONE_''nonce''__:BEGIN' )";
-    let closing = r#"( \exec '/tmp/tmux' -N -S '/tmp/socket' display-message -p '__LIBTMUX_MCP_DONE_''nonce''__:'"$1" )"#;
+    let separator = r"( \exec '/tmp/tmux' -N -S '/tmp/socket' if-shell -F '#{==:pid #{pid} started #{start_time},pid 123 started 456}' '' 'libtmux-mcp-generation-changed-nonce' ';' display-message -p '' )";
+    let opening = r"( \exec '/tmp/tmux' -N -S '/tmp/socket' if-shell -F '#{==:pid #{pid} started #{start_time},pid 123 started 456}' '' 'libtmux-mcp-generation-changed-nonce' ';' display-message -p '__LIBTMUX_MCP_DONE_''nonce''__:BEGIN' )";
+    let closing = r#"( \exec '/tmp/tmux' -N -S '/tmp/socket' if-shell -F '#{==:pid #{pid} started #{start_time},pid 123 started 456}' '' 'libtmux-mcp-generation-changed-nonce' ';' display-message -p '__LIBTMUX_MCP_DONE_''nonce''__:'"$1" )"#;
     let expected = format!(
         r#"(
 case $- in
@@ -254,6 +415,7 @@ esac
         render_payload(
             OsStr::new("/tmp/tmux"),
             Path::new("/tmp/socket"),
+            "pid 123 started 456",
             "nonce",
             b"dash",
             OsStr::new("printf body # trailing comment"),
@@ -389,6 +551,7 @@ fn random_frames_retry_source_collisions_with_128_bit_nonces() {
     let frame = frame_with_random(
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
+        "pid 123 started 456",
         b"sh",
         OsStr::new(&collision),
         false,
@@ -414,6 +577,7 @@ fn random_frame_entropy_failure_is_preflight_failure() {
     let error = frame_with_random(
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
+        "pid 123 started 456",
         b"sh",
         OsStr::new("true"),
         false,
@@ -432,6 +596,7 @@ fn repeated_random_marker_collisions_are_bounded() {
     let error = frame_with_random(
         OsStr::new("/tmp/tmux"),
         Path::new("/tmp/socket"),
+        "pid 123 started 456",
         b"sh",
         OsStr::new(&collision),
         false,
@@ -844,6 +1009,7 @@ fn no_frame_line_exceeds_a_terminal_input_limit() {
             let payload = render_payload(
                 OsStr::new("/opt/homebrew/bin/tmux"),
                 Path::new("/tmp/libtmux-rs-test/agent-preserves-raw.sock"),
+                "pid 123 started 456",
                 "63bdf5760a1f845190b25ac835320917",
                 shell,
                 OsStr::new("printf body # trailing comment"),
@@ -888,6 +1054,7 @@ fn the_typed_line_never_carries_the_command() {
             let frame = frame_with_random(
                 executable,
                 socket,
+                "pid 123 started 456",
                 b"bash",
                 command,
                 suppress_history,
