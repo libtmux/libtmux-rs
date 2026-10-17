@@ -144,11 +144,13 @@ impl TmuxTools {
         pane: &str,
     ) -> Result<Json<Capture>, ToolError> {
         let target = self.find_pane(pane).await?;
-        let supported = self.server.capabilities().await.is_ok_and(|capabilities| {
-            capabilities
-                .tmux_version()
-                .has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS)
-        });
+        // The daemon runs the capture, so its version decides the flags; the
+        // client executable's can differ.
+        let supported = self
+            .server
+            .daemon_version()
+            .await
+            .is_ok_and(|version| version.has_behavior(&libtmux::since::CAPTURE_LINE_FLAGS));
 
         let (rendered, marks) = if supported {
             let lines = target
