@@ -67,6 +67,9 @@ full.
 - `next-X.Y` development builds rank below `X.Y-rc` and `X.Y`, so they no
   longer pass gates for the release they precede. (#70)
 
+- Control acquisition reads the daemon's identity the same way, so it no
+  longer runs `after-display-message` before attaching. (#72)
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;
