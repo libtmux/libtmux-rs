@@ -93,11 +93,12 @@ async fn native_frame_generation_case(replacement: Option<OsString>) {
     let marker = fixture.root.join("forbidden-user-job");
     let mut command = OsString::from("printf executed > ");
     command.push(quote_shell_word(marker.as_os_str()));
+    let nonce = format!("nativegeneration{}", std::process::id());
     let payload = render_payload(
         &fixture.executable,
         &fixture.socket,
         &generation.to_string(),
-        "nativegeneration",
+        &nonce,
         b"sh",
         &command,
         false,
@@ -129,7 +130,7 @@ async fn native_frame_generation_case(replacement: Option<OsString>) {
     assert_eq!(
         find(
             &output.stdout,
-            b"__LIBTMUX_MCP_DONE_nativegeneration__:BEGIN"
+            format!("__LIBTMUX_MCP_DONE_{nonce}__:BEGIN").as_bytes()
         )
         .is_some(),
         !replaced,
@@ -140,7 +141,7 @@ async fn native_frame_generation_case(replacement: Option<OsString>) {
         assert!(
             find(
                 &output.stderr,
-                b"unknown command: libtmux-mcp-generation-changed-nativegeneration"
+                format!("unknown command: libtmux-mcp-generation-changed-{nonce}").as_bytes()
             )
             .is_some(),
             "native queue guard rejected the replacement"
