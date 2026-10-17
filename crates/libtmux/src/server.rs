@@ -403,7 +403,7 @@ impl Server {
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
-    ) -> Result<PersistentChild, Error> {
+    ) -> Result<(PersistentChild, TmuxVersion), Error> {
         self.core.spawn_control(session).await
     }
 

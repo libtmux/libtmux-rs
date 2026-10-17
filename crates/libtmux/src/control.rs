@@ -517,18 +517,20 @@ impl ControlMode {
             .is_ok_and(|capabilities| capabilities.tmux_version().has_behavior(&CONTROL_PANE_OFF));
 
         let timeout = server.default_timeout();
+        let (child, version) = server.spawn_control(session).await?;
         let actor::OpenedConnection {
             commands,
             events,
             stop,
             connection,
-        } = actor::open(server.spawn_control(session).await?, limits, timeout).await?;
+        } = actor::open(child, limits, timeout).await?;
 
         let sender = ControlSender {
             commands,
             timeout,
             pane_off_is_safe,
             identity: server.identity().clone(),
+            version,
         };
         let events = ControlEvents {
             events,
@@ -686,6 +688,11 @@ pub struct ControlSender {
     /// handle for a different server would silently talk to this one.
     /// [`crate::Server::over_control_mode`] compares it and refuses.
     identity: crate::ServerIdentity,
+    /// The daemon version checked when this connection attached.
+    ///
+    /// A version cannot be asked over the connection without running a user
+    /// hook, so everything that needs one reads it from here.
+    version: crate::TmuxVersion,
 }
 
 impl ControlSender {
@@ -740,6 +747,11 @@ impl ControlSender {
     /// Return the server this connection reaches.
     pub(crate) const fn identity(&self) -> &crate::ServerIdentity {
         &self.identity
+    }
+
+    /// Return the daemon version checked when this connection attached.
+    pub(crate) const fn version(&self) -> &crate::TmuxVersion {
+        &self.version
     }
 
     /// Send a command whose completed block marks one point in event order.
