@@ -91,6 +91,7 @@ pub(crate) fn dispatch(
             request_id,
             &summary,
             configuration.timeout(),
+            true,
         )
         .await?
         else {
@@ -116,18 +117,37 @@ pub(crate) fn dispatch(
             request_id,
             &summary,
             configuration.timeout(),
+            false,
         )
         .await?;
         if !result.success()
             && result.stderr().trim_ascii() == b"unknown command: libtmux-core-version-changed"
         {
+            // Ask the replacement what it is, so a caller that stops after one
+            // failure still learns the floor. The probe shares the caller's
+            // remaining deadline; nothing was sent, so it times out as such.
+            let replacement = within(
+                live_version(&executor, &configuration, endpoint_probe, &versions),
+                deadline,
+                request_id,
+                &summary,
+                configuration.timeout(),
+                true,
+            )
+            .await;
             versions.forget(&version);
-            return Err(Error::version_probe_failed(
-                request_id.get(),
-                summary.clone(),
-                result.exit_code(),
-                result.signal(),
-            ));
+            return Err(match replacement {
+                Ok(Some(replacement)) => match replacement.ensure_supported() {
+                    Ok(()) => Error::server_replaced(request_id.get(), summary.clone()),
+                    Err(unsupported) => unsupported,
+                },
+                Err(
+                    error @ (Error::Timeout { .. }
+                    | Error::UnsupportedTmuxVersion { .. }
+                    | Error::UnrecognizedTmuxVersion { .. }),
+                ) => error,
+                Ok(None) | Err(_) => Error::server_replaced(request_id.get(), summary.clone()),
+            });
         }
         if (absent_cleanup && result.success()) || (!result.success() && is_cold(result.stderr())) {
             versions.forget(&version);
@@ -144,8 +164,15 @@ async fn within<T>(
     request_id: RequestId,
     summary: &CommandSummary,
     budget: Duration,
+    before_dispatch: bool,
 ) -> Result<T, Error> {
-    let expired = || Error::timeout(request_id.get(), summary.clone(), budget);
+    let expired = || {
+        if before_dispatch {
+            Error::timeout_before_dispatch(request_id.get(), summary.clone(), budget)
+        } else {
+            Error::timeout(request_id.get(), summary.clone(), budget)
+        }
+    };
     let result = match deadline {
         Some(deadline) => timeout_at(deadline, future).await.map_err(|_| expired())?,
         None => future.await,

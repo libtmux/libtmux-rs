@@ -2057,12 +2057,15 @@ struct_field libtmux::Error::ServerGenerationChanged::found: libtmux::ServerGene
 struct_field libtmux::Error::ServerGone::command: &'static str
 struct_field libtmux::Error::ServerGone::kind: libtmux::ServerGoneKind
 struct_field libtmux::Error::ServerMismatch::operation: &'static str
+struct_field libtmux::Error::ServerReplaced::command: libtmux::CommandSummary
+struct_field libtmux::Error::ServerReplaced::request_id: u64
 struct_field libtmux::Error::SessionExists::name: String
 struct_field libtmux::Error::Spawn::command: libtmux::CommandSummary
 struct_field libtmux::Error::Spawn::request_id: u64
 struct_field libtmux::Error::Spawn::source: io::Error
 struct_field libtmux::Error::SupervisorLost::command: libtmux::CommandSummary
 struct_field libtmux::Error::SupervisorLost::request_id: u64
+struct_field libtmux::Error::Timeout::before_dispatch: bool
 struct_field libtmux::Error::Timeout::command: libtmux::CommandSummary
 struct_field libtmux::Error::Timeout::request_id: u64
 struct_field libtmux::Error::Timeout::timeout: std::time::Duration
@@ -2345,6 +2348,7 @@ variant libtmux::Error::RuntimeUnavailable
 variant libtmux::Error::ServerGenerationChanged
 variant libtmux::Error::ServerGone
 variant libtmux::Error::ServerMismatch
+variant libtmux::Error::ServerReplaced
 variant libtmux::Error::SessionExists
 variant libtmux::Error::Spawn
 variant libtmux::Error::SupervisorLost

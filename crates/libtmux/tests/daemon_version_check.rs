@@ -669,9 +669,11 @@ async fn version_check_timeout_is_charged_to_the_logical_request() {
         .await
         .expect_err("probe deadline expires");
     assert!(
-        matches!(error, Error::Timeout { request_id: 1, ref command, .. } if command.to_string().starts_with("\"set-buffer\" ")),
+        matches!(error, Error::Timeout { request_id: 1, ref command, before_dispatch: true, .. } if command.to_string().starts_with("\"set-buffer\" ")),
         "{error:?}"
     );
+    assert!(error.is_transient(), "nothing was sent, so a retry is safe");
+    assert!(error.to_string().ends_with("; nothing was sent"), "{error}");
     server
         .shutdown()
         .await
@@ -700,9 +702,17 @@ async fn version_check_and_dispatch_share_one_deadline() {
         .await
         .expect_err("two individually bounded phases exceed the shared deadline");
     assert!(
-        matches!(error, Error::Timeout { request_id: 1, .. }),
-        "{error:?}"
+        matches!(
+            error,
+            Error::Timeout {
+                request_id: 1,
+                before_dispatch: false,
+                ..
+            }
+        ),
+        "the probe finished in time and the request itself ran out: {error:?}"
     );
+    assert!(!error.is_transient(), "tmux may have run the request");
     server
         .shutdown()
         .await
@@ -777,6 +787,120 @@ async fn an_unrepresentable_deadline_retains_the_unbounded_budget() {
     guard.shutdown().await.expect("fixture shuts down");
 }
 
+/// A daemon replaced after its version was checked answers the fence with its
+/// refusal. That is not a probe failure: the request never ran, and a repeat
+/// checks the new daemon.
+#[tokio::test]
+async fn a_fence_mismatch_is_reported_as_a_replaced_server() {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+    let marker = directory.path().join("effect");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "case \"$*\" in *libtmux-version-*) {};; *libtmux-core-version-changed*) printf 'unknown command: libtmux-core-version-changed\\n' >&2; exit 1;; *) touch {};; esac",
+            probe_report("3.7d"),
+            shell_quote(marker.as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(executable)
+        .build()
+        .expect("client configured");
+    let error = server
+        .cmd(Command::new("set-buffer").arg("-b").arg("fenced").arg("x"))
+        .await
+        .expect_err("the fence refuses the request");
+    assert!(
+        matches!(error, Error::ServerReplaced { request_id: 1, .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.kind(), libtmux::ErrorKind::Refused);
+    assert!(error.is_transient(), "nothing ran, so a retry is safe");
+    let message = error.to_string();
+    assert!(message.contains("was replaced"), "{message}");
+    assert!(message.contains("nothing was sent"), "{message}");
+    assert!(!message.contains("exit code"), "{message}");
+    assert!(!marker.exists(), "the fenced request never ran");
+    server.shutdown().await.expect("client shuts down");
+}
+
+/// The first failure after a swap already names the floor: the check asks the
+/// replacement what it is instead of leaving that to the next call.
+#[tokio::test]
+async fn a_fence_mismatch_names_a_replacement_below_the_floor() {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+    let marker = directory.path().join("effect");
+    let swapped = directory.path().join("swapped");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "case \"$*\" in *libtmux-version-*) if [ -e {swapped} ]; then {old}; else touch {swapped}; {new}; fi;; *libtmux-core-version-changed*) printf 'unknown command: libtmux-core-version-changed\\n' >&2; exit 1;; *) touch {marker};; esac",
+            swapped = shell_quote(swapped.as_os_str()),
+            old = probe_report("3.2a"),
+            new = probe_report("3.7d"),
+            marker = shell_quote(marker.as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(executable)
+        .build()
+        .expect("client configured");
+    let error = server
+        .cmd(Command::new("set-buffer").arg("-b").arg("fenced").arg("x"))
+        .await
+        .expect_err("the replacement is below the floor");
+    assert_unsupported(&error, "3.2a");
+    assert!(error.to_string().contains("Upgrade tmux"), "{error}");
+    assert!(!marker.exists(), "the fenced request never ran");
+    server.shutdown().await.expect("client shuts down");
+}
+
+/// The extra probe spends the caller's remaining deadline, not a fresh one.
+#[tokio::test]
+async fn a_fence_mismatch_reprobe_times_out_within_the_callers_deadline() {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+    let marker = directory.path().join("effect");
+    let swapped = directory.path().join("swapped");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "case \"$*\" in *libtmux-version-*) if [ -e {swapped} ]; then exec sleep 30; else touch {swapped}; {new}; fi;; *libtmux-core-version-changed*) printf 'unknown command: libtmux-core-version-changed\\n' >&2; exit 1;; *) touch {marker};; esac",
+            swapped = shell_quote(swapped.as_os_str()),
+            new = probe_report("3.7d"),
+            marker = shell_quote(marker.as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(executable)
+        .default_timeout(Duration::from_secs(2))
+        .build()
+        .expect("client configured");
+    let started = std::time::Instant::now();
+    let error = server
+        .cmd(Command::new("set-buffer").arg("-b").arg("fenced").arg("x"))
+        .await
+        .expect_err("the re-probe outlives the deadline");
+    assert!(
+        matches!(
+            error,
+            Error::Timeout {
+                before_dispatch: true,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10), "bounded");
+    assert!(!marker.exists(), "nothing was dispatched");
+    server.shutdown().await.expect("client shuts down");
+}
+
 #[tokio::test]
 async fn real_tmux_compat_replacement_between_probe_and_dispatch_refuses_effects() {
     let Some(old) = optional_binary("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
@@ -823,9 +947,9 @@ async fn real_tmux_compat_replacement_between_probe_and_dispatch_refuses_effects
         &repeated.expect_err("a fence refusal invalidates the old cached version"),
         "3.2a",
     );
-    assert!(
-        matches!(result, Err(Error::VersionProbeFailed { .. })),
-        "{result:?}"
+    assert_unsupported(
+        &result.expect_err("the replacement is below the floor"),
+        "3.2a",
     );
     assert!(
         buffers.stdout.is_empty(),

@@ -587,6 +587,23 @@ pub enum Error {
         found: crate::ServerGeneration,
     },
 
+    /// The daemon was replaced between its version check and the request.
+    ///
+    /// Nothing ran: the request is fenced on the version that was checked,
+    /// and the replacement did not match it. Repeating the call checks the
+    /// daemon that is there now.
+    #[non_exhaustive]
+    #[error(
+        "the tmux server was replaced after the version check of request {request_id} \
+         ({command}); nothing was sent. Repeat the call to check the new server"
+    )]
+    ServerReplaced {
+        /// The Core-scoped dispatch-request identity.
+        request_id: u64,
+        /// The sanitized logical command.
+        command: CommandSummary,
+    },
+
     /// tmux produced more output than the dispatch was allowed to read.
     ///
     /// Not a truncation. A shortened tmux listing decodes cleanly and says
@@ -830,8 +847,15 @@ pub enum Error {
     },
 
     /// A tmux request exceeded its configured deadline.
+    ///
+    /// When `before_dispatch` is true the deadline passed while the daemon's
+    /// version was still being checked, and nothing was sent. Otherwise tmux
+    /// may already have carried out the request.
     #[non_exhaustive]
-    #[error("tmux request {request_id} ({command}) timed out after {timeout:?}")]
+    #[error(
+        "tmux request {request_id} ({command}) timed out after {timeout:?}{}",
+        if *.before_dispatch { "; nothing was sent" } else { "" }
+    )]
     Timeout {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -839,6 +863,9 @@ pub enum Error {
         command: CommandSummary,
         /// The configured deadline.
         timeout: Duration,
+        /// Whether the deadline passed during the version check, before the
+        /// request was sent.
+        before_dispatch: bool,
     },
 
     /// The executor has stopped accepting requests.
@@ -1275,6 +1302,13 @@ impl Error {
         }
     }
 
+    pub(crate) fn server_replaced(request_id: u64, command: CommandSummary) -> Self {
+        Self::ServerReplaced {
+            request_id,
+            command,
+        }
+    }
+
     pub(crate) fn from_invalid_version_output(output_len: usize) -> Self {
         Self::InvalidVersionOutput { output_len }
     }
@@ -1349,6 +1383,20 @@ impl Error {
             request_id,
             command,
             timeout,
+            before_dispatch: false,
+        }
+    }
+
+    pub(crate) fn timeout_before_dispatch(
+        request_id: u64,
+        command: CommandSummary,
+        timeout: Duration,
+    ) -> Self {
+        Self::Timeout {
+            request_id,
+            command,
+            timeout,
+            before_dispatch: true,
         }
     }
 
@@ -1531,6 +1579,14 @@ impl fmt::Debug for Error {
                 .field("command", command)
                 .field("in_flight", in_flight)
                 .finish(),
+            Self::ServerReplaced {
+                request_id,
+                command,
+            } => formatter
+                .debug_struct("ServerReplaced")
+                .field("request_id", request_id)
+                .field("command", command)
+                .finish(),
             Self::ServerGenerationChanged { expected, found } => formatter
                 .debug_struct("ServerGenerationChanged")
                 .field("expected", expected)
@@ -1634,11 +1690,13 @@ impl fmt::Debug for Error {
                 request_id,
                 command,
                 timeout,
+                before_dispatch,
             } => formatter
                 .debug_struct("Timeout")
                 .field("request_id", request_id)
                 .field("command", command)
                 .field("timeout", timeout)
+                .field("before_dispatch", before_dispatch)
                 .finish(),
             Self::ExecutorShutdown {
                 request_id,
