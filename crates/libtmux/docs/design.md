@@ -129,7 +129,9 @@ catalogs follow the admitted daemon. Live and cached admissions use native
 That failure clears admission; the next explicit call can freshly qualify a
 cold startup. An owned kill clears admission immediately. A cold metadata probe
 never grants cached startup permission. Undated `master` reports remain
-available diagnostically and cannot qualify hard admission.
+available diagnostically and cannot qualify hard admission. Creating executable
+reports may use `tmux` or its exact captured basename; controlled daemon
+metadata requires the literal `tmux` prefix.
 
 The configured executable and library-owned metadata and guard commands must
 retain tmux's native built-in semantics. Owner-defined `command-alias`

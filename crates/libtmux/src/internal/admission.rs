@@ -77,7 +77,7 @@ pub(crate) fn dispatch(
             let allow_start = live.is_none();
             let version = match live {
                 Some(version) => version,
-                None => binary_version(&executor, binary_probe).await?,
+                None => binary_version(&executor, &configuration, binary_probe).await?,
             };
             version.ensure_supported()?;
             if !allow_start {
@@ -197,7 +197,7 @@ pub(crate) async fn endpoint_version(
         versions.remember(version.clone());
         Ok(version)
     } else {
-        let version = binary_version(executor, binary_probe).await?;
+        let version = binary_version(executor, configuration, binary_probe).await?;
         version.ensure_supported()?;
         Ok(version)
     }
@@ -219,6 +219,9 @@ async fn live_version(
     let request = request.with_control_line(line.flatten());
     let result = executor.execute(request).await?;
     if result.success() {
+        if !result.stdout().starts_with(b"tmux ") {
+            return Err(Error::from_invalid_version_output(result.stdout().len()));
+        }
         return TmuxVersion::parse_output(result.stdout()).map(Some);
     }
     if is_cold(result.stderr()) {
@@ -234,6 +237,7 @@ async fn live_version(
 
 async fn binary_version(
     executor: &Arc<dyn Executor>,
+    configuration: &CoreConfiguration,
     request_id: RequestId,
 ) -> Result<TmuxVersion, Error> {
     let result = executor
@@ -247,7 +251,20 @@ async fn binary_version(
             result.signal(),
         ));
     }
-    TmuxVersion::parse_output(result.stdout())
+    let output = result.stdout();
+    // tmux 3.3a prints argv[0]'s basename; newer releases print "tmux".
+    // Only the configured name can qualify the older native framing.
+    let configured = std::path::Path::new(configuration.executable())
+        .file_name()
+        .and_then(|program| output.strip_prefix(program.as_encoded_bytes()))
+        .and_then(|rest| rest.strip_prefix(b" "));
+    let version = configured
+        .or_else(|| output.strip_prefix(b"tmux "))
+        .ok_or_else(|| Error::from_invalid_version_output(output.len()))?;
+    let mut canonical = b"tmux ".to_vec();
+    canonical.extend_from_slice(version);
+    TmuxVersion::parse_output(&canonical)
+        .map_err(|_| Error::from_invalid_version_output(output.len()))
 }
 
 fn is_cold(stderr: &[u8]) -> bool {
