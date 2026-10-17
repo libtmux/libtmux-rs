@@ -90,6 +90,32 @@ result, including versions below the floor. Standalone `Server::cmd` calls
 with `-V` or `-h` also retain native executable diagnostics. Client flags have
 no representation over an open control connection.
 
+Optional operations have narrower daemon requirements:
+
+| Operation | Qualified daemon |
+| --- | --- |
+| Ordinary subprocess operations and polling waits | 3.3a or newer |
+| Named-buffer deletion or rename, including managed paste cleanup | 3.4 or newer |
+| Captured `run-shell` output | 3.5 or newer |
+| Control acquisition, pane streams and subscriptions | Stable numbered 3.7 or newer |
+| Literal `break-pane` | Refused on exact 3.7; available again on 3.7a |
+| Literal `split-window -p` | Refused on 3.4; typed percentages use `-l N%` |
+| Literal `select-layout` with a layout operand | On 3.3a, a unique preset or standard serialized header; unsafe operands refuse |
+| Capture flags `-T` / `-F` | 3.4 / 3.7 or newer |
+
+Managed control acquisition admits a daemon ranking at or above 3.7 final,
+including `3.8-rc2` and `next-3.8`; `next-3.7` and `3.7-rc*` rank below it and
+refuse.
+Eligibility comes from the admitted daemon and assumes a natively compatible
+client/daemon pair. Direct literal argv commands and
+flat batches are checked before dispatch; `Command::requires_tmux` carries a
+managed staging requirement across the whole chain. User-authored tmux or
+shell programs and configured alias contents retain native semantics. On the
+pinned Linux builds, 3.3a, 3.4 and 3.5 clients cannot register a control connection to
+an exact 3.7 daemon; 3.7d can. Those older clients exit without changing the
+daemon, including on a plain native attachment. Use a compatible client for
+control; this does not raise the 3.3a subprocess baseline.
+
 ```toml
 [dependencies]
 libtmux = "0.1.0-alpha.15"
@@ -252,6 +278,14 @@ use libtmux::test::TestServer;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
+# let version = guard.server().capabilities().await?.tmux_version().clone();
+# let eligible = version.release().is_some_and(|release| {
+#     *release >= libtmux::since::CONTROL_ACQUISITION && !release.suffix().is_release_candidate()
+# });
+# if !eligible {
+#     guard.shutdown().await?;
+#     return Ok(());
+# }
     let session = guard.server().new_session("watching").await?;
     let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
         .await?
@@ -303,15 +337,16 @@ Measured on one workload of six operations, all leaving identical tmux state:
 
 | Mode | Processes | Attribution on failure |
 | --- | --- | --- |
-| One command per invocation | 6 | names the failing command |
-| Folded into shared invocations | 3 | `Unknown` -- tmux reports one status for the group |
-| Control mode | 1 | names the failing command |
+| One command per invocation | 7 | names the failing command |
+| Folded into shared invocations | 4 | `Unknown` -- tmux reports one status for the group |
+| Control mode, streaming | 3 | names the failing command |
+| Control mode, routed typed API | 4 | names the failing command |
 
-Control mode is the only one that buys back the processes without giving up
-the answer, because its `%begin`/`%end` blocks are per command. Folding is
-what a subprocess transport offers instead of having that. Run
-`cargo run --example matrix --features full,test-support` to reproduce the
-table on your own machine.
+Control mode reports `%begin`/`%end` blocks per command. Its rows include
+two acquisition probes; routing the typed API adds an identity probe. The
+subprocess rows include the plan preflight. Run
+`cargo run --example matrix --features full,test-support` with compatible
+tmux 3.7 or newer to reproduce the table on your own machine.
 
 ### How to turn each one on
 

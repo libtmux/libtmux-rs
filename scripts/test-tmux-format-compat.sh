@@ -196,27 +196,43 @@ run_lane() {
     fi
 
     if [[ "$source_contract" == "reject-core" ]]; then
-        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
             cargo test --locked --package libtmux --all-features \
             --test daemon_admission -- --test-threads=1
-        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
             cargo test --locked --package tmux-workspace --all-features \
             --test cli old_daemon_refuses_load_before_scripts_or_mutation \
             -- --exact --test-threads=1
-        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
             cargo test --locked --package tmux-workspace --all-features \
             --test cli the_attach_handoff -- --test-threads=1
         return
     fi
     if [[ "$source_contract" == "reject-boundary" ]]; then
-        LIBTMUX_TEST_BOUNDARY_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_BOUNDARY_TMUX \
+            LIBTMUX_TEST_BOUNDARY_TMUX="$tmux_binary" \
             cargo test --locked --package libtmux --all-features \
             --test daemon_admission -- --test-threads=1
         return
     fi
 
+    if [[ "$source_contract" == "feature-boundary" ]]; then
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_BROKEN_BREAK_TMUX,LIBTMUX_TEST_MINIMUM_TMUX,LIBTMUX_TEST_NEWER_TMUX \
+            LIBTMUX_TEST_BROKEN_BREAK_TMUX="$tmux_binary" \
+            LIBTMUX_TEST_MINIMUM_TMUX="$build_root/tmux-3.3a-install/bin/tmux" \
+            LIBTMUX_TEST_NEWER_TMUX="$build_root/tmux-3.7b-install/bin/tmux" \
+            cargo test --locked --package libtmux --all-features \
+            --test optional_features \
+            -- --test-threads=1
+        return
+    fi
+
     if [[ "$tag" == "3.3a" ]]; then
-        LIBTMUX_TEST_MINIMUM_TMUX="$tmux_binary" \
+        LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_MINIMUM_TMUX \
+            LIBTMUX_TEST_MINIMUM_TMUX="$tmux_binary" \
             cargo test --locked --package libtmux --all-features \
             --test daemon_admission \
             real_tmux_compat_minimum_daemon_accepts_newer_clients \
@@ -226,6 +242,12 @@ run_lane() {
     {
         local lane_path
         local selected_version
+        local -a feature_environment=()
+        if [[ "$tag" == "3.3a" ]]; then
+            feature_environment+=("LIBTMUX_TEST_MINIMUM_TMUX=$tmux_binary" "LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_MINIMUM_TMUX")
+        elif [[ "$tag" == "3.4" ]]; then
+            feature_environment+=("LIBTMUX_TEST_SAFE_BUFFER_TMUX=$tmux_binary" "LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_SAFE_BUFFER_TMUX")
+        fi
 
         if [[ -z "${PATH:-}" ]]; then
             printf 'inherited PATH must be nonempty\n' >&2
@@ -238,9 +260,10 @@ run_lane() {
             return 1
         fi
 
-        LC_ALL=C.UTF-8 \
+        env LC_ALL=C.UTF-8 \
             LIBTMUX_TEST_TMUX="$tmux_binary" \
             PATH="$lane_path" \
+            "${feature_environment[@]}" \
             cargo test \
             --locked \
             --workspace \
@@ -328,3 +351,11 @@ run_lane \
     "e802909de06012a4df6209d55e86487c56223163" \
     "tmux 3.7b" \
     "format-catalog" \
+
+# The release with the break-pane defect is a refusal witness, separate from
+# the maintained patch-series lane above.
+run_lane \
+    "3.7" \
+    "81f88f8517c9fc5371b56cf117530c6b477c96ac" \
+    "tmux 3.7" \
+    "feature-boundary"

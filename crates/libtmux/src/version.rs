@@ -721,6 +721,20 @@ fn parse_output_frame(output: &[u8]) -> Option<&str> {
 pub mod since {
     use super::{ReleaseSuffix, ReleaseVersion};
 
+    /// Exact `delete-buffer -b` and `set-buffer -b -n` identity.
+    ///
+    /// Older daemons fall back to the top buffer when the requested name is
+    /// absent. Managed temporary staging needs this before creating a buffer,
+    /// because abort cleanup can race another client removing its name.
+    pub const NAMED_BUFFER_IDENTITY: ReleaseVersion =
+        ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
+
+    /// Managed control acquisition on stable numbered daemons, before `-C`.
+    ///
+    /// Development and release-candidate reports remain ineligible even when
+    /// [`crate::TmuxVersion::has_behavior`] reports this floor.
+    pub const CONTROL_ACQUISITION: ReleaseVersion = ReleaseVersion::new(3, 7, ReleaseSuffix::FINAL);
+
     /// `server-access`, and so [`crate::Server::access_rules`].
     pub const SERVER_ACCESS: ReleaseVersion = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
 

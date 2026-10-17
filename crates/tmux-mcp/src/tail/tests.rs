@@ -343,6 +343,9 @@ async fn opening_is_fail_fast_and_a_failed_replacement_preserves_tails() {
         .start()
         .await
         .expect("tmux starts");
+    let Some(guard) = crate::test_support::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("tail-opening").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);

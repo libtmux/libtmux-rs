@@ -476,9 +476,10 @@ impl ControlMode {
     ///
     /// # Errors
     ///
-    /// Returns an error when tmux cannot be started, does not give the crate
-    /// the pipes it asked for, exits before attaching, or does not finish its
-    /// opening block before the server deadline.
+    /// Refuses a daemon ranking below 3.7 final (`next-3.7`, `3.7-rc*`).
+    /// Capacity, metadata, socket pinning and the opening handshake share one
+    /// deadline from attach entry. Process, pipe and framing failures also
+    /// refuse the attachment.
     ///
     /// # Cancel safety
     ///
@@ -508,29 +509,24 @@ impl ControlMode {
         session: &SessionId,
         limits: ControlLimits,
     ) -> Result<Self, Error> {
-        // Asked before the attach so a connection never carries an unknown
-        // answer: a release that cannot be read is treated as too old, which
-        // costs a pane's back-pressure rather than the server.
-        let pane_off_is_safe = server
-            .capabilities()
-            .await
-            .is_ok_and(|capabilities| capabilities.tmux_version().has_behavior(&CONTROL_PANE_OFF));
-
         let timeout = server.default_timeout();
-        let (child, version) = server.spawn_control(session).await?;
+        let deadline = Instant::now().checked_add(timeout);
+        let child = server.spawn_control(session, deadline).await?;
+        let version = child.version().clone();
+        let pane_off_is_safe = version.has_behavior(&CONTROL_PANE_OFF);
         let actor::OpenedConnection {
             commands,
             events,
             stop,
             connection,
-        } = actor::open(child, limits, timeout).await?;
+        } = actor::open(child, limits, timeout, deadline).await?;
 
         let sender = ControlSender {
             commands,
             timeout,
             pane_off_is_safe,
-            identity: server.identity().clone(),
             version,
+            identity: server.identity().clone(),
         };
         let events = ControlEvents {
             events,
@@ -682,17 +678,17 @@ pub struct ControlSender {
     /// Read once at attach rather than per call: the server cannot change
     /// release under a connection.
     pane_off_is_safe: bool,
+    /// The daemon version admitted when this connection attached.
+    ///
+    /// A version cannot be asked over the connection without running a user
+    /// hook, so everything that needs one reads it from here.
+    version: crate::TmuxVersion,
     /// Which server this connection reaches.
     ///
     /// A sender says nothing about where it points, so routing one onto a
     /// handle for a different server would silently talk to this one.
     /// [`crate::Server::over_control_mode`] compares it and refuses.
     identity: crate::ServerIdentity,
-    /// The daemon version admitted when this connection attached.
-    ///
-    /// A version cannot be asked over the connection without running a user
-    /// hook, so everything that needs one reads it from here.
-    version: crate::TmuxVersion,
 }
 
 impl ControlSender {
@@ -760,6 +756,7 @@ impl ControlSender {
         command: Command,
         boundary: Option<Boundary>,
     ) -> Result<BlockResult, Error> {
+        command.require_features(&self.version)?;
         let sensitive_input = command.summary().sensitive_argument_count() > 0;
         let line = command
             .control_mode_line()
@@ -971,6 +968,14 @@ impl ControlSender {
     /// use libtmux::control::{ControlMode, Event, Subscription};
     ///
     /// let guard = libtmux::test::TestServer::new().await?;
+    /// # let version = guard.server().capabilities().await?.tmux_version().clone();
+    /// # let eligible = version.release().is_some_and(|release| {
+    /// #     *release >= libtmux::since::CONTROL_ACQUISITION && !release.suffix().is_release_candidate()
+    /// # });
+    /// # if !eligible {
+    /// #     guard.shutdown().await?;
+    /// #     return Ok(());
+    /// # }
     /// let session = guard.server().new_session("watched").await?;
     /// let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
     ///     .await?

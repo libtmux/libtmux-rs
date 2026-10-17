@@ -716,6 +716,9 @@ mod tests {
             ("caller", "refusing to send input", "self_protection"),
         ] {
             let guard = TestServer::builder().start().await.expect("tmux starts");
+            let Some(guard) = crate::test_support::control_fixture(guard).await else {
+                return;
+            };
             let server = guard.server();
             let session = server
                 .new_session(format!("run-final-{transition}"))

@@ -2,6 +2,9 @@
 
 #![cfg(all(feature = "control-mode", feature = "test-support"))]
 
+#[path = "support/versions.rs"]
+mod versions;
+
 use std::time::Duration;
 
 use libtmux::control::{ControlEvents, ControlMode, ControlSender, Event, Subscription};
@@ -89,6 +92,9 @@ async fn settle_stream(
 #[tokio::test]
 async fn commands_travel_down_one_connection() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("control").await.expect("session");
 
@@ -129,6 +135,9 @@ async fn commands_travel_down_one_connection() {
 #[tokio::test]
 async fn owns_control_client_reports_its_own_spawned_connections() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("owns-control-client")
@@ -171,6 +180,9 @@ async fn owns_control_client_reports_its_own_spawned_connections() {
 #[tokio::test]
 async fn stream_reports_server_shutdown_once_before_eof() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let session = guard.session("terminal-error").await.expect("session");
     let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
         .await
@@ -204,6 +216,9 @@ async fn stream_reports_server_shutdown_once_before_eof() {
 #[tokio::test]
 async fn the_server_reports_changes_as_they_happen() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("watched").await.expect("session");
 
@@ -242,6 +257,9 @@ async fn the_server_reports_changes_as_they_happen() {
 #[tokio::test]
 async fn watching_and_sending_run_at_the_same_time() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("concurrent").await.expect("session");
 
@@ -281,6 +299,9 @@ async fn watching_and_sending_run_at_the_same_time() {
 #[tokio::test]
 async fn pane_output_keeps_bytes_no_string_would_hold() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("binary").await.expect("session");
 
@@ -330,6 +351,9 @@ async fn pane_output_keeps_bytes_no_string_would_hold() {
 #[tokio::test]
 async fn events_compose_with_the_async_ecosystem() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("streamed").await.expect("session");
 
@@ -370,6 +394,9 @@ async fn events_compose_with_the_async_ecosystem() {
 #[tokio::test]
 async fn attaching_finishes_before_anything_can_be_missed() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("racing").await.expect("session");
 
@@ -406,6 +433,9 @@ async fn attaching_finishes_before_anything_can_be_missed() {
 #[tokio::test]
 async fn either_half_keeps_the_connection_alive_on_its_own() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("halves").await.expect("session");
 
@@ -450,6 +480,9 @@ async fn either_half_keeps_the_connection_alive_on_its_own() {
 #[tokio::test]
 async fn shutting_down_does_not_wait_for_a_sender_that_is_still_alive() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("stopping").await.expect("session");
 
@@ -482,6 +515,9 @@ async fn one_pane_can_be_watched_without_the_protocol_showing() {
     use libtmux::control::PaneOutput;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("streaming").await.expect("session");
 
@@ -538,6 +574,9 @@ async fn one_pane_can_be_watched_without_the_protocol_showing() {
 #[tokio::test]
 async fn a_command_holding_spaces_survives_the_text_protocol() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("quoting").await.expect("session");
 
@@ -573,6 +612,9 @@ async fn a_command_that_cannot_be_a_line_is_refused_before_it_is_sent() {
     use std::os::unix::ffi::OsStringExt as _;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("unrepresentable")
@@ -622,6 +664,9 @@ async fn a_command_that_cannot_be_a_line_is_refused_before_it_is_sent() {
 #[tokio::test]
 async fn detaching_a_session_removes_the_clients_attached_to_it() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("busy").await.expect("session");
 
@@ -655,6 +700,9 @@ async fn detaching_a_session_removes_the_clients_attached_to_it() {
 #[tokio::test]
 async fn a_client_reports_the_session_window_and_pane_it_is_attached_to() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("attached").await.expect("session");
     let window = session
@@ -736,6 +784,9 @@ async fn a_muted_pane_never_reaches_this_connection() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("muting").await.expect("session");
     let window = session
@@ -812,6 +863,9 @@ async fn a_pane_created_after_narrowing_is_muted_too() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("late-pane").await.expect("session");
     let window = session
@@ -879,6 +933,9 @@ async fn a_pane_created_after_narrowing_is_muted_too() {
 #[tokio::test]
 async fn watching_one_pane_does_not_touch_an_unrelated_session() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let watched_session = server
         .new_session("watch-scope-watched")
@@ -927,6 +984,9 @@ async fn watching_one_pane_does_not_touch_an_unrelated_session() {
 #[tokio::test]
 async fn a_block_carrying_pane_ids_keeps_them_as_output() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("ids").await.expect("session");
 
@@ -987,6 +1047,9 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("unread").await.expect("session");
     let window = session
@@ -1062,6 +1125,9 @@ async fn a_reply_arrives_while_a_pane_floods_and_nobody_reads() {
 #[tokio::test]
 async fn replies_arrive_when_a_caller_only_ever_sends() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("sending").await.expect("session");
 
@@ -1101,6 +1167,9 @@ async fn a_slow_reader_of_one_pane_is_given_every_byte() {
     const LAST: u32 = 50_000;
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("counted").await.expect("session");
     let window = session
@@ -1180,6 +1249,9 @@ async fn a_stream_opens_on_a_server_that_is_already_flooding() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("busy").await.expect("session");
     let window = session
@@ -1230,6 +1302,9 @@ async fn observed_pane_death_ends_the_stream_via_layout_change() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("pane-death-layout")
@@ -1285,6 +1360,9 @@ async fn observed_pane_death_ends_the_stream_via_layout_change() {
 #[tokio::test]
 async fn observed_pane_death_ends_the_stream_via_window_close() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("pane-death-window")
@@ -1339,6 +1417,9 @@ async fn observed_pane_death_ends_the_stream_via_window_close() {
 #[tokio::test]
 async fn observed_pane_death_in_a_never_active_window_ends_the_stream() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("pane-death-inactive-window")
@@ -1392,6 +1473,9 @@ async fn pane_output_sender_reaches_the_streams_own_connection() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("stream-mutes-itself")
@@ -1478,7 +1562,10 @@ async fn real_tmux_compat_muting_a_producing_pane_leaves_the_server_up() {
 
     const MARKER: &str = "libtmux-mute-regression";
 
-    let mut guard = TestServer::builder().start().await.expect("tmux starts");
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(mut guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let session = guard.session("mute").await.expect("session is created");
     let window = session
         .windows()
@@ -1597,6 +1684,9 @@ async fn next_report(events: &mut ControlEvents, name: &str, within: Duration) -
 #[tokio::test]
 async fn a_subscription_reports_a_change_under_its_own_name() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("watched").await.expect("session");
 
@@ -1640,6 +1730,9 @@ async fn a_subscription_reports_a_change_under_its_own_name() {
 #[tokio::test]
 async fn unsubscribing_stops_the_reports() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("watched").await.expect("session");
 
@@ -1689,6 +1782,9 @@ async fn unsubscribing_stops_the_reports() {
 #[tokio::test]
 async fn a_subscription_format_may_contain_colons() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("colonised").await.expect("session");
 
@@ -1726,6 +1822,9 @@ async fn a_subscription_format_may_contain_colons() {
 #[tokio::test]
 async fn a_subscription_name_tmux_would_misread_is_refused() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("guarded").await.expect("session");
 
@@ -1767,6 +1866,9 @@ async fn a_subscription_name_tmux_would_misread_is_refused() {
 #[tokio::test]
 async fn the_pause_threshold_and_its_resume_are_accepted() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("paused").await.expect("session");
     let pane = session.panes().await.expect("panes").remove(0);
@@ -1807,6 +1909,9 @@ async fn resume_pane_recovers_what_mute_pane_muted() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("resume-recovers-mute")
@@ -1876,6 +1981,9 @@ async fn layout_events_and_snapshots_agree_on_format() {
     use libtmux::{SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server
         .new_session("layout-agreement")
@@ -1939,6 +2047,9 @@ async fn a_pane_is_watched_wherever_it_now_lives() {
     use libtmux::{JoinOptions, SplitDirection, SplitOptions};
 
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let origin = server.new_session("origin").await.expect("session");
     let destination = server.new_session("destination").await.expect("session");
@@ -1991,6 +2102,9 @@ async fn a_pane_is_watched_wherever_it_now_lives() {
 #[tokio::test]
 async fn a_clients_listing_tells_our_own_connection_apart() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let server = guard.server();
     let session = server.new_session("watched").await.expect("session");
 

@@ -12,11 +12,19 @@ use libtmux::test::TestServer;
 use libtmux::{Command, CommandChain, Error, Server};
 
 fn optional_binary(variable: &str) -> Option<PathBuf> {
-    let Some(binary) = std::env::var_os(variable) else {
+    let found = std::env::var_os(variable);
+    // Skipping in a lane that lists the variable would pass without
+    // exercising the boundary the lane exists to test.
+    assert!(
+        found.is_some()
+            || !std::env::var("LIBTMUX_REQUIRE_NATIVE")
+                .is_ok_and(|required| required.split(',').any(|name| name == variable)),
+        "{variable} is listed in LIBTMUX_REQUIRE_NATIVE but is unset"
+    );
+    if found.is_none() {
         eprintln!("{variable} unset; native boundary case skipped");
-        return None;
-    };
-    Some(PathBuf::from(binary))
+    }
+    found.map(PathBuf::from)
 }
 
 fn current_binary() -> PathBuf {

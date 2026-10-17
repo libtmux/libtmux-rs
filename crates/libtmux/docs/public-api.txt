@@ -236,10 +236,12 @@ constant libtmux::option_names::XTERM_KEYS: &str
 constant libtmux::since::CAPTURE_LINE_FLAGS: libtmux::ReleaseVersion
 constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS: libtmux::ReleaseVersion
 constant libtmux::since::CLIENTS_HIDE_STOPPED: libtmux::ReleaseVersion
+constant libtmux::since::CONTROL_ACQUISITION: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
 constant libtmux::since::JSON_LAYOUTS: libtmux::ReleaseVersion
 constant libtmux::since::LIST_KEYS_FORMAT: libtmux::ReleaseVersion
 constant libtmux::since::MIRRORED_LAYOUTS: libtmux::ReleaseVersion
+constant libtmux::since::NAMED_BUFFER_IDENTITY: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_FORMAT_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PROMPT_HISTORY: libtmux::ReleaseVersion
@@ -337,6 +339,7 @@ function libtmux::Client::tty: fn(&self) -> &libtmux::TmuxText
 function libtmux::Client::width: fn(&self) -> u32
 function libtmux::Command::arg: fn(self, argument: impl Into<OsString>) -> Self
 function libtmux::Command::new: fn(subcommand: impl Into<OsString>) -> Self
+function libtmux::Command::requires_tmux: fn(self, capability: &'static str, needs: libtmux::ReleaseVersion) -> Self
 function libtmux::Command::sensitive_arg: fn(self, argument: impl Into<OsString>) -> Self
 function libtmux::Command::summary: fn(&self) -> libtmux::CommandSummary
 function libtmux::CommandChain::command_count: fn(&self) -> usize

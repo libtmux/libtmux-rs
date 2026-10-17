@@ -836,6 +836,23 @@ protocol evidence supports that attribution.
 
 ## Control mode
 
+Managed control acquisition requires a daemon ranking at or above 3.7 final.
+`next-3.7` and `3.7-rc*` rank below it and refuse before pinning or `-C`.
+The caller reserves client capacity before probing, shares one deadline across
+both metadata probes and the handshake, and links the observed socket inode
+into a private 0700 carrier. A second probe through that alias must match the first daemon's
+version, PID and start time. The control client connects with `-N` through the
+alias and owns the carrier until it exits. Replacing the original path cannot
+redirect that connection. The nearest usable same-filesystem ancestor keeps
+the alias within the platform's Unix socket path limit; allocation or identity
+failure refuses acquisition without an unpinned retry.
+
+Feature requirements are carried on commands and folded over a complete
+chain before any member is sent. The direct control sender applies the same
+literal-argv policy with its pinned daemon version. Opaque programs and
+configured aliases are not expanded by a second parser. Subprocess operations
+and polling stay available from 3.3a.
+
 The `control-mode` feature opens one tmux connection and keeps it. A task owns
 the pipes; callers hold a `ControlSender` and a `ControlEvents`, which is a
 `Stream<Item = Result<Event, Error>>`. Buffered notifications precede one
