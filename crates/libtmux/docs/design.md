@@ -213,7 +213,8 @@ tmux. Its source is not copied into the crate.
   `.matching(expr)` accepts portable expressions and named matchers. No
   collection wrapper or duplicate closure method is needed.
 - Single-evaluation `q`-quoted tmux formats round-tripped delimiter bytes,
-  embedded newlines, and invalid UTF-8 on pinned tmux 3.2a. Delimiter
+  embedded newlines, and invalid UTF-8 on tmux 3.2a (measured before the floor
+  moved to 3.3a; the supported releases behave the same). Delimiter
   splitting and separately sampled length prefixes did not work.
 - tmux 3.4 and 3.5 wrap that output in `VIS_OCTAL | VIS_CSTYLE | VIS_NOSLASH`,
   so the transport carries two escaping layers rather than one. The layers do
@@ -857,7 +858,8 @@ What the earlier framing was right about is kept:
   only while nothing is waiting for a reply. A reply arrives on the connection
   the events arrive on, so pausing with one outstanding would be waiting for
   something this end had stopped listening for, and it deadlocked: measured
-  identically on 3.2a through 3.7c, with no error and `is_closed` reporting
+  identically on every release tried, 3.2a (below the current floor) through
+  3.7c, with no error and `is_closed` reporting
   false. While a reply is outstanding the connection keeps reading and holds
   a fixed maximum of what the consumer has not taken. At that ceiling it
   refuses live replies but retains their correlation slots; an absolute reply
@@ -1156,7 +1158,7 @@ question with its own premise.
 `real_tmux_compat_a_coordinate_miss_is_not_an_object_miss` pins both halves
 against whichever tmux the lane runs, for the same reason the wording test
 exists, and has passed on every one: 3.2a, 3.4, 3.5a, 3.6b and 3.7b. The split
-needs no version gate, and 3.2a, which predates the core floor, echoes exactly
+needs no version gate, and 3.2a, which is below the 3.3a floor and no longer supported, echoes exactly
 as newer releases do. If a future release echoed the whole target or dropped
 the sigil, the unrecognized form classifies as `LinkGone` -- the reading that does not license
 discarding a live handle -- so the cost of being wrong is a distinction rather

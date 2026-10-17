@@ -15,7 +15,7 @@ use super::{
 /// keeps those unique, so a bare word there is still an identity. So is a
 /// client, which tmux names by its terminal.
 ///
-/// Measured against tmux 3.2a through 3.7b; see `docs/design.md`.
+/// Measured against tmux 3.2a (below the current 3.3a floor) through 3.7b; see `docs/design.md`.
 const fn is_identity(kind: ObjectKind, target: &str) -> bool {
     match kind {
         ObjectKind::Session | ObjectKind::Client => true,
