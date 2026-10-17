@@ -240,10 +240,7 @@ constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
 constant libtmux::since::JSON_LAYOUTS: libtmux::ReleaseVersion
 constant libtmux::since::LIST_KEYS_FORMAT: libtmux::ReleaseVersion
 constant libtmux::since::MIRRORED_LAYOUTS: libtmux::ReleaseVersion
-constant libtmux::since::PANE_BORDER_FORMAT_PER_PANE: libtmux::ReleaseVersion
 constant libtmux::since::PANE_BORDER_STYLE_PER_PANE: libtmux::ReleaseVersion
-constant libtmux::since::PROMPT_HISTORY: libtmux::ReleaseVersion
-constant libtmux::since::SERVER_ACCESS: libtmux::ReleaseVersion
 enum libtmux::AccessMode
 enum libtmux::Availability<T>
 enum libtmux::ChannelWait
@@ -2072,6 +2069,7 @@ struct_field libtmux::Error::Timeout::timeout: std::time::Duration
 struct_field libtmux::Error::UnreadableAccessRule::marker: String
 struct_field libtmux::Error::UnreadableFormatValue::detail: libtmux::IdParseError
 struct_field libtmux::Error::UnreadableFormatValue::format: &'static str
+struct_field libtmux::Error::UnrecognizedTmuxVersion::found: libtmux::TmuxVersion
 struct_field libtmux::Error::UnsupportedCapability::capability: &'static str
 struct_field libtmux::Error::UnsupportedCapability::found: libtmux::TmuxVersion
 struct_field libtmux::Error::UnsupportedCapability::needs: libtmux::ReleaseVersion
@@ -2354,6 +2352,7 @@ variant libtmux::Error::Timeout
 variant libtmux::Error::UnreadableAccessRule
 variant libtmux::Error::UnreadableFormatValue
 variant libtmux::Error::UnrecognizedLayout
+variant libtmux::Error::UnrecognizedTmuxVersion
 variant libtmux::Error::UnsupportedCapability
 variant libtmux::Error::UnsupportedTmuxVersion
 variant libtmux::Error::VersionProbeFailed

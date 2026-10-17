@@ -1,6 +1,10 @@
 //! Byte-preserving tmux text values.
 
-use crate::version::{ReleaseSuffix, ReleaseVersion, TmuxVersion};
+use crate::version::{ReleaseSuffix, ReleaseVersion};
+
+// The release the catalog was recorded against. Introduction floors at or
+// below the supported minimum are history, not live gates.
+const CATALOG_BASELINE: ReleaseVersion = ReleaseVersion::new(3, 2, ReleaseSuffix::PATCH_A);
 
 #[cfg(feature = "unstable-fuzzing")]
 mod fuzz;
@@ -275,7 +279,7 @@ impl FormatDescriptor {
             owner: SemanticOwner::Session,
             required_context: RequiredContext::Session,
             profiles: ProfileSet::all(),
-            minimum_release: TmuxVersion::MIN_SUPPORTED,
+            minimum_release: CATALOG_BASELINE,
             decoder,
             empty_policy: EmptyPolicy::Available,
             placement: InfoPlacement::CatalogOnly,
@@ -509,7 +513,7 @@ macro_rules! catalog_profiles {
 
 macro_rules! catalog_floor {
     (V3_2A) => {
-        TmuxVersion::MIN_SUPPORTED
+        CATALOG_BASELINE
     };
     (V3_3) => {
         ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL)

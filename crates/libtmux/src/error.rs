@@ -468,12 +468,34 @@ pub enum Error {
     },
 
     /// The detected tmux version does not meet the supported floor.
-    #[error("tmux {found} is below the minimum supported version {minimum}")]
+    ///
+    /// Nothing was sent to the daemon.
+    #[error(
+        "tmux {found} is not supported; libtmux requires tmux {minimum} or newer. \
+         Upgrade tmux and restart the server, or pin the previous release of libtmux"
+    )]
     UnsupportedTmuxVersion {
         /// The detected tmux version.
         found: TmuxVersion,
         /// The minimum supported release.
         minimum: ReleaseVersion,
+    },
+
+    /// The daemon reported a version that names no release, such as a bare
+    /// `master`, an `openbsd-*` build or `3.3a-dev`.
+    ///
+    /// Nothing was sent to the daemon. Such a report cannot be compared with
+    /// the supported floor, so it is refused as unrecognized rather than as
+    /// too old. The report is kept for the message only when it is at most 64
+    /// printable ASCII bytes; a longer or non-ASCII token is
+    /// [`Error::InvalidVersionOutput`].
+    #[error(
+        "tmux reports the version \"{found}\", which names no release libtmux can compare \
+         with the supported minimum; run a released tmux build and restart the server"
+    )]
+    UnrecognizedTmuxVersion {
+        /// The version the daemon reported.
+        found: TmuxVersion,
     },
 
     /// tmux would not accept an option name or value.
@@ -1253,6 +1275,10 @@ impl Error {
         }
     }
 
+    pub(crate) fn unrecognized_tmux_version(found: TmuxVersion) -> Self {
+        Self::UnrecognizedTmuxVersion { found }
+    }
+
     pub(crate) fn unsupported_tmux_version(found: TmuxVersion, minimum: ReleaseVersion) -> Self {
         Self::UnsupportedTmuxVersion { found, minimum }
     }
@@ -1374,6 +1400,7 @@ impl Error {
     pub fn found_version(&self) -> Option<&TmuxVersion> {
         match self {
             Self::UnsupportedTmuxVersion { found, .. }
+            | Self::UnrecognizedTmuxVersion { found }
             | Self::UnsupportedCapability { found, .. } => Some(found),
             _ => None,
         }
@@ -1515,6 +1542,10 @@ impl fmt::Debug for Error {
             Self::InvalidLayout { reason } => formatter
                 .debug_struct("InvalidLayout")
                 .field("reason", reason)
+                .finish(),
+            Self::UnrecognizedTmuxVersion { found } => formatter
+                .debug_struct("UnrecognizedTmuxVersion")
+                .field("found", found)
                 .finish(),
             Self::UnsupportedTmuxVersion { found, minimum } => formatter
                 .debug_struct("UnsupportedTmuxVersion")

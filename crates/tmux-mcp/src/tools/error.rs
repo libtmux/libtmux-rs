@@ -279,6 +279,29 @@ mod tests {
 
     use super::{EffectBoundary, tmux_error};
 
+    /// An unsupported daemon is reported with its remedy and a kind an agent
+    /// can branch on, not as a transport failure.
+    #[test]
+    fn a_version_refusal_names_its_remedy() {
+        let found = libtmux::TmuxVersion::parse_output(b"tmux 3.2a\n").expect("parses");
+        let refusal = found
+            .ensure_supported()
+            .expect_err("3.2a is below the floor");
+        let data = tmux_error(&refusal).into_error_data();
+        let detail = data.data.expect("the refusal carries detail");
+        assert_eq!(detail["kind"], "unsupported_version", "{detail}");
+        assert!(
+            data.message.contains("requires tmux 3.3a or newer"),
+            "{}",
+            data.message
+        );
+        assert!(
+            data.message.contains("Upgrade tmux and restart the server"),
+            "{}",
+            data.message
+        );
+    }
+
     #[test]
     fn an_effect_boundary_changes_only_later_failures() {
         let mut boundary = EffectBoundary::new("send_keys");

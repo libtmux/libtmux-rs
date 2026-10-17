@@ -304,6 +304,8 @@ impl ReportTool {
 pub struct CapabilityReport {
     pub(crate) schema_version: u8,
     pub(crate) frozen: bool,
+    /// The oldest tmux release the server accepts; an older daemon is refused.
+    pub(crate) minimum_tmux_version: String,
     pub(crate) boundary: BoundaryReport,
     pub(crate) connection: ConnectionReport,
     pub(crate) socket: SocketReport,
@@ -341,6 +343,20 @@ pub(crate) struct ConnectionReport {
     pub(crate) server_state: &'static str,
     pub(crate) configuration_provenance: &'static str,
     pub(crate) attach_command: String,
+}
+
+impl ConnectionReport {
+    /// What the report says before the server has resolved its socket.
+    fn unresolved() -> Self {
+        Self {
+            socket_selector: String::new(),
+            socket_provenance: "unknown",
+            resolved_socket_path: String::new(),
+            server_state: "unknown",
+            configuration_provenance: "unknown",
+            attach_command: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -431,20 +447,14 @@ pub(crate) fn resolve(
         report: CapabilityReport {
             schema_version: 2,
             frozen: true,
+            minimum_tmux_version: libtmux::TmuxVersion::MIN_SUPPORTED.to_string(),
             boundary: BoundaryReport {
                 one_socket_per_process: true,
                 per_call_socket_selection: false,
                 host_command_execution: false,
                 dynamic_resources: false,
             },
-            connection: ConnectionReport {
-                socket_selector: String::new(),
-                socket_provenance: "unknown",
-                resolved_socket_path: String::new(),
-                server_state: "unknown",
-                configuration_provenance: "unknown",
-                attach_command: String::new(),
-            },
+            connection: ConnectionReport::unresolved(),
             socket: SocketReport {
                 selector: String::new(),
                 selection_provenance: "unknown",

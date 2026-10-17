@@ -295,11 +295,6 @@ pub(crate) async fn unset_hook(core: &Core, scope: Scope<'_>, name: &str) -> Res
 /// to stop.
 const LATE_SCOPES: &[(&str, OptionScope, crate::version::ReleaseVersion)] = &[
     (
-        "pane-border-format",
-        OptionScope::Pane,
-        crate::version::since::PANE_BORDER_FORMAT_PER_PANE,
-    ),
-    (
         "pane-active-border-style",
         OptionScope::Pane,
         crate::version::since::PANE_BORDER_STYLE_PER_PANE,

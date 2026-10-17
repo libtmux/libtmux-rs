@@ -145,6 +145,11 @@ fn rejects_malformed_output_and_reports_only_its_length() {
         b"tmux 3.7A\n",
         b"tmux 3.7a trailing\n",
         b"tmux 3.7aa\n",
+        b"tmux 3.3rc1\n",
+        b"tmux 3.3a-rc1\n",
+        b"tmux next-3.3a\n",
+        b"tmux 3.3a-extra\n",
+        b"tmux 3.3a-master\n",
         b"tmux 3.7-rc0\n",
         b"tmux 3.7-rc01\n",
         b"tmux 3.7-rc65536\n",
@@ -195,11 +200,11 @@ fn invalid_output_is_redacted_from_diagnostics() {
 
 #[test]
 fn enforces_the_minimum_without_promoting_development_versions() {
-    let old = TmuxVersion::parse_output(b"tmux 3.2\n").unwrap();
-    let minimum = TmuxVersion::parse_output(b"tmux 3.2a\n").unwrap();
+    let old = TmuxVersion::parse_output(b"tmux 3.3\n").unwrap();
+    let minimum = TmuxVersion::parse_output(b"tmux 3.3a\n").unwrap();
     let master = TmuxVersion::parse_output(b"tmux master\n").unwrap();
     let next_3_2 = TmuxVersion::parse_output(b"tmux next-3.2\n").unwrap();
-    let next_3_3 = TmuxVersion::parse_output(b"tmux next-3.3\n").unwrap();
+    let next_3_4 = TmuxVersion::parse_output(b"tmux next-3.4\n").unwrap();
     let next_3_8 = TmuxVersion::parse_output(b"tmux next-3.8\n").unwrap();
     let newer_requirement = ReleaseVersion::new(
         3,
@@ -212,12 +217,12 @@ fn enforces_the_minimum_without_promoting_development_versions() {
     assert!(master.meets(&TmuxVersion::MIN_SUPPORTED));
     assert!(!master.meets(&newer_requirement));
     assert!(!next_3_2.meets(&TmuxVersion::MIN_SUPPORTED));
-    assert!(next_3_3.meets(&TmuxVersion::MIN_SUPPORTED));
-    assert!(!next_3_3.meets(&newer_requirement));
+    assert!(next_3_4.meets(&TmuxVersion::MIN_SUPPORTED));
+    assert!(!next_3_4.meets(&newer_requirement));
     assert!(next_3_8.meets(&TmuxVersion::MIN_SUPPORTED));
     assert!(!next_3_8.meets(&newer_requirement));
 
-    let error = old.ensure_supported().expect_err("3.2 is below 3.2a");
+    let error = old.ensure_supported().expect_err("3.3 is below 3.3a");
     match &error {
         Error::UnsupportedTmuxVersion { found, minimum } => {
             assert_eq!(found, &old);
@@ -254,29 +259,29 @@ fn has_behavior_and_meets_disagree_above_the_supported_floor() {
     let next_3_9 = TmuxVersion::parse_output(b"tmux next-3.9\n").unwrap();
     let next_3_2 = TmuxVersion::parse_output(b"tmux next-3.2\n").unwrap();
     let numbered = TmuxVersion::parse_output(b"tmux 3.7b\n").unwrap();
-    let prompt_history = ReleaseVersion::new(3, 3, ReleaseSuffix::FINAL);
+    let capture_trim = ReleaseVersion::new(3, 4, ReleaseSuffix::FINAL);
 
     // `meets` clamps every development identifier to "no more than the
-    // floor", so it refuses a capability above 3.2a regardless of what the
+    // floor", so it refuses a capability above 3.3a regardless of what the
     // build's own next-release number is.
-    assert!(!master.meets(&prompt_history));
-    assert!(!next_3_9.meets(&prompt_history));
-    assert!(!next_3_2.meets(&prompt_history));
+    assert!(!master.meets(&capture_trim));
+    assert!(!next_3_9.meets(&capture_trim));
+    assert!(!next_3_2.meets(&capture_trim));
 
     // `has_behavior` computes the real answer instead: `next-3.9` already
-    // contains 3.3's behavior, `next-3.2` does not yet, and a bare `master`
+    // contains 3.4's behavior, `next-3.2` does not yet, and a bare `master`
     // is taken at its word rather than assumed to lack it.
-    assert!(master.has_behavior(&prompt_history));
-    assert!(next_3_9.has_behavior(&prompt_history));
-    assert!(!next_3_2.has_behavior(&prompt_history));
+    assert!(master.has_behavior(&capture_trim));
+    assert!(next_3_9.has_behavior(&capture_trim));
+    assert!(!next_3_2.has_behavior(&capture_trim));
 
     // A numbered release is the one shape where the two rules cannot
     // disagree: both reduce to the same `release >= required` comparison.
     assert_eq!(
-        numbered.meets(&prompt_history),
-        numbered.has_behavior(&prompt_history)
+        numbered.meets(&capture_trim),
+        numbered.has_behavior(&capture_trim)
     );
-    assert!(numbered.has_behavior(&prompt_history));
+    assert!(numbered.has_behavior(&capture_trim));
 }
 
 #[test]

@@ -390,6 +390,7 @@ async fn capabilities_resource_reports_the_effective_surface() {
         }
     }
     assert_eq!(report["schemaVersion"], 2);
+    assert_eq!(report["minimumTmuxVersion"], "3.3a");
     assert!(
         text.len() < 32 * 1024,
         "the report grew to {} bytes; it is read to learn the socket",

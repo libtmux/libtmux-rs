@@ -284,11 +284,24 @@ mod tests {
         let new = TmuxVersion::parse_output(b"tmux 3.7c\n").unwrap();
         let json = [(OsStr::new(r#"{"V":2,"L":[]}"#), 1)];
         let pending = prepare(json).unwrap();
+        for output in ["tmux 3.7c\n", "tmux 3.8-rc\n"] {
+            let json_incapable = TmuxVersion::parse_output(output.as_bytes()).unwrap();
+            assert_eq!(
+                resolve(&pending, &json_incapable).unwrap_err().kind(),
+                crate::ErrorKind::UnsupportedVersion,
+                "{output}"
+            );
+        }
         assert_eq!(
             resolve(&pending, &new).unwrap_err().kind(),
             crate::ErrorKind::UnsupportedVersion
         );
-        for output in ["tmux 3.8-rc\n", "tmux 3.8\n", "tmux next-3.9\n"] {
+        for output in [
+            "tmux 3.8-rc2\n",
+            "tmux 3.8-rc3\n",
+            "tmux 3.8\n",
+            "tmux next-3.9\n",
+        ] {
             let json_capable = TmuxVersion::parse_output(output.as_bytes()).unwrap();
             resolve(&pending, &json_capable).unwrap();
         }

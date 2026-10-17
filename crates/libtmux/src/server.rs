@@ -38,9 +38,6 @@ pub use discovery::{SessionTree, WindowTree};
 #[cfg(feature = "query")]
 pub use discovery::{SessionTreeFields, WindowTreeFields};
 
-/// The first tmux release that has a server access list.
-use crate::version::since::SERVER_ACCESS as SERVER_ACCESS_SINCE;
-
 /// How much a user on the server's access list may do.
 ///
 /// An enum rather than two flags because tmux's `-r` and `-w` are exclusive:
@@ -185,9 +182,6 @@ fn parse_access_rule(line: &str) -> Result<AccessRule, Error> {
     })
 }
 
-/// The first tmux release that remembers prompt history.
-use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
-
 /// Which prompt tmux is remembering answers for.
 ///
 /// # Examples
@@ -199,14 +193,11 @@ use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
 /// use libtmux::PromptKind;
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
-/// let version = guard.server().capabilities().await?.tmux_version().clone();
 ///
 /// // tmux keeps a separate history per prompt kind, so a command typed at the
 /// // `:` prompt is not offered when searching.
-/// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
-///     assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
-///     assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
-/// }
+/// assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
+/// assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
 ///
 /// guard.shutdown().await?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1306,7 +1297,6 @@ impl Server {
     ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let server = guard.server();
-    /// let version = server.capabilities().await?.tmux_version().clone();
     ///
     /// // A fresh server has answered no prompts.
     /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
@@ -1320,8 +1310,6 @@ impl Server {
     /// # }
     /// ```
     pub async fn prompt_history(&self, kind: PromptKind) -> Result<Vec<TmuxText>, Error> {
-        self.require("prompt history", PROMPT_HISTORY_SINCE).await?;
-
         let result = self
             .cmd(
                 Command::new("show-prompt-history")
@@ -1357,8 +1345,6 @@ impl Server {
     /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
     /// when tmux cannot be reached or refuses the command.
     pub async fn clear_prompt_history(&self) -> Result<(), Error> {
-        self.require("prompt history", PROMPT_HISTORY_SINCE).await?;
-
         listing::mutate(
             &self.core,
             "clear-prompt-history",
@@ -1384,14 +1370,11 @@ impl Server {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux::test::TestServer::new().await?;
-    /// let version = guard.server().capabilities().await?.tmux_version().clone();
     ///
     /// // Whoever started the server owns it and may act.
-    /// if version.has_behavior(&libtmux::since::SERVER_ACCESS) {
-    ///     let rules = guard.server().access_rules().await?;
-    ///     assert_eq!(rules.len(), 1);
-    ///     assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
-    /// }
+    /// let rules = guard.server().access_rules().await?;
+    /// assert_eq!(rules.len(), 1);
+    /// assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1400,9 +1383,6 @@ impl Server {
     /// # }
     /// ```
     pub async fn access_rules(&self) -> Result<Vec<AccessRule>, Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
-
         let result = self.cmd(Command::new("server-access").arg("-l")).await?;
         if !result.success() {
             return Err(Error::from_refused_result("server-access", &result, None));
@@ -1422,9 +1402,6 @@ impl Server {
     /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
     /// when tmux refuses -- which it does for the user who owns the server.
     pub async fn grant_access(&self, user: &str, mode: AccessMode) -> Result<(), Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
-
         listing::mutate(
             &self.core,
             "server-access",
@@ -1447,9 +1424,6 @@ impl Server {
     /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
     /// when tmux refuses -- which it does for the user who owns the server.
     pub async fn revoke_access(&self, user: &str) -> Result<(), Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
-
         listing::mutate(
             &self.core,
             "server-access",

@@ -12,4 +12,6 @@ PANE MODES: a pane in copy mode or another tmux mode belongs to the person in it
 
 TOOLSETS: inspect reads; manage changes tmux state; execute runs processes and sends pane input; teardown deletes. tmux://capabilities has the surface frozen at startup; a missing tool was not selected.
 
+REQUIRES tmux 3.3a or newer; an older server is refused as unsupported_version.
+
 TRUST: the tool surface is not authorization: commands and input run with the tmux user's permissions, and tmux configuration may add effects. Pane output may be sensitive or untrusted; environment values are withheld unless allowed by name. No hook writing, and no reading of paste buffers, which hold what a person copied.

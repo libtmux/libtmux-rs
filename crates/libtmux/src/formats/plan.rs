@@ -89,6 +89,12 @@ impl TransportDialect {
     /// matching every tmux tree since the 3.6 restore. A build that is wrong
     /// about this fails loudly during decoding rather than returning altered
     /// bytes, because neither dialect accepts the other's escapes.
+    ///
+    /// A `next-X.Y` build is master between releases, and the version string
+    /// cannot say which side of a dialect switch it sits on. `next-3.4` ranks
+    /// below 3.4 and selects `RawQ`, although master emitted `Vis` from
+    /// `7e497c7f`; `next-3.6` ranks below 3.6 and selects `Vis`, although
+    /// master emitted `RawQ` again after `5fd45b38`.
     pub(crate) fn for_version(version: &TmuxVersion) -> Self {
         match version.behavior_release() {
             Some(release) if release >= Self::VIS_FIRST && release < Self::VIS_RESTORED => {
@@ -383,7 +389,7 @@ fn classify_field(
             slot: selected_slot,
         },
         Some(_) => PlanFieldState::Unsupported,
-        None if descriptor.minimum_release() <= TmuxVersion::MIN_SUPPORTED => {
+        None if descriptor.minimum_release() <= super::CATALOG_BASELINE => {
             PlanFieldState::Selected {
                 slot: selected_slot,
             }

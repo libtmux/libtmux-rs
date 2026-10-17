@@ -92,6 +92,7 @@ impl Error {
                 ErrorKind::InvalidInput
             }
             Self::UnsupportedTmuxVersion { .. }
+            | Self::UnrecognizedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
             Self::InvalidLayout { .. }
@@ -176,6 +177,7 @@ impl Error {
             | Self::InvalidServerConfiguration { .. }
             | Self::InvalidVersionOutput { .. }
             | Self::UnsupportedTmuxVersion { .. }
+            | Self::UnrecognizedTmuxVersion { .. }
             | Self::OptionRejected { .. }
             | Self::UnreadableFormatValue { .. }
             | Self::ServerGenerationChanged { .. }
