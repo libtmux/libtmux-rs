@@ -750,6 +750,12 @@ pub(crate) struct CommandRequest {
     /// the channel's next signal or its next lock. Such a request ends when
     /// tmux answers or the executor shuts down.
     unbounded: bool,
+    /// Whether the client's stdout goes to the null device instead of a pipe.
+    ///
+    /// tmux 3.1 and older keep a client's stdout open after the client exits,
+    /// so a pipe read to its end waits out the deadline. A request whose
+    /// answer is on stderr and in the exit status does not need the pipe.
+    stdout_discarded: bool,
 }
 
 impl CommandRequest {
@@ -824,6 +830,7 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count: 1,
             unbounded: false,
+            stdout_discarded: false,
         }
     }
 
@@ -847,6 +854,7 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count,
             unbounded: false,
+            stdout_discarded: false,
         }
     }
 
@@ -859,6 +867,17 @@ impl CommandRequest {
     /// Whether this request runs without a deadline of its own.
     pub(crate) const fn is_unbounded(&self) -> bool {
         self.unbounded
+    }
+
+    /// Send the client's stdout to the null device.
+    pub(crate) const fn discarding_stdout(mut self) -> Self {
+        self.stdout_discarded = true;
+        self
+    }
+
+    /// Whether the client's stdout goes to the null device.
+    pub(crate) const fn is_stdout_discarded(&self) -> bool {
+        self.stdout_discarded
     }
 
     /// Attach the control-mode rendering of the command this request carries.

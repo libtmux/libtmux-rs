@@ -378,6 +378,16 @@ process-group identity until inherited pipes close or the overall deadline
 expires. Dropping the caller future signals cancellation; `kill_on_drop` is
 only a final safety net and is never the reaping strategy.
 
+One request opts out of reading stdout. tmux 3.1 and older keep a client's
+stdout open after the client exits, so a pipe read to its end waits out the
+command timeout on every refusal from such a daemon. The version probe's
+answer is on stderr and in the exit status, so its request carries
+`stdout_discarded`: the child gets the null device in place of the stdout
+pipe, a ready empty reader stands in for the stdout reader, and stderr is
+still read to its end. Output tmux wrote to the discarded stream is not
+counted, so `InvalidVersionOutput::output_len` is the length of the stream the
+check read: stderr for the daemon probe, stdout for `tmux -V`.
+
 Deterministic async reaping requires the Tokio runtime to remain alive until
 the operation or explicit executor shutdown completes. Runtime teardown cannot
 make that async guarantee; it synchronously signals the process group and uses

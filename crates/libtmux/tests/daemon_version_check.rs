@@ -534,6 +534,103 @@ async fn a_daemon_older_than_the_probe_is_refused_as_unsupported() {
     server.shutdown().await.expect("client shuts down");
 }
 
+/// A pre-3.2 daemon that holds the client's stdout open is refused at once.
+///
+/// tmux 3.1 and older keep the client's stdout open after the client exits.
+/// The double does the same with a background process, so a probe that read
+/// stdout to its end would wait for that process instead of the refusal.
+#[tokio::test]
+async fn a_pre_probe_daemon_holding_stdout_is_refused_promptly() {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+    let holder = directory.path().join("holder.pid");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "case \"$*\" in *libtmux-version-*) sleep 20 2>/dev/null & echo $! > {}; echo 'usage: run-shell [-b] [-t target-pane] shell-command' >&2; exit 1;; *) exit 0;; esac",
+            shell_quote(holder.as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(executable)
+        .default_timeout(Duration::from_secs(30))
+        .build()
+        .expect("client configured");
+    let started = std::time::Instant::now();
+    let error = server
+        .cmd(Command::new("new-session").arg("-d"))
+        .await
+        .expect_err("a pre-3.2 daemon is refused");
+    let elapsed = started.elapsed();
+    if let Ok(pid) = std::fs::read_to_string(&holder) {
+        let _ = ProcessCommand::new("kill").arg(pid.trim()).status();
+    }
+    assert!(
+        matches!(error, Error::UnsupportedTmuxVersion { .. }),
+        "{error:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the refusal waited {elapsed:?} for a stdout the daemon kept open"
+    );
+    server.shutdown().await.expect("client shuts down");
+}
+
+/// A real tmux 3.0a or 3.1c daemon behind a current client is refused.
+///
+/// The daemon keeps the client's stdout open after the client exits, and
+/// answers the probe with a usage line (3.1c) or a protocol mismatch (3.0a).
+#[tokio::test]
+async fn real_tmux_compat_pre_probe_daemon_behind_a_current_client_is_refused() {
+    let Some(old) = optional_binary("LIBTMUX_TEST_PRE_PROBE_TMUX") else {
+        return;
+    };
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture directory");
+    let socket = directory.path().join("s");
+    let started = native(
+        &old,
+        &socket,
+        &[OsStr::new("new-session"), OsStr::new("-d")],
+    );
+    assert!(started.status.success(), "{started:?}");
+    let server = Server::builder()
+        .socket_path(&socket)
+        .tmux_executable(current_binary())
+        .default_timeout(Duration::from_secs(30))
+        .build()
+        .expect("client configured");
+    let started = std::time::Instant::now();
+    let error = server
+        .new_session("refused")
+        .await
+        .expect_err("a pre-3.2 daemon is refused");
+    let elapsed = started.elapsed();
+    let listing = native(&old, &socket, &[OsStr::new("list-sessions")]);
+    native(&old, &socket, &[OsStr::new("kill-server")]);
+    assert!(
+        matches!(error, Error::UnsupportedTmuxVersion { .. }),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .starts_with("tmux older than 3.2 is not supported"),
+        "{error}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the refusal waited {elapsed:?} for a stdout the daemon kept open"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&listing.stdout).lines().count(),
+        1,
+        "only the native session exists: {listing:?}"
+    );
+    server.shutdown().await.expect("client shuts down");
+}
+
 /// A real tmux older than the probe: the configured executable is a 3.0a or
 /// 3.1c build, so the client itself rejects the probe's flags.
 #[tokio::test]

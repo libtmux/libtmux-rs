@@ -255,7 +255,11 @@ async fn live_version(
     // `-N` keeps a vanished daemon from being restarted by this client.
     let mut global_argv = configuration.global_argv().to_vec();
     global_argv.push(std::ffi::OsString::from("-N"));
-    let request = CommandRequest::with_global_argv(request_id, &global_argv, command);
+    // The answer is on stderr and in the exit status. A tmux 3.1 or older
+    // daemon keeps the client's stdout open after the client exits, so a
+    // piped stdout would hold the refusal until the deadline.
+    let request =
+        CommandRequest::with_global_argv(request_id, &global_argv, command).discarding_stdout();
     #[cfg(feature = "control-mode")]
     let request = request.with_control_line(line.flatten());
     let result = executor.execute(request).await?;
