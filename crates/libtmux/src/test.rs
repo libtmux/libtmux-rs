@@ -662,7 +662,10 @@ pub enum DaemonState {
     /// `signal: 11 (SIGSEGV)` is tmux crashing; `signal: 9 (SIGKILL)` is
     /// something outside the fixture killing it; an exit status is tmux
     /// deciding to stop.
-    Gone(std::process::ExitStatus),
+    Gone(
+        /// The exit status reaped from this fixture's tmux daemon.
+        std::process::ExitStatus,
+    ),
     /// The wait could not be made, so the daemon's fate is unknown.
     Unreadable,
 }

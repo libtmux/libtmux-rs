@@ -26,7 +26,10 @@ pub enum Stop {
     /// Print the version and exit successfully.
     Version,
     /// Complain and exit unsuccessfully.
-    Misuse(String),
+    Misuse(
+        /// The argument diagnostic printed to stderr before the binary exits.
+        String,
+    ),
 }
 
 /// The help text, which is also the documentation for the flags.

@@ -83,7 +83,10 @@ pub enum OperationValue {
         pane: PaneId,
     },
     /// Pane contents, exactly as tmux wrote them.
-    CapturedPane(TmuxText),
+    CapturedPane(
+        /// The capture command's stdout bytes, without UTF-8 conversion.
+        TmuxText,
+    ),
 }
 
 /// What one recorded operation produced, in plan order.

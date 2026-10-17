@@ -66,7 +66,10 @@ pub enum Availability<T> {
     /// tmux was asked and reported nothing.
     Absent,
     /// tmux reported a value, which for text may be empty.
-    Available(T),
+    Available(
+        /// The value fetched for this snapshot field, including empty text.
+        T,
+    ),
 }
 
 impl<T> Availability<T> {

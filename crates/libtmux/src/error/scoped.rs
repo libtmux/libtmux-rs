@@ -50,9 +50,15 @@ use super::Error;
 #[non_exhaustive]
 pub enum ScopeError<T, E> {
     /// The resource could not be created; the operation did not run.
-    Creation(Error),
+    Creation(
+        /// The error returned while creating the scoped resource.
+        Error,
+    ),
     /// The operation failed and cleanup succeeded.
-    Operation(E),
+    Operation(
+        /// The caller's operation error, kept in its original type and value.
+        E,
+    ),
     /// The operation succeeded, but cleanup failed after creation.
     Cleanup {
         /// The operation's own result, since the caller cannot reach it any

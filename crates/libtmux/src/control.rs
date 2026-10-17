@@ -634,11 +634,17 @@ pub enum Subscription {
     /// The session this connection is attached to.
     Session,
     /// One window.
-    Window(WindowId),
+    Window(
+        /// The window ID used to scope the watched format.
+        WindowId,
+    ),
     /// Every window in the attached session.
     AllWindows,
     /// One pane.
-    Pane(PaneId),
+    Pane(
+        /// The pane ID used to scope the watched format.
+        PaneId,
+    ),
     /// Every pane in the attached session.
     AllPanes,
 }
