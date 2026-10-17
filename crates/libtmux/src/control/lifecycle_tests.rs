@@ -81,7 +81,7 @@ fn shell_quote(path: &Path) -> String {
 
 /// How a fixture answers the hook-free version probe: tmux refuses the marker
 /// string as a command and reports it, version appended, on stderr.
-const PROBE_AS_3_7B: &str = "printf 'unknown command: %s3.7b\\n' \"${argument%%#*}\" >&2; exit 1";
+const PROBE_AS_3_7B: &str = "case \"$argument\" in\n    *'#{pid}'*) printf 'unknown command: %s3.7b,123,456\\n' \"${argument%%#*}\" >&2 ;;\n    *) printf 'unknown command: %s3.7b\\n' \"${argument%%#*}\" >&2 ;;\n    esac\n    exit 1";
 
 fn write_script(directory: &Path, body: &str) -> PathBuf {
     write_script_with_version(directory, body, "printf 'tmux 3.7b\\n'", PROBE_AS_3_7B)
@@ -93,7 +93,7 @@ fn write_script_with_version(directory: &Path, body: &str, version: &str, probe:
     let mut file = fs::File::create(&staging).expect("staged script is creatable");
     writeln!(
         file,
-        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\nfor argument do\n    case \"$argument\" in\n    libtmux-version-*)\n        {probe}\n        ;;\n    esac\n    if [ \"$argument\" = 'tmux #{{version}} #{{pid}} #{{start_time}}' ]; then\n        report=\"$({version})\"\n        printf '%s 123 456\\n' \"$report\"\n        exit 0\n    fi\ndone\n{body}"
+        "#!/bin/sh\nif [ \"${{1-}}\" = \"-V\" ]; then\n    {version}\n    exit 0\nfi\nset -eu\nfor argument do\n    case \"$argument\" in\n    libtmux-version-*)\n        {probe}\n        ;;\n    esac\ndone\n{body}"
     )
     .expect("script is writable");
     file.sync_all().expect("script contents are durable");
@@ -1212,4 +1212,69 @@ async fn initial_watch_failure_preserves_the_connection_error() {
         },
         "got {error:?}"
     );
+}
+
+/// Acquiring control reads the daemon's identity first. That read must not
+/// have effects: `display-message` fires `after-display-message` on every
+/// release, before this client has decided to attach.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn real_tmux_control_acquisition_fires_no_user_hook() {
+    let guard = crate::test::TestServer::builder()
+        .start()
+        .await
+        .expect("tmux starts");
+    let server = guard.server();
+    if !control_qualified(server).await {
+        guard.shutdown().await.expect("ineligible fixture closes");
+        return;
+    }
+    let session = server.new_session("hooked").await.expect("session starts");
+    let hook = server
+        .cmd(
+            Command::new("set-hook")
+                .arg("-g")
+                .arg("after-display-message")
+                .arg("set-option -g @after_display_message fired"),
+        )
+        .await
+        .expect("hook is set");
+    assert!(hook.success(), "{hook:?}");
+    let read = || async {
+        let shown = server
+            .cmd(
+                Command::new("show-options")
+                    .arg("-gqv")
+                    .arg("@after_display_message"),
+            )
+            .await
+            .expect("option reads");
+        shown.stdout_lossy().trim().to_owned()
+    };
+
+    // Control: the hook is live, so an empty value below means acquisition
+    // did not fire it rather than that the hook never worked.
+    server
+        .cmd(Command::new("display-message").arg("-p").arg("x"))
+        .await
+        .expect("display-message runs");
+    assert_eq!(read().await, "fired");
+    server
+        .cmd(
+            Command::new("set-option")
+                .arg("-g")
+                .arg("@after_display_message")
+                .arg(""),
+        )
+        .await
+        .expect("marker resets");
+
+    let control = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches");
+    drop(control);
+
+    let after = read().await;
+    guard.shutdown().await.expect("fixture shuts down");
+    assert_eq!(after, "", "control acquisition must not fire the hook");
 }

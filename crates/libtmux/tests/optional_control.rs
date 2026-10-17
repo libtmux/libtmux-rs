@@ -61,13 +61,13 @@ fn delayed_server(guard: &TestServer, directory: &Path, delay: &str, timeout: Du
 import os,sys,pathlib,time
 root=pathlib.Path({root})
 binary={binary}
-if 'tmux #{{version}} #{{pid}} #{{start_time}}' in sys.argv:
+if any(a.startswith('libtmux-version-') for a in sys.argv):
  counter=root/'probes'
  count=int(counter.read_text())+1 if counter.exists() else 1
  counter.write_text(str(count))
  (root/('probe-'+str(count)+'.pid')).write_text(str(os.getpid()))
  time.sleep({delay})
-if '-C' in sys.argv: (root/'control-started').touch()
+if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv): (root/'control-started').touch()
 os.execv(binary,[binary,*sys.argv[1:]])
 ",
         root = serde_json::to_string(directory).expect("root"),
@@ -131,17 +131,19 @@ async fn preview_control_refuses_before_identification(reported: &str) {
         r"#!/usr/bin/python3
 import os,sys,pathlib,subprocess
 binary={binary}
-if 'tmux #{{version}} #{{pid}} #{{start_time}}' in sys.argv:
+if any(a.startswith('libtmux-version-') for a in sys.argv):
  result=subprocess.run([binary,*sys.argv[1:]],capture_output=True)
- if result.returncode == 0:
-  parts=result.stdout.split()
-  parts[1]={reported}.encode()
-  sys.stdout.buffer.write(b' '.join(parts)+b'\n')
- else:
-  sys.stdout.buffer.write(result.stdout)
- sys.stderr.buffer.write(result.stderr)
+ text=result.stderr.decode()
+ marker=[a for a in sys.argv if a.startswith('libtmux-version-')][0].split('#')[0]
+ lead='unknown command: '+marker
+ if text.startswith(lead):
+  fields=text.strip()[len(lead):].split(',')
+  fields[0]={reported}
+  text=lead+','.join(fields)+'\n'
+ sys.stdout.buffer.write(result.stdout)
+ sys.stderr.buffer.write(text.encode())
  sys.exit(result.returncode)
-if '-C' in sys.argv: pathlib.Path({marker}).touch()
+if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv): pathlib.Path({marker}).touch()
 os.execv(binary,[binary,*sys.argv[1:]])
 ",
         binary =
@@ -203,7 +205,7 @@ async fn real_tmux_compat_optional_control_refuses_3_3a_before_identification() 
     let marker = directory.path().join("control-started");
     let wrapper = directory.path().join("tmux");
     let script = format!(
-        "#!/usr/bin/python3\nimport os,sys,pathlib\nif '-C' in sys.argv: pathlib.Path({}).touch()\nos.execv({},[{},*sys.argv[1:]])\n",
+        "#!/usr/bin/python3\nimport os,sys,pathlib\nif '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv): pathlib.Path({}).touch()\nos.execv({},[{},*sys.argv[1:]])\n",
         serde_json::to_string(&marker).expect("path"),
         serde_json::to_string(&modern()).expect("binary"),
         serde_json::to_string(&modern()).expect("binary")
@@ -307,7 +309,7 @@ async fn real_tmux_compat_optional_scanner_a_long_native_socket_can_acquire_cont
         r"#!/usr/bin/python3
 import os,sys,pathlib,subprocess,json
 binary={binary}
-if 'tmux #{{version}} #{{pid}} #{{start_time}}' in sys.argv:
+if any(a.startswith('libtmux-version-') for a in sys.argv):
  result=subprocess.run([binary,*sys.argv[1:]],capture_output=True)
  with pathlib.Path({probes}).open('a') as stream:
   stream.write(json.dumps({{'argv':sys.argv[1:],'status':result.returncode,'stderr':result.stderr.decode(errors='replace')}})+'\n')
@@ -424,7 +426,7 @@ socket={socket}
 witness={witness}
 def native(binary,*args):
  return subprocess.run([binary,'-S',socket,'-f','/dev/null',*args],capture_output=True,timeout=4,cwd=pathlib.Path(witness).parent)
-if '-C' in sys.argv:
+if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv):
  assert native(modern,'-N','kill-server').returncode == 0
  end=time.monotonic()+3
  while native(modern,'-N','display-message','-p','version').returncode == 0:
@@ -499,12 +501,12 @@ fn delayed_opening_server(guard: &TestServer, directory: &Path, timeout: Duratio
 import os,sys,pathlib,time
 root=pathlib.Path({root})
 binary={binary}
-if 'tmux #{{version}} #{{pid}} #{{start_time}}' in sys.argv:
+if any(a.startswith('libtmux-version-') for a in sys.argv):
  counter=root/'probes'
  count=int(counter.read_text())+1 if counter.exists() else 1
  counter.write_text(str(count))
  time.sleep(.15)
-if '-C' in sys.argv:
+if '-C' in sys.argv and not any(a.startswith('libtmux-version-') for a in sys.argv):
  (root/'control.pid').write_text(str(os.getpid()))
  if (root/'mode').read_text() == 'slow': time.sleep(.55)
 os.execv(binary,[binary,*sys.argv[1:]])

@@ -715,29 +715,33 @@ impl Core {
     ) -> Result<(Vec<u8>, u64, u64), Error> {
         let mut arguments = global.to_vec();
         arguments.push(OsString::from("-N"));
+        // `run-shell -C` runs no user hook; `display-message` would fire
+        // `after-display-message` before this client has decided to attach.
+        // tmux reports only the first word it fails to parse as a command, so
+        // the fields are joined with commas rather than spaces.
+        let probe = crate::layout::VersionProbe::new();
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
             &arguments,
-            Command::new("display-message")
-                .arg("-p")
-                .arg("tmux #{version} #{pid} #{start_time}"),
+            probe.command_for("#{version},#{pid},#{start_time}"),
         );
         let result = native.execute(request).await?;
-        if !result.success() {
-            return Err(Error::control_mode_closed());
+        if result.success() {
+            return Err(Error::control_mode(std::io::Error::other(
+                "invalid control daemon identity",
+            )));
         }
-        let parts: Vec<_> = result
-            .stdout()
-            .trim_ascii()
-            .split(u8::is_ascii_whitespace)
-            .collect();
-        if parts.len() != 4 || parts[0] != b"tmux" {
+        let Some(fields) = probe.report(result.stderr()) else {
+            return Err(Error::control_mode_closed());
+        };
+        let parts: Vec<_> = fields.split(|byte| *byte == b',').collect();
+        if parts.len() != 3 {
             return Err(Error::control_mode(std::io::Error::other(
                 "invalid control daemon identity",
             )));
         }
         let mut report = b"tmux ".to_vec();
-        report.extend_from_slice(parts[1]);
+        report.extend_from_slice(parts[0]);
         report.push(b'\n');
         let version = TmuxVersion::parse_output(&report)?;
         version.ensure_supported()?;
@@ -761,7 +765,7 @@ impl Core {
                 .ok()
                 .and_then(|text| text.parse::<u64>().ok())
         };
-        let (Some(pid), Some(start)) = (number(parts[2]), number(parts[3])) else {
+        let (Some(pid), Some(start)) = (number(parts[1]), number(parts[2])) else {
             return Err(Error::control_mode(std::io::Error::other(
                 "invalid control daemon generation",
             )));
