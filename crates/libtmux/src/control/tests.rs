@@ -174,10 +174,39 @@ fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
         commands,
         timeout,
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
     }
+}
+
+#[tokio::test]
+async fn feature_requirements_refuse_before_control_queueing() {
+    let (commands, mut requests) = mpsc::channel(1);
+    let mut sender = sender(commands, Duration::from_secs(1));
+    let result = sender
+        .send(Command::new("display-message").requires_tmux(
+            "staged cleanup",
+            crate::ReleaseVersion::new(3, 8, crate::ReleaseSuffix::FINAL),
+        ))
+        .await;
+    assert!(matches!(result, Err(Error::UnsupportedCapability { .. })));
+    assert!(matches!(
+        requests.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+
+    sender.version = crate::TmuxVersion::parse_output(b"tmux 3.7\n").expect("exact 3.7");
+    let result = sender
+        .send(Command::new("breakp").arg("-n").arg("requested-name"))
+        .await;
+    assert!(matches!(result, Err(Error::CapabilityDefective { .. })));
+    assert!(matches!(
+        requests.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
 }
 
 fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> Error {
@@ -227,6 +256,8 @@ async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
@@ -282,6 +313,8 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
@@ -572,6 +605,8 @@ async fn mute_pane_reports_a_control_error_block() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),

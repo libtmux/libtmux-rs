@@ -21,6 +21,9 @@
     clippy::unwrap_used
 )]
 
+#[path = "support/versions.rs"]
+mod versions;
+
 use std::fs;
 use std::path::Path;
 
@@ -59,6 +62,9 @@ fn spawned(log: &Path) -> Vec<String> {
 #[tokio::test]
 async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
     let guard = TestServer::new().await.expect("a private tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let real = guard.server().clone();
     let session = real
         .new_session("routed")
@@ -267,6 +273,9 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
 #[tokio::test]
 async fn a_blocking_channel_call_is_refused_rather_than_routed() {
     let guard = TestServer::new().await.expect("a private tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let real = guard.server().clone();
     let session = real
         .new_session("routed")
@@ -323,6 +332,9 @@ async fn a_blocking_channel_call_is_refused_rather_than_routed() {
 #[tokio::test]
 async fn a_sender_for_another_server_is_refused() {
     let first = TestServer::new().await.expect("a private tmux starts");
+    let Some(first) = versions::control_fixture(first).await else {
+        return;
+    };
     let second = TestServer::new()
         .await
         .expect("a second private tmux starts");
@@ -362,6 +374,9 @@ async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
     use libtmux::plan::{Plan, Planner, SelectLayout};
 
     let guard = TestServer::new().await.expect("a private tmux starts");
+    let Some(guard) = versions::control_fixture(guard).await else {
+        return;
+    };
     let real = guard.server().clone();
     let session = real.new_session("routed-plan").await.expect("session");
     let version = real

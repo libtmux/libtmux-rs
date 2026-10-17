@@ -9,6 +9,9 @@
 // in-test exemptions, and these files have them.
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
+#[path = "support/versions.rs"]
+mod versions;
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
@@ -153,22 +156,33 @@ async fn each_dispatch_runs_in_one_span_on_either_transport() {
         .capabilities()
         .await
         .expect("tmux reports its version");
-    let (sender, events) = ControlMode::attach(&server, session.id())
-        .await
-        .expect("a control client attaches")
-        .split();
-    let routed = server
-        .over_control_mode(&sender)
-        .await
-        .expect("a routed handle");
+    let control = if versions::supports_control(&server).await {
+        let (sender, events) = ControlMode::attach(&server, session.id())
+            .await
+            .expect("a control client attaches")
+            .split();
+        let routed = server
+            .over_control_mode(&sender)
+            .await
+            .expect("a routed handle");
+        Some((routed, events))
+    } else {
+        None
+    };
 
     let collector = Collector::default();
     let subscriber = tracing_subscriber::registry().with(collector.clone());
     let default = tracing::subscriber::set_default(subscriber);
     let process_kind = dispatch_each_outcome(&server).await;
-    let control_kind = dispatch_each_outcome(&routed).await;
+    let control_kind = if let Some((routed, _)) = &control {
+        Some(dispatch_each_outcome(routed).await)
+    } else {
+        None
+    };
     drop(default);
-    events.shutdown().await.expect("control shuts down");
+    if let Some((_, events)) = control {
+        events.shutdown().await.expect("control shuts down");
+    }
     guard.shutdown().await.expect("tmux fixture shuts down");
 
     let recorded = collector.0.lock().unwrap();
@@ -186,18 +200,15 @@ async fn each_dispatch_runs_in_one_span_on_either_transport() {
         })
         .collect();
     let process_kind = format!("{process_kind:?}");
-    let control_kind = format!("{control_kind:?}");
+    let control_kind = control_kind.map(|kind| format!("{kind:?}"));
     let mut expected = Vec::new();
-    for (transport, kind) in [("subprocess", &process_kind), ("control", &control_kind)] {
+    let transports = std::iter::once(("subprocess", process_kind.as_str()))
+        .chain(control_kind.as_deref().map(|kind| ("control", kind)));
+    for (transport, kind) in transports {
         expected.extend([
             (transport, "set-environment", Some("success"), None),
             (transport, "set-environment", Some("exit"), None),
-            (
-                transport,
-                "set-environment",
-                Some("error"),
-                Some(kind.as_str()),
-            ),
+            (transport, "set-environment", Some("error"), Some(kind)),
             (transport, "set-environment", Some("cancelled"), None),
         ]);
     }

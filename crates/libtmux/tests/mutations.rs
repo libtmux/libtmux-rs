@@ -1323,11 +1323,11 @@ async fn a_failure_says_what_to_do_about_it() {
             .is_empty(),
     );
 
-    // tmux answering "no" is a different thing: the arguments were wrong.
+    // A popup needs an attached client, and this fixture has none.
     let refused = server
-        .delete_buffer("never-existed")
+        .display_popup(None, "true")
         .await
-        .expect_err("tmux refuses to delete a buffer it does not have");
+        .expect_err("tmux refuses a popup without a client");
     assert_eq!(refused.kind(), ErrorKind::Refused);
     assert!(
         !refused.is_transient(),
