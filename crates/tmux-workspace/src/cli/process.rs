@@ -29,6 +29,8 @@ mod captured;
 
 pub(super) use captured::{require_support, run};
 
+pub(super) const PYTHON_ADMISSION: &str = include_str!("python_admission.py");
+
 #[cfg(unix_process_observer)]
 pub(super) const CAPTURE_LIMIT: usize = 1024 * 1024;
 
@@ -150,11 +152,11 @@ async fn run_terminal(argv: &[OsString], terminal: std::fs::File) -> Result<Chil
 
 pub(super) async fn python() -> Result<OsString> {
     let python = std::env::var_os("TMUX_WORKSPACE_PYTHON").unwrap_or_else(|| "python3".into());
+    let probe = format!(
+        "{PYTHON_ADMISSION}\nimport importlib.metadata; print(importlib.metadata.version('tmuxp'))"
+    );
     let output = tokio::process::Command::new(&python)
-        .args([
-            "-c",
-            "import importlib.metadata; print(importlib.metadata.version('tmuxp'))",
-        ])
+        .args(["-c", probe.as_str()])
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output()
@@ -171,7 +173,7 @@ pub(super) async fn python() -> Result<OsString> {
     if !output.status.success() || !is_supported_tmuxp_version(&version) {
         return Err(CliError::new(
             "python_runtime",
-            "Python bridge requires tmuxp 1.74.x; install a matching release and set TMUX_WORKSPACE_PYTHON to its Python executable",
+            "Python bridge requires tmuxp 1.74.x and libtmux with a hard tmux minimum of 3.3a or newer; upgrade Python libtmux and set TMUX_WORKSPACE_PYTHON to the compatible environment",
         ));
     }
     Ok(python)
@@ -202,7 +204,7 @@ pub(super) async fn shell(options: &ArgMatches, report: &mut Reporter) -> Result
     let mut argv: Vec<OsString> = vec![
         python,
         "-c".into(),
-        "from tmuxp.cli import cli; cli()".into(),
+        format!("{PYTHON_ADMISSION}\nfrom tmuxp.cli import cli; cli()").into(),
         "--color".into(),
         "never".into(),
         "shell".into(),

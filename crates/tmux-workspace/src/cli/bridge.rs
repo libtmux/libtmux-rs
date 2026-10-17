@@ -10,13 +10,17 @@ use super::{Result, output::Reporter, process};
 /// syntax-checks it with a bare `python3`, which needs no tmuxp install.
 const BUILD: &str = include_str!("bridge.py");
 
+fn program() -> String {
+    format!("{}\n{BUILD}", process::PYTHON_ADMISSION)
+}
+
 pub(super) async fn build(
     python: &OsStr,
     request: Value,
     report: &mut Reporter,
 ) -> Result<process::ChildOutput> {
     report.event("warning", json!({"code":"python_extension_bridge","message":"Python extension hooks execute through tmuxp 1.74.x; child output is captured separately from native build events"}))?;
-    let argv = [python.to_owned(), "-c".into(), BUILD.into()];
+    let argv = [python.to_owned(), "-c".into(), program().into()];
     // The request carries a socket path and session name; an argv value
     // lands in /proc/<pid>/cmdline, which is world-readable on Linux, while
     // an environment variable lands in /proc/<pid>/environ, which is not.
@@ -54,7 +58,7 @@ mod tests {
                     .stdin
                     .take()
                     .expect("stdin was piped")
-                    .write_all(BUILD.as_bytes())?;
+                    .write_all(program().as_bytes())?;
                 child.wait_with_output()
             })
             .unwrap();
@@ -62,6 +66,34 @@ mod tests {
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn obsolete_backend_refuses_before_tmuxp_imports() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = directory.path().join("libtmux");
+        let tmuxp = directory.path().join("tmuxp");
+        std::fs::create_dir(&library).unwrap();
+        std::fs::create_dir(&tmuxp).unwrap();
+        std::fs::write(library.join("__init__.py"), "class Server: pass\n").unwrap();
+        std::fs::write(library.join("common.py"), "TMUX_MIN_VERSION = '3.2a'\n").unwrap();
+        std::fs::write(
+            tmuxp.join("__init__.py"),
+            "from pathlib import Path\nPath('builder-imported').touch()\nraise RuntimeError('builder import ran')\n",
+        )
+        .unwrap();
+        let output = std::process::Command::new("python3")
+            .args(["-c", &program()])
+            .current_dir(directory.path())
+            .env("PYTHONPATH", directory.path())
+            .output()
+            .unwrap();
+        assert!(!directory.path().join("builder-imported").exists());
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("hard tmux minimum of 3.3a"),
+            "{output:?}"
         );
     }
 
@@ -124,7 +156,7 @@ class Builder(ClassicWorkspaceBuilder):
                 "append_identity":if case == "mismatch" {"0:0"} else {&identity}});
             let mut command = std::process::Command::new(&python);
             command
-                .args(["-c", BUILD])
+                .args(["-c", &program()])
                 .env("TMUX_WORKSPACE_BRIDGE_REQUEST", request.to_string())
                 .current_dir(directory.path())
                 .env_remove("TMUX")

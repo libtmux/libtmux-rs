@@ -343,7 +343,7 @@ pub(super) async fn load(
     state.started = true;
     if flag(args, "colors88") {
         return Err(CliError::usage(
-            "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2",
+            "supported tmux releases do not support 88-color mode; omit -8 or use -2",
         ));
     }
     if flag(args, "dry-run") {
@@ -1517,13 +1517,23 @@ fn same_socket(a: &std::path::Path, b: &std::path::Path) -> bool {
 }
 
 async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result<()> {
+    let version = server
+        .cmd(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("--")
+                .arg("tmux #{version}"),
+        )
+        .await?;
+    let version = libtmux::TmuxVersion::parse_output(version.stdout())?;
+    version.ensure_supported()?;
     let action = if inside_tmux {
         "switch-client"
     } else {
         "attach-session"
     };
     let mut command = tokio::process::Command::new(server.tmux_executable());
-    command.arg("-S").arg(server.socket_path());
+    command.arg("-N").arg("-S").arg(server.socket_path());
     // The handoff is the same tmux the rest of the load talked to, so it is
     // given the same endpoint flags: a client that ignored -2 or -f would
     // come up with different colours or a different configuration.
@@ -1534,6 +1544,12 @@ async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result
         command.arg("-2");
     }
     let status = command
+        .arg("if-shell")
+        .arg("-F")
+        .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
+        .arg("")
+        .arg("libtmux-core-version-changed")
+        .arg(";")
         .arg(action)
         .arg("-t")
         .arg(session.id().to_string())

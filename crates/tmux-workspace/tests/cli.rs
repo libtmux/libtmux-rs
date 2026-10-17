@@ -6,6 +6,148 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 #[tokio::test]
+async fn old_daemon_refuses_load_before_scripts_or_mutation() {
+    let Some(binary) = std::env::var_os("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
+        return;
+    };
+    let guard = libtmux::test::TestServer::builder()
+        .tmux_executable(&binary)
+        .start()
+        .await
+        .expect("unsupported boundary fixture starts");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("workspace directory");
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({
+            "session_name": "must-not-create", "before_script": "touch must-not-run",
+            "windows": [{"panes": ["blank"]}]
+        })
+        .to_string(),
+    )
+    .expect("workspace written");
+    let output = at(
+        &[
+            "load",
+            "workspace.json",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().expect("socket UTF-8"),
+        ],
+        directory.path(),
+    );
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("3.3a"),
+        "{output:?}"
+    );
+    assert!(!directory.path().join("must-not-run").exists());
+    let sessions = Command::new(binary)
+        .arg("-S")
+        .arg(guard.socket_path())
+        .arg("list-sessions")
+        .output()
+        .expect("native boundary read");
+    assert!(sessions.stdout.is_empty(), "load created no session");
+    guard.shutdown().await.expect("fixture shuts down");
+}
+
+#[tokio::test]
+async fn obsolete_python_backend_refuses_before_extension_imports() {
+    let Some(python) = std::env::var_os("LIBTMUX_TEST_OBSOLETE_PYTHON") else {
+        return;
+    };
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let keeper = guard.session("bridge-keeper").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("extension.py"),
+        "from pathlib import Path\nPath('extension-imported').touch()\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"must-not-create","workspace_builder":"extension:Builder","workspace_builder_paths":[directory.path()],"windows":[{"panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &[
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "workspace.json",
+        ],
+        directory.path(),
+    )
+    .env("TMUX_WORKSPACE_PYTHON", python)
+    .env_remove("PYTHONPATH")
+    .output()
+    .unwrap();
+    assert!(!directory.path().join("extension-imported").exists());
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("hard tmux minimum of 3.3a"),
+        "{output:?}"
+    );
+    assert_eq!(
+        guard.server().sessions().await.unwrap()[0].id(),
+        keeper.id()
+    );
+    assert_eq!(guard.server().sessions().await.unwrap().len(), 1);
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn qualified_python_bridge_builds_on_the_minimum_daemon() {
+    let (Some(python), Some(binary)) = (
+        std::env::var_os("LIBTMUX_TEST_QUALIFIED_PYTHON"),
+        std::env::var_os("LIBTMUX_TEST_MINIMUM_TMUX"),
+    ) else {
+        return;
+    };
+    let guard = libtmux::test::TestServer::builder()
+        .tmux_executable(binary)
+        .start()
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    std::fs::write(
+        directory.path().join("extension.py"),
+        "from tmuxp.workspace.builder.classic import ClassicWorkspaceBuilder\nclass Builder(ClassicWorkspaceBuilder):\n    def build(self, *args, **kwargs):\n        super().build(*args, **kwargs)\n        self.session.set_environment('BRIDGE_CALLED', 'yes')\n",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"qualified","workspace_builder":"extension:Builder","workspace_builder_paths":[directory.path()],"windows":[{"panes":["blank"]}]}).to_string(),
+    )
+    .unwrap();
+    let output = command_at(
+        &[
+            "load",
+            "-d",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "workspace.json",
+        ],
+        directory.path(),
+    )
+    .env("TMUX_WORKSPACE_PYTHON", python)
+    .output()
+    .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let session = guard.server().session("qualified").await.unwrap().unwrap();
+    assert_eq!(
+        session
+            .environment_all()
+            .await
+            .unwrap()
+            .get("BRIDGE_CALLED"),
+        Some(&libtmux::EnvironmentEntry::Set("yes".into()))
+    );
+    guard.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn outside_tmux_attach_requires_terminal_before_scripts_or_session_mutation() {
     let guard = libtmux::test::TestServer::new().await.unwrap();
     let keeper = guard.session("terminal-keeper").await.unwrap();
@@ -3524,7 +3666,11 @@ async fn python_shell_uses_the_checked_console_entrypoint() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(value["stdout"].as_str().unwrap().ends_with("\nbridge\n"));
+    assert_eq!(
+        value["stdout"].as_str().unwrap().lines().last(),
+        Some("bridge"),
+        "{value}"
+    );
     guard.shutdown().await.unwrap();
 }
 
@@ -4740,6 +4886,113 @@ async fn the_attach_handoff_carries_the_endpoint_flags() {
         .unwrap_or_else(|| panic!("no handoff recorded: {calls}"));
     assert!(handoff.contains("<-2>"), "{handoff}");
     assert!(handoff.contains("<-f>"), "{handoff}");
+    assert!(handoff.contains("<-N>"), "{handoff}");
+    assert!(handoff.contains("<if-shell><-F>"), "{handoff}");
     drop(control);
     guard.shutdown().await.unwrap();
+}
+
+async fn guarded_handoff(replacement: Option<std::ffi::OsString>) -> (Output, bool, bool) {
+    let guard = libtmux::test::TestServer::new().await.unwrap();
+    let _keeper = guard.session("handoff-keeper").await.unwrap();
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").unwrap();
+    let wrapper = directory.path().join("tmux");
+    libtmux::test::install_executable(
+        &wrapper,
+        r#"#!/bin/sh
+case "$*" in *switch-client*|*attach-session*)
+    "$WORKSPACE_REAL_TMUX" -S "$WORKSPACE_SOCKET" kill-server
+    if [ -n "${WORKSPACE_OLD_TMUX-}" ]; then
+        "$WORKSPACE_OLD_TMUX" -S "$WORKSPACE_SOCKET" -f /dev/null new-session -d -s replacement 'sleep 30'
+        "$WORKSPACE_OLD_TMUX" -S "$WORKSPACE_SOCKET" new-session -d -s replacement-target 'sleep 30'
+        "$WORKSPACE_OLD_TMUX" -S "$WORKSPACE_SOCKET" set-hook -g client-attached "run-shell \"touch $WORKSPACE_ATTACHED_MARKER\""
+        # Matching tty protocols make an unguarded attach a real effect.
+        WORKSPACE_REAL_TMUX="$WORKSPACE_OLD_TMUX"
+    fi
+    ;;
+esac
+exec "$WORKSPACE_REAL_TMUX" "$@"
+"#,
+    )
+    .unwrap();
+    let config = directory.path().join("tmux.conf");
+    std::fs::write(&config, "run-shell 'touch handoff-started'\n").unwrap();
+    std::fs::write(
+        directory.path().join("workspace.json"),
+        serde_json::json!({"session_name":"handed-over","windows":[{"panes":["blank"]}]})
+            .to_string(),
+    )
+    .unwrap();
+    let mut command = command_at(
+        &[
+            "load",
+            "-y",
+            "-S",
+            guard.socket_path().to_str().unwrap(),
+            "-f",
+            config.to_str().unwrap(),
+            "workspace.json",
+        ],
+        directory.path(),
+    );
+    command
+        .env("LIBTMUX_TEST_TMUX", &wrapper)
+        .env("WORKSPACE_REAL_TMUX", guard.server().tmux_executable())
+        .env("WORKSPACE_SOCKET", guard.socket_path())
+        .env("WORKSPACE_OLD_TMUX", replacement.unwrap_or_default());
+    command.env("TERM", "xterm-256color").env(
+        "WORKSPACE_ATTACHED_MARKER",
+        directory.path().join("handoff-attached"),
+    );
+    let mut terminal = Command::new("python3");
+    terminal
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/terminal_handoff.py"
+        ))
+        .arg(command.get_program())
+        .args(command.get_args())
+        .current_dir(directory.path());
+    for (name, value) in command.get_envs() {
+        if let Some(value) = value {
+            terminal.env(name, value);
+        } else {
+            terminal.env_remove(name);
+        }
+    }
+    let mut command = terminal;
+    let output = command.output().unwrap();
+    let _ = Command::new(guard.server().tmux_executable())
+        .args(["-N", "-S"])
+        .arg(guard.socket_path())
+        .arg("kill-server")
+        .env_remove("TMUX")
+        .output();
+    let started = directory.path().join("handoff-started").exists();
+    let attached = directory.path().join("handoff-attached").exists();
+    guard.shutdown().await.unwrap();
+    (output, started, attached)
+}
+
+#[tokio::test]
+async fn the_attach_handoff_refuses_daemon_replacement() {
+    let Some(old) = std::env::var_os("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
+        return;
+    };
+    let (output, started, attached) = guarded_handoff(Some(old)).await;
+    assert!(!attached, "the old daemon received an attach effect");
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("libtmux-core-version-changed"),
+        "{output:?}"
+    );
+    assert!(!started, "handoff did not source a new daemon's config");
+}
+
+#[tokio::test]
+async fn the_attach_handoff_never_starts_a_missing_daemon() {
+    let (output, started, attached) = guarded_handoff(None).await;
+    assert!(!attached);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(!started, "handoff started a daemon and sourced its config");
 }
