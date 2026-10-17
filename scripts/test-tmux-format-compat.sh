@@ -143,23 +143,31 @@ run_lane() {
     local installed_version
     local test_list
 
-    git clone \
-        --branch "$tag" \
-        --depth 1 \
-        --single-branch \
-        https://github.com/tmux/tmux.git \
-        "$source_root"
+    if [[ "$source_contract" == "development" ]]; then
+        # A development build has no release tag: pin the exact commit.
+        git init "$source_root"
+        git -C "$source_root" fetch --depth 1 \
+            https://github.com/tmux/tmux.git "$expected_commit"
+        git -C "$source_root" checkout --detach FETCH_HEAD
+    else
+        git clone \
+            --branch "$tag" \
+            --depth 1 \
+            --single-branch \
+            https://github.com/tmux/tmux.git \
+            "$source_root"
 
-    tag_type="$(git -C "$source_root" cat-file -t "refs/tags/$tag")"
-    if [[ "$tag_type" != "tag" ]]; then
-        printf 'tmux %s is not an annotated tag\n' "$tag" >&2
-        return 1
-    fi
+        tag_type="$(git -C "$source_root" cat-file -t "refs/tags/$tag")"
+        if [[ "$tag_type" != "tag" ]]; then
+            printf 'tmux %s is not an annotated tag\n' "$tag" >&2
+            return 1
+        fi
 
-    peeled_commit="$(git -C "$source_root" rev-parse "refs/tags/$tag^{}")"
-    if [[ "$peeled_commit" != "$expected_commit" ]]; then
-        printf 'tmux %s peeled commit does not match\n' "$tag" >&2
-        return 1
+        peeled_commit="$(git -C "$source_root" rev-parse "refs/tags/$tag^{}")"
+        if [[ "$peeled_commit" != "$expected_commit" ]]; then
+            printf 'tmux %s peeled commit does not match\n' "$tag" >&2
+            return 1
+        fi
     fi
 
     checkout_commit="$(git -C "$source_root" rev-parse HEAD)"
@@ -403,3 +411,19 @@ run_lane \
     "81f88f8517c9fc5371b56cf117530c6b477c96ac" \
     "tmux 3.7" \
     "feature-boundary"
+
+# The final release, so the newest series is exercised alongside the 3.7
+# patch lane rather than only in rejection witnesses.
+run_lane \
+    "3.8" \
+    "7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53" \
+    "tmux 3.8"
+
+# Development master, reported as `next-3.9`: it ranks above 3.7 final, so
+# managed control acquisition is accepted, and it catches format and
+# behavior changes before a release carries them.
+run_lane \
+    "master" \
+    "d1fedcc9a0e98dbad57f92f923db46c6f4b6e893" \
+    "tmux next-3.9" \
+    "development"
