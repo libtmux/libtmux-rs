@@ -297,12 +297,18 @@ impl Client {
     /// // A control-mode connection is a client, so the server has one to find.
     /// # #[cfg(feature = "control-mode")]
     /// # {
+    /// # let version = server.capabilities().await?.tmux_version().clone();
+    /// # let eligible = version.release().is_some_and(|release| {
+    /// #     *release >= libtmux::since::CONTROL_ACQUISITION && !release.suffix().is_release_candidate()
+    /// # });
+    /// # if eligible {
     /// let control = libtmux::control::ControlMode::attach(server, session.id()).await?;
     /// let client = server.clients().await?.into_iter().next().expect("one client");
     ///
     /// let attached = client.attached_session().await?.expect("it is attached");
     /// assert_eq!(attached.id(), session.id());
     /// control.shutdown().await?;
+    /// # }
     /// # }
     ///
     /// guard.shutdown().await?;

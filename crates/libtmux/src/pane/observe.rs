@@ -160,11 +160,7 @@ impl Pane {
     pub async fn capture_with(&self, options: CaptureOptions) -> Result<Vec<TmuxText>, Error> {
         // Refusing beats dispatching a flag tmux will reject with a usage
         // error that names the whole command.
-        let version = crate::Server::from_core(Arc::clone(&self.core))
-            .capabilities()
-            .await?
-            .tmux_version()
-            .clone();
+        let version = self.core.format_version().await?;
         let needs_wrap_trim = options.needs_wrap_trim();
         let command = options.lower(self.id().as_ref(), &version)?;
         let target = command.target().map(OsStr::to_os_string);
@@ -464,11 +460,7 @@ impl Pane {
         // spanning a wrap point would never match.
         let options = CaptureOptions::history().join_wrapped();
         let target = self.id().to_string();
-        let version = crate::Server::from_core(Arc::clone(&self.core))
-            .capabilities()
-            .await?
-            .tmux_version()
-            .clone();
+        let version = self.core.format_version().await?;
 
         // Capture the dead flag and pane contents in one tmux process. The flag
         // comes first so the first newline is an unambiguous boundary.

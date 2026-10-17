@@ -174,10 +174,11 @@ fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
         commands,
         timeout,
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     }
 }
 
@@ -228,10 +229,11 @@ async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     };
     let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
 
@@ -284,10 +286,11 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     };
     let watch = tokio::spawn(async move { sender.watch_only(&[]).await });
 
@@ -575,10 +578,11 @@ async fn mute_pane_reports_a_control_error_block() {
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
+        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n")
+            .expect("qualified fixture version"),
         identity: crate::ServerIdentity::from_socket_path(std::path::PathBuf::from(
             "/tmp/libtmux-rs-test/control-sender",
         )),
-        version: crate::TmuxVersion::parse_output(b"tmux 3.7b\n").expect("fixture version"),
     };
     let pane: PaneId = "%1".parse().expect("a pane id");
     let mute = tokio::spawn(async move { sender.mute_pane(&pane).await });

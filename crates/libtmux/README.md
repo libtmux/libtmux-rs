@@ -325,6 +325,12 @@ use libtmux::test::TestServer;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
+# let version = guard.server().capabilities().await?.tmux_version().clone();
+# let eligible = version.has_behavior(&libtmux::since::CONTROL_ACQUISITION);
+# if !eligible {
+#     guard.shutdown().await?;
+#     return Ok(());
+# }
     let session = guard.server().new_session("watching").await?;
     let (commands, mut events) = ControlMode::attach(guard.server(), session.id())
         .await?
@@ -548,6 +554,11 @@ use libtmux::test::TestServer;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
+# let version = guard.server().capabilities().await?.tmux_version().clone();
+# if !version.has_behavior(&libtmux::since::CONTROL_ACQUISITION) {
+#     guard.shutdown().await?;
+#     return Ok(());
+# }
     let session = guard.server().new_session("routed").await?;
 
     let (commands, events) = ControlMode::attach(guard.server(), session.id())

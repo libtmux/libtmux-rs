@@ -133,7 +133,7 @@ full = ["blocking", "control-mode", "derive", "plan", "query", "schema", "serde"
 # `full`, and nothing but `fuzz/` turns it on.
 unstable-fuzzing = ["control-mode", "query", "serde"]
 blocking = ["tokio/rt"]
-control-mode = ["dep:futures-core", "tokio/io-util", "tokio/process", "tokio/sync"]
+control-mode = ["dep:tempfile", "dep:futures-core", "tokio/io-util", "tokio/process", "tokio/sync"]
 # The derive writes `impl Filterable`, which does not exist without `query`.
 derive = ["dep:libtmux-macros", "query"]
 # Recording tmux work before doing it. No new dependencies: it is opt-in
