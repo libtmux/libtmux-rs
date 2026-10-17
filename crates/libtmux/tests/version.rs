@@ -369,3 +369,13 @@ fn walk(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     found
 }
+
+#[test]
+fn undated_diagnostics_do_not_qualify_hard_admission() {
+    let version = TmuxVersion::parse_output(b"tmux master\n").unwrap();
+    assert!(version.meets(&TmuxVersion::MIN_SUPPORTED));
+    assert!(matches!(
+        version.ensure_supported(),
+        Err(Error::UnsupportedTmuxVersion { .. })
+    ));
+}

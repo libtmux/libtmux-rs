@@ -550,7 +550,10 @@ impl TmuxVersion {
         Ok(())
     }
 
-    /// Require this version to meet the crate's minimum supported release.
+    /// Require a numbered release to meet the minimum supported version.
+    ///
+    /// A numbered `next-X.Y` report can establish the floor. An undated
+    /// `master` report remains diagnostic and cannot qualify dispatch.
     ///
     /// # Errors
     ///
@@ -567,7 +570,11 @@ impl TmuxVersion {
     /// # Ok::<(), libtmux::Error>(())
     /// ```
     pub fn ensure_supported(&self) -> Result<(), Error> {
-        if self.meets(&Self::MIN_SUPPORTED) {
+        if self
+            .release
+            .or_else(|| parse_next_release(&self.raw))
+            .is_some_and(|release| release >= Self::MIN_SUPPORTED)
+        {
             return Ok(());
         }
 

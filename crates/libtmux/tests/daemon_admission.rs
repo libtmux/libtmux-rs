@@ -574,3 +574,225 @@ async fn real_tmux_compat_replacement_between_probe_and_dispatch_refuses_effects
     server.shutdown().await.expect("client shuts down");
     guard.shutdown().await.expect("fixture shuts down");
 }
+
+async fn assert_undated_master_refused(cold: bool) {
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned directory");
+    let marker = directory.path().join("effect");
+    let endpoint = if cold {
+        "printf 'no server running on fixture\\n' >&2; exit 1"
+    } else {
+        "printf 'tmux master\\n'"
+    };
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "case \"$*\" in *-V) printf 'tmux master\\n';; *'tmux '#*) {endpoint};; *) touch {};; esac",
+            shell_quote(marker.as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .tmux_executable(executable)
+        .build()
+        .expect("client configured");
+    assert_eq!(
+        server
+            .capabilities()
+            .await
+            .expect("diagnostic parses master")
+            .tmux_version()
+            .raw(),
+        "master"
+    );
+    assert_eq!(
+        server
+            .cmd(Command::new("-V"))
+            .await
+            .expect("diagnostic remains available")
+            .stdout(),
+        b"tmux master\n"
+    );
+    let result = server.cmd(Command::new("new-session").arg("-d")).await;
+    let effect = marker.exists();
+    server.shutdown().await.expect("client shuts down");
+    assert!(!effect, "undated master admitted a requested effect");
+    assert_unsupported(
+        &result.expect_err("undated master refuses admission"),
+        "master",
+    );
+}
+
+#[tokio::test]
+async fn strict_admission_refuses_undated_daemon() {
+    assert_undated_master_refused(false).await;
+}
+
+#[tokio::test]
+async fn strict_admission_refuses_undated_creating_executable() {
+    assert_undated_master_refused(true).await;
+}
+
+#[tokio::test]
+async fn strict_admission_does_not_reuse_creating_executable_permission() {
+    let Some(old) = optional_binary("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
+        return;
+    };
+    let current = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&current)
+        .start()
+        .await
+        .expect("daemon starts");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned directory");
+    let old_mode = directory.path().join("old-mode");
+    let startup = directory.path().join("started");
+    let config = directory.path().join("tmux.conf");
+    std::fs::write(
+        &config,
+        format!("run-shell \"touch {}\"\n", shell_quote(startup.as_os_str())),
+    )
+    .expect("startup witness configured");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "if [ -e {} ]; then exec {} \"$@\"; else exec {} \"$@\"; fi",
+            shell_quote(old_mode.as_os_str()),
+            shell_quote(old.as_os_str()),
+            shell_quote(current.as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(guard.socket_path())
+        .config_file(&config)
+        .tmux_executable(executable)
+        .build()
+        .expect("client configured");
+    server
+        .cmd(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("--")
+                .arg("warm"),
+        )
+        .await
+        .expect("supported client warms admission");
+    assert!(
+        native(&current, guard.socket_path(), &[OsStr::new("kill-server")])
+            .status
+            .success()
+    );
+    std::fs::write(&old_mode, "old").expect("configured executable changes");
+    let first = server.new_session("must-not-start").await;
+    let second = server.new_session("still-must-not-start").await;
+    let started = startup.exists();
+    let _ = native(&old, guard.socket_path(), &[OsStr::new("kill-server")]);
+    server.shutdown().await.expect("client shuts down");
+    guard.shutdown().await.expect("fixture shuts down");
+    assert!(
+        !started,
+        "cached permission started the swapped old executable"
+    );
+    assert!(matches!(first, Err(Error::ServerGone { .. })), "{first:?}");
+    assert_unsupported(
+        &second.expect_err("next explicit call freshly checks old executable"),
+        "3.2a",
+    );
+}
+
+#[tokio::test]
+async fn strict_admission_supports_explicit_restarts_on_a_warmed_handle() {
+    let current = current_binary();
+    let guard = TestServer::builder()
+        .tmux_executable(&current)
+        .start()
+        .await
+        .expect("daemon starts");
+    let server = Server::builder()
+        .socket_path(guard.socket_path())
+        .config_file("/dev/null")
+        .tmux_executable(&current)
+        .build()
+        .expect("client configured");
+    server
+        .new_session("original")
+        .await
+        .expect("admission warms");
+    server.kill().await.expect("owned kill succeeds");
+    let owned_restart = server.new_session("after-owned-kill").await;
+    let _ = native(&current, guard.socket_path(), &[OsStr::new("kill-server")]);
+    let disappeared = server.new_session("disappeared").await;
+    let explicit_restart = server.new_session("after-disappearance").await;
+    let _ = native(&current, guard.socket_path(), &[OsStr::new("kill-server")]);
+    server.shutdown().await.expect("client shuts down");
+    guard.shutdown().await.expect("fixture shuts down");
+    assert!(owned_restart.is_ok(), "{owned_restart:?}");
+    assert!(
+        matches!(disappeared, Err(Error::ServerGone { .. })),
+        "{disappeared:?}"
+    );
+    assert!(explicit_restart.is_ok(), "{explicit_restart:?}");
+}
+
+async fn assert_fresh_start_after_cold_metadata(swap: bool) {
+    let Some(old) = optional_binary("LIBTMUX_TEST_UNSUPPORTED_TMUX") else {
+        return;
+    };
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned directory");
+    let socket = directory.path().join("s");
+    let old_mode = directory.path().join("old-mode");
+    let startup = directory.path().join("started");
+    let config = directory.path().join("tmux.conf");
+    std::fs::write(
+        &config,
+        format!("run-shell \"touch {}\"\n", shell_quote(startup.as_os_str())),
+    )
+    .expect("startup witness configured");
+    let executable = wrapper(
+        directory.path(),
+        &format!(
+            "if [ -e {} ]; then exec {} \"$@\"; else exec {} \"$@\"; fi",
+            shell_quote(old_mode.as_os_str()),
+            shell_quote(old.as_os_str()),
+            shell_quote(current_binary().as_os_str())
+        ),
+    );
+    let server = Server::builder()
+        .socket_path(&socket)
+        .config_file(&config)
+        .tmux_executable(executable)
+        .build()
+        .expect("client configured");
+    server
+        .validate_layouts(std::iter::empty())
+        .await
+        .expect("cold metadata preflight succeeds");
+    if swap {
+        std::fs::write(&old_mode, "old").expect("executable changes after preflight");
+    }
+    let result = server.new_session("freshly-admitted").await;
+    let started = startup.exists();
+    let _ = native(&old, &socket, &[OsStr::new("kill-server")]);
+    server.shutdown().await.expect("client shuts down");
+    if swap {
+        assert!(!started, "cold metadata granted stale creating permission");
+        assert_unsupported(
+            &result.expect_err("creating executable is freshly checked"),
+            "3.2a",
+        );
+    } else {
+        assert!(result.is_ok(), "{result:?}");
+        assert!(started, "fresh supported startup ran its configuration");
+    }
+}
+
+#[tokio::test]
+async fn strict_admission_cold_metadata_cannot_qualify_a_changed_executable() {
+    assert_fresh_start_after_cold_metadata(true).await;
+}
+
+#[tokio::test]
+async fn strict_admission_cold_metadata_preserves_the_first_explicit_start() {
+    assert_fresh_start_after_cold_metadata(false).await;
+}

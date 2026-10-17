@@ -124,9 +124,12 @@ executable that would start it. Admission shares the logical request's timeout;
 a native queue guard verifies the same version immediately before its effects.
 Unknown versions and failed probes refuse dispatch. Executable capabilities
 remain a separate cached description of the configured binary. Ordinary format
-catalogs follow the admitted daemon. If the configured executable is older or
-cannot prove its version, native `-N` prevents it from starting a replacement
-server after the admitted daemon disappears.
+catalogs follow the admitted daemon. Live and cached admissions use native
+`-N`, so disappearance is reported without restarting the configured executable.
+That failure clears admission; the next explicit call can freshly qualify a
+cold startup. An owned kill clears admission immediately. A cold metadata probe
+never grants cached startup permission. Undated `master` reports remain
+available diagnostically and cannot qualify hard admission.
 
 Workspace layout preflight checks the core floor even with no pending layouts,
 so extension builders cannot begin after an unsupported endpoint was mistaken
