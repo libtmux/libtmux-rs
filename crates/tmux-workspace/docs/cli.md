@@ -186,6 +186,7 @@ stays empty:
 | 1 | `workspace_not_found`, `session_not_found` | Nothing by that name |
 | 1 | `session_mismatch`, `destination_exists` | Something already there does not match, or would be replaced |
 | 1 | `tmux_failed`, `tmux_unavailable` | tmux refused, or is not running or installed |
+| 1 | `tmux_unsupported` | tmux is older than the minimum, or names no release |
 | 1 | `script_failed` | `before_script` failed |
 | 2 | `usage` | The invocation itself is wrong; nothing ran |
 | 130 | `interrupted` | `SIGINT` or `SIGTERM` |

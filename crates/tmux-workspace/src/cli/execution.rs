@@ -343,7 +343,7 @@ pub(super) async fn load(
     state.started = true;
     if flag(args, "colors88") {
         return Err(CliError::usage(
-            "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2",
+            "supported tmux releases do not support 88-color mode; omit -8 or use -2",
         ));
     }
     if flag(args, "dry-run") {
@@ -1517,26 +1517,17 @@ fn same_socket(a: &std::path::Path, b: &std::path::Path) -> bool {
 }
 
 async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result<()> {
-    let action = if inside_tmux {
-        "switch-client"
-    } else {
-        "attach-session"
-    };
-    let mut command = tokio::process::Command::new(server.tmux_executable());
-    command.arg("-S").arg(server.socket_path());
-    // The handoff is the same tmux the rest of the load talked to, so it is
-    // given the same endpoint flags: a client that ignored -2 or -f would
-    // come up with different colours or a different configuration.
-    if let Some(path) = server.config_file() {
-        command.arg("-f").arg(path);
-    }
-    if server.colors() == Some(256) {
-        command.arg("-2");
-    }
-    let status = command
-        .arg(action)
-        .arg("-t")
-        .arg(session.id().to_string())
+    let version = server
+        .cmd(
+            Command::new("display-message")
+                .arg("-p")
+                .arg("--")
+                .arg("tmux #{version}"),
+        )
+        .await?;
+    let version = libtmux::TmuxVersion::parse_output(version.stdout())?;
+    version.ensure_supported()?;
+    let status = handoff_command(server, &version, session.id().to_string(), inside_tmux)
         .status()
         .await?;
     if status.success() {
@@ -1550,5 +1541,70 @@ async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result
                 "the session could not be attached to this terminal"
             },
         ))
+    }
+}
+
+/// The terminal handoff: the same tmux the load talked to, fenced on the
+/// version it checked. `-N` comes first, so a daemon that vanished is
+/// reported rather than restarted by a client that was only meant to attach.
+fn handoff_command(
+    server: &Server,
+    version: &libtmux::TmuxVersion,
+    session: String,
+    inside_tmux: bool,
+) -> tokio::process::Command {
+    let action = if inside_tmux {
+        "switch-client"
+    } else {
+        "attach-session"
+    };
+    let mut command = tokio::process::Command::new(server.tmux_executable());
+    command.arg("-N").arg("-S").arg(server.socket_path());
+    // The handoff is the same tmux the rest of the load talked to, so it is
+    // given the same endpoint flags: a client that ignored -2 or -f would
+    // come up with different colours or a different configuration.
+    if let Some(path) = server.config_file() {
+        command.arg("-f").arg(path);
+    }
+    if server.colors() == Some(256) {
+        command.arg("-2");
+    }
+    command
+        .arg("if-shell")
+        .arg("-F")
+        .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
+        .arg("")
+        .arg("libtmux-core-version-changed")
+        .arg(";")
+        .arg(action)
+        .arg("-t")
+        .arg(session);
+    command
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::handoff_command;
+
+    #[test]
+    fn the_handoff_never_lets_the_client_start_a_daemon() {
+        let server = libtmux::Server::builder()
+            .socket_path("/tmp/libtmux-handoff-test")
+            .tmux_executable("tmux")
+            .build()
+            .expect("client configured");
+        let version = libtmux::TmuxVersion::parse_output(b"tmux 3.3a\n").expect("parses");
+        let command = handoff_command(&server, &version, "$1".to_owned(), false);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args.first().map(String::as_str), Some("-N"), "{args:?}");
+        assert!(
+            args.iter().any(|arg| arg == "libtmux-core-version-changed"),
+            "{args:?}"
+        );
+        assert!(args.iter().any(|arg| arg == "attach-session"), "{args:?}");
     }
 }
