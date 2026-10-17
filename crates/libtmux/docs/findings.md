@@ -388,7 +388,7 @@ the listing misses. A reply that names the client and carries that flag is
 outright, stays `Error::ObjectGone`. The probe can mark a suspended client as
 suspended, and can never report a gone client as live.
 
-Both mechanisms date to 3.2a, which is `MIN_SUPPORTED`, so this needs no
+Both mechanisms predate the supported floor (3.3a), so this needs no
 version gate. The listing filter differs by release: 3.2a and 3.5a screen
 `list-clients` on `c->session == NULL` alone, and `server_client_suspend` never
 clears the session, so a suspended client stays listed there and the miss path

@@ -102,28 +102,58 @@ pub(crate) fn resolve(pending: &[(&OsStr, usize)], version: &TmuxVersion) -> Res
 }
 
 pub(crate) async fn version(server: &Server) -> Result<TmuxVersion, Error> {
-    let result = server.cmd(version_command()).await?;
-    if result.success() {
-        return TmuxVersion::parse_output(result.stdout());
-    }
-    if is_cold(result.stderr()) {
-        return Ok(server.capabilities().await?.tmux_version().clone());
-    }
-    Err(Error::from_refused_result("display-message", &result, None))
+    server.endpoint_version().await
 }
 
-fn is_cold(stderr: &[u8]) -> bool {
-    let reason = stderr.trim_ascii();
-    reason.starts_with(b"no server running on ")
-        || (reason.starts_with(b"error connecting to ")
-            && reason.ends_with(b" (No such file or directory)"))
+/// A version probe that fires no user hook.
+///
+/// `display-message` runs the `after-display-message` hook on every release,
+/// so asking the daemon its version with it already had effects. `run-shell
+/// -C` has no `after-` hook, and it parses its argument in a timer callback
+/// after `exec` returned, so tmux never queues `command-error` for it either.
+/// The argument is not a command: tmux expands the format, fails to parse
+/// `<marker><version>`, and reports `unknown command: <marker><version>` on
+/// stderr with exit status 1.
+pub(crate) struct VersionProbe {
+    marker: String,
 }
 
-pub(crate) fn version_command() -> Command {
-    Command::new("display-message")
-        .arg("-p")
-        .arg("--")
-        .arg("tmux #{version}")
+impl VersionProbe {
+    pub(crate) fn new() -> Self {
+        use std::hash::{BuildHasher as _, Hasher as _};
+
+        // `RandomState` is seeded by the operating system, so a hook, alias
+        // or session name cannot guess the marker to forge a version report.
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u32(std::process::id());
+        Self {
+            marker: format!("libtmux-version-{:016x}-", hasher.finish()),
+        }
+    }
+
+    pub(crate) fn command(&self) -> Command {
+        Command::new("run-shell")
+            .arg("-C")
+            .arg(format!("{}#{{version}}", self.marker))
+    }
+
+    /// Read the daemon's version from the probe's refusal.
+    ///
+    /// Returns `Ok(None)` when `stderr` is not this probe's report, so the
+    /// caller can tell an unrelated failure from an unparseable version.
+    pub(crate) fn parse(&self, stderr: &[u8]) -> Result<Option<TmuxVersion>, Error> {
+        let Some(version) = stderr
+            .trim_ascii()
+            .strip_prefix(b"unknown command: ")
+            .and_then(|rest| rest.strip_prefix(self.marker.as_bytes()))
+        else {
+            return Ok(None);
+        };
+        let mut framed = b"tmux ".to_vec();
+        framed.extend_from_slice(version);
+        framed.push(b'\n');
+        TmuxVersion::parse_output(&framed).map(Some)
+    }
 }
 
 struct Parser<'a> {
@@ -258,24 +288,6 @@ mod tests {
         let long = format!("{}1x1,0,0", "0".repeat(9000));
         assert!(accepts(&serialized(long.as_bytes()), 1, true));
         assert!(!accepts(b"tiled", 0, true));
-    }
-
-    #[test]
-    fn layout_preflight_cold_diagnostics_exclude_live_or_permission_failures() {
-        for reason in [
-            b"no server running on /socket\n".as_slice(),
-            b"error connecting to /socket (No such file or directory)\n",
-        ] {
-            assert!(is_cold(reason));
-        }
-        for reason in [
-            b"server exited unexpectedly".as_slice(),
-            b"error connecting to /socket (Permission denied)\n",
-            b"protocol version mismatch",
-            b"can't find session: absent",
-        ] {
-            assert!(!is_cold(reason));
-        }
     }
 
     #[test]

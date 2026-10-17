@@ -54,7 +54,7 @@ knows nothing about either.
 `libtmux` presents `Server`, `Session`, `Window`, `Pane`, and `Client`
 handles, hierarchy listings, refresh, options, hooks, buffers, key bindings,
 and the local typed filtering kernel, keeping Python libtmux's object
-vocabulary and the same tmux floor of 3.2a. The format catalog, intrinsic
+vocabulary and a tmux floor of 3.3a. The format catalog, intrinsic
 snapshots, and winlink projections back those handles and stay crate-private.
 Optional features add control mode, a blocking runtime, portable expression
 serialization, tracing, and the real-tmux test guard.
@@ -74,7 +74,7 @@ so either serves the same object APIs.
 - Reach behavioral feature parity with the pinned Python public API baseline.
 - Keep familiar names and hierarchy while using Rust ownership, errors,
   builders, iterators, and async methods naturally.
-- Preserve tmux 3.2a compatibility and gate newer format fields and flags by
+- Preserve tmux 3.3a compatibility and gate newer format fields and flags by
   detected capabilities.
 - Make IDs, targets, fields, option scopes, directions, flags, and query
   cardinality statically meaningful.
@@ -112,11 +112,40 @@ so either serves the same object APIs.
 
 ## Compatibility contract
 
-The target compatibility surface is tmux 3.2a and newer on Linux, macOS, and
+The target compatibility surface is tmux 3.3a and newer on Linux, macOS, and
 WSL. Native Windows is unsupported because tmux is unavailable there. The
 initial Rust MSRV is 1.85, the first stable compiler supporting Edition 2024.
 The Foundation gate verifies Linux with both Rust 1.85 and the pinned
 development toolchain; the release slice adds the remaining platform matrix.
+
+Every ordinary dispatch checks the connected daemon, including commands,
+chains, scoped handles and parked channel clients. An absent daemon checks the
+executable that would start it. Admission shares the logical request's timeout;
+a native queue guard verifies the same version immediately before its effects.
+Unknown versions and failed probes refuse dispatch. Executable capabilities
+remain a separate cached description of the configured binary. Ordinary format
+catalogs follow the admitted daemon. Live and cached admissions use native
+`-N`, so disappearance is reported without restarting the configured executable.
+That failure clears admission; the next explicit call can freshly qualify a
+cold startup. An owned kill clears admission immediately. A cold metadata probe
+never grants cached startup permission. Undated `master` reports remain
+available diagnostically and cannot qualify hard admission. Creating executable
+reports may use `tmux` or its exact captured basename; controlled daemon
+metadata requires the literal `tmux` prefix.
+
+MCP completion helpers carry the admitted daemon's generation into a native
+queue guard before printing their markers. A replacement, including one on the
+same version, cannot acknowledge the opening frame and authorize its user job.
+
+The configured executable and library-owned metadata and guard commands must
+retain tmux's native built-in semantics. Owner-defined `command-alias`
+redefinitions of those commands are outside this qualification; their contents
+run with tmux's own semantics.
+
+Workspace layout preflight checks the core floor even with no pending layouts,
+so extension builders cannot begin after an unsupported endpoint was mistaken
+for an absent daemon. The test fixture's private PID bootstrap and an absent
+`Server::kill` cleanup have no requested library effects.
 
 The compatibility baseline for the first Rust release is the Python package at
 commit
@@ -184,7 +213,8 @@ tmux. Its source is not copied into the crate.
   `.matching(expr)` accepts portable expressions and named matchers. No
   collection wrapper or duplicate closure method is needed.
 - Single-evaluation `q`-quoted tmux formats round-tripped delimiter bytes,
-  embedded newlines, and invalid UTF-8 on pinned tmux 3.2a. Delimiter
+  embedded newlines, and invalid UTF-8 on tmux 3.2a (measured before the floor
+  moved to 3.3a; the supported releases behave the same). Delimiter
   splitting and separately sampled length prefixes did not work.
 - tmux 3.4 and 3.5 wrap that output in `VIS_OCTAL | VIS_CSTYLE | VIS_NOSLASH`,
   so the transport carries two escaping layers rather than one. The layers do
@@ -828,7 +858,8 @@ What the earlier framing was right about is kept:
   only while nothing is waiting for a reply. A reply arrives on the connection
   the events arrive on, so pausing with one outstanding would be waiting for
   something this end had stopped listening for, and it deadlocked: measured
-  identically on 3.2a through 3.7c, with no error and `is_closed` reporting
+  identically on every release tried, 3.2a (below the current floor) through
+  3.7c, with no error and `is_closed` reporting
   false. While a reply is outstanding the connection keeps reading and holds
   a fixed maximum of what the consumer has not taken. At that ceiling it
   refuses live replies but retains their correlation slots; an absolute reply
@@ -958,8 +989,8 @@ UTF-8, non-zero status with stdout, stderr without failure, absent daemons,
 task abort during a command, cancellation during scoped shutdown, redaction on
 every diagnostic surface, daemon PID disappearance, and cleanup after panics.
 
-The Foundation workflow runs the pinned tmux 3.2a floor on Linux. The format
-slice adds a dedicated Linux harness that builds pinned 3.2a and 3.6 commits,
+The compatibility workflow runs the pinned tmux 3.3a floor on Linux. The
+format harness builds pinned 3.3a and 3.6 commits,
 supplies each binary directly to `TestServer`, and exercises both sides of the
 3.6 linked-window callback transition. An unpinned distro tmux cannot
 substitute for either endpoint. The harness also builds pinned 3.4 and 3.5a,
@@ -1024,10 +1055,14 @@ here publishes: a path-only dependency cannot be published at all.
 
 `scripts/test-tmux-format-compat.sh` builds each pinned tmux from source and
 runs the whole workspace against it, all targets and all features. The lanes
-are 3.2a, 3.4, 3.5a, 3.6b, and 3.7b: the floor, the ceiling, and the releases
+are 3.3a, 3.4, 3.5a, 3.6b, and 3.7b: the floor, the ceiling, and the releases
 in between that are known to differ. 3.4 and 3.5a are the two that wrapped
 command output in `VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH`, and are the reason the
 codec has a second dialect at all.
+
+Additional 3.2a and exact 3.3 lanes prove refusal before effects. A real 3.3a
+daemon accepts a newer client, and a replacement between admission and dispatch
+is fenced before mutations.
 
 Running only the codec tests on the middle lanes was tempting and wrong. The
 crate's version sensitivity is not confined to the codec: command flags,
@@ -1123,9 +1158,9 @@ question with its own premise.
 `real_tmux_compat_a_coordinate_miss_is_not_an_object_miss` pins both halves
 against whichever tmux the lane runs, for the same reason the wording test
 exists, and has passed on every one: 3.2a, 3.4, 3.5a, 3.6b and 3.7b. The split
-needs no version gate, and 3.2a -- the oldest supported, and the release most
-likely to answer differently -- echoes exactly as the current one does. If a future release echoed the whole target, or dropped the sigil, the
-unrecognized form classifies as `LinkGone` -- the reading that does not license
+needs no version gate, and 3.2a, which is below the 3.3a floor and no longer supported, echoes exactly
+as newer releases do. If a future release echoed the whole target or dropped
+the sigil, the unrecognized form classifies as `LinkGone` -- the reading that does not license
 discarding a live handle -- so the cost of being wrong is a distinction rather
 than a destroyed handle.
 
@@ -1263,7 +1298,7 @@ The crate is complete only when:
   corrections rather than missing behavior;
 - the full Rust format, Clippy, test, doctest, docs, feature, and MSRV gates
   pass;
-- real-tmux tests pass on tmux 3.2a and the maintained compatibility matrix;
+- real-tmux tests pass on tmux 3.3a and the maintained compatibility matrix;
 - socket isolation and cleanup pass under parallel tests and panic paths;
 - timeout, dropped-future, and task-abort tests prove process-group termination
   and direct-child reaping;

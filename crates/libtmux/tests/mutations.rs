@@ -26,16 +26,17 @@ async fn layout_preflight_rejects_unsafe_saved_input_before_dispatch() {
 }
 
 #[tokio::test]
-async fn layout_preflight_static_inputs_need_no_executable() {
+async fn layout_preflight_validates_syntax_before_endpoint_admission() {
     use std::ffi::OsStr;
     let server = libtmux::Server::builder()
         .tmux_executable("/tmp/libtmux-rs-test/absent-layout-executable")
         .build()
         .unwrap();
-    server
+    let error = server
         .validate_layouts([(OsStr::new("t"), 1)])
         .await
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(error, libtmux::Error::ExecutableNotFound { .. }));
     let error = server
         .validate_layouts([
             (OsStr::new("main-horizontal-mirrored"), 1),
@@ -217,12 +218,6 @@ async fn creation_options_reach_tmux() {
     let windows = session.windows().await.expect("windows list");
     assert_eq!(windows[0].name().as_bytes().to_vec(), b"first".to_vec());
 
-    // tmux records the requested size as the session's `default-size`, which
-    // is what this option controls and is the same on every supported
-    // release. Whether a window with no client attached is then drawn at that
-    // size is tmux's own business and is not: 3.2a leaves it at 80x23 where
-    // 3.6 uses the default. Asserting the rendered size would be asserting
-    // tmux's behaviour rather than the crate's.
     assert_eq!(
         session.typed_option("default-size").await.expect("read"),
         Some(libtmux::OptionValue::from("120x40")),
@@ -230,6 +225,7 @@ async fn creation_options_reach_tmux() {
     );
 
     let panes = session.panes().await.expect("panes list");
+    assert_eq!((panes[0].width(), panes[0].height()), (120, 40));
     assert_eq!(
         text(panes[0].current_path()),
         directory

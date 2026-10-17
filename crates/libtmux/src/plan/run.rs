@@ -777,27 +777,16 @@ impl Plan {
         Ok(())
     }
 
-    async fn validate_control_layouts(
+    fn validate_control_layouts(
         &self,
         sender: &crate::control::ControlSender,
     ) -> Result<(), Error> {
         let pending = crate::layout::prepare(layouts(self.steps()))?;
         if !pending.is_empty() {
-            let block = sender.send(crate::layout::version_command()).await?;
-            if let Some(error) = block.refusal_for("display-message") {
-                return Err(error);
-            }
-            let output = block
-                .output()
-                .iter()
-                .flat_map(|line| {
-                    line.as_bytes()
-                        .iter()
-                        .copied()
-                        .chain(std::iter::once(b'\n'))
-                })
-                .collect::<Vec<_>>();
-            crate::layout::resolve(&pending, &crate::TmuxVersion::parse_output(&output)?)?;
+            // The version the connection attached under: asking over it would
+            // run the owner's `after-display-message` hook.
+            let version = sender.version();
+            crate::layout::resolve(&pending, version)?;
         }
         Ok(())
     }
@@ -843,7 +832,7 @@ impl Plan {
         self.validate()
             .map_err(|source| Error::InvalidPlan { source })?;
         self.refuse_pause_over_control_mode()?;
-        self.validate_control_layouts(sender).await?;
+        self.validate_control_layouts(sender)?;
         let mut bound: HashMap<(usize, Part), OsString> = HashMap::new();
         let mut outcomes = vec![Outcome::Skipped; self.len()];
         let mut reported = Vec::with_capacity(self.len());

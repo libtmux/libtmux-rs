@@ -1,0 +1,317 @@
+use std::future::Future;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tokio::time::{Instant, timeout_at};
+
+use super::core::CoreConfiguration;
+use super::executor::{DispatchFuture, Executor};
+use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatus, RequestId};
+use crate::{Command, Error, TmuxVersion};
+
+#[derive(Default)]
+pub(crate) struct VersionState {
+    version: Mutex<Option<TmuxVersion>>,
+    initializing: tokio::sync::Mutex<()>,
+}
+
+impl VersionState {
+    fn get(&self) -> Option<TmuxVersion> {
+        self.version
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn remember(&self, version: TmuxVersion) {
+        *self
+            .version
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version);
+    }
+
+    fn forget(&self, expected: &TmuxVersion) {
+        let mut version = self
+            .version
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if version.as_ref() == Some(expected) {
+            *version = None;
+        }
+    }
+}
+
+#[allow(
+    clippy::await_holding_invalid_type,
+    reason = "serializes the first probe; executor dispatch never reacquires this guard"
+)]
+pub(crate) fn dispatch(
+    executor: Arc<dyn Executor>,
+    configuration: CoreConfiguration,
+    request: CommandRequest,
+    endpoint_probe: RequestId,
+    binary_probe: RequestId,
+    absent_cleanup: bool,
+    versions: Arc<VersionState>,
+) -> DispatchFuture {
+    DispatchFuture::new(async move {
+        let deadline = Instant::now().checked_add(configuration.timeout());
+        let request_id = request.request_id();
+        let summary = request.summary().clone();
+        let unbounded = request.is_unbounded();
+        let admission = async {
+            if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
+                return Ok(Some((version, false)));
+            }
+            let _initialization = versions.initializing.lock().await;
+            if let Some(version) = versions.get().filter(|_| !absent_cleanup) {
+                return Ok(Some((version, false)));
+            }
+            let live = live_version(&executor, &configuration, endpoint_probe, &versions).await?;
+            if absent_cleanup && live.is_none() {
+                if let Some(version) = versions.get() {
+                    versions.forget(&version);
+                }
+                return Ok(None);
+            }
+            let allow_start = live.is_none();
+            let version = match live {
+                Some(version) => version,
+                None => binary_version(&executor, &configuration, binary_probe).await?,
+            };
+            version.ensure_supported()?;
+            if !allow_start {
+                versions.remember(version.clone());
+            }
+            Ok(Some((version, allow_start)))
+        };
+        let Some((version, allow_start)) = within(
+            admission,
+            deadline,
+            request_id,
+            &summary,
+            configuration.timeout(),
+        )
+        .await?
+        else {
+            return Ok(CommandResult::new(
+                request_id,
+                summary,
+                ProcessStatus::from_block_outcome(true),
+                Vec::new(),
+                Vec::new(),
+            ));
+        };
+        let request = if allow_start {
+            request
+        } else {
+            request.live_only()
+        };
+        // The guard and effects share tmux's queue, so replacing its daemon
+        // after the probe cannot admit effects on an unverified version.
+        let dispatch = executor.execute(request.fence_version(&version));
+        let result = within(
+            dispatch,
+            if unbounded { None } else { deadline },
+            request_id,
+            &summary,
+            configuration.timeout(),
+        )
+        .await?;
+        if !result.success()
+            && result.stderr().trim_ascii() == b"unknown command: libtmux-core-version-changed"
+        {
+            versions.forget(&version);
+            return Err(Error::version_probe_failed(
+                request_id.get(),
+                summary.clone(),
+                result.exit_code(),
+                result.signal(),
+            ));
+        }
+        if (absent_cleanup && result.success()) || (!result.success() && is_cold(result.stderr())) {
+            versions.forget(&version);
+        } else if allow_start && result.success() {
+            versions.remember(version);
+        }
+        Ok(result)
+    })
+}
+
+async fn within<T>(
+    future: impl Future<Output = Result<T, Error>>,
+    deadline: Option<Instant>,
+    request_id: RequestId,
+    summary: &CommandSummary,
+    budget: Duration,
+) -> Result<T, Error> {
+    let result = match deadline {
+        Some(deadline) => timeout_at(deadline, future)
+            .await
+            .map_err(|_| Error::timeout(request_id.get(), summary.clone(), budget))?,
+        None => future.await,
+    };
+    result.map_err(|error| match error {
+        Error::Timeout { .. } => Error::timeout(request_id.get(), summary.clone(), budget),
+        other => other,
+    })
+}
+
+#[allow(
+    clippy::await_holding_invalid_type,
+    reason = "coalesces the format probe; endpoint probing never reacquires this guard"
+)]
+pub(crate) async fn format_version(
+    executor: &Arc<dyn Executor>,
+    configuration: &CoreConfiguration,
+    endpoint_probe: RequestId,
+    binary_probe: RequestId,
+    versions: &VersionState,
+) -> Result<TmuxVersion, Error> {
+    if let Some(version) = versions.get() {
+        return Ok(version);
+    }
+    let _initialization = versions.initializing.lock().await;
+    if let Some(version) = versions.get() {
+        return Ok(version);
+    }
+    endpoint_version(
+        executor,
+        configuration,
+        endpoint_probe,
+        binary_probe,
+        versions,
+    )
+    .await
+}
+
+pub(crate) async fn endpoint_version(
+    executor: &Arc<dyn Executor>,
+    configuration: &CoreConfiguration,
+    endpoint_probe: RequestId,
+    binary_probe: RequestId,
+    versions: &VersionState,
+) -> Result<TmuxVersion, Error> {
+    if let Some(version) = live_version(executor, configuration, endpoint_probe, versions).await? {
+        version.ensure_supported()?;
+        versions.remember(version.clone());
+        Ok(version)
+    } else {
+        let version = binary_version(executor, configuration, binary_probe).await?;
+        version.ensure_supported()?;
+        Ok(version)
+    }
+}
+
+async fn live_version(
+    executor: &Arc<dyn Executor>,
+    configuration: &CoreConfiguration,
+    request_id: RequestId,
+    #[cfg_attr(not(feature = "control-mode"), allow(unused_variables))] versions: &VersionState,
+) -> Result<Option<TmuxVersion>, Error> {
+    // Over a control connection the probe's refusal is printed outside any
+    // block, so it cannot be read back. A routed handle is seeded with the
+    // version its connection attached under, and has no other source.
+    #[cfg(feature = "control-mode")]
+    if executor.renders_control_line() {
+        return versions.get().map(Some).ok_or_else(|| {
+            Error::control_mode(std::io::Error::other(
+                "a control-routed handle holds no admitted daemon version",
+            ))
+        });
+    }
+    let probe = crate::layout::VersionProbe::new();
+    let command = probe.command();
+    #[cfg(feature = "control-mode")]
+    let line = executor
+        .renders_control_line()
+        .then(|| command.control_mode_line());
+    // `-N` keeps a vanished daemon from being restarted by this client.
+    let mut global_argv = configuration.global_argv().to_vec();
+    global_argv.push(std::ffi::OsString::from("-N"));
+    let request = CommandRequest::with_global_argv(request_id, &global_argv, command);
+    #[cfg(feature = "control-mode")]
+    let request = request.with_control_line(line.flatten());
+    let result = executor.execute(request).await?;
+    if result.success() {
+        // `run-shell -C` of a non-command always fails; success is another
+        // program answering in tmux's place.
+        return Err(Error::from_invalid_version_output(result.stdout().len()));
+    }
+    if let Some(version) = probe.parse(result.stderr())? {
+        return Ok(Some(version));
+    }
+    if is_cold(result.stderr()) {
+        return Ok(None);
+    }
+    Err(Error::version_probe_failed(
+        request_id.get(),
+        result.command().clone(),
+        result.exit_code(),
+        result.signal(),
+    ))
+}
+
+async fn binary_version(
+    executor: &Arc<dyn Executor>,
+    configuration: &CoreConfiguration,
+    request_id: RequestId,
+) -> Result<TmuxVersion, Error> {
+    let result = executor
+        .execute(CommandRequest::new(request_id, Command::new("-V")))
+        .await?;
+    if !result.success() {
+        return Err(Error::version_probe_failed(
+            request_id.get(),
+            result.command().clone(),
+            result.exit_code(),
+            result.signal(),
+        ));
+    }
+    let output = result.stdout();
+    // tmux 3.3a prints argv[0]'s basename; newer releases print "tmux".
+    // Only the configured name can qualify the older native framing.
+    let configured = std::path::Path::new(configuration.executable())
+        .file_name()
+        .and_then(|program| output.strip_prefix(program.as_encoded_bytes()))
+        .and_then(|rest| rest.strip_prefix(b" "));
+    let version = configured
+        .or_else(|| output.strip_prefix(b"tmux "))
+        .ok_or_else(|| Error::from_invalid_version_output(output.len()))?;
+    let mut canonical = b"tmux ".to_vec();
+    canonical.extend_from_slice(version);
+    TmuxVersion::parse_output(&canonical)
+        .map_err(|_| Error::from_invalid_version_output(output.len()))
+}
+
+fn is_cold(stderr: &[u8]) -> bool {
+    let reason = stderr.trim_ascii();
+    reason.starts_with(b"no server running on ")
+        || (reason.starts_with(b"error connecting to ")
+            && (reason.ends_with(b" (No such file or directory)")
+                || reason.ends_with(b" (Connection refused)")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_cold;
+
+    #[test]
+    fn admission_cold_diagnostics_exclude_live_or_permission_failures() {
+        for reason in [
+            b"no server running on /socket\n".as_slice(),
+            b"error connecting to /socket (No such file or directory)\n",
+            b"error connecting to /socket (Connection refused)\n",
+        ] {
+            assert!(is_cold(reason));
+        }
+        for reason in [
+            b"server exited unexpectedly".as_slice(),
+            b"error connecting to /socket (Permission denied)\n",
+            b"protocol version mismatch",
+            b"can't find session: absent",
+        ] {
+            assert!(!is_cold(reason));
+        }
+    }
+}

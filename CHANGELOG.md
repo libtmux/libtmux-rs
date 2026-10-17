@@ -16,6 +16,39 @@ full.
 
 ## Unreleased
 
+### Changed
+
+- **Breaking.** `libtmux`, `tmux-mcp`, and `tmux-workspace` require tmux 3.3a
+  or newer. Raw commands, chains and scoped operations check the connected
+  daemon before effects; an absent endpoint checks the executable that would
+  start it. Ordinary listings use the daemon's format catalog, and older
+  clients cannot restart their unsupported executable after a supported
+  daemon disappears. Upgrade older daemons before using these operations.
+
+- **Breaking.** `tmux-workspace` Python extensions and `shell` require a
+  Python libtmux backend declaring a hard tmux minimum of 3.3a or newer with
+  per-command daemon admission. Select a compatible tmuxp 1.74.x environment
+  through `TMUX_WORKSPACE_PYTHON`.
+
+### Fixed
+
+- MCP completion helpers accept markers only from the admitted daemon
+  generation. Replacing the daemon before the opening frame refuses the user
+  job, including when the replacement has the same tmux version. (#70)
+
+- Admission asks the daemon for its version with `run-shell -C` instead of
+  `display-message`, so a user's `after-display-message` hook no longer runs
+  before a refusal. The version arrives on stderr as the refused command's
+  text, and `Connection refused` on the socket now reads as an absent daemon.
+  (#70)
+
+- A `Server` routed over a control-mode connection reads the daemon version
+  the connection attached under instead of asking over it, so plans with
+  layouts and other version-sensitive calls run on it. (#70)
+
+- `next-X.Y` development builds rank below `X.Y-rc` and `X.Y`, so they no
+  longer pass gates for the release they precede. (#70)
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;

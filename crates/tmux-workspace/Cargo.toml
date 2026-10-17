@@ -23,10 +23,12 @@ include = [
     "/libtmux-macros-README.md",
     "/src/**/*.rs",
     "/src/cli/bridge.py",
+    "/src/cli/python_admission.py",
     "/tests/**/*.rs",
     "/tests/fixtures/tmuxp/*",
     "/tests/fixtures/layout-preflight.json",
     "/tests/fixtures/terminal_lifecycle.py",
+    "/tests/fixtures/terminal_handoff.py",
 ]
 
 [dependencies]

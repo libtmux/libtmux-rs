@@ -383,7 +383,7 @@ fn classify_field(
             slot: selected_slot,
         },
         Some(_) => PlanFieldState::Unsupported,
-        None if descriptor.minimum_release() <= TmuxVersion::MIN_SUPPORTED => {
+        None if descriptor.minimum_release() <= super::CATALOG_BASELINE => {
             PlanFieldState::Selected {
                 slot: selected_slot,
             }

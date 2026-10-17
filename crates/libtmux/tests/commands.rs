@@ -1337,8 +1337,6 @@ async fn timestamps_are_system_times_that_agree_with_their_handles() {
 /// that the command is built and accepted, not what it did.
 #[tokio::test]
 async fn dispatch_only_commands_are_accepted() {
-    use libtmux::since;
-
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let server = guard.server();
     let session = server.new_session("dispatch").await.expect("session");
@@ -1346,28 +1344,10 @@ async fn dispatch_only_commands_are_accepted() {
 
     pane.send_prefix().await.expect("the prefix key is sent");
 
-    // The prompt history arrived in 3.3, and the crate refuses it below that
-    // rather than dispatching something tmux will reject. Both answers are
-    // asserted, because a skip would leave the refusal untested on exactly
-    // the releases that produce it.
-    let cleared = server.clear_prompt_history().await;
-    if server
-        .capabilities()
+    server
+        .clear_prompt_history()
         .await
-        .expect("capabilities")
-        .tmux_version()
-        .has_behavior(&since::PROMPT_HISTORY)
-    {
-        cleared.expect("the prompt history is cleared");
-    } else {
-        assert!(
-            matches!(
-                cleared.as_ref().map_err(libtmux::Error::kind),
-                Err(libtmux::ErrorKind::UnsupportedVersion),
-            ),
-            "an older tmux reports the version rather than failing some other way: {cleared:?}",
-        );
-    }
+        .expect("the prompt history is cleared");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
@@ -1887,44 +1867,16 @@ async fn formatting_returns_text_and_displaying_returns_nothing() {
 }
 
 #[tokio::test]
-async fn a_capability_too_new_for_this_tmux_is_refused_rather_than_ignored() {
-    // Follows the compat suite's convention: `LIBTMUX_TEST_TMUX` points this
-    // at one release of the version matrix, so the same assertion runs across
-    // every supported tmux rather than only whichever is on PATH.
-    let mut builder = TestServer::builder();
-    if let Some(executable) = std::env::var_os("LIBTMUX_TEST_TMUX") {
-        builder = builder.tmux_executable(executable);
-    }
-    let guard = builder.start().await.expect("tmux starts");
-    let server = guard.server();
-
-    let version = server
-        .capabilities()
-        .await
-        .expect("capabilities")
-        .tmux_version()
-        .clone();
-    let supported = version.release().is_none_or(|release| {
-        *release >= libtmux::ReleaseVersion::new(3, 3, libtmux::ReleaseSuffix::FINAL)
-    });
-
-    let answer = server.prompt_history(libtmux::PromptKind::Command).await;
-    if supported {
-        // Nothing has answered a prompt on a fresh server, so the history is
-        // empty rather than absent.
-        assert!(answer.expect("prompt history reads").is_empty());
-    } else {
-        // tmux below 3.3 has no such command. Left to tmux this would surface
-        // as an unknown-command failure or, for a flag, as silence: the
-        // command succeeding having ignored what was asked for.
-        let error = answer.expect_err("an older tmux refuses the capability");
-        assert_eq!(error.kind(), libtmux::ErrorKind::UnsupportedVersion);
-        assert!(
-            error.to_string().contains("3.3"),
-            "the refusal says what it needs: {error}",
-        );
-    }
-
+async fn prompt_history_is_available_on_every_supported_release() {
+    let guard = TestServer::new().await.expect("tmux starts");
+    assert!(
+        guard
+            .server()
+            .prompt_history(libtmux::PromptKind::Command)
+            .await
+            .expect("prompt history reads")
+            .is_empty()
+    );
     guard.shutdown().await.expect("tmux fixture shuts down");
 }
 
@@ -1936,28 +1888,6 @@ async fn the_server_access_list_names_its_owner_and_refuses_to_unseat_them() {
     }
     let guard = builder.start().await.expect("tmux starts");
     let server = guard.server();
-
-    let supported = server
-        .capabilities()
-        .await
-        .expect("capabilities")
-        .tmux_version()
-        .release()
-        .is_none_or(|release| {
-            *release >= libtmux::ReleaseVersion::new(3, 3, libtmux::ReleaseSuffix::FINAL)
-        });
-    if !supported {
-        assert_eq!(
-            server
-                .access_rules()
-                .await
-                .expect_err("an older tmux has no access list")
-                .kind(),
-            libtmux::ErrorKind::UnsupportedVersion,
-        );
-        guard.shutdown().await.expect("tmux fixture shuts down");
-        return;
-    }
 
     // Whoever started the server owns it, and an owner may always act.
     let rules = server.access_rules().await.expect("access list");

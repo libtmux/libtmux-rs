@@ -343,7 +343,7 @@ pub(super) async fn load(
     state.started = true;
     if flag(args, "colors88") {
         return Err(CliError::usage(
-            "tmux 3.2a and newer do not support 88-color mode; omit -8 or use -2",
+            "supported tmux releases do not support 88-color mode; omit -8 or use -2",
         ));
     }
     if flag(args, "dry-run") {
@@ -1516,14 +1516,48 @@ fn same_socket(a: &std::path::Path, b: &std::path::Path) -> bool {
     a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
+/// Ask the daemon its version without firing a user hook.
+///
+/// `display-message` runs `after-display-message` on every release. `run-shell
+/// -C` of a string that is not a command runs no hook and fails with
+/// `unknown command: <marker><version>`, which carries the answer.
+async fn daemon_version(server: &Server) -> Result<libtmux::TmuxVersion> {
+    use std::hash::{BuildHasher as _, Hasher as _};
+
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    let marker = format!("libtmux-version-{:016x}-", hasher.finish());
+    let result = server
+        .cmd(
+            Command::new("run-shell")
+                .arg("-C")
+                .arg(format!("{marker}#{{version}}")),
+        )
+        .await?;
+    let stderr = result.stderr();
+    let version = stderr
+        .trim_ascii()
+        .strip_prefix(b"unknown command: ")
+        .and_then(|rest| rest.strip_prefix(marker.as_bytes()))
+        .ok_or_else(|| {
+            CliError::new("tmux_failed", "the tmux server did not report its version")
+        })?;
+    let mut framed = b"tmux ".to_vec();
+    framed.extend_from_slice(version);
+    framed.push(b'\n');
+    Ok(libtmux::TmuxVersion::parse_output(&framed)?)
+}
+
 async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result<()> {
+    let version = daemon_version(server).await?;
+    version.ensure_supported()?;
     let action = if inside_tmux {
         "switch-client"
     } else {
         "attach-session"
     };
     let mut command = tokio::process::Command::new(server.tmux_executable());
-    command.arg("-S").arg(server.socket_path());
+    command.arg("-N").arg("-S").arg(server.socket_path());
     // The handoff is the same tmux the rest of the load talked to, so it is
     // given the same endpoint flags: a client that ignored -2 or -f would
     // come up with different colours or a different configuration.
@@ -1534,6 +1568,12 @@ async fn attach(server: &Server, session: &Session, inside_tmux: bool) -> Result
         command.arg("-2");
     }
     let status = command
+        .arg("if-shell")
+        .arg("-F")
+        .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
+        .arg("")
+        .arg("libtmux-core-version-changed")
+        .arg(";")
         .arg(action)
         .arg("-t")
         .arg(session.id().to_string())

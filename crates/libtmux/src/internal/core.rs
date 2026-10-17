@@ -267,7 +267,6 @@ impl CoreConfiguration {
             .expect("resolved Core launch context has a working directory")
     }
 
-    #[cfg(test)]
     pub(crate) fn global_argv(&self) -> &[OsString] {
         &self.global_argv
     }
@@ -318,6 +317,9 @@ pub(crate) struct Core {
     executor: Arc<dyn Executor>,
     capabilities: OnceCell<EngineCapabilities>,
     next_request_id: AtomicU64,
+    admitted_version: Arc<crate::internal::admission::VersionState>,
+    #[cfg(test)]
+    admit_dispatches: bool,
     /// The `wait-for` channels this handle has a client on, or a signal for.
     ///
     /// Shared by every clone of a [`crate::Server`], because the clients are
@@ -360,6 +362,9 @@ impl Core {
             executor,
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
+            admitted_version: Arc::default(),
+            #[cfg(test)]
+            admit_dispatches: true,
             channel_waits: ChannelWaits::default(),
             #[cfg(feature = "control-mode")]
             persistent_clients: PersistentClients::new(control_client_limits),
@@ -379,6 +384,10 @@ impl Core {
         sender: crate::control::ControlSender,
         capabilities: EngineCapabilities,
     ) -> Self {
+        // A version cannot be asked over the connection without a hook:
+        // `run-shell -C` reports its answer outside any block. The attach
+        // already admitted the daemon this connection reaches, so carry that.
+        self.admitted_version.remember(sender.version().clone());
         let executor = crate::internal::control_executor::ControlModeExecutor::new(sender);
 
         Self {
@@ -386,6 +395,9 @@ impl Core {
             executor: Arc::new(executor),
             capabilities: OnceCell::new_with(Some(capabilities)),
             next_request_id: AtomicU64::new(1),
+            admitted_version: Arc::clone(&self.admitted_version),
+            #[cfg(test)]
+            admit_dispatches: true,
             channel_waits: ChannelWaits::default(),
             persistent_clients: PersistentClients::new(self.configuration.control_client_limits),
             // Shared with the parent: a control client this process spawned is
@@ -413,7 +425,9 @@ impl Core {
             #[cfg(feature = "test-support")]
             synchronous_reap_on_supervisor_drop: false,
         };
-        Self::with_executor(configuration, executor)
+        let mut core = Self::with_executor(configuration, executor);
+        core.admit_dispatches = false;
+        core
     }
 
     fn next_request_id(&self) -> RequestId {
@@ -435,7 +449,16 @@ impl Core {
         );
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
-        self.executor.execute(request).await
+        if request.is_client_diagnostic() {
+            #[cfg(feature = "control-mode")]
+            if self.executor.renders_control_line() {
+                return crate::internal::executor::DispatchSpan::new(&request, "control")
+                    .run(async { Err(Error::control_mode_unrepresentable()) })
+                    .await;
+            }
+            return self.executor.execute(request).await;
+        }
+        self.dispatch_admitted(request, false).await
     }
 
     /// Start a dispatch with no deadline of its own, and name it.
@@ -462,7 +485,7 @@ impl Core {
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
         let request_id = request.request_id();
-        (request_id, self.executor.execute(request))
+        (request_id, self.dispatch_admitted(request, false))
     }
 
     /// The `wait-for` channels this handle has a client on, or a signal for.
@@ -493,6 +516,99 @@ impl Core {
         );
         #[cfg(feature = "control-mode")]
         let request = request.with_control_line(control_line.flatten());
+        self.dispatch_admitted(request, false).await
+    }
+
+    fn dispatch_admitted(
+        &self,
+        request: CommandRequest,
+        absent_cleanup: bool,
+    ) -> crate::internal::executor::DispatchFuture {
+        if let Err(error) =
+            crate::internal::process::validate_request(&self.configuration.launch, &request)
+        {
+            #[cfg(feature = "control-mode")]
+            let transport = if self.executor.renders_control_line() {
+                "control"
+            } else {
+                "subprocess"
+            };
+            #[cfg(not(feature = "control-mode"))]
+            let transport = "subprocess";
+            return crate::internal::executor::DispatchSpan::new(&request, transport)
+                .run(async { Err(error) });
+        }
+        #[cfg(test)]
+        if !self.admit_dispatches {
+            return self.executor.execute(request);
+        }
+        crate::internal::admission::dispatch(
+            Arc::clone(&self.executor),
+            self.configuration.clone(),
+            request,
+            self.next_request_id(),
+            self.next_request_id(),
+            absent_cleanup,
+            Arc::clone(&self.admitted_version),
+        )
+    }
+
+    pub(crate) async fn format_version(&self) -> Result<TmuxVersion, Error> {
+        #[cfg(test)]
+        if !self.admit_dispatches {
+            return Ok(self.capabilities().await?.tmux_version().clone());
+        }
+        crate::internal::admission::format_version(
+            &self.executor,
+            &self.configuration,
+            self.next_request_id(),
+            self.next_request_id(),
+            &self.admitted_version,
+        )
+        .await
+    }
+
+    pub(crate) async fn endpoint_version(&self) -> Result<TmuxVersion, Error> {
+        #[cfg(test)]
+        if !self.admit_dispatches {
+            return TmuxVersion::parse_output(
+                format!("tmux {}\n", TmuxVersion::MIN_SUPPORTED).as_bytes(),
+            );
+        }
+        crate::internal::admission::endpoint_version(
+            &self.executor,
+            &self.configuration,
+            self.next_request_id(),
+            self.next_request_id(),
+            &self.admitted_version,
+        )
+        .await
+    }
+
+    pub(crate) async fn kill_server(&self) -> Result<CommandResult, Error> {
+        let command = Command::new("kill-server");
+        #[cfg(feature = "control-mode")]
+        let control_line = self
+            .executor
+            .renders_control_line()
+            .then(|| command.control_mode_line());
+        let request = CommandRequest::with_global_argv(
+            self.next_request_id(),
+            &self.configuration.global_argv,
+            command,
+        );
+        #[cfg(feature = "control-mode")]
+        let request = request.with_control_line(control_line.flatten());
+        self.dispatch_admitted(request, true).await
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) async fn fixture_pid(&self) -> Result<CommandResult, Error> {
+        let request = CommandRequest::with_global_argv(
+            self.next_request_id(),
+            &self.configuration.global_argv,
+            Command::new("display-message").arg("-p").arg("#{pid}"),
+        );
         self.executor.execute(request).await
     }
 
@@ -508,7 +624,6 @@ impl Core {
             ));
         }
         let version = TmuxVersion::parse_output(result.stdout())?;
-        version.ensure_supported()?;
         Ok(EngineCapabilities::from_tmux_version(version))
     }
 
@@ -522,8 +637,11 @@ impl Core {
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
-    ) -> Result<PersistentChild, Error> {
+    ) -> Result<(PersistentChild, TmuxVersion), Error> {
+        let version = self.endpoint_version().await?;
+        version.ensure_supported()?;
         let mut global_argv = self.configuration.global_argv.clone();
+        global_argv.push(OsString::from("-N"));
         global_argv.push(OsString::from("-C"));
         let request = CommandRequest::with_global_argv(
             self.next_request_id(),
@@ -534,7 +652,8 @@ impl Core {
                 .arg("-E")
                 .arg("-t")
                 .arg(session.to_string()),
-        );
+        )
+        .fence_version(&version);
         let reservation = self
             .persistent_clients
             .reserve(
@@ -543,12 +662,13 @@ impl Core {
                 tokio::time::Instant::now().checked_add(self.configuration.timeout),
             )
             .await?;
-        PersistentChild::spawn(
+        let child = PersistentChild::spawn(
             &self.configuration.launch,
             &request,
             reservation,
             Arc::clone(&self.control_client_pids),
-        )
+        )?;
+        Ok((child, version))
     }
 
     /// Report whether this process itself spawned the control client with
@@ -1000,7 +1120,12 @@ printf '<TMUX_TMPDIR=%s>\n' "${TMUX_TMPDIR-unset}"
         .expect("captured configuration resolves");
         let core = Core::new(configuration);
         let result = core
-            .execute(Command::new("display-message").arg("value;"))
+            .executor
+            .execute(crate::command::CommandRequest::with_global_argv(
+                core.next_request_id(),
+                core.configuration.global_argv(),
+                Command::new("display-message").arg("value;"),
+            ))
             .await
             .expect("fake subprocess executes");
         let stdout = result.stdout_utf8().expect("fixture output is UTF-8");

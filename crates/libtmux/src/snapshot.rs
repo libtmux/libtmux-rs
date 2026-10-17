@@ -26,7 +26,7 @@ use crate::{PaneId, ServerIdentity, SessionId, TmuxVersion, WindowId};
 /// running tmux cannot have: a release older than the field gives
 /// [`Unsupported`](Self::Unsupported), and a development build, which names no
 /// release to compare, gives [`Unproven`](Self::Unproven) for any field newer
-/// than the oldest supported release. Neither is fetched.
+/// than the catalog's recorded tmux 3.2a baseline. Neither is fetched.
 ///
 /// [`Absent`](Self::Absent) means tmux was asked and answered with nothing,
 /// which for some fields is the ordinary state: a pane outside copy mode has
