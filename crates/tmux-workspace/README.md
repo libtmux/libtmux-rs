@@ -30,7 +30,7 @@ $ cargo install tmux-workspace \
     --locked
 ```
 
-It needs tmux 3.2a or newer on `PATH`, and Rust 1.85 to build.
+It needs tmux 3.3a or newer on `PATH`, and Rust 1.85 to build.
 [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
 prebuilt binary for Linux or macOS when the release carries one, and builds
 from source when it does not:
@@ -208,7 +208,16 @@ project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
   a value.
 - `freeze` saves only where `-o` says, or prints with `--json`.
 - `plugins` and custom `workspace_builder`s run through tmuxp itself, so they
-  need tmuxp 1.74 installed; everything else is native.
+  need tmuxp 1.74.x and Python libtmux declaring a hard tmux minimum of 3.3a
+  or newer with per-command daemon admission. Runtime discovery and the
+  builder child check this before importing extension hooks.
+
+The Python bridge depends on the coordinated
+[Python libtmux admission change](https://github.com/tmux-python/libtmux/pull/779),
+which has not been released. CI qualifies its pinned source with tmux 3.3a.
+Released tmuxp 1.74.0 pins libtmux below 0.62; installing that release alone
+does not qualify the bridge. Use a compatible tmuxp environment carrying the
+updated Python library and select it with `TMUX_WORKSPACE_PYTHON`.
 
 The [command reference](docs/cli.md) has the complete list.
 

@@ -10,7 +10,7 @@ rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
 
 ## Getting set up
 
-You need tmux 3.2a or newer on `PATH` and a Unix target. Native Windows is
+You need tmux 3.3a or newer on `PATH` and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 The CLI's captured-child support has a narrower binding boundary; see
 [CLI cancellation](../crates/tmux-workspace/README.md#cli-cancellation).
@@ -545,9 +545,9 @@ configured, which all four have been.
 
 ## Compatibility
 
-Every supported tmux release is built from source in CI and runs the whole
+Pinned compatibility releases are built from source in CI and run the whole
 workspace, because tmux's own output and error wording change between
-releases. The lane covers **3.2a, 3.4, 3.5a, 3.6b, and 3.7b** — the final
+releases. The lane covers **3.3a, 3.4, 3.5a, 3.6b, and 3.7b** — the final
 patch of each series, which is what a distribution ships and what a user runs;
 3.4 is the exception because that series has no later patch.
 

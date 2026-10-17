@@ -4,7 +4,7 @@ Run one task from its imports through daemon cleanup. Each `api_*.rs` file
 contains its own entrypoint and error handling; no Rustdoc setup or example
 helper is added before execution.
 
-You need a Unix environment, tmux 3.2a or newer, and the Rust toolchain in
+You need a Unix environment, tmux 3.3a or newer, and the Rust toolchain in
 the repository's `rust-toolchain.toml`. Each program creates a private socket
 under `/tmp/libtmux-rs-dev/` and reads `/dev/null` as its tmux configuration.
 It does not connect to the default server or the server named by `$TMUX`.

@@ -81,7 +81,7 @@ use protocol::unescape_output;
 /// it, because tmux adds notifications between releases; its name is the tmux
 /// notification without the leading `%`.
 ///
-/// Four of these are newer than the oldest tmux this crate supports:
+/// Emission depends on the server release:
 /// `%config-error`, `%message`, `%paste-buffer-changed` and
 /// `%paste-buffer-deleted` are never emitted by 3.2a. Nothing else in the
 /// vocabulary is version-dependent.
