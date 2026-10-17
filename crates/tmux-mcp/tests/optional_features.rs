@@ -6,7 +6,8 @@ use libtmux::NewSessionOptions;
 use libtmux::test::TestServer;
 
 mod support;
-use support::{args, bare_tools, prompt_ready};
+use support::{args, bare_tools, json, prompt_ready};
+use tokio_util::sync::CancellationToken;
 
 /// Read a native-binary variable. A lane that lists the variable in
 /// `LIBTMUX_REQUIRE_NATIVE` must have set it: skipping there would pass
@@ -122,5 +123,74 @@ async fn paste_staging_works_on_3_4_without_acquiring_control() {
         server.clients().await.expect("clients").is_empty(),
         "paste did not acquire a control client"
     );
+    guard.shutdown().await.expect("fixture closes");
+}
+
+/// Below 3.7 `wait_for_text` polls the screen instead of refusing: the
+/// choice is made from the daemon's version before a control client is
+/// attempted, so none is ever acquired.
+#[tokio::test]
+async fn wait_for_text_polls_on_3_3a_without_acquiring_control() {
+    let Some(binary) = native_binary("LIBTMUX_TEST_MINIMUM_TMUX") else {
+        return;
+    };
+    let guard = TestServer::builder()
+        .tmux_executable(binary)
+        .start()
+        .await
+        .expect("3.3a starts");
+    let server = guard.server();
+    let session = server
+        .new_session(NewSessionOptions::new("keeper").command("env ENV=/dev/null PS1='ready> ' sh"))
+        .await
+        .expect("session");
+    let pane = session.panes().await.expect("panes").remove(0);
+    prompt_ready(server, pane.id().as_ref()).await;
+    let tools = bare_tools(server);
+    let pane_id = pane.id().to_string();
+    tools
+        .send_keys(args(serde_json::json!({
+            "pane": pane_id,
+            "text": "sleep 1; echo polled-$((20+22))",
+            "enter": true,
+        })))
+        .await
+        .expect("the delayed command is typed");
+
+    let view = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane_id,
+                    "patterns": ["polled-42"],
+                    "seconds": 10
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("polling wait completes instead of refusing"),
+    );
+    assert_eq!(view["outcome"], "matched", "{view}");
+    assert!(
+        server.clients().await.expect("clients").is_empty(),
+        "polling did not acquire a control client"
+    );
+
+    let missing = json(
+        tools
+            .wait_for_text(
+                args(serde_json::json!({
+                    "pane": pane_id,
+                    "patterns": ["never-printed"],
+                    "seconds": 1
+                })),
+                CancellationToken::new(),
+                tmux_mcp::Reporter::none(),
+            )
+            .await
+            .expect("a timed-out poll is an outcome, not an error"),
+    );
+    assert_eq!(missing["outcome"], "deadline", "{missing}");
     guard.shutdown().await.expect("fixture closes");
 }

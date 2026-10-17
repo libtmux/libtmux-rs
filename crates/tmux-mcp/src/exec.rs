@@ -115,8 +115,16 @@ pub enum WaitOutcome {
     Stopped,
     /// The time the caller allowed ran out.
     Deadline,
-    /// The pane stopped writing for good.
+    /// The pane stopped writing for good: it closed, or the server holding it
+    /// exited. `text` holds the output seen up to then.
     PaneClosed,
+    /// The control stream ended while the pane was still alive, for example
+    /// because its client was detached.
+    ///
+    /// Nothing says the pane stopped, only that this wait can no longer see
+    /// it. Wait again to watch it afresh; `text` holds the output seen up to
+    /// the loss. The polling path, used below tmux 3.7, has no stream to lose.
+    StreamLost,
     /// The client withdrew the request while the wait was still running.
     Cancelled,
 }
@@ -249,6 +257,7 @@ impl Patterns {
 ///
 /// Returns an error when the pane cannot be watched or read.
 pub(crate) async fn wait_for_text(
+    server: &libtmux::Server,
     pane: &Pane,
     patterns: &Patterns,
     stops: &Patterns,
@@ -256,6 +265,16 @@ pub(crate) async fn wait_for_text(
     cancelled: &CancellationToken,
     echo: EchoContext<'_>,
 ) -> Result<WaitView, Error> {
+    // Chosen from the daemon's version before any control client is
+    // attempted: below 3.7 a stream cannot be acquired safely, and the screen
+    // can be read by polling instead of refusing the wait.
+    let streams = server
+        .daemon_version()
+        .await?
+        .has_behavior(&libtmux::since::CONTROL_ACQUISITION);
+    if !streams {
+        return wait_for_text_polling(pane, patterns, stops, timeout, cancelled, echo).await;
+    }
     wait_for_text_with_limits(
         pane,
         patterns,
@@ -266,6 +285,83 @@ pub(crate) async fn wait_for_text(
         echo,
     )
     .await
+}
+
+/// How often the polling wait reads the screen.
+const POLL_INTERVAL: Duration = Duration::from_millis(120);
+
+/// A [`wait_for_text`] that polls the screen, for a daemon below the
+/// control-acquisition floor.
+///
+/// It reads the screen on an interval instead of streaming the pane's output.
+/// The view differs from a stream's in one way a caller can see: `text` is
+/// the screen as last read, not the bytes written since the wait began, and a
+/// pattern that appears and scrolls off between two reads is missed. A match
+/// is confirmed the same way a stream's is, against rows above the one still
+/// being typed into and discounting this server's own echo.
+async fn wait_for_text_polling(
+    pane: &Pane,
+    patterns: &Patterns,
+    stops: &Patterns,
+    timeout: Duration,
+    cancelled: &CancellationToken,
+    echo: EchoContext<'_>,
+) -> Result<WaitView, Error> {
+    if let Some(view) = read_present_at_entry(pane, patterns, echo).await? {
+        return Ok(view);
+    }
+    let baseline = Screen::capture(pane).await.map(|screen| screen.whole());
+    let mut sticky: Vec<Vec<u8>> = Vec::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let pane_id = pane.id().to_string();
+    let view = |outcome, found: Option<(usize, &str)>, text: Vec<u8>| WaitView {
+        pane: pane_id.clone(),
+        outcome,
+        matched_index: found.map(|(index, _)| index),
+        matched_pattern: found.map(|(_, source)| source.to_owned()),
+        bytes: text.len(),
+        text: String::from_utf8_lossy(&text).into_owned(),
+    };
+    let mut last = Vec::new();
+    loop {
+        if cancelled.is_cancelled() {
+            return Ok(view(WaitOutcome::Cancelled, None, last));
+        }
+        let Some(screen) = Screen::capture(pane).await else {
+            return Ok(view(WaitOutcome::PaneClosed, None, last));
+        };
+        let whole = screen.whole();
+        if let Some(found) = stops.first_match(&whole) {
+            return Ok(view(WaitOutcome::Stopped, Some(found), whole));
+        }
+        if let Some(key) = echo.key {
+            for line in echo.echoes.snapshot(key) {
+                if !sticky.contains(&line) {
+                    sticky.push(line);
+                }
+            }
+        }
+        let mut haystack = crate::echo::mask(&screen.above, &sticky);
+        if !echo.key.is_some_and(|key| echo.echoes.has_pending(key)) {
+            haystack.extend_from_slice(&screen.pending);
+        }
+        if patterns.is_empty() {
+            if baseline.as_deref() != Some(whole.as_slice()) && !whole.is_empty() {
+                return Ok(view(WaitOutcome::Matched, None, whole));
+            }
+        } else if let Some(found) = patterns.first_match(&haystack) {
+            return Ok(view(WaitOutcome::Matched, Some(found), whole));
+        }
+        last = whole;
+        tokio::select! {
+            biased;
+            () = cancelled.cancelled() => {}
+            () = tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + POLL_INTERVAL)) => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(view(WaitOutcome::Deadline, None, last));
+        }
+    }
 }
 
 /// Like [`wait_for_text`], with explicit control-mode frame budgets.
@@ -303,6 +399,16 @@ pub(crate) async fn wait_for_text_with_limits(
     wait_on_output(pane, output, patterns, stops, timeout, cancelled, echo).await
 }
 
+/// Whether `pane` still exists and is running, as the daemon reports now.
+///
+/// A daemon that cannot answer -- it exited, or the pane is gone -- is not
+/// live.
+async fn pane_is_live(pane: &Pane) -> bool {
+    pane.format("#{pane_dead}")
+        .await
+        .is_ok_and(|dead| dead.to_string_lossy().trim() == "0")
+}
+
 /// One pane's screen, split at the row still being typed into.
 ///
 /// Two tmux round trips read this, not one: the cursor row first, then the
@@ -334,19 +440,28 @@ impl Screen {
             .trim()
             .parse()
             .ok()?;
-        let lines = pane.capture_with(CaptureOptions::visible()).await.ok()?;
-        // A cursor row past the last captured line is conservative rather
-        // than a decode failure: treat every visible row as still pending.
-        let pending_row = cursor_row.min(lines.len().saturating_sub(1));
+        // Rows the pane wrapped are joined, so a pattern split across a wrap
+        // is one line to match. The capture ends at the cursor row, which
+        // makes the last joined line the one still being typed into, however
+        // many rows it spans; counting rows against joined lines would not.
+        // Trailing spaces are dropped from each line as an unjoined capture
+        // drops them.
+        let end = i32::try_from(cursor_row).ok()?;
+        let lines = pane
+            .capture_with(CaptureOptions::visible().join_wrapped().end(end))
+            .await
+            .ok()?;
+        let trimmed = |line: &[u8]| -> Vec<u8> { line.trim_ascii_end().to_vec() };
 
         let mut above = Vec::new();
-        for line in lines.iter().take(pending_row) {
-            above.extend_from_slice(line.as_bytes());
+        let completed = lines.len().saturating_sub(1);
+        for line in lines.iter().take(completed) {
+            above.extend_from_slice(&trimmed(line.as_bytes()));
             above.push(b'\n');
         }
         let mut pending = lines
-            .get(pending_row)
-            .map_or_else(Vec::new, |line| line.as_bytes().to_vec());
+            .last()
+            .map_or_else(Vec::new, |line| trimmed(line.as_bytes()));
         pending.push(b'\n');
 
         Some(Self { above, pending })
@@ -536,7 +651,15 @@ async fn wait_on_output(
                 }
             }
             Ok(None) => {
-                outcome = WaitOutcome::PaneClosed;
+                // The stream ending says the wait can no longer see the pane,
+                // not that the pane stopped: a detached control client ends
+                // it too. Only a pane that cannot be read, or one tmux holds
+                // dead, has closed.
+                outcome = if pane_is_live(pane).await {
+                    WaitOutcome::StreamLost
+                } else {
+                    WaitOutcome::PaneClosed
+                };
                 break;
             }
             Err(_) => break,

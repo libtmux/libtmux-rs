@@ -239,7 +239,7 @@ async fn every_advertised_tool_answers_the_schema_it_publishes() {
 
         let arguments = arguments_for(tool, &target);
         let restricted = match name.as_str() {
-            "capture_since" | "run_shell_command" | "wait_for_text" => !control,
+            "capture_since" | "run_shell_command" => !control,
             "paste_text" => !staging,
             _ => false,
         };

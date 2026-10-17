@@ -50,11 +50,13 @@ You need tmux 3.3a or newer on `PATH`, and Rust 1.88 to build.
 
 Basic listing, capture, direct input, layout and channel tools work on 3.3a.
 `paste_text` needs 3.4 for safe named-buffer cleanup; an empty paste without
-Enter needs no buffer. Pane observation tools (`wait_for_text`,
-`capture_since`) and `run_shell_command` need tmux 3.7 or
-newer because they acquire a control client. Unavailable operations return an
+Enter needs no buffer. `wait_for_text` streams pane output on tmux 3.7 or
+newer and polls the visible screen with `capture-pane` below that, chosen from
+the daemon's version before any control client is attempted; a match that
+appears and scrolls off between two reads is missed on the polling path.
+`capture_since` and `run_shell_command` need tmux 3.7 or newer because they
+acquire a control client; unavailable operations return an
 `unsupported_version` refusal before control acquisition or paste staging.
-Library polling waits remain available on 3.3a.
 
 ```console
 $ cargo install tmux-mcp --version 0.1.0-alpha.17
