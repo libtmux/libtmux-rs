@@ -71,13 +71,34 @@ mod tests {
 
     #[test]
     fn obsolete_backend_refuses_before_tmuxp_imports() {
+        backend_refuses_before_imports("TMUX_MIN_VERSION = '3.2a'\n", "hard tmux minimum of 3.3a");
+    }
+
+    #[test]
+    fn core_only_backend_refuses_before_tmuxp_imports() {
+        backend_refuses_before_imports("TMUX_MIN_VERSION = '3.3a'\n", "optional feature policy");
+    }
+
+    #[test]
+    fn invalid_feature_policy_refuses_before_tmuxp_imports() {
+        for policy in ["True", "'2'", "0", "1", "None"] {
+            backend_refuses_before_imports(
+                &format!(
+                    "TMUX_MIN_VERSION = '3.3a'\nTMUX_OPTIONAL_FEATURE_POLICY_VERSION = {policy}\n"
+                ),
+                "optional feature policy",
+            );
+        }
+    }
+
+    fn backend_refuses_before_imports(common: &str, message: &str) {
         let directory = tempfile::tempdir().unwrap();
         let library = directory.path().join("libtmux");
         let tmuxp = directory.path().join("tmuxp");
         std::fs::create_dir(&library).unwrap();
         std::fs::create_dir(&tmuxp).unwrap();
         std::fs::write(library.join("__init__.py"), "class Server: pass\n").unwrap();
-        std::fs::write(library.join("common.py"), "TMUX_MIN_VERSION = '3.2a'\n").unwrap();
+        std::fs::write(library.join("common.py"), common).unwrap();
         std::fs::write(
             tmuxp.join("__init__.py"),
             "from pathlib import Path\nPath('builder-imported').touch()\nraise RuntimeError('builder import ran')\n",
@@ -92,7 +113,7 @@ mod tests {
         assert!(!directory.path().join("builder-imported").exists());
         assert!(!output.status.success(), "{output:?}");
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains("hard tmux minimum of 3.3a"),
+            String::from_utf8_lossy(&output.stderr).contains(message),
             "{output:?}"
         );
     }
