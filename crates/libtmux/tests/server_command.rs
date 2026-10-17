@@ -44,12 +44,16 @@ fn hash(value: &Server) -> u64 {
 }
 
 fn write_script(directory: &Path, name: &str, body: &str) -> PathBuf {
+    write_script_for_version(directory, name, body, "3.7b")
+}
+
+fn write_script_for_version(directory: &Path, name: &str, body: &str, version: &str) -> PathBuf {
     let path = directory.join(name);
     let staging = directory.join(format!(".{name}.{}.tmp", process::id()));
     let mut file = fs::File::create(&staging).expect("staged script is creatable");
     file.write_all(
         format!(
-            "#!/bin/sh\nif [ \"${{1-}}\" = __libtmux_fixture_ready__ ]; then\n    exit 0\nfi\nset -eu\n{body}\n"
+            "#!/bin/sh\nif [ \"${{1-}}\" = __libtmux_fixture_ready__ ]; then\n    exit 0\nfi\nset -eu\nfor argument do\n    if [ \"$argument\" = 'tmux #{{version}}' ]; then\n        printf 'tmux {version}\\n'\n        exit 0\n    fi\ndone\n{body}\n"
         )
         .as_bytes(),
     )
@@ -407,7 +411,7 @@ async fn capability_probe_is_exact_shared_lazy_and_preserves_versions() {
             r#"
 if [ "$#" -eq 1 ] && [ "$1" = "-V" ]; then
     printf '<%s>\n' "$1" >> {}
-    printf 'renamed-tmux 3.2a\n'
+    printf 'renamed-tmux 3.3a\n'
     exit 0
 fi
 printf 'unexpected command\n' >&2
@@ -437,7 +441,7 @@ exit 91
     let second = second.expect("shared probe succeeds");
     let third = third.expect("cloned server shares probe");
 
-    assert_eq!(first.tmux_version().raw(), "3.2a");
+    assert_eq!(first.tmux_version().raw(), "3.3a");
     assert!(std::ptr::eq(first, second));
     assert!(std::ptr::eq(first, third));
     assert_eq!(
@@ -545,44 +549,42 @@ printf 'tmux 3.7b\n'
 }
 
 #[tokio::test]
-async fn minimum_version_rejection_does_not_disable_the_raw_escape_hatch() {
+async fn minimum_version_rejection_also_refuses_public_raw_commands() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let marker = directory.path().join("command-ran");
-    let script = write_script(
+    let script = write_script_for_version(
         directory.path(),
         "old-tmux",
         &format!(
             r#"
 if [ "$#" -eq 1 ] && [ "$1" = "-V" ]; then
-    printf 'tmux 3.2\n'
+    printf 'tmux 3.3\n'
     exit 0
 fi
 : > {}
 "#,
             shell_quote(&marker),
         ),
+        "3.3",
     );
     let server = fake_server(&script, &directory.path().join("old.sock"));
 
-    let error = server
+    let diagnostic = server
         .capabilities()
         .await
-        .expect_err("tmux below 3.2a is rejected");
-    assert!(matches!(error, Error::UnsupportedTmuxVersion { .. }));
+        .expect("executable diagnostics remain available below the floor");
+    assert_eq!(diagnostic.tmux_version().raw(), "3.3");
     assert!(
         !marker.exists(),
         "capability probing has no command side effect"
     );
 
-    let result = server
+    let raw = server
         .cmd(Command::new("display-message"))
         .await
-        .expect("raw execution remains available without capability escalation");
-    assert!(result.success());
-    assert!(
-        marker.exists(),
-        "raw command reached the configured executable"
-    );
+        .expect_err("public raw commands enforce the same floor");
+    assert!(matches!(raw, Error::UnsupportedTmuxVersion { .. }));
+    assert!(!marker.exists(), "the refused command was never dispatched");
     server.shutdown().await.expect("shutdown succeeds");
 }
 
@@ -620,7 +622,7 @@ printf '<TMUX_PANE=%s>\n' "${TMUX_PANE-unset}"
     assert_eq!(
         stdout,
         format!(
-            "<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<display-message>\n<value\\;>\n<TMUX=unset>\n<TMUX_PANE=unset>\n",
+            "<-S>\n<{}>\n<-f>\n<{}>\n<-2>\n<-u>\n<if-shell>\n<-F>\n<#{{==:#{{version}},3.7b}}>\n<>\n<libtmux-core-version-changed>\n<;>\n<display-message>\n<value\\;>\n<TMUX=unset>\n<TMUX_PANE=unset>\n",
             socket.display(),
             config.display(),
         )

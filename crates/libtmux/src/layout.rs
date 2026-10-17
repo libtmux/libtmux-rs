@@ -102,21 +102,7 @@ pub(crate) fn resolve(pending: &[(&OsStr, usize)], version: &TmuxVersion) -> Res
 }
 
 pub(crate) async fn version(server: &Server) -> Result<TmuxVersion, Error> {
-    let result = server.cmd(version_command()).await?;
-    if result.success() {
-        return TmuxVersion::parse_output(result.stdout());
-    }
-    if is_cold(result.stderr()) {
-        return Ok(server.capabilities().await?.tmux_version().clone());
-    }
-    Err(Error::from_refused_result("display-message", &result, None))
-}
-
-fn is_cold(stderr: &[u8]) -> bool {
-    let reason = stderr.trim_ascii();
-    reason.starts_with(b"no server running on ")
-        || (reason.starts_with(b"error connecting to ")
-            && reason.ends_with(b" (No such file or directory)"))
+    server.endpoint_version().await
 }
 
 pub(crate) fn version_command() -> Command {
@@ -258,24 +244,6 @@ mod tests {
         let long = format!("{}1x1,0,0", "0".repeat(9000));
         assert!(accepts(&serialized(long.as_bytes()), 1, true));
         assert!(!accepts(b"tiled", 0, true));
-    }
-
-    #[test]
-    fn layout_preflight_cold_diagnostics_exclude_live_or_permission_failures() {
-        for reason in [
-            b"no server running on /socket\n".as_slice(),
-            b"error connecting to /socket (No such file or directory)\n",
-        ] {
-            assert!(is_cold(reason));
-        }
-        for reason in [
-            b"server exited unexpectedly".as_slice(),
-            b"error connecting to /socket (Permission denied)\n",
-            b"protocol version mismatch",
-            b"can't find session: absent",
-        ] {
-            assert!(!is_cold(reason));
-        }
     }
 
     #[test]

@@ -140,7 +140,7 @@ fn decode_error(list_command: &'static str) -> impl Fn(FormatCodecError) -> Erro
 pub(crate) async fn sessions(core: &Core, filter: Option<&str>) -> Result<Vec<SessionInfo>, Error> {
     const LIST_COMMAND: &str = "list-sessions";
 
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
     let stdout = list(core, LIST_COMMAND, Scope::Unscoped, filter, plan.template()).await?;
 
@@ -155,7 +155,7 @@ pub(crate) async fn windows(
 ) -> Result<Vec<WindowProjection>, Error> {
     const LIST_COMMAND: &str = "list-windows";
 
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = window_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
     let stdout = list(core, LIST_COMMAND, scope, filter, plan.template()).await?;
 
@@ -170,7 +170,7 @@ pub(crate) async fn window_for_pane(
 ) -> Result<Option<WindowProjection>, Error> {
     const LIST_COMMAND: &str = "list-panes";
 
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = window_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
     let target = pane.to_string();
     let filter = pane.predicate("pane_id");
@@ -203,7 +203,7 @@ pub(crate) async fn panes(
 ) -> Result<Vec<PaneProjection>, Error> {
     const LIST_COMMAND: &str = "list-panes";
 
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = pane_projection_plan(&version).map_err(decode_error(LIST_COMMAND))?;
     let stdout = list(core, LIST_COMMAND, scope, filter, plan.template()).await?;
 
@@ -215,7 +215,7 @@ pub(crate) async fn panes(
 pub(crate) async fn clients(core: &Core, filter: Option<&str>) -> Result<Vec<ClientInfo>, Error> {
     const LIST_COMMAND: &str = "list-clients";
 
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = FormatPlan::for_profile(ListProfile::Clients, &version);
     let stdout = list(core, LIST_COMMAND, Scope::Unscoped, filter, plan.template()).await?;
 
@@ -309,7 +309,7 @@ pub(crate) async fn client_session(
     core: &Core,
     client: &OsStr,
 ) -> Result<Option<SessionInfo>, Error> {
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
 
     in_client_context(core, client, &plan, hydrate_session_infos_from_stdout).await
@@ -320,7 +320,7 @@ pub(crate) async fn client_window(
     core: &Core,
     client: &OsStr,
 ) -> Result<Option<WindowProjection>, Error> {
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = window_projection_plan(&version).map_err(decode_error(IN_CLIENT))?;
 
     in_client_context(core, client, &plan, |plan, stdout| {
@@ -334,7 +334,7 @@ pub(crate) async fn client_pane(
     core: &Core,
     client: &OsStr,
 ) -> Result<Option<PaneProjection>, Error> {
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = pane_projection_plan(&version).map_err(decode_error(IN_CLIENT))?;
 
     in_client_context(core, client, &plan, |plan, stdout| {
@@ -404,7 +404,7 @@ pub(crate) async fn create_session(
     core: &Core,
     build: impl FnOnce(&str) -> Command,
 ) -> Result<SessionInfo, Error> {
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = FormatPlan::for_profile(ListProfile::Sessions, &version);
     let template = plan.template().to_owned();
 
@@ -419,7 +419,7 @@ pub(crate) async fn create_window(
     core: &Core,
     build: impl FnOnce(&str) -> Command,
 ) -> Result<WindowProjection, Error> {
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = window_projection_plan(&version).map_err(decode_error("new-window"))?;
     let template = plan.template().to_owned();
     let identity = core.configuration().identity();
@@ -436,7 +436,7 @@ pub(crate) async fn create_pane(
     core: &Core,
     build: impl FnOnce(&str) -> Command,
 ) -> Result<PaneProjection, Error> {
-    let version = core.capabilities().await?.tmux_version().clone();
+    let version = core.format_version().await?;
     let plan = pane_projection_plan(&version).map_err(decode_error("split-window"))?;
     let template = plan.template().to_owned();
     let identity = core.configuration().identity();

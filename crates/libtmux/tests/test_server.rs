@@ -393,10 +393,12 @@ fn blocking_exposed_client_tmux_script(pid_file: &Path, client_pid_file: &Path) 
     format!(
         "#!/bin/sh\n\
          daemon=0\n\
+         version=0\n\
          block=0\n\
          socket=''\n\
          previous=''\n\
          for argument in \"$@\"; do\n\
+           if [ \"$argument\" = 'tmux #{{version}}' ]; then version=1; fi\n\
            if [ \"$argument\" = '-D' ]; then daemon=1; fi\n\
            if [ \"$argument\" = 'libtmux-block-client' ]; then block=1; fi\n\
            if [ \"$previous\" = '-S' ]; then socket=$argument; fi\n\
@@ -410,6 +412,7 @@ fn blocking_exposed_client_tmux_script(pid_file: &Path, client_pid_file: &Path) 
            while :; do sleep 1; done\n\
          fi\n\
          while [ ! -s {pid_file} ]; do :; done\n\
+         if [ \"$version\" = 1 ]; then printf 'tmux 3.3a\\n'; exit 0; fi\n\
          if [ \"$block\" = 1 ]; then\n\
            printf '%s' \"$$\" > {client_pid_file}.new\n\
            mv {client_pid_file}.new {client_pid_file}\n\
@@ -735,9 +738,11 @@ async fn exposed_no_start_clients_use_the_isolated_environment_inner() {
         &format!(
             "#!/bin/sh\n\
              daemon=0\n\
+             version=0\n\
              socket=''\n\
              previous=''\n\
              for argument in \"$@\"; do\n\
+               if [ \"$argument\" = 'tmux #{{version}}' ]; then version=1; fi\n\
                if [ \"$argument\" = '-D' ]; then daemon=1; fi\n\
                if [ \"$previous\" = '-S' ]; then socket=$argument; fi\n\
                previous=$argument\n\
@@ -752,6 +757,7 @@ async fn exposed_no_start_clients_use_the_isolated_environment_inner() {
              test \"${{TERM:-}}\" = xterm-256color || exit 41\n\
              test -z \"${{TMUX:-}}\" || exit 42\n\
              test -z \"${{TMUX_PANE:-}}\" || exit 43\n\
+             if [ \"$version\" = 1 ]; then printf 'tmux 3.3a\\n'; exit 0; fi\n\
              cat {pid}\n",
             pid = shell_literal(&pid_file),
         ),
@@ -1775,12 +1781,21 @@ async fn every_exposed_server_command_refuses_to_bootstrap_a_replacement() {
     kill_process(pid(daemon_pid), Signal::TERM).expect("retained daemon receives SIGTERM");
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
-            let probe = escaped_server
+            match escaped_server
                 .cmd(Command::new("display-message").arg("-p").arg("#{pid}"))
                 .await
-                .expect("no-start probe process executes");
-            if !probe.success() {
-                break;
+            {
+                Ok(probe) if !probe.success() => break,
+                // A client that connects while the daemon is still exiting
+                // sees an empty answer or a bare failure, which the version check
+                // refuses to read as a version. That is the daemon going,
+                // not a client starting a replacement.
+                Ok(_)
+                | Err(
+                    libtmux::Error::InvalidVersionOutput { .. }
+                    | libtmux::Error::VersionProbeFailed { .. },
+                ) => {}
+                Err(error) => panic!("no-start probe process executes: {error:?}"),
             }
             tokio::task::yield_now().await;
         }
