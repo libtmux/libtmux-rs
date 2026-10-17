@@ -8,6 +8,8 @@ use crate::Error;
 
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum SuffixKind {
+    /// Master before the release branch is cut: `next-X.Y`.
+    Next,
     ReleaseCandidate(u16),
     Final,
     Patch(u8),
@@ -50,6 +52,9 @@ impl ReleaseSuffix {
 
     /// A final release with no suffix.
     pub const FINAL: Self = Self(SuffixKind::Final);
+
+    /// A development build of the release, ranked below its candidates.
+    pub(crate) const NEXT: Self = Self(SuffixKind::Next);
 
     pub(crate) const PATCH_A: Self = Self(SuffixKind::Patch(b'a'));
 
@@ -114,7 +119,7 @@ impl ReleaseSuffix {
     pub fn patch_letter(self) -> Option<char> {
         match self.0 {
             SuffixKind::Patch(letter) => Some(char::from(letter)),
-            SuffixKind::ReleaseCandidate(_) | SuffixKind::Final => None,
+            SuffixKind::Next | SuffixKind::ReleaseCandidate(_) | SuffixKind::Final => None,
         }
     }
 
@@ -134,7 +139,7 @@ impl ReleaseSuffix {
     pub const fn release_candidate_number(self) -> Option<u16> {
         match self.0 {
             SuffixKind::ReleaseCandidate(number) => Some(number),
-            SuffixKind::Final | SuffixKind::Patch(_) => None,
+            SuffixKind::Next | SuffixKind::Final | SuffixKind::Patch(_) => None,
         }
     }
 
@@ -176,6 +181,7 @@ impl fmt::Debug for ReleaseSuffix {
                 .debug_tuple("ReleaseCandidate")
                 .field(&number)
                 .finish(),
+            SuffixKind::Next => formatter.write_str("Next"),
             SuffixKind::Final => formatter.write_str("Final"),
             SuffixKind::Patch(letter) => formatter
                 .debug_tuple("Patch")
@@ -188,6 +194,7 @@ impl fmt::Debug for ReleaseSuffix {
 impl fmt::Display for ReleaseSuffix {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
+            SuffixKind::Next => formatter.write_str("-next"),
             SuffixKind::ReleaseCandidate(1) => formatter.write_str("-rc"),
             SuffixKind::ReleaseCandidate(number) => write!(formatter, "-rc{number}"),
             SuffixKind::Final => Ok(()),
@@ -415,8 +422,10 @@ impl TmuxVersion {
     /// Return the release whose in-tree behavior this version carries.
     ///
     /// A numbered release returns itself. A `next-X.Y` identifier returns
-    /// `X.Y`, because its tree already contains the changes being developed
-    /// for that release. `master` returns `None` because it names no release.
+    /// `X.Y` ranked below its release candidates: its tree is master before
+    /// the release branch is cut, so it carries what shipped in earlier
+    /// releases but not yet the changes that complete `X.Y`. `master` returns
+    /// `None` because it names no release.
     ///
     /// Unlike [`TmuxVersion::meets`], this does not clamp development
     /// identifiers to the crate's minimum supported release. It answers "which
@@ -635,7 +644,7 @@ fn parse_next_release(raw: &str) -> Option<ReleaseVersion> {
     Some(ReleaseVersion::new(
         parse_u16_component(major)?,
         parse_u16_component(minor)?,
-        ReleaseSuffix::FINAL,
+        ReleaseSuffix::NEXT,
     ))
 }
 
@@ -795,4 +804,99 @@ pub mod since {
     /// newer tmux. The format is already present in 3.8-rc.
     pub const JSON_LAYOUTS: ReleaseVersion =
         ReleaseVersion::new(3, 8, ReleaseSuffix::RELEASE_CANDIDATE);
+}
+
+#[cfg(test)]
+mod grammar_tests {
+    use super::{ReleaseVersion, TmuxVersion};
+
+    fn parsed(raw: &str) -> Result<TmuxVersion, crate::Error> {
+        TmuxVersion::parse_output(format!("tmux {raw}\n").as_bytes())
+    }
+
+    fn rank(raw: &str) -> ReleaseVersion {
+        parsed(raw)
+            .unwrap_or_else(|error| panic!("{raw}: {error:?}"))
+            .behavior_release()
+            .unwrap_or_else(|| panic!("{raw} names no release"))
+    }
+
+    /// Every form tmux has reported through `#{version}`, and the library-side
+    /// spellings it never reported.
+    #[test]
+    fn the_canonical_grammar_admits_refuses_and_orders() {
+        for raw in [
+            "3.3a", "3.4", "3.7d", "3.8", "3.10", "4.0", "3.4-rc", "3.8-rc", "3.8-rc2", "next-3.4",
+            "next-3.9",
+        ] {
+            let version = parsed(raw).unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert!(version.ensure_supported().is_ok(), "{raw} is admitted");
+        }
+        for raw in ["3.3", "3.2a", "3.3-rc", "3.2-rc5", "next-3.3"] {
+            let version = parsed(raw).unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert!(
+                version.ensure_supported().is_err(),
+                "{raw} is below the floor"
+            );
+        }
+        for raw in [
+            "master",
+            "openbsd-7.6",
+            "3",
+            "garbage",
+            "3.3a-master",
+            "3.3a-dev",
+            "next-3.3a",
+            "next-3.9-master",
+        ] {
+            assert!(
+                parsed(raw)
+                    .and_then(|version| version.ensure_supported())
+                    .is_err(),
+                "{raw} is refused"
+            );
+        }
+        assert!(
+            TmuxVersion::parse_output(b"tmux \n").is_err(),
+            "empty is refused"
+        );
+        assert!(
+            parsed("3.3a garbage").is_err(),
+            "trailing words are refused"
+        );
+
+        for chain in [
+            &["next-3.7", "3.7-rc", "3.7-rc3", "3.7", "3.7a"][..],
+            &["next-3.4", "3.4-rc", "3.4"],
+            &["3.9", "3.10"],
+        ] {
+            for pair in chain.windows(2) {
+                assert!(
+                    rank(pair[0]) < rank(pair[1]),
+                    "{} ranks below {}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        }
+
+        // Anything ranking at or above 3.7 final may acquire control.
+        let control = ReleaseVersion::new(3, 7, crate::ReleaseSuffix::FINAL);
+        for (raw, allowed) in [
+            ("3.8-rc2", true),
+            ("next-3.8", true),
+            ("3.7", true),
+            ("3.7d", true),
+            ("next-3.7", false),
+            ("3.7-rc2", false),
+            ("3.6b", false),
+        ] {
+            let version = parsed(raw).unwrap_or_else(|error| panic!("{raw}: {error:?}"));
+            assert_eq!(
+                version.has_behavior(&control),
+                allowed,
+                "{raw} control acquisition"
+            );
+        }
+    }
 }
