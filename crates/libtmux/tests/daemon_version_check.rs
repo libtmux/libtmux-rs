@@ -963,3 +963,82 @@ async fn strict_version_check_cold_metadata_cannot_qualify_a_changed_executable(
 async fn strict_version_check_cold_metadata_preserves_the_first_explicit_start() {
     assert_fresh_start_after_cold_metadata(false).await;
 }
+
+#[tokio::test]
+async fn strict_probe_program_prefixes_refuse_unrelated_reports_before_effects() {
+    for cold in [false, true] {
+        std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+        let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture");
+        let marker = directory.path().join("effect");
+        let endpoint = if cold {
+            "printf 'no server running on missing\\n' >&2; exit 1"
+        } else {
+            "printf 'unrelated 3.7d\\n'"
+        };
+        let executable = wrapper(
+            directory.path(),
+            &format!(
+                "case \"$*\" in *-V) printf 'unrelated 3.7d\\n';; *'tmux '#*) {endpoint};; *) touch {};; esac",
+                shell_quote(marker.as_os_str())
+            ),
+        );
+        let server = Server::builder()
+            .socket_path(directory.path().join("s"))
+            .tmux_executable(executable)
+            .build()
+            .expect("client");
+        assert_eq!(
+            server
+                .capabilities()
+                .await
+                .expect("diagnostic framing remains available")
+                .tmux_version()
+                .raw(),
+            "3.7d"
+        );
+        let result = server.cmd(Command::new("new-session").arg("-d")).await;
+        assert!(
+            !marker.exists(),
+            "unrelated program report ran effects; cold={cold}"
+        );
+        assert!(
+            matches!(result, Err(Error::InvalidVersionOutput { .. })),
+            "unrelated prefix fails the version check; cold={cold}"
+        );
+        server.shutdown().await.expect("client closes");
+    }
+}
+
+#[tokio::test]
+async fn strict_probe_accepts_the_actual_3_3a_creating_executable_basename() {
+    let Some(minimum) = optional_binary("LIBTMUX_TEST_MINIMUM_TMUX") else {
+        return;
+    };
+    std::fs::create_dir_all("/tmp/libtmux-rs-test").expect("fixture root");
+    let directory = tempfile::tempdir_in("/tmp/libtmux-rs-test").expect("owned fixture");
+    let renamed = directory.path().join("renamed-tmux");
+    std::os::unix::fs::symlink(minimum, &renamed).expect("native executable symlink");
+    let report = ProcessCommand::new(&renamed)
+        .arg("-V")
+        .output()
+        .expect("native diagnostic");
+    assert_eq!(
+        report.stdout, b"renamed-tmux 3.3a\n",
+        "native3.3a prints argv0 basename"
+    );
+    let server = Server::builder()
+        .socket_path(directory.path().join("s"))
+        .config_file("/dev/null")
+        .tmux_executable(&renamed)
+        .build()
+        .expect("client");
+    let result = async {
+        server.new_session("qualified").await?;
+        assert_eq!(server.sessions().await?.len(), 1);
+        Ok::<_, Error>(())
+    }
+    .await;
+    let _ = server.kill().await;
+    server.shutdown().await.expect("client closes");
+    result.expect("renamed supported executable can explicitly start its daemon");
+}

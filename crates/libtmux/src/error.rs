@@ -460,10 +460,18 @@ pub enum Error {
         kind: ServerConfigurationErrorKind,
     },
 
-    /// The output from `tmux -V` did not match a supported shape.
+    /// What the version check read from tmux was not a version report.
+    ///
+    /// Raised for output with no version frame, such as a stdout success from
+    /// another program in tmux's place, and for a token that is not printable
+    /// ASCII. A well-framed report that names no release is
+    /// [`Error::UnrecognizedTmuxVersion`] instead.
+    ///
+    /// Nothing was sent to the daemon.
     #[error("invalid tmux version output")]
     InvalidVersionOutput {
-        /// The number of bytes returned by tmux.
+        /// The number of bytes the check read: stderr for the daemon probe,
+        /// stdout for `tmux -V`.
         output_len: usize,
     },
 
@@ -687,7 +695,9 @@ pub enum Error {
         fixed_in: ReleaseVersion,
     },
 
-    /// The version probe process returned a non-zero status.
+    /// The version probe could not establish the daemon's version.
+    ///
+    /// Nothing was sent to the daemon: the check runs before the request.
     #[non_exhaustive]
     #[error(
         "tmux version probe request {request_id} ({command}) failed with exit code {exit_code:?} and signal {signal:?}"

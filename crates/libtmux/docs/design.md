@@ -129,7 +129,9 @@ catalogs follow the checked daemon. Live and cached version checks use native
 That failure clears the cached version; the next explicit call can freshly qualify a
 cold startup. An owned kill clears the cached version immediately. A cold metadata probe
 never grants cached startup permission. Undated `master` reports remain
-available diagnostically and cannot qualify hard admission.
+available diagnostically and cannot pass the version check. Creating executable
+reports may use `tmux` or its exact captured basename; controlled daemon
+metadata requires the literal `tmux` prefix.
 
 The configured executable and library-owned metadata and guard commands must
 retain tmux's native built-in semantics. Owner-defined `command-alias`
