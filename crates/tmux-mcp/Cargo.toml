@@ -6,9 +6,6 @@ name = "tmux-mcp"
 version = "0.1.0-alpha.16"
 authors.workspace = true
 edition.workspace = true
-# Not inherited. The workspace floor is the libraries' floor, which this
-# crate cannot meet: rmcp and darling require 1.88, so inheriting 1.85 would
-# publish a version that does not build.
 rust-version.workspace = true
 description = "Model Context Protocol server exposing tmux through libtmux (alpha)"
 documentation = "https://docs.rs/tmux-mcp"
@@ -36,7 +33,6 @@ getrandom = "0.4"
 libtmux = { package = "libtmux-tokio", path = "../libtmux-tokio", version = "0.1.0-alpha.15", features = ["control-mode", "query", "serde"] }
 regex = "1.13"
 rmcp = { version = "3.0", features = ["server", "macros", "transport-io"] }
-# `std::fs::File::lock` needs 1.89, above this crate's floor.
 rustix = { version = "1.1.4", features = ["fs"] }
 schemars.workspace = true
 serde.workspace = true
