@@ -48,7 +48,7 @@ libtmux  | inspect  |                                               |    |      
 libtmux  | find     | query                                         | sh |               | in window
 libtmux  | scratch  | test-support                                  |    |               | hello from tmux
 libtmux  | sweep    | test-support                                  |    |               | fixture
-libtmux  | watch    | control-mode,test-support                     |    |               | on the same socket
+libtmux  | watch    | control-mode,test-support                     |    |               | on the same connection
 libtmux  | matrix   | plan,control-mode,test-support,query |    |               | every mode built the same thing: true
 libtmux  | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
 libtmux  | recover  | test-support                                  |    |               | is_object_gone: false
@@ -71,7 +71,7 @@ libtmux-tokio | inspect  |                                               |    | 
 libtmux-tokio | find     | query                                         | sh |               | in window
 libtmux-tokio | scratch  | test-support                                  |    |               | hello from tmux
 libtmux-tokio | sweep    | test-support                                  |    |               | fixture
-libtmux-tokio | watch    | control-mode,test-support                     |    |               | on the same socket
+libtmux-tokio | watch    | control-mode,test-support                     |    |               | on the same connection
 libtmux-tokio | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
 libtmux-tokio | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
 libtmux-tokio | recover  | test-support                                  |    |               | is_object_gone: false

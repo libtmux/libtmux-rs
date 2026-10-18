@@ -17,6 +17,18 @@ struct State {
 /// closes admission for that server and asks active client work to stop. A
 /// scoped callback already running checks [`Self::is_cancelled`] at its own
 /// stopping points; cancellation does not interrupt a native thread.
+///
+/// # Examples
+///
+/// ```
+/// use libtmux::CancellationToken;
+///
+/// let token = CancellationToken::new();
+/// let observer = token.clone();
+/// assert!(!observer.is_cancelled());
+/// token.cancel();
+/// assert!(observer.is_cancelled());
+/// ```
 #[derive(Clone, Default)]
 pub struct CancellationToken {
     state: Arc<State>,
