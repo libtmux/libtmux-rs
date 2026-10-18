@@ -277,11 +277,13 @@ async fn options_decode_by_declared_kind_rather_than_by_shape() {
     server.new_session("typed").await.expect("session");
 
     // The schema comes from tmux's own table, so a flag is a flag even though
-    // its value is the text "off", and a number is a number.
+    // its value is the text "off", and a number is a number. tmux 3.8 turned
+    // `mouse` on by default, so the test sets the value it reads back.
     assert_eq!(
         option_schema("mouse").map(OptionSchemaKind::kind),
         Some(OptionKind::Flag),
     );
+    server.set_global_option("mouse", "off").await.expect("set");
     assert_eq!(
         server.typed_global_option("mouse").await.expect("read"),
         Some(OptionValue::Flag(false)),
