@@ -1,8 +1,8 @@
 [workspace]
-members = ["crates/*", "tools/mcp-swap", "tools/sync-client"]
+members = ["crates/*", "tools/mcp-swap", "tools/sync-client", "tools/workspace-docs"]
 # Nightly-only and needs a sanitizer linker flag, so it is not a member.
 exclude = ["fuzz"]
-default-members = ["crates/*", "tools/mcp-swap", "tools/sync-client"]
+default-members = ["crates/*", "tools/mcp-swap", "tools/sync-client", "tools/workspace-docs"]
 resolver = "3"
 
 [workspace.package]

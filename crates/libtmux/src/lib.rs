@@ -474,17 +474,6 @@ pub struct Findings;
 #[doc(inline)]
 pub use libtmux_macros::Filterable;
 
-/// Compiles the workspace README's examples, and nothing else.
-///
-/// The crate README is the crate documentation, so rustdoc already runs its
-/// examples. The one at the repository root is the page most readers see
-/// first and had no such check, which is how an example that never compiled
-/// sat there. `cfg(doctest)` means this exists only while doctests run, so it
-/// costs a normal build nothing and appears in no documentation.
-#[cfg(doctest)]
-#[doc = include_str!("../../../README.md")]
-pub struct WorkspaceReadme;
-
 #[cfg(all(doctest, feature = "query", feature = "control-mode"))]
 #[doc = include_str!("../docs/migration.md")]
 pub struct MigrationGuide;

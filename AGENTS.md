@@ -9,7 +9,7 @@ was asked for.
 
 ## What is here
 
-One Cargo workspace, five published crates and two private developer tools:
+One Cargo workspace, five published crates and three private developer tools:
 
 | Crate | What it is |
 | --- | --- |

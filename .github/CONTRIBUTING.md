@@ -1,6 +1,6 @@
 # Contributing
 
-This repository is a Cargo workspace of five published crates and two private
+This repository is a Cargo workspace of five published crates and three private
 developer tools. The gates below are what a change has to pass. It was
 extracted from the Python libtmux repository; its `uv`, `pytest`, `ruff`, and
 `mypy` conventions do not apply here.
@@ -38,7 +38,7 @@ justfile only groups Cargo commands.
 $ cargo build --workspace --all-features
 ```
 
-Seven workspace packages; five are published:
+Eight workspace packages; five are published:
 
 | Crate | What it is |
 | --- | --- |
@@ -48,6 +48,7 @@ Seven workspace packages; five are published:
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
 | `tools/mcp-swap` | A private agent-client configuration switcher (`publish = false`) |
+| `tools/workspace-docs` | Root README doctests (`publish = false`) |
 | `tools/sync-client` | A private blocking-client source generator (`publish = false`) |
 
 `tmux-mcp` carries its own version. All crates require Rust 1.97.1.
@@ -109,9 +110,10 @@ $ just doctest
 
 The client READMEs, package guides, root README, workspace library guide,
 workspace README, and macro README are compiled with the doctests. The root
-README is included by `libtmux`; each client includes its own README and
-package guide. `tmux-workspace` compiles the macro README through its local
-symlink because the derive requires a downstream crate.
+README is tested by the unpublished `tools/workspace-docs` crate. Each client
+includes its own README and package guide. `tmux-workspace` compiles the macro
+README through its local symlink because the derive requires a downstream
+crate.
 
 `crates/tmux-mcp/README.md` contains prose blocks rather than Rust programs.
 Wire any new page with Rust examples into a doctest target. Removing its
