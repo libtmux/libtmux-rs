@@ -98,6 +98,19 @@ async fn typed_calls_route_over_the_connection_and_spawn_nothing() {
         vec!["-V".to_owned()],
         "only the release probe ran as a process",
     );
+    for flag in ["-V", "-h"] {
+        let error = routed
+            .cmd(Command::new(flag))
+            .await
+            .expect_err("client flags have no control protocol representation");
+        assert!(matches!(
+            error,
+            libtmux::Error::ControlMode {
+                kind: libtmux::ControlModeErrorKind::UnrepresentableCommand,
+                ..
+            }
+        ));
+    }
 
     // A listing: the typed call renders a format plan and decodes rows.
     let names: Vec<String> = routed
@@ -337,4 +350,55 @@ async fn a_sender_for_another_server_is_refused() {
     events.shutdown().await.expect("the connection closes");
     first.shutdown().await.expect("the first fixture stops");
     second.shutdown().await.expect("the second fixture stops");
+}
+
+/// A routed handle has no process to ask for the daemon's version, and asking
+/// over the connection would run a hook (or, for the hook-free probe, come
+/// back as an empty block). Version-sensitive work such as layout validation
+/// must read what the connection attached under.
+#[cfg(feature = "plan")]
+#[tokio::test]
+async fn a_routed_plan_validates_layouts_without_asking_the_connection() {
+    use libtmux::plan::{Plan, Planner, SelectLayout};
+
+    let guard = TestServer::new().await.expect("a private tmux starts");
+    let real = guard.server().clone();
+    let session = real.new_session("routed-plan").await.expect("session");
+    let version = real
+        .capabilities()
+        .await
+        .expect("release")
+        .tmux_version()
+        .raw()
+        .to_owned();
+    let window = session.windows().await.expect("windows").remove(0);
+
+    let control = ControlMode::attach(&real, session.id())
+        .await
+        .expect("a control client attaches");
+    let (sender, events) = control.split();
+    let directory = tempfile::tempdir().expect("a scratch directory");
+    let (stub, log) = stub_tmux(directory.path(), &version);
+    let probe = Server::builder()
+        .socket_path(guard.socket_path())
+        .tmux_executable(&stub)
+        .build()
+        .expect("a server pointed at the fixture's socket");
+    let routed = probe
+        .over_control_mode(&sender)
+        .await
+        .expect("the connection reaches the same server");
+    let before = spawned(&log);
+
+    let mut plan = Plan::new();
+    plan.add(SelectLayout::new(window.id().clone(), "tiled"));
+    let result = plan
+        .run(&routed, Planner::Sequential)
+        .await
+        .expect("the routed plan runs");
+    assert!(result.is_complete(), "{result:?}");
+    assert_eq!(spawned(&log), before, "no process asked for the version");
+
+    events.shutdown().await.expect("events shut down");
+    guard.shutdown().await.expect("fixture shuts down");
 }

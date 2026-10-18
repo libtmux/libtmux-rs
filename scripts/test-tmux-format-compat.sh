@@ -195,6 +195,68 @@ run_lane() {
         return 1
     fi
 
+    # A filtered run that matches no test exits 0, so every refusal lane goes
+    # through require-tests.sh. LIBTMUX_REQUIRE_NATIVE names the variables
+    # a lane provides: a case gated on one fails instead of skipping.
+    if [[ "$source_contract" == "reject-core" ]]; then
+        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+            LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            bash scripts/require-tests.sh \
+            cargo test --locked --package libtmux --all-features \
+            --test daemon_version_check -- --test-threads=1
+        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+            LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            bash scripts/require-tests.sh \
+            cargo test --locked --package tmux-workspace --all-features \
+            --test cli old_daemon_refuses_load_before_scripts_or_mutation \
+            -- --exact --test-threads=1
+        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+            LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            bash scripts/require-tests.sh \
+            cargo test --locked --package tmux-workspace --all-features \
+            --test cli the_attach_handoff -- --test-threads=1
+        LIBTMUX_TEST_UNSUPPORTED_TMUX="$tmux_binary" \
+            LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_UNSUPPORTED_TMUX \
+            bash scripts/require-tests.sh \
+            cargo test --locked --package tmux-mcp --all-features --lib \
+            native_frame_generation_refuses_an_older_replacement \
+            -- --test-threads=1
+        return
+    fi
+    if [[ "$source_contract" == "reject-pre-probe" ]]; then
+        local current_binary="$build_root/tmux-3.3a-install/bin/tmux"
+        if [[ ! -x "$current_binary" ]]; then
+            printf 'tmux %s runs behind the 3.3a client, which is not built\n' "$tag" >&2
+            return 1
+        fi
+        LIBTMUX_TEST_PRE_PROBE_TMUX="$tmux_binary" \
+            LIBTMUX_TEST_TMUX="$current_binary" \
+            LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_PRE_PROBE_TMUX \
+            bash scripts/require-tests.sh \
+            cargo test --locked --package libtmux --all-features \
+            --test daemon_version_check real_tmux_compat_pre_probe_ \
+            -- --test-threads=1
+        return
+    fi
+    if [[ "$source_contract" == "reject-boundary" ]]; then
+        LIBTMUX_TEST_BOUNDARY_TMUX="$tmux_binary" \
+            LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_BOUNDARY_TMUX \
+            bash scripts/require-tests.sh \
+            cargo test --locked --package libtmux --all-features \
+            --test daemon_version_check -- --test-threads=1
+        return
+    fi
+
+    if [[ "$tag" == "3.3a" ]]; then
+        LIBTMUX_TEST_MINIMUM_TMUX="$tmux_binary" \
+            LIBTMUX_REQUIRE_NATIVE=LIBTMUX_TEST_MINIMUM_TMUX \
+            bash scripts/require-tests.sh \
+            cargo test --locked --package libtmux --all-features \
+            --test daemon_version_check \
+            real_tmux_compat_minimum_daemon_accepts_newer_clients \
+            -- --test-threads=1
+    fi
+
     {
         local lane_path
         local selected_version
@@ -250,15 +312,42 @@ run_lane() {
         --test-threads=1
 }
 
-# Every lane runs the whole workspace against the tmux it built. The crate's
-# version sensitivity is not confined to the codec: flags, control mode, and
-# the stderr wording that separates a missing target from a refusal all differ
-# by release in principle, and asserting them on one version proves nothing
-# about the others.
+# Supported lanes run the whole workspace against their build. The older
+# lanes prove refusal without effects. The crate's version sensitivity is
+# not confined to the codec: flags, control mode, and the stderr wording that
+# separates a missing target from a refusal all differ by release in
+# principle, and asserting them on one version proves nothing about the
+# others.
 run_lane \
     "3.2a" \
     "3b929f332aafa7f1080eacc31feb11ffbb1d1841" \
     "tmux 3.2a" \
+    "reject-core"
+
+run_lane \
+    "3.3" \
+    "87fe00e8b44901240fc22d7120c1b31e4331f6f5" \
+    "tmux 3.3" \
+    "reject-boundary"
+
+run_lane \
+    "3.3a" \
+    "0b355ae8114511e1ff6359272b164f1cdf718e80" \
+    "tmux 3.3a" \
+
+# tmux 3.1 and older cannot answer the probe. Each daemon is refused behind
+# the 3.3a client built above, and with its own client, which rejects `-N`.
+run_lane \
+    "3.0a" \
+    "25ae02869544b84b639b25b0aa69baa6ea2d3a6a" \
+    "tmux 3.0a" \
+    "reject-pre-probe"
+
+run_lane \
+    "3.1c" \
+    "25cae5d86f01d0deb050243842ed5d967b3dc411" \
+    "tmux 3.1c" \
+    "reject-pre-probe"
 
 # 3.4 and 3.5a are the releases that wrapped command output in
 # VIS_OCTAL|VIS_CSTYLE|VIS_NOSLASH. They are the reason the codec has a second
@@ -274,7 +363,7 @@ run_lane \
     "549c35b06165f6ae023115eb76f83f2cbf945395" \
     "tmux 3.5a" \
 
-# The final patch of each series rather than its first: 3.2a, 3.5a, 3.6b, and
+# The final patch of each supported series: 3.3a, 3.5a, 3.6b, and
 # 3.7b are what a distribution ships and what a user runs. 3.4 is the
 # exception because that series has no later patch.
 run_lane \

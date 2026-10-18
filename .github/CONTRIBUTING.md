@@ -10,7 +10,7 @@ rustdoc, and source comments — see [`WRITING.md`](WRITING.md).
 
 ## Getting set up
 
-You need tmux 3.2a or newer on `PATH` and a Unix target. Native Windows is
+You need tmux 3.3a or newer on `PATH` and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 The CLI's captured-child support has a narrower binding boundary; see
 [CLI cancellation](../crates/tmux-workspace/README.md#cli-cancellation).
@@ -245,7 +245,7 @@ These gates are **not** in `just check` and run only in CI:
 | --- | --- |
 | `just api-check` | Needs nightly rustdoc JSON; the gate stays on stable |
 | `just example-coverage-check` | Same, and rides the same nightly build |
-| `just compat` | Builds five tmux releases from source; 90 minutes |
+| `just compat` | Builds every pinned tmux release from source; 90 minutes |
 | `just fuzz <target>` | Needs nightly and a sanitizer; runs weekly |
 | `just bench`, `just bench-waits`, `just bench-compare` | Timing on a shared runner; runs weekly against the previous week, failing past 2x |
 | `just parity`, `just bench-cli` | Need tmuxp 1.74.0; load every tmuxp fixture through tmuxp and `tmux-workspace` and diff the sessions, then time both; run weekly |
@@ -545,11 +545,16 @@ configured, which all four have been.
 
 ## Compatibility
 
-Every supported tmux release is built from source in CI and runs the whole
+Pinned compatibility releases are built from source in CI and run the whole
 workspace, because tmux's own output and error wording change between
-releases. The lane covers **3.2a, 3.4, 3.5a, 3.6b, and 3.7b** — the final
+releases. The lane covers **3.3a, 3.4, 3.5a, 3.6b, and 3.7b** — the final
 patch of each series, which is what a distribution ships and what a user runs;
 3.4 is the exception because that series has no later patch.
+
+The same lane builds 3.0a, 3.1c, 3.2a and 3.3, and checks that each is
+refused before any command reaches it. 3.0a and 3.1c run as the daemon
+behind the 3.3a client as well as with their own client, because an old
+daemon answers a current client differently from its own.
 
 Where a release is wrong rather than merely old, the crate says so rather than
 working around it silently: `run_shell` refuses on 3.3 through 3.4, which drop

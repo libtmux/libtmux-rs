@@ -33,7 +33,7 @@ guess from text.
 
 ## Requirements
 
-tmux 3.2a or newer, on `$PATH`. Rust 1.88 to build.
+tmux 3.3a or newer, on `$PATH`. Rust 1.88 to build.
 
 ## Install
 

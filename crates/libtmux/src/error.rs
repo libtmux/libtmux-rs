@@ -460,20 +460,50 @@ pub enum Error {
         kind: ServerConfigurationErrorKind,
     },
 
-    /// The output from `tmux -V` did not match a supported shape.
+    /// What the version check read from tmux was not a version report.
+    ///
+    /// Raised for output with no version frame, such as a stdout success from
+    /// another program in tmux's place, and for a token that is not printable
+    /// ASCII. A well-framed report that names no release is
+    /// [`Error::UnrecognizedTmuxVersion`] instead.
+    ///
+    /// Nothing was sent to the daemon.
     #[error("invalid tmux version output")]
     InvalidVersionOutput {
-        /// The number of bytes returned by tmux.
+        /// The number of bytes the check read: stderr for the daemon probe,
+        /// stdout for `tmux -V`.
         output_len: usize,
     },
 
     /// The detected tmux version does not meet the supported floor.
-    #[error("tmux {found} is below the minimum supported version {minimum}")]
+    ///
+    /// Nothing was sent to the daemon.
+    #[error(
+        "tmux {found} is not supported; libtmux requires tmux {minimum} or newer. \
+         Upgrade tmux and restart the server, or pin the previous release of libtmux"
+    )]
     UnsupportedTmuxVersion {
         /// The detected tmux version.
         found: TmuxVersion,
         /// The minimum supported release.
         minimum: ReleaseVersion,
+    },
+
+    /// The daemon reported a version that names no release, such as a bare
+    /// `master`, an `openbsd-*` build or `3.3a-dev`.
+    ///
+    /// Nothing was sent to the daemon. Such a report cannot be compared with
+    /// the supported floor, so it is refused as unrecognized rather than as
+    /// too old. The report is kept for the message only when it is at most 64
+    /// printable ASCII bytes; a longer or non-ASCII token is
+    /// [`Error::InvalidVersionOutput`].
+    #[error(
+        "tmux reports the version \"{found}\", which names no release libtmux can compare \
+         with the supported minimum; run a released tmux build and restart the server"
+    )]
+    UnrecognizedTmuxVersion {
+        /// The version the daemon reported.
+        found: TmuxVersion,
     },
 
     /// tmux would not accept an option name or value.
@@ -555,6 +585,23 @@ pub enum Error {
         expected: crate::ServerGeneration,
         /// The daemon answering now.
         found: crate::ServerGeneration,
+    },
+
+    /// The daemon was replaced between its version check and the request.
+    ///
+    /// Nothing ran: the request is fenced on the version that was checked,
+    /// and the replacement did not match it. Repeating the call checks the
+    /// daemon that is there now.
+    #[non_exhaustive]
+    #[error(
+        "the tmux server was replaced after the version check of request {request_id} \
+         ({command}); nothing was sent. Repeat the call to check the new server"
+    )]
+    ServerReplaced {
+        /// The Core-scoped dispatch-request identity.
+        request_id: u64,
+        /// The sanitized logical command.
+        command: CommandSummary,
     },
 
     /// tmux produced more output than the dispatch was allowed to read.
@@ -665,7 +712,9 @@ pub enum Error {
         fixed_in: ReleaseVersion,
     },
 
-    /// The version probe process returned a non-zero status.
+    /// The version probe could not establish the daemon's version.
+    ///
+    /// Nothing was sent to the daemon: the check runs before the request.
     #[non_exhaustive]
     #[error(
         "tmux version probe request {request_id} ({command}) failed with exit code {exit_code:?} and signal {signal:?}"
@@ -798,8 +847,15 @@ pub enum Error {
     },
 
     /// A tmux request exceeded its configured deadline.
+    ///
+    /// When `before_dispatch` is true the deadline passed while the daemon's
+    /// version was still being checked, and nothing was sent. Otherwise tmux
+    /// may already have carried out the request.
     #[non_exhaustive]
-    #[error("tmux request {request_id} ({command}) timed out after {timeout:?}")]
+    #[error(
+        "tmux request {request_id} ({command}) timed out after {timeout:?}{}",
+        if *.before_dispatch { "; nothing was sent" } else { "" }
+    )]
     Timeout {
         /// The Core-scoped dispatch-request identity.
         request_id: u64,
@@ -807,6 +863,9 @@ pub enum Error {
         command: CommandSummary,
         /// The configured deadline.
         timeout: Duration,
+        /// Whether the deadline passed during the version check, before the
+        /// request was sent.
+        before_dispatch: bool,
     },
 
     /// The executor has stopped accepting requests.
@@ -1243,6 +1302,13 @@ impl Error {
         }
     }
 
+    pub(crate) fn server_replaced(request_id: u64, command: CommandSummary) -> Self {
+        Self::ServerReplaced {
+            request_id,
+            command,
+        }
+    }
+
     pub(crate) fn from_invalid_version_output(output_len: usize) -> Self {
         Self::InvalidVersionOutput { output_len }
     }
@@ -1251,6 +1317,10 @@ impl Error {
         Self::UnreadableAccessRule {
             marker: marker.to_owned(),
         }
+    }
+
+    pub(crate) fn unrecognized_tmux_version(found: TmuxVersion) -> Self {
+        Self::UnrecognizedTmuxVersion { found }
     }
 
     pub(crate) fn unsupported_tmux_version(found: TmuxVersion, minimum: ReleaseVersion) -> Self {
@@ -1313,6 +1383,20 @@ impl Error {
             request_id,
             command,
             timeout,
+            before_dispatch: false,
+        }
+    }
+
+    pub(crate) fn timeout_before_dispatch(
+        request_id: u64,
+        command: CommandSummary,
+        timeout: Duration,
+    ) -> Self {
+        Self::Timeout {
+            request_id,
+            command,
+            timeout,
+            before_dispatch: true,
         }
     }
 
@@ -1374,6 +1458,7 @@ impl Error {
     pub fn found_version(&self) -> Option<&TmuxVersion> {
         match self {
             Self::UnsupportedTmuxVersion { found, .. }
+            | Self::UnrecognizedTmuxVersion { found }
             | Self::UnsupportedCapability { found, .. } => Some(found),
             _ => None,
         }
@@ -1494,6 +1579,14 @@ impl fmt::Debug for Error {
                 .field("command", command)
                 .field("in_flight", in_flight)
                 .finish(),
+            Self::ServerReplaced {
+                request_id,
+                command,
+            } => formatter
+                .debug_struct("ServerReplaced")
+                .field("request_id", request_id)
+                .field("command", command)
+                .finish(),
             Self::ServerGenerationChanged { expected, found } => formatter
                 .debug_struct("ServerGenerationChanged")
                 .field("expected", expected)
@@ -1515,6 +1608,10 @@ impl fmt::Debug for Error {
             Self::InvalidLayout { reason } => formatter
                 .debug_struct("InvalidLayout")
                 .field("reason", reason)
+                .finish(),
+            Self::UnrecognizedTmuxVersion { found } => formatter
+                .debug_struct("UnrecognizedTmuxVersion")
+                .field("found", found)
                 .finish(),
             Self::UnsupportedTmuxVersion { found, minimum } => formatter
                 .debug_struct("UnsupportedTmuxVersion")
@@ -1593,11 +1690,13 @@ impl fmt::Debug for Error {
                 request_id,
                 command,
                 timeout,
+                before_dispatch,
             } => formatter
                 .debug_struct("Timeout")
                 .field("request_id", request_id)
                 .field("command", command)
                 .field("timeout", timeout)
+                .field("before_dispatch", before_dispatch)
                 .finish(),
             Self::ExecutorShutdown {
                 request_id,

@@ -16,6 +16,71 @@ full.
 
 ## Unreleased
 
+### Added
+
+- `Server::daemon_version` returns the version of the daemon a handle reaches
+  once it has passed the minimum check, so a caller needs no probe of its own.
+  `tmux-workspace` uses it for the terminal handoff. (#70)
+
+- `Error::ServerReplaced` reports a daemon replaced between its version check
+  and the request. Nothing ran, and repeating the call checks the new server.
+  `Error::Timeout` gains `before_dispatch`, true when the deadline passed
+  during the version check, before the request was sent. (#70)
+
+- `tmux://capabilities` reports `minimumTmuxVersion`. (#70)
+
+### Changed
+
+- **Breaking.** `libtmux`, `tmux-mcp`, and `tmux-workspace` require tmux 3.3a
+  or newer, checked against the running tmux server rather than the `tmux`
+  executable. Raw commands, chains and scoped operations refuse an older
+  server, including 3.3, with `Error::UnsupportedTmuxVersion` before any
+  effect; an absent endpoint checks the executable that would start it.
+  Upgrade tmux and restart the server, or pin the previous release. (#70)
+
+- **Breaking.** A version report that is well framed but names no release,
+  such as `master`, `openbsd-*` or `3.3a-dev`, raises
+  `Error::UnrecognizedTmuxVersion` instead of the minimum-version error, for a
+  running server and for `tmux -V` alike. Output that is not a version report
+  stays `Error::InvalidVersionOutput`, whose `output_len` counts the bytes the
+  check read: stderr for the server probe, stdout for `tmux -V`. (#70)
+
+- **Breaking.** `tmux-workspace` Python extensions and `shell` require a
+  Python libtmux backend that declares tmux 3.3a or newer and checks each
+  command's server. Select a compatible tmuxp 1.74.x environment through
+  `TMUX_WORKSPACE_PYTHON`. (#70)
+
+- `tmux-mcp` reports a refused tmux server as `unsupported_version` with the
+  remedy, and its instructions state the 3.3a minimum. (#70)
+
+- `tmux-workspace` reports a refused tmux, old or naming no release, with the
+  machine code `tmux_unsupported` instead of `tmux_failed`. (#70)
+
+- JSON layouts require tmux 3.8-rc2 or newer, the earliest build that emits
+  them; the `3.8-rc` tag no longer exists upstream. (#70)
+
+### Removed
+
+- **Breaking.** Remove `since::SERVER_ACCESS`, `since::PROMPT_HISTORY` and
+  `since::PANE_BORDER_FORMAT_PER_PANE`. Every supported tmux has these
+  features, so drop the checks that used them. (#70)
+
+### Fixed
+
+- Reading the server's version no longer runs a user's
+  `after-display-message` hook, and `Connection refused` on the socket reads
+  as an absent server rather than an error. (#70)
+
+- `tmux-mcp` completion helpers accept a marker only from the tmux server it
+  was issued for, so a server replaced before the opening frame refuses the
+  job, even when the replacement runs the same tmux version. (#70)
+
+- `next-X.Y` development builds rank below `X.Y-rc` and `X.Y`, so they no
+  longer pass gates for the release they precede. A `next-X.Y` build can sit
+  on either side of a change in tmux's command-output encoding, which its
+  version cannot tell: `next-3.4` is read as the raw dialect and `next-3.6` as
+  the visual one. (#70)
+
 ## 0.1.0-alpha.15 - 2026-09-27
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.15;

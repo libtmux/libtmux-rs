@@ -212,15 +212,15 @@ each start. `routed` is `Plan::run` on a `Server::over_control_mode` handle:
 ```text
 mode                     feature            dispatches processes      wall  attribution  query output
 ----------------------------------------------------------------------------------------------------------------------
-blocking/sequential      plan                        6         6     16ms  per-command  2 panes, 2 windows, 2 active
-async/sequential         plan                        6         6     16ms  per-command  2 panes, 2 windows, 2 active
-async/folded             plan                        3         3      9ms  merged       2 panes, 2 windows, 2 active
-async/marked-fold        plan                        3         3     10ms  merged       2 panes, 2 windows, 2 active
-control-mode/streaming   plan,control-mode           6         1     10ms  per-command  2 panes, 2 windows, 2 active
-control-mode/routed      plan,control-mode           6         1      6ms  per-command  2 panes, 2 windows, 2 active
+blocking/sequential      plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
+async/sequential         plan                        6         7     16ms  per-command  2 panes, 2 windows, 2 active
+async/folded             plan                        3         4      9ms  merged       2 panes, 2 windows, 2 active
+async/marked-fold        plan                        3         4     10ms  merged       2 panes, 2 windows, 2 active
+control-mode/streaming   plan,control-mode           6         3     10ms  per-command  2 panes, 2 windows, 2 active
+control-mode/routed      plan,control-mode           6         3      6ms  per-command  2 panes, 2 windows, 2 active
 
 every mode built the same thing: true
-dispatches ranged 3..6, processes ranged 1..6
+dispatches ranged 3..6, processes ranged 3..7
 
 the same failure, dispatched two ways:
   Sequential   1 dispatch(es) -> [Failed, Skipped]
@@ -271,14 +271,13 @@ it into an MCP client.
 
 ## Requirements
 
-Rust 1.85 or newer, tmux 3.2a or newer, and a Unix target. Native Windows is
+Rust 1.85 or newer, tmux 3.3a or newer, and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
-Every supported tmux release — 3.2a, 3.4, 3.5a, 3.6b, and 3.7b — is built from
-source in CI and runs the whole workspace, because tmux's own output and error
-wording change between releases. Where a release is wrong rather than merely
-old, the crate says so: `run_shell` refuses on 3.3 through 3.4, which drop the
-command's output instead of returning it.
+CI builds pinned tmux 3.3a, 3.4, 3.5a, 3.6b, and 3.7b from source and runs the
+whole workspace against each, because tmux's output and error wording change
+between releases. `run_shell` refuses on 3.3a and 3.4, which drop the command's
+output instead of returning it.
 
 ## Crates
 

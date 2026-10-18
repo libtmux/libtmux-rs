@@ -142,10 +142,13 @@ Python-extension loads fail before touching tmux; other commands work.
 ## Python extensions
 
 `plugins` and `workspace_builder` run through a bridge to tmuxp: a nonempty
-plugin list or builder string needs tmuxp 1.74.x, found through
-`TMUX_WORKSPACE_PYTHON` or `PATH`. An absent or empty value keeps the native
-builder. The bridge's request travels in an environment variable, not on the
-child's command line. `shell` also runs tmuxp's Python shell.
+plugin list or builder string needs tmuxp 1.74.x and Python libtmux declaring a
+hard tmux minimum of 3.3a or newer with per-command daemon version check. Select
+the environment through `TMUX_WORKSPACE_PYTHON` or `PATH`. Runtime discovery and
+each builder or shell child check the backend before tmuxp imports. An absent or
+empty plugin/builder value keeps the native builder. The bridge's request
+travels in an environment variable rather than the child's command line. `shell`
+also runs tmuxp's Python shell.
 
 ## Imports
 
@@ -186,6 +189,7 @@ stays empty:
 | 1 | `workspace_not_found`, `session_not_found` | Nothing by that name |
 | 1 | `session_mismatch`, `destination_exists` | Something already there does not match, or would be replaced |
 | 1 | `tmux_failed`, `tmux_unavailable` | tmux refused, or is not running or installed |
+| 1 | `tmux_unsupported` | tmux is older than the minimum, or names no release |
 | 1 | `script_failed` | `before_script` failed |
 | 2 | `usage` | The invocation itself is wrong; nothing ran |
 | 130 | `interrupted` | `SIGINT` or `SIGTERM` |

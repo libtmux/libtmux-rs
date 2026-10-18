@@ -78,6 +78,7 @@ impl Error {
             Self::ServerGone { .. } => ErrorKind::ServerGone,
             Self::CommandFailed { .. }
             | Self::NoEffect { .. }
+            | Self::ServerReplaced { .. }
             | Self::OutputLimitExceeded { .. }
             | Self::Overloaded { .. }
             | Self::SessionExists { .. }
@@ -92,6 +93,7 @@ impl Error {
                 ErrorKind::InvalidInput
             }
             Self::UnsupportedTmuxVersion { .. }
+            | Self::UnrecognizedTmuxVersion { .. }
             | Self::UnsupportedCapability { .. }
             | Self::CapabilityDefective { .. } => ErrorKind::UnsupportedVersion,
             Self::InvalidLayout { .. }
@@ -158,7 +160,13 @@ impl Error {
     #[must_use]
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::Overloaded { .. } | Self::ClientSuspended { .. } => true,
+            Self::Overloaded { .. }
+            | Self::ClientSuspended { .. }
+            | Self::ServerReplaced { .. }
+            | Self::Timeout {
+                before_dispatch: true,
+                ..
+            } => true,
             Self::Spawn { source, .. } => matches!(
                 source.kind(),
                 io::ErrorKind::Interrupted
@@ -176,6 +184,7 @@ impl Error {
             | Self::InvalidServerConfiguration { .. }
             | Self::InvalidVersionOutput { .. }
             | Self::UnsupportedTmuxVersion { .. }
+            | Self::UnrecognizedTmuxVersion { .. }
             | Self::OptionRejected { .. }
             | Self::UnreadableFormatValue { .. }
             | Self::ServerGenerationChanged { .. }
@@ -193,7 +202,10 @@ impl Error {
             | Self::DuplicateRequest { .. }
             | Self::ReadOutput { .. }
             | Self::WaitChild { .. }
-            | Self::Timeout { .. }
+            | Self::Timeout {
+                before_dispatch: false,
+                ..
+            }
             | Self::SupervisorLost { .. }
             | Self::ObjectGone { .. }
             | Self::LinkGone { .. }

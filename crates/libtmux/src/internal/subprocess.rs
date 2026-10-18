@@ -281,10 +281,15 @@ impl SubprocessExecutor {
             return Err(error);
         }
 
+        let stdout_discarded = request.is_stdout_discarded();
         let mut process = self.configuration.launch.command(request.argv());
         process
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
+            .stdout(if stdout_discarded {
+                Stdio::null()
+            } else {
+                Stdio::piped()
+            })
             .stderr(Stdio::piped());
 
         let mut child = match process.spawn() {
@@ -326,6 +331,7 @@ impl SubprocessExecutor {
         let readers = ReaderTasks::spawn(
             child.stdout.take(),
             child.stderr.take(),
+            stdout_discarded,
             self.configuration.output_limits,
             #[cfg(test)]
             &self.configuration.hooks,
@@ -766,18 +772,27 @@ impl ReaderTasks {
     fn spawn(
         stdout: Option<ChildStdout>,
         stderr: Option<ChildStderr>,
+        stdout_discarded: bool,
         limits: OutputLimits,
         #[cfg(test)] hooks: &TestHooks,
     ) -> Self {
         #[cfg(test)]
-        let stdout = spawn_reader(
-            stdout,
-            limits.max_stdout_bytes,
-            hooks.reader_failure,
-            hooks.reader_failure_release.clone(),
-        );
+        let stdout = if stdout_discarded {
+            tokio::spawn(std::future::ready(Ok(Vec::new())))
+        } else {
+            spawn_reader(
+                stdout,
+                limits.max_stdout_bytes,
+                hooks.reader_failure,
+                hooks.reader_failure_release.clone(),
+            )
+        };
         #[cfg(not(test))]
-        let stdout = spawn_reader(stdout, limits.max_stdout_bytes);
+        let stdout = if stdout_discarded {
+            tokio::spawn(std::future::ready(Ok(Vec::new())))
+        } else {
+            spawn_reader(stdout, limits.max_stdout_bytes)
+        };
 
         #[cfg(test)]
         let stderr = spawn_reader(stderr, limits.max_stderr_bytes, None, None);

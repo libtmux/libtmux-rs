@@ -40,6 +40,9 @@ type Result<T> = std::result::Result<T, CliError>;
 ///   document: found, not missing, so `session_not_found` here would send a
 ///   consumer looking for a session that is right there.
 /// - `tmux_unavailable` — no tmux executable, or its server is unreachable.
+/// - `tmux_unsupported` — the tmux server, or an executable that would start
+///   one, is older than the minimum or names no release; the message carries
+///   the remedy.
 /// - `tmux_failed` — tmux rejected a command this port sent it.
 /// - `script_failed` — a `before_script` is missing, not executable, or
 ///   exited nonzero.
@@ -122,6 +125,9 @@ impl From<libtmux::Error> for CliError {
             // option tmux keeps somewhere else. That is a defect in the
             // workspace, not a failure of tmux.
             libtmux::ErrorKind::InvalidInput => "invalid_workspace",
+            // A version refusal, including a report that names no release:
+            // the tmux is the problem and upgrading it is the remedy.
+            libtmux::ErrorKind::UnsupportedVersion => "tmux_unsupported",
             _ => "tmux_failed",
         };
         Self::new(code, error.to_string())

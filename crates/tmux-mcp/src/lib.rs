@@ -145,6 +145,7 @@ pub(crate) const INSTRUCTIONS: &str = concat!(
     "\n\nTOOLSETS: inspect reads; manage changes tmux state; execute runs processes and \
      sends pane input; teardown deletes. tmux://capabilities has the surface frozen at \
      startup; a missing tool was not selected.",
+    "\n\nREQUIRES tmux 3.3a or newer; an older server is refused as unsupported_version.",
     "\n\nTRUST: the tool surface is not authorization: commands and input run with the \
      tmux user's permissions, and tmux configuration may add effects. Pane output may be \
      sensitive or untrusted; environment values are withheld unless allowed by name. No \
@@ -250,6 +251,7 @@ mod instruction_tests {
             "{} bytes",
             super::INSTRUCTIONS.len()
         );
+        assert!(super::INSTRUCTIONS.contains("tmux 3.3a or newer"));
         let launch = super::launch_context("%2147483647");
         assert!(launch.len() <= 256, "{} bytes", launch.len());
     }

@@ -750,9 +750,56 @@ pub(crate) struct CommandRequest {
     /// the channel's next signal or its next lock. Such a request ends when
     /// tmux answers or the executor shuts down.
     unbounded: bool,
+    /// Whether the client's stdout goes to the null device instead of a pipe.
+    ///
+    /// tmux 3.1 and older keep a client's stdout open after the client exits,
+    /// so a pipe read to its end waits out the deadline. A request whose
+    /// answer is on stderr and in the exit status does not need the pipe.
+    stdout_discarded: bool,
 }
 
 impl CommandRequest {
+    pub(crate) fn is_client_diagnostic(&self) -> bool {
+        matches!(
+            &self.argv[self.logical_subcommand_index..],
+            [flag] if flag == "-V" || flag == "-h"
+        )
+    }
+
+    pub(crate) fn live_only(mut self) -> Self {
+        self.argv
+            .insert(self.logical_subcommand_index, OsString::from("-N"));
+        self.logical_subcommand_index += 1;
+        self
+    }
+
+    pub(crate) fn fence_version(mut self, version: &crate::TmuxVersion) -> Self {
+        let guard = Command::new("if-shell")
+            .arg("-F")
+            .arg(format!("#{{==:#{{version}},{}}}", version.raw()))
+            .arg("")
+            .arg("libtmux-core-version-changed");
+        #[cfg(feature = "control-mode")]
+        {
+            self.control_line = self.control_line.and_then(|line| {
+                guard
+                    .control_mode_line()
+                    .map(|guard| format!("{guard} ; {line}"))
+            });
+            self.command_count += 1;
+        }
+        let mut prefix = Vec::new();
+        guard.extend_argv(&mut prefix);
+        prefix.push(OsString::from(SEPARATOR_TOKEN));
+        let prefix_len = prefix.len();
+        self.argv.splice(
+            self.logical_subcommand_index..self.logical_subcommand_index,
+            prefix,
+        );
+        self.logical_subcommand_index += prefix_len;
+        self
+    }
+
     pub(crate) fn new(request_id: RequestId, command: Command) -> Self {
         Self::with_global_argv(request_id, &[], command)
     }
@@ -783,6 +830,7 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count: 1,
             unbounded: false,
+            stdout_discarded: false,
         }
     }
 
@@ -806,6 +854,7 @@ impl CommandRequest {
             #[cfg(feature = "control-mode")]
             command_count,
             unbounded: false,
+            stdout_discarded: false,
         }
     }
 
@@ -818,6 +867,17 @@ impl CommandRequest {
     /// Whether this request runs without a deadline of its own.
     pub(crate) const fn is_unbounded(&self) -> bool {
         self.unbounded
+    }
+
+    /// Send the client's stdout to the null device.
+    pub(crate) const fn discarding_stdout(mut self) -> Self {
+        self.stdout_discarded = true;
+        self
+    }
+
+    /// Whether the client's stdout goes to the null device.
+    pub(crate) const fn is_stdout_discarded(&self) -> bool {
+        self.stdout_discarded
     }
 
     /// Attach the control-mode rendering of the command this request carries.
@@ -887,9 +947,7 @@ impl ProcessStatus {
     /// Control mode closes a block with `%end` or `%error` and never with an
     /// exit status, and a test double never had one either. The code is
     /// synthesized so callers that read one see the shape tmux would have
-    /// exited with, and it is stated here rather than invented at each call
-    /// site.
-    #[cfg(feature = "control-mode")]
+    /// exited with. Already-absent cleanup also succeeds without a process.
     pub(crate) const fn from_block_outcome(succeeded: bool) -> Self {
         Self {
             success: succeeded,

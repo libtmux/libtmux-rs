@@ -102,28 +102,59 @@ pub(crate) fn resolve(pending: &[(&OsStr, usize)], version: &TmuxVersion) -> Res
 }
 
 pub(crate) async fn version(server: &Server) -> Result<TmuxVersion, Error> {
-    let result = server.cmd(version_command()).await?;
-    if result.success() {
-        return TmuxVersion::parse_output(result.stdout());
-    }
-    if is_cold(result.stderr()) {
-        return Ok(server.capabilities().await?.tmux_version().clone());
-    }
-    Err(Error::from_refused_result("display-message", &result, None))
+    server.endpoint_version().await
 }
 
-fn is_cold(stderr: &[u8]) -> bool {
-    let reason = stderr.trim_ascii();
-    reason.starts_with(b"no server running on ")
-        || (reason.starts_with(b"error connecting to ")
-            && reason.ends_with(b" (No such file or directory)"))
+/// A version probe that fires no user hook.
+///
+/// `display-message` runs the `after-display-message` hook on every release,
+/// so asking the daemon its version with it already had effects. `run-shell
+/// -C` has no `after-` hook, and it parses its argument in a timer callback
+/// after `exec` returned, so tmux never queues `command-error` for it either.
+/// The argument is not a command: tmux expands the format, fails to parse
+/// `<marker><version>`, and reports `unknown command: <marker><version>` on
+/// stderr with exit status 1.
+pub(crate) struct VersionProbe {
+    marker: String,
 }
 
-pub(crate) fn version_command() -> Command {
-    Command::new("display-message")
-        .arg("-p")
-        .arg("--")
-        .arg("tmux #{version}")
+impl VersionProbe {
+    pub(crate) fn new() -> Self {
+        use std::hash::{BuildHasher as _, Hasher as _};
+
+        // `RandomState` is seeded by the operating system, so a hook, alias
+        // or session name cannot guess the marker to forge a version report.
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u32(std::process::id());
+        Self {
+            marker: format!("libtmux-version-{:016x}-", hasher.finish()),
+        }
+    }
+
+    pub(crate) fn command(&self) -> Command {
+        Command::new("run-shell")
+            .arg("-C")
+            .arg(format!("{}#{{version}}", self.marker))
+    }
+
+    /// Read the daemon's version from the probe's refusal.
+    ///
+    /// Returns `Ok(None)` when `stderr` is not this probe's report, so the
+    /// caller can tell an unrelated failure from an unparseable version. A
+    /// report that names no release is [`Error::UnrecognizedTmuxVersion`].
+    pub(crate) fn parse(&self, stderr: &[u8]) -> Result<Option<TmuxVersion>, Error> {
+        let Some(version) = stderr
+            .trim_ascii()
+            .strip_prefix(b"unknown command: ")
+            .and_then(|rest| rest.strip_prefix(self.marker.as_bytes()))
+        else {
+            return Ok(None);
+        };
+        let mut framed = b"tmux ".to_vec();
+        framed.extend_from_slice(version);
+        framed.push(b'\n');
+        TmuxVersion::parse_report(&framed, stderr.len()).map(Some)
+    }
 }
 
 struct Parser<'a> {
@@ -261,34 +292,29 @@ mod tests {
     }
 
     #[test]
-    fn layout_preflight_cold_diagnostics_exclude_live_or_permission_failures() {
-        for reason in [
-            b"no server running on /socket\n".as_slice(),
-            b"error connecting to /socket (No such file or directory)\n",
-        ] {
-            assert!(is_cold(reason));
-        }
-        for reason in [
-            b"server exited unexpectedly".as_slice(),
-            b"error connecting to /socket (Permission denied)\n",
-            b"protocol version mismatch",
-            b"can't find session: absent",
-        ] {
-            assert!(!is_cold(reason));
-        }
-    }
-
-    #[test]
     fn layout_preflight_retains_native_version_and_error_semantics() {
         let old = TmuxVersion::parse_output(b"tmux 3.2a\n").unwrap();
         let new = TmuxVersion::parse_output(b"tmux 3.7c\n").unwrap();
         let json = [(OsStr::new(r#"{"V":2,"L":[]}"#), 1)];
         let pending = prepare(json).unwrap();
+        for output in ["tmux 3.7c\n", "tmux 3.8-rc\n"] {
+            let json_incapable = TmuxVersion::parse_output(output.as_bytes()).unwrap();
+            assert_eq!(
+                resolve(&pending, &json_incapable).unwrap_err().kind(),
+                crate::ErrorKind::UnsupportedVersion,
+                "{output}"
+            );
+        }
         assert_eq!(
             resolve(&pending, &new).unwrap_err().kind(),
             crate::ErrorKind::UnsupportedVersion
         );
-        for output in ["tmux 3.8-rc\n", "tmux 3.8\n", "tmux next-3.9\n"] {
+        for output in [
+            "tmux 3.8-rc2\n",
+            "tmux 3.8-rc3\n",
+            "tmux 3.8\n",
+            "tmux next-3.9\n",
+        ] {
             let json_capable = TmuxVersion::parse_output(output.as_bytes()).unwrap();
             resolve(&pending, &json_capable).unwrap();
         }

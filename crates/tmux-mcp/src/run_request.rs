@@ -288,6 +288,10 @@ fn hold<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Run one pane command while this request owns the watcher and collector.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps dispatch and reservation handoff in one path"
+)]
 pub(crate) async fn run(
     pane: &Pane,
     command: &str,
@@ -306,8 +310,16 @@ pub(crate) async fn run(
         lease,
         echoes,
     } = transport;
-    let prepared =
-        exec::prepare_run(pane, command, suppress_history, executable, endpoint, shell).await?;
+    let prepared = exec::prepare_run(
+        pane,
+        command,
+        suppress_history,
+        executable,
+        endpoint,
+        generation,
+        shell,
+    )
+    .await?;
     if let Err(error) = final_check.await {
         let _ = prepared.shutdown().await;
         return Err(RunError::Guard(error));

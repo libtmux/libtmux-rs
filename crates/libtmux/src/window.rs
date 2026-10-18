@@ -2135,11 +2135,11 @@ mod layout_version_tests {
     #[test]
     fn the_minimum_release_resolves_its_own_presets() {
         assert_eq!(
-            classify("main-h", b"tmux 3.2a\n"),
+            classify("main-h", b"tmux 3.3a\n"),
             SavedLayout::Preset(Layout::MainHorizontal),
         );
         assert_eq!(
-            classify("main-vertical-mirrored", b"tmux 3.2a\n"),
+            classify("main-vertical-mirrored", b"tmux 3.3a\n"),
             SavedLayout::Unrecognized,
         );
     }

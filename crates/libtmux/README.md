@@ -69,8 +69,37 @@ stdout and stderr as raw bytes, so decoding stays the caller's decision.
 
 ## Requirements and installation
 
-Rust 1.85 or newer, tmux 3.2a or newer, and a Unix target. Native Windows is
+Rust 1.85 or newer, tmux 3.3a or newer, and a Unix target. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
+
+Every ordinary command checks the connected daemon before dispatch, including
+raw commands, chains, and scoped handles. A missing daemon is checked against
+the executable that would start it. Unknown versions and failed probes refuse
+the operation. The version probe shares the command's timeout, and a queue
+guard refuses a daemon replacement with a different version.
+The daemon's version is cached; every dispatch checks it in tmux's queue, and
+a mismatch invalidates the cache for a fresh probe on the next operation.
+
+A refusal means nothing was sent to the daemon. A daemon older than 3.3a
+(including 3.1 and older, which cannot answer the probe at all) is refused as
+`Error::UnsupportedTmuxVersion`. A report that names no release, such as a bare
+`master`, `openbsd-*` or `3.3a-dev`, is refused as
+`Error::UnrecognizedTmuxVersion`. The same holds when the probe fails
+(`Error::VersionProbeFailed`), when its output is not a version report
+(`Error::InvalidVersionOutput`), and when the deadline passes during the check
+(`Error::Timeout` with `before_dispatch` set). A daemon replaced between the
+check and the request fails with `Error::ServerReplaced`, and nothing ran.
+Upgrade tmux and restart the server, or pin the previous release of libtmux.
+
+The configured executable and library-owned metadata and guard commands must
+retain tmux's native built-in semantics. Owner-defined `command-alias`
+redefinitions of those commands are outside this qualification; their contents
+run with tmux's own semantics.
+
+`Server::capabilities` reports the configured executable and caches that
+result, including versions below the floor. Standalone `Server::cmd` calls
+with `-V` or `-h` also retain native executable diagnostics. Client flags have
+no representation over an open control connection.
 
 ```toml
 [dependencies]
@@ -660,8 +689,8 @@ with the crate.
 
 ## Compatibility
 
-Every supported tmux release is built from source in CI and runs the whole
-workspace: 3.2a, 3.4, 3.5a, 3.6b, and 3.7b. The floor and the ceiling matter
+Pinned compatibility releases are built from source in CI and run the whole
+workspace: 3.3a, 3.4, 3.5a, 3.6b, and 3.7b. The floor and the ceiling matter
 equally — 3.4 and 3.5a are the releases that wrap command output differently,
 which is why the format codec carries a second dialect.
 

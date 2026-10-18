@@ -1288,8 +1288,6 @@ async fn a_name_tmux_would_resolve_is_guarded_like_the_one_it_resolves_to() {
 /// matrix builds, `next-3.9` included, without a version predicate.
 #[tokio::test]
 async fn a_late_pane_scope_is_granted_to_whichever_tmux_actually_has_it() {
-    use libtmux::since;
-
     let mut builder = TestServer::builder();
     if let Some(executable) = std::env::var_os("LIBTMUX_TEST_TMUX") {
         builder = builder.tmux_executable(executable);
@@ -1307,29 +1305,9 @@ async fn a_late_pane_scope_is_granted_to_whichever_tmux_actually_has_it() {
         .expect("active pane")
         .expect("a window has a pane");
 
-    let has_capability = server
-        .capabilities()
+    pane.set_option("pane-border-format", "#{pane_index}")
         .await
-        .expect("capabilities")
-        .tmux_version()
-        .has_behavior(&since::PANE_BORDER_FORMAT_PER_PANE);
-
-    let result = pane.set_option("pane-border-format", "#{pane_index}").await;
-    if has_capability {
-        result.expect("a build that already has this capability accepts the write");
-    } else {
-        let error = result.expect_err("a build below the real floor is still refused");
-        assert!(
-            matches!(
-                error,
-                libtmux::Error::UnsupportedCapability {
-                    capability: "pane-border-format",
-                    ..
-                }
-            ),
-            "the refusal names the capability: {error:?}",
-        );
-    }
+        .expect("every supported release accepts the write");
 
     guard.shutdown().await.expect("tmux fixture shuts down");
 }

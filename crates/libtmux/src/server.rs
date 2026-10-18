@@ -19,7 +19,7 @@ use crate::session::Session;
 use crate::{
     Command, CommandChain, CommandResult, EngineCapabilities, Error, ListingDecodeError,
     ReleaseSuffix, ReleaseVersion, ServerConfigurationErrorKind, ServerGeneration, ServerIdentity,
-    TmuxArg,
+    TmuxArg, TmuxVersion,
 };
 
 mod builder;
@@ -37,9 +37,6 @@ pub use builder::ServerBuilder;
 pub use discovery::{SessionTree, WindowTree};
 #[cfg(feature = "query")]
 pub use discovery::{SessionTreeFields, WindowTreeFields};
-
-/// The first tmux release that has a server access list.
-use crate::version::since::SERVER_ACCESS as SERVER_ACCESS_SINCE;
 
 /// How much a user on the server's access list may do.
 ///
@@ -185,9 +182,6 @@ fn parse_access_rule(line: &str) -> Result<AccessRule, Error> {
     })
 }
 
-/// The first tmux release that remembers prompt history.
-use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
-
 /// Which prompt tmux is remembering answers for.
 ///
 /// # Examples
@@ -199,14 +193,11 @@ use crate::version::since::PROMPT_HISTORY as PROMPT_HISTORY_SINCE;
 /// use libtmux::PromptKind;
 ///
 /// let guard = libtmux::test::TestServer::new().await?;
-/// let version = guard.server().capabilities().await?.tmux_version().clone();
 ///
 /// // tmux keeps a separate history per prompt kind, so a command typed at the
 /// // `:` prompt is not offered when searching.
-/// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
-///     assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
-///     assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
-/// }
+/// assert!(guard.server().prompt_history(PromptKind::Command).await?.is_empty());
+/// assert!(guard.server().prompt_history(PromptKind::Search).await?.is_empty());
 ///
 /// guard.shutdown().await?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -475,11 +466,20 @@ impl Server {
         Self { core }
     }
 
+    pub(crate) async fn endpoint_version(&self) -> Result<TmuxVersion, Error> {
+        self.core.endpoint_version().await
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) async fn fixture_pid(&self) -> Result<CommandResult, Error> {
+        self.core.fixture_pid().await
+    }
+
     #[cfg(feature = "control-mode")]
     pub(crate) async fn spawn_control(
         &self,
         session: &SessionId,
-    ) -> Result<PersistentChild, Error> {
+    ) -> Result<(PersistentChild, TmuxVersion), Error> {
         self.core.spawn_control(session).await
     }
 
@@ -698,12 +698,13 @@ impl Server {
 
     /// Detect and share capabilities for the configured tmux executable.
     ///
-    /// Failed initialization is not cached and may be retried.
+    /// Failed initialization is not cached and may be retried. This diagnostic
+    /// also describes executables below the supported daemon minimum.
     ///
     /// # Errors
     ///
     /// Returns an error when the executable cannot be run, its version probe
-    /// fails, its output is invalid, or the detected version is unsupported.
+    /// fails, or its output is invalid.
     ///
     /// # Examples
     ///
@@ -723,16 +724,54 @@ impl Server {
         self.core.capabilities().await
     }
 
+    /// Return the version of the daemon this handle reaches.
+    ///
+    /// The version has passed the supported-minimum check. A cold endpoint
+    /// reports the executable that would start the daemon. The answer is
+    /// cached with the handle's other version checks, so asking costs one
+    /// probe at most, and no user hook runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnsupportedTmuxVersion`] or
+    /// [`Error::UnrecognizedTmuxVersion`] for a daemon libtmux refuses,
+    /// [`Error::InvalidVersionOutput`] or [`Error::VersionProbeFailed`] when
+    /// no version can be read, and a transport error when tmux cannot be run.
+    /// Nothing is sent to the daemon in any of those cases.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    /// # runtime.block_on(async {
+    /// let guard = libtmux::test::TestServer::new().await?;
+    /// let version = guard.server().daemon_version().await?;
+    /// assert!(version.meets(&libtmux::TmuxVersion::MIN_SUPPORTED));
+    /// guard.shutdown().await?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// # })?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn daemon_version(&self) -> Result<TmuxVersion, Error> {
+        self.core.format_version().await
+    }
+
     /// Execute one raw logical tmux command.
     ///
-    /// A non-zero process exit status is returned in [`CommandResult`]. This
-    /// raw boundary does not probe or enforce the supported-version floor;
-    /// callers opt into that check with [`Server::capabilities`].
+    /// A non-zero process exit status is returned in [`CommandResult`]. The
+    /// connected daemon must meet [`TmuxVersion::MIN_SUPPORTED`]; a cold
+    /// endpoint checks the executable that would start it. A queue guard
+    /// refuses a replacement with a different version before effects.
+    /// Standalone `-V` and `-h` retain native executable diagnostics below the
+    /// floor; an open control connection cannot represent those client flags.
     ///
     /// # Errors
     ///
     /// Returns an error when the process cannot be started, captured, awaited,
-    /// or is cancelled by timeout or shutdown.
+    /// or is cancelled by timeout or shutdown. Invalid or unsupported daemon
+    /// versions and failed version probes are errors before dispatch.
     ///
     /// # Examples
     ///
@@ -760,15 +799,17 @@ impl Server {
     /// Each item pairs layout bytes with the required pane count. Classic
     /// layouts are checked for checksums, nonempty trees, unsigned fields and
     /// depth up to 256 nested groups. tmux owns geometry correction and pruning.
-    /// JSON layouts require tmux 3.8; tmux validates their contents.
-    /// Version-sensitive layouts query the daemon; only a cold endpoint uses
-    /// the selected client version. Unique name abbreviations are accepted.
+    /// JSON layouts require tmux 3.8-rc2 or newer; tmux validates their
+    /// contents. The version check queries the daemon even when no layouts need a version
+    /// check; a cold endpoint uses the selected executable. Unique name
+    /// abbreviations are accepted.
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidLayout`] for invalid syntax, ambiguous names or
     /// insufficient pane cells, [`Error::UnsupportedCapability`] for layouts
-    /// unavailable on the daemon, or the version probe's transport/decode error.
+    /// unavailable on the daemon, [`Error::UnsupportedTmuxVersion`] below the
+    /// core floor, or the version probe's transport/decode error.
     ///
     /// # Examples
     ///
@@ -784,9 +825,7 @@ impl Server {
         layouts: impl IntoIterator<Item = (&'a OsStr, usize)>,
     ) -> Result<(), Error> {
         let pending = crate::layout::prepare(layouts)?;
-        if !pending.is_empty() {
-            crate::layout::resolve(&pending, &crate::layout::version(self).await?)?;
-        }
+        crate::layout::resolve(&pending, &crate::layout::version(self).await?)?;
         Ok(())
     }
 
@@ -997,7 +1036,7 @@ impl Server {
     /// Returns an error when tmux cannot be run. A daemon that was already
     /// stopped is not an error.
     pub async fn kill(&self) -> Result<(), Error> {
-        let result = self.cmd(Command::new("kill-server")).await?;
+        let result = self.core.kill_server().await?;
         if result.success() {
             return Ok(());
         }
@@ -1140,7 +1179,7 @@ impl Server {
     /// Returns an error when tmux refuses the listing, and
     /// [`Error::DecodeListing`] when its output does not decode.
     pub async fn buffer_names(&self) -> Result<Vec<TmuxText>, Error> {
-        let dialect = TransportDialect::for_version(self.capabilities().await?.tmux_version());
+        let dialect = TransportDialect::for_version(&self.core.format_version().await?);
         let result = self
             .cmd(
                 Command::new("list-buffers")
@@ -1369,8 +1408,8 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
-    /// when tmux cannot be reached or refuses the listing.
+    /// Returns an error when the daemon is unsupported, cannot be reached, or
+    /// refuses the listing.
     ///
     /// # Examples
     ///
@@ -1382,12 +1421,9 @@ impl Server {
     ///
     /// let guard = libtmux::test::TestServer::new().await?;
     /// let server = guard.server();
-    /// let version = server.capabilities().await?.tmux_version().clone();
     ///
     /// // A fresh server has answered no prompts.
-    /// if version.has_behavior(&libtmux::since::PROMPT_HISTORY) {
-    ///     assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
-    /// }
+    /// assert!(server.prompt_history(PromptKind::Command).await?.is_empty());
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1396,8 +1432,6 @@ impl Server {
     /// # }
     /// ```
     pub async fn prompt_history(&self, kind: PromptKind) -> Result<Vec<TmuxText>, Error> {
-        self.require("prompt history", PROMPT_HISTORY_SINCE).await?;
-
         let result = self
             .cmd(
                 Command::new("show-prompt-history")
@@ -1430,11 +1464,9 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
-    /// when tmux cannot be reached or refuses the command.
+    /// Returns an error when the daemon is unsupported, cannot be reached, or
+    /// refuses the command.
     pub async fn clear_prompt_history(&self) -> Result<(), Error> {
-        self.require("prompt history", PROMPT_HISTORY_SINCE).await?;
-
         listing::mutate(
             &self.core,
             "clear-prompt-history",
@@ -1450,8 +1482,8 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
-    /// when tmux cannot be reached or refuses the listing.
+    /// Returns an error when the daemon is unsupported, cannot be reached, or
+    /// refuses the listing.
     ///
     /// # Examples
     ///
@@ -1460,14 +1492,11 @@ impl Server {
     /// # let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     /// # runtime.block_on(async {
     /// let guard = libtmux::test::TestServer::new().await?;
-    /// let version = guard.server().capabilities().await?.tmux_version().clone();
     ///
     /// // Whoever started the server owns it and may act.
-    /// if version.has_behavior(&libtmux::since::SERVER_ACCESS) {
-    ///     let rules = guard.server().access_rules().await?;
-    ///     assert_eq!(rules.len(), 1);
-    ///     assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
-    /// }
+    /// let rules = guard.server().access_rules().await?;
+    /// assert_eq!(rules.len(), 1);
+    /// assert_eq!(rules[0].mode(), libtmux::AccessMode::Write);
     ///
     /// guard.shutdown().await?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1476,9 +1505,6 @@ impl Server {
     /// # }
     /// ```
     pub async fn access_rules(&self) -> Result<Vec<AccessRule>, Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
-
         let result = self.cmd(Command::new("server-access").arg("-l")).await?;
         if !result.success() {
             return Err(Error::from_refused_result("server-access", &result, None));
@@ -1495,12 +1521,9 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
-    /// when tmux refuses -- which it does for the user who owns the server.
+    /// Returns an error when the daemon is unsupported or refuses the change,
+    /// which it does for the user who owns the server.
     pub async fn grant_access(&self, user: &str, mode: AccessMode) -> Result<(), Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
-
         listing::mutate(
             &self.core,
             "server-access",
@@ -1520,12 +1543,9 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedCapability`] below tmux 3.3, and an error
-    /// when tmux refuses -- which it does for the user who owns the server.
+    /// Returns an error when the daemon is unsupported or refuses the change,
+    /// which it does for the user who owns the server.
     pub async fn revoke_access(&self, user: &str) -> Result<(), Error> {
-        self.require("the server access list", SERVER_ACCESS_SINCE)
-            .await?;
-
         listing::mutate(
             &self.core,
             "server-access",
@@ -2340,12 +2360,6 @@ impl NewSessionOptions {
     }
 
     /// Set the initial size, which a detached session would otherwise default.
-    ///
-    /// tmux 3.2a accepts this and sets `default-size` as asked, but still
-    /// draws the new, client-less window at its own classic default,
-    /// `80x23`: a pane's reported width and height on 3.2a do not reflect
-    /// this call, even though the option was set. Every later release draws
-    /// at the requested size.
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.width = Some(width);
         self.height = Some(height);
