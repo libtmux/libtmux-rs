@@ -16,6 +16,12 @@ full.
 
 ## Unreleased
 
+### Changed
+
+- CI no longer runs the test suite on macOS. macOS stays supported on a
+  best-effort basis, and the release workflow still builds and attaches the
+  macOS binaries. (#87)
+
 ## 0.1.0-alpha.16 - 2026-10-18
 
 `libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.16;
