@@ -77,8 +77,8 @@ $ mkdir src &&
 
 To try another task, copy its complete `api_*.rs` file to `src/main.rs`.
 The same Cargo and toolchain files apply to every program. The consumer
-declares its Tokio and tempfile dependencies explicitly and uses the
-library's default query feature; it does not enable `test-support`.
+declares tempfile and enables the library's query feature. The library runs
+these programs through its async-io driver.
 
 ## Results and cleanup
 
