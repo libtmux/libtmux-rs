@@ -309,7 +309,9 @@ impl PromptKind {
 ///
 /// **Things that need a terminal.** [`display_popup`], [`display_menu`],
 /// [`command_prompt`], [`choose`], [`find_window`], and [`display_panes`] all
-/// draw on an attached client, and fail without one.
+/// draw on an attached client. The first three fail without one; tmux accepts
+/// [`choose`] with no client, and [`display_panes`] from tmux 3.8, because
+/// each opens as a mode in a pane.
 ///
 /// Anything tmux can do that is not here is reachable through [`cmd`], which
 /// runs an arbitrary command and hands back its result.

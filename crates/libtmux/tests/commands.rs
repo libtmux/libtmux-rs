@@ -1716,8 +1716,16 @@ async fn interactive_commands_need_a_client() {
     server.new_session("interactive").await.expect("session");
 
     // A headless server has no terminal, so commands that draw on one fail
-    // loudly rather than reporting a success nobody could see.
-    assert!(server.display_panes(None).await.is_err());
+    // loudly rather than reporting a success nobody could see. From 3.8-rc,
+    // display-panes is a pane mode instead of a client overlay: tmux opens it
+    // in the target pane with no client and closes it after
+    // display-panes-time.
+    let panes_mode = versions::supports(
+        server,
+        &libtmux::ReleaseVersion::new(3, 8, libtmux::ReleaseSuffix::RELEASE_CANDIDATE),
+    )
+    .await;
+    assert_eq!(server.display_panes(None).await.is_ok(), panes_mode);
     assert!(
         server
             .display_menu(
