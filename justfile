@@ -161,8 +161,9 @@ example-coverage-check:
 [doc('Which format names each listing asks tmux for')]
 [group: 'release']
 list-profiles:
-    LIBTMUX_RERECORD=1 cargo test --locked --package libtmux --all-features \
-        --lib each_listing_records_the_fields_it_requests
+    LIBTMUX_RERECORD=1 cargo test --locked --package libtmux \
+        --package libtmux-tokio --all-features --lib \
+        each_listing_records_the_fields_it_requests
 
 # Regenerate the recorded public API surface
 #
