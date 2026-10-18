@@ -128,14 +128,14 @@ requires. `plan` and `control-mode` also work without crate dependencies.
 | What kind of failure was this? | `Error::kind` |
 | Did the object disappear? | `Error::is_object_gone` |
 | Is retrying safe? | Inspect `Error::is_transient` and whether an effect was accepted |
-| Which request failed? | Request ID and redacted command summary |
+| Which request failed? | Request ID and redacted command summary, when present |
 | Did scoped cleanup also fail? | `ScopeError` |
 
 The `tracing` feature records command outcomes. Diagnostics omit arguments
 marked sensitive and raw process output; public arguments may appear in
-bounded, escaped command summaries. Request IDs correlate calls with failures
-within one server core. Output remains available from the returned result
-for a caller that deliberately needs it.
+bounded, escaped command summaries. Command spans carry request IDs scoped to
+one server core. Errors from rejected control-mode input carry no request ID.
+Returned results retain output for callers that need it.
 
 ## Further reading
 
