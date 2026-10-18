@@ -193,6 +193,34 @@ async fn read_batch_rejects_more_than_sixteen_operations() {
 }
 
 #[tokio::test]
+async fn send_keys_batch_rejects_more_than_sixty_four_operations() {
+    let tools = TmuxTools::builder(libtmux::Server::new().expect("server config"))
+        .selection(selection("execute"))
+        .build();
+    let wire = Wire::connect(tools).await;
+    let operations: Vec<_> = (0..65)
+        .map(|_| json!({"pane": "%0", "text": "x"}))
+        .collect();
+
+    let arguments = json!({"operations": operations, "on_error": "stop"});
+    let request = CallToolRequestParams::new("send_keys_batch")
+        .with_arguments(arguments.as_object().cloned().expect("object arguments"));
+    let result = wire
+        .client
+        .call_tool(request)
+        .await
+        .expect("too many operations is a tool result, not a protocol error");
+
+    assert_eq!(result.is_error, Some(true), "{result:?}");
+    let text = result.content.first().and_then(|block| block.as_text());
+    assert!(
+        text.is_some_and(|text| text.text.contains("1 through 64")),
+        "{result:?}"
+    );
+    wire.shutdown().await;
+}
+
+#[tokio::test]
 async fn read_batch_reports_a_nested_business_refusal_as_a_failed_result() {
     let guard = TestServer::builder().start().await.expect("tmux starts");
     let tools = TmuxTools::builder(guard.server().clone())

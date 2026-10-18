@@ -274,39 +274,70 @@ directly from that registry, and the [tool pages][tools] publish it.
 
 | Toolset | Intent | Tools |
 |---|---|---|
-| `inspect` (18) | Read bounded tmux state and terminal output | `call_read_tools_batch`, `capture_pane`, `capture_since`, `find_pane_by_position`, `get_pane_info`, `get_server_info`, `get_session_info`, `get_tmux_variables`, `get_window_info`, `list_panes`, `list_sessions`, `list_windows`, `search_panes`, `show_environment`, `show_hooks`, `show_option`, `snapshot_pane`, `wait_for_text` |
-| `manage` (13) | Change tmux objects without starting a process | `move_window`, `rename_session`, `rename_window`, `resize_pane`, `resize_window`, `select_layout`, `select_pane`, `select_window`, `set_mouse_enabled`, `set_pane_title`, `signal_channel`, `swap_pane`, `wait_for_channel` |
-| `execute` (9) | Start configured processes or drive pane programs | `create_session`, `create_window`, `paste_text`, `respawn_pane`, `run_shell_command`, `send_keys`, `send_keys_batch`, `set_synchronize_panes`, `split_window` |
-| `teardown` (5) | Delete tmux state | `clear_pane_scrollback`, `kill_pane`, `kill_session`, `kill_window`, `set_history_limit` |
+| [`inspect`][toolset-inspect] (18) | Read bounded tmux state and terminal output | [`call_read_tools_batch`][call_read_tools_batch], [`capture_pane`][capture_pane], [`capture_since`][capture_since], [`find_pane_by_position`][find_pane_by_position], [`get_pane_info`][get_pane_info], [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_tmux_variables`][get_tmux_variables], [`get_window_info`][get_window_info], [`list_panes`][list_panes], [`list_sessions`][list_sessions], [`list_windows`][list_windows], [`search_panes`][search_panes], [`show_environment`][show_environment], [`show_hooks`][show_hooks], [`show_option`][show_option], [`snapshot_pane`][snapshot_pane], [`wait_for_text`][wait_for_text] |
+| [`manage`][toolset-manage] (13) | Change tmux objects without starting a process | [`move_window`][move_window], [`rename_session`][rename_session], [`rename_window`][rename_window], [`resize_pane`][resize_pane], [`resize_window`][resize_window], [`select_layout`][select_layout], [`select_pane`][select_pane], [`select_window`][select_window], [`set_mouse_enabled`][set_mouse_enabled], [`set_pane_title`][set_pane_title], [`signal_channel`][signal_channel], [`swap_pane`][swap_pane], [`wait_for_channel`][wait_for_channel] |
+| [`execute`][toolset-execute] (9) | Start configured processes or drive pane programs | [`create_session`][create_session], [`create_window`][create_window], [`paste_text`][paste_text], [`respawn_pane`][respawn_pane], [`run_shell_command`][run_shell_command], [`send_keys`][send_keys], [`send_keys_batch`][send_keys_batch], [`set_synchronize_panes`][set_synchronize_panes], [`split_window`][split_window] |
+| [`teardown`][toolset-teardown] (5) | Delete tmux state | [`clear_pane_scrollback`][clear_pane_scrollback], [`kill_pane`][kill_pane], [`kill_session`][kill_session], [`kill_window`][kill_window], [`set_history_limit`][set_history_limit] |
 
-`set_synchronize_panes` changes the window default; individual pane overrides
-determine the effective configured recipient cohort. `send_keys` observes that
-cohort immediately before input and refuses the whole call if any configured
-pane is dead, input-disabled, in a tmux mode, attended by a non-control client,
-reserved by an active MCP run, or may be the inherited caller. Malformed state
-fails closed. Caller context is detached when `TMUX` and `TMUX_PANE` are both
-absent or empty; partial, noncanonical, stale, or unresolved selected-daemon
-context refuses input, and a context that cannot be parsed is also reported
-once in the startup log. `send_keys_batch` repeats the complete check for each
-executed row.
-Returned pane IDs describe configured membership and do not prove delivery.
-`paste_text` applies the same refusals to its named target before buffer
-creation. Text and optional Enter share one private buffer; an empty paste
-without Enter stays buffer-free. The tool repeats the target check immediately
-before target-only paste and deletes the buffer after refusal or delivery.
-Synchronized input never expands paste.
-`run_shell_command` requires a single configured recipient and reserves its
-resolved server and pane process-wide until completion, pane closure, or a
-respawn is proved. Every MCP pane-input route observes that reservation except
-`send_keys` with only `C-c` or `C-\` keys, which interrupts the command.
-`call_read_tools_batch` accepts at most 16 enabled inspect operations and caps
-the complete JSON-RPC response line, including its request ID and newline, at
-1,000,000 bytes. Truncated payloads and omitted bytes are explicit, and every
-executed row remains present.
-A serialized request ID may use at most 512 KiB. A larger ID receives a bounded
-invalid-request response before tool dispatch.
-`on_error` is either `stop` or `continue`. Its one client approval covers every
-nested name in its schema; inner tools do not receive separate approval.
+### Pane input
+
+[`send_keys`][send_keys], [`send_keys_batch`][send_keys_batch],
+[`paste_text`][paste_text] and [`run_shell_command`][run_shell_command] type
+into panes, and what they type runs with your user's permissions. Before one
+acts, the server looks at the panes the input would reach. If any of them
+fails a check below, that input is refused and nothing is sent.
+
+Which panes receive input:
+
+- `send_keys` and `send_keys_batch` reach the pane you name, plus every other
+  synchronized pane in its window when that pane has synchronized input on.
+  [`set_synchronize_panes`][set_synchronize_panes] sets the window default,
+  and a pane's own setting overrides it.
+- `paste_text` reaches only the pane you name, even when synchronized input is
+  on.
+- `run_shell_command` reaches exactly one pane, and refuses when synchronized
+  input would reach more.
+- A reply lists the panes the input was meant for. It does not prove the input
+  arrived.
+
+Input is refused when a pane it would reach:
+
+- is dead, has input turned off, or is in a tmux mode such as copy mode
+- is on screen in a terminal that a person has attached. With a zoomed window
+  only the zoomed pane counts, and control-mode clients never do
+- is reserved by a running `run_shell_command`
+- is the pane the server was started from
+
+It is also refused when `TMUX` and `TMUX_PANE` are set but incomplete or out
+of date, because the server cannot tell which pane is its own. Start the
+server outside tmux, or with both set correctly.
+
+The checks look; they do not lock. A person can attach, or a pane can change,
+between the check and the keystrokes.
+
+`run_shell_command`:
+
+- Needs a pane running a POSIX shell that the server recognises.
+- Reserves its pane until the command ends or the pane closes. Until then the
+  other pane-input tools refuse that pane.
+- Lets `send_keys` with only `C-c` or `C-\` through, to interrupt the command.
+- Stops waiting at its deadline, but not the command, and the reservation
+  stays. [`respawn_pane`][respawn_pane] with `kill_first` set to `true` ends a
+  program that ignores both interrupts.
+
+Batches:
+
+- `send_keys_batch` takes 1 to 64 operations and runs them in order, repeating
+  the checks before each one. A refused operation does not undo the ones
+  before it. `on_error` is `stop`, the default, or `continue`.
+- [`call_read_tools_batch`][call_read_tools_batch] takes 1 to 16 inspect
+  operations, and one approval covers the whole batch. Its reply is capped at
+  1,000,000 bytes. Anything trimmed is flagged, and no executed row is
+  dropped.
+
+Each tool's page, linked in the table above, has the full contract.
+
+### Capability records
 
 The capability row is not a second hand-maintained catalog. A client receives
 it under `_meta["com.git-pull.libtmux-mcp/capability"]`, holding only what the
@@ -413,33 +444,33 @@ now run in the client. Update existing client calls with this mapping:
 |---|---|
 | `--safety`, `LIBTMUX_SAFETY`, `TMUX_MCP_SAFETY` | Select unordered `LIBTMUX_TOOLSETS`, then exact inclusions or exclusions. |
 | `--confirm`, `--no-confirm`, `TMUX_MCP_CONFIRM` | Remove them. The server has no confirmation policy; clients decide approval from each tool's MCP annotations. |
-| `list_session_windows`, `list_window_panes` | Use `list_windows` or `list_panes`, then filter the returned stable `session_id` or `window_id`. |
-| `describe` | Use `get_server_info`, `get_session_info`, `get_window_info`, or `get_pane_info`. |
-| `list_servers` or per-call socket selection | Run one MCP process per socket and use `get_server_info` for its pinned server. |
-| `expand_format` | Use `get_tmux_variables` for validated variable names; arbitrary tmux-format evaluation has no public replacement. |
-| `what_changed`, `watch_pane` | Follow a known pane with `capture_since` or wait with `wait_for_text`; there is no global activity feed or subscription. |
-| `find_panes`, `find_sessions` | Use `search_panes` for terminal content, `find_pane_by_position` for layout, or filter `list_panes` and `list_sessions` locally. |
-| `run_command` | Use `run_shell_command`. |
-| `wait_for_idle` | Use a concrete `wait_for_text` condition or inspect new output with `capture_since`; no idle heuristic remains. |
-| `start_command`, `job_status`, `list_jobs`, `forget_job` | No background handle remains. Use bounded `run_shell_command`, or drive a pane and observe it with `capture_since`. |
-| `new_window`, `split_pane` | Use `create_window` and `split_window`. |
-| `rename` | Use `rename_session`, `rename_window`, or `set_pane_title`. |
-| `pipe_pane` | No shell-command pipe route remains; read with `capture_pane` or `capture_since`. |
-| `clear_pane` | Use teardown tool `clear_pane_scrollback`. |
-| `set_option` | Use constrained tools such as `set_mouse_enabled`, `set_history_limit`, or `set_synchronize_panes`. |
+| `list_session_windows`, `list_window_panes` | Use [`list_windows`][list_windows] or [`list_panes`][list_panes], then filter the returned stable `session_id` or `window_id`. |
+| `describe` | Use [`get_server_info`][get_server_info], [`get_session_info`][get_session_info], [`get_window_info`][get_window_info], or [`get_pane_info`][get_pane_info]. |
+| `list_servers` or per-call socket selection | Run one MCP process per socket and use [`get_server_info`][get_server_info] for its pinned server. |
+| `expand_format` | Use [`get_tmux_variables`][get_tmux_variables] for validated variable names; arbitrary tmux-format evaluation has no public replacement. |
+| `what_changed`, `watch_pane` | Follow a known pane with [`capture_since`][capture_since] or wait with [`wait_for_text`][wait_for_text]; there is no global activity feed or subscription. |
+| `find_panes`, `find_sessions` | Use [`search_panes`][search_panes] for terminal content, [`find_pane_by_position`][find_pane_by_position] for layout, or filter [`list_panes`][list_panes] and [`list_sessions`][list_sessions] locally. |
+| `run_command` | Use [`run_shell_command`][run_shell_command]. |
+| `wait_for_idle` | Use a concrete [`wait_for_text`][wait_for_text] condition or inspect new output with [`capture_since`][capture_since]; no idle heuristic remains. |
+| `start_command`, `job_status`, `list_jobs`, `forget_job` | No background handle remains. Use bounded [`run_shell_command`][run_shell_command], or drive a pane and observe it with [`capture_since`][capture_since]. |
+| `new_window`, `split_pane` | Use [`create_window`][create_window] and [`split_window`][split_window]. |
+| `rename` | Use [`rename_session`][rename_session], [`rename_window`][rename_window], or [`set_pane_title`][set_pane_title]. |
+| `pipe_pane` | No shell-command pipe route remains; read with [`capture_pane`][capture_pane] or [`capture_since`][capture_since]. |
+| `clear_pane` | Use teardown tool [`clear_pane_scrollback`][clear_pane_scrollback]. |
+| `set_option` | Use constrained tools such as [`set_mouse_enabled`][set_mouse_enabled], [`set_history_limit`][set_history_limit], or [`set_synchronize_panes`][set_synchronize_panes]. |
 | `set_environment` | No generic caller-controlled environment route remains. |
 | `show_environment` values | Values are withheld by default; allow names with `LIBTMUX_ENVIRONMENT_VALUES`. |
-| `run_plan` | Use `call_read_tools_batch` for inspect-only batches; issue typed state-changing calls separately. |
+| `run_plan` | Use [`call_read_tools_batch`][call_read_tools_batch] for inspect-only batches; issue typed state-changing calls separately. |
 | `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
-| `tmux://server` | Use `get_server_info`; `tmux://capabilities` adds the frozen connection and selection boundary. |
-| `tmux://sessions`, `tmux://windows`, `tmux://panes` | Use `list_sessions`, `list_windows`, and `list_panes`. |
-| `tmux://sessions/{name}`, `tmux://panes/{id}` | Use `get_session_info` and `get_pane_info`. |
-| `tmux://sessions/{name}/windows`, `tmux://sessions/{name}/windows/{index}` | Use `list_windows`, filter by `session_id`, then pass the returned stable id to `get_window_info`. |
-| `tmux://panes/{id}/content` | Use `capture_pane` or continue from a cursor with `capture_since`. |
+| `tmux://server` | Use [`get_server_info`][get_server_info]; `tmux://capabilities` adds the frozen connection and selection boundary. |
+| `tmux://sessions`, `tmux://windows`, `tmux://panes` | Use [`list_sessions`][list_sessions], [`list_windows`][list_windows], and [`list_panes`][list_panes]. |
+| `tmux://sessions/{name}`, `tmux://panes/{id}` | Use [`get_session_info`][get_session_info] and [`get_pane_info`][get_pane_info]. |
+| `tmux://sessions/{name}/windows`, `tmux://sessions/{name}/windows/{index}` | Use [`list_windows`][list_windows], filter by `session_id`, then pass the returned stable id to [`get_window_info`][get_window_info]. |
+| `tmux://panes/{id}/content` | Use [`capture_pane`][capture_pane] or continue from a cursor with [`capture_since`][capture_since]. |
 | `enter_copy_mode`, `exit_copy_mode` | Read with capture, snapshot, search, or cursor tools. The attached person owns pane modes. |
-| Prompt `run_and_wait` | Use one `run_shell_command`; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
-| Prompt `interrupt_gracefully` | Start with `snapshot_pane`. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use `send_keys` with `keys: ["C-c"]`, not `text: "C-c"`, then observe with `capture_since` or `wait_for_text`. `keys: ["C-\\"]` is stronger. Either, sent alone, reaches a command an active `run_shell_command` still reserves; `respawn_pane` with `kill_first: true` replaces a program that ignores both. Do not turn pane recovery into teardown. |
-| Prompt `diagnose_pane` | Start with `snapshot_pane`; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with `capture_since`, and use `search_panes` if the target is uncertain. |
+| Prompt `run_and_wait` | Use one [`run_shell_command`][run_shell_command]; decide from `outcome` and `exit_status`. A deadline stops the wait, not the pane command. |
+| Prompt `interrupt_gracefully` | Start with [`snapshot_pane`][snapshot_pane]. If `in_mode`, keep observing and let the attached person leave the mode. Otherwise use [`send_keys`][send_keys] with `keys: ["C-c"]`, not `text: "C-c"`, then observe with [`capture_since`][capture_since] or [`wait_for_text`][wait_for_text]. `keys: ["C-\\"]` is stronger. Either, sent alone, reaches a command an active [`run_shell_command`][run_shell_command] still reserves; [`respawn_pane`][respawn_pane] with `kill_first: true` replaces a program that ignores both. Do not turn pane recovery into teardown. |
+| Prompt `diagnose_pane` | Start with [`snapshot_pane`][snapshot_pane]; inspect `pane.command`, `dead`, `in_mode`, `mode`, `dropped`, and `content`. Repeat with `history: true` when the visible screen is insufficient, follow later output with [`capture_since`][capture_since], and use [`search_panes`][search_panes] if the target is uncertain. |
 
 ### Asking first
 
@@ -743,3 +774,52 @@ or [MIT license](LICENSE-MIT) at your option.
 [docs-rs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
 [libtmux-docs]: https://docs.rs/libtmux/latest/libtmux/
 [tmuxtools-docs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/struct.TmuxTools.html
+[toolset-inspect]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-inspect
+[toolset-manage]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-manage
+[toolset-execute]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-execute
+[toolset-teardown]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-teardown
+[call_read_tools_batch]: https://libtmux.org/en/rs/latest/mcp/tools/call_read_tools_batch/
+[capture_pane]: https://libtmux.org/en/rs/latest/mcp/tools/capture_pane/
+[capture_since]: https://libtmux.org/en/rs/latest/mcp/tools/capture_since/
+[clear_pane_scrollback]: https://libtmux.org/en/rs/latest/mcp/tools/clear_pane_scrollback/
+[create_session]: https://libtmux.org/en/rs/latest/mcp/tools/create_session/
+[create_window]: https://libtmux.org/en/rs/latest/mcp/tools/create_window/
+[find_pane_by_position]: https://libtmux.org/en/rs/latest/mcp/tools/find_pane_by_position/
+[get_pane_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_pane_info/
+[get_server_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_server_info/
+[get_session_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_session_info/
+[get_tmux_variables]: https://libtmux.org/en/rs/latest/mcp/tools/get_tmux_variables/
+[get_window_info]: https://libtmux.org/en/rs/latest/mcp/tools/get_window_info/
+[kill_pane]: https://libtmux.org/en/rs/latest/mcp/tools/kill_pane/
+[kill_session]: https://libtmux.org/en/rs/latest/mcp/tools/kill_session/
+[kill_window]: https://libtmux.org/en/rs/latest/mcp/tools/kill_window/
+[list_panes]: https://libtmux.org/en/rs/latest/mcp/tools/list_panes/
+[list_sessions]: https://libtmux.org/en/rs/latest/mcp/tools/list_sessions/
+[list_windows]: https://libtmux.org/en/rs/latest/mcp/tools/list_windows/
+[move_window]: https://libtmux.org/en/rs/latest/mcp/tools/move_window/
+[paste_text]: https://libtmux.org/en/rs/latest/mcp/tools/paste_text/
+[rename_session]: https://libtmux.org/en/rs/latest/mcp/tools/rename_session/
+[rename_window]: https://libtmux.org/en/rs/latest/mcp/tools/rename_window/
+[resize_pane]: https://libtmux.org/en/rs/latest/mcp/tools/resize_pane/
+[resize_window]: https://libtmux.org/en/rs/latest/mcp/tools/resize_window/
+[respawn_pane]: https://libtmux.org/en/rs/latest/mcp/tools/respawn_pane/
+[run_shell_command]: https://libtmux.org/en/rs/latest/mcp/tools/run_shell_command/
+[search_panes]: https://libtmux.org/en/rs/latest/mcp/tools/search_panes/
+[select_layout]: https://libtmux.org/en/rs/latest/mcp/tools/select_layout/
+[select_pane]: https://libtmux.org/en/rs/latest/mcp/tools/select_pane/
+[select_window]: https://libtmux.org/en/rs/latest/mcp/tools/select_window/
+[send_keys]: https://libtmux.org/en/rs/latest/mcp/tools/send_keys/
+[send_keys_batch]: https://libtmux.org/en/rs/latest/mcp/tools/send_keys_batch/
+[set_history_limit]: https://libtmux.org/en/rs/latest/mcp/tools/set_history_limit/
+[set_mouse_enabled]: https://libtmux.org/en/rs/latest/mcp/tools/set_mouse_enabled/
+[set_pane_title]: https://libtmux.org/en/rs/latest/mcp/tools/set_pane_title/
+[set_synchronize_panes]: https://libtmux.org/en/rs/latest/mcp/tools/set_synchronize_panes/
+[show_environment]: https://libtmux.org/en/rs/latest/mcp/tools/show_environment/
+[show_hooks]: https://libtmux.org/en/rs/latest/mcp/tools/show_hooks/
+[show_option]: https://libtmux.org/en/rs/latest/mcp/tools/show_option/
+[signal_channel]: https://libtmux.org/en/rs/latest/mcp/tools/signal_channel/
+[snapshot_pane]: https://libtmux.org/en/rs/latest/mcp/tools/snapshot_pane/
+[split_window]: https://libtmux.org/en/rs/latest/mcp/tools/split_window/
+[swap_pane]: https://libtmux.org/en/rs/latest/mcp/tools/swap_pane/
+[wait_for_channel]: https://libtmux.org/en/rs/latest/mcp/tools/wait_for_channel/
+[wait_for_text]: https://libtmux.org/en/rs/latest/mcp/tools/wait_for_text/

@@ -157,10 +157,9 @@ fn readme_links_to_the_generated_reference_without_copying_the_inventory() -> Te
 
     assert!(readme.contains("[generated tool reference](TOOLS.md)"));
     assert!(!readme.contains("**Inspect (18):**"));
-    assert!(readme.contains("configured recipient cohort"));
+    assert!(readme.contains("### Pane input"));
+    assert!(readme.contains("The checks look; they do not lock."));
     assert!(readme.contains("trusted POSIX-compatible pane shell"));
-    assert!(readme.contains("may be the inherited caller"));
-    assert!(readme.contains("do not prove delivery"));
     Ok(())
 }
 
@@ -581,4 +580,148 @@ fn the_readme_checks_find_what_they_report_and_refuse_what_the_binary_refuses() 
         assert_eq!(launches[0].arguments, ["-L", "work"], "{client}");
         assert_eq!(launches[0].accepted(), Ok(()), "{client}");
     }
+}
+
+/// Where libtmux.org publishes one page per tool.
+const TOOL_PAGE: &str = "https://libtmux.org/en/rs/latest/mcp/tools/";
+
+/// Every tool the registry offers, with the toolset it belongs to.
+fn registered_tools() -> TestResult<Vec<(String, String)>> {
+    let tools = TmuxTools::builder(libtmux::Server::new()?)
+        .selection(Selection::parse(
+            Some("inspect,manage,execute,teardown"),
+            None,
+            None,
+        )?)
+        .build();
+    Ok(tools
+        .offered()
+        .into_iter()
+        .map(|tool| {
+            let toolset = tool
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.0.get("com.git-pull.libtmux-mcp/capability"))
+                .and_then(|row| row["toolset"].as_str())
+                .expect("a capability row names its toolset")
+                .to_owned();
+            (tool.name.to_string(), toolset)
+        })
+        .collect())
+}
+
+/// Why the Toolsets table disagrees with the registry: a toolset without a
+/// row, a row with the wrong count, a tool left unlinked or linked to another
+/// name, or a link the toolset does not own.
+fn table_disagreement(readme: &str, tools: &[(String, String)]) -> Option<String> {
+    let toolsets: std::collections::BTreeSet<&str> =
+        tools.iter().map(|(_, toolset)| toolset.as_str()).collect();
+    for toolset in toolsets {
+        let names: Vec<&str> = tools
+            .iter()
+            .filter(|(_, owner)| owner == toolset)
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let Some(row) = readme
+            .lines()
+            .find(|line| line.starts_with(&format!("| [`{toolset}`][")))
+        else {
+            return Some(format!("the table has no row for {toolset}"));
+        };
+        if !row.contains(&format!("({})", names.len())) {
+            return Some(format!("the {toolset} row does not count {}", names.len()));
+        }
+        for name in &names {
+            if !row.contains(&format!("[`{name}`][{name}]")) {
+                return Some(format!("the {toolset} row does not link {name}"));
+            }
+        }
+        // One link per tool, and the toolset's own.
+        if row.matches("`][").count() != names.len() + 1 {
+            return Some(format!("the {toolset} row links something it does not own"));
+        }
+    }
+    None
+}
+
+/// Why the link definitions disagree with the registry: a tool without its
+/// page, or a page the registry has no tool for. The index page, which names
+/// no tool, is not a tool page.
+fn definitions_disagreement(readme: &str, tools: &[(String, String)]) -> Option<String> {
+    for (name, _) in tools {
+        if !readme
+            .lines()
+            .any(|line| line == format!("[{name}]: {TOOL_PAGE}{name}/"))
+        {
+            return Some(format!("{name} has no link definition"));
+        }
+    }
+    for line in readme.lines() {
+        let unknown = line
+            .split_once("]: ")
+            .and_then(|(_, target)| target.strip_prefix(TOOL_PAGE))
+            .map(|page| page.trim_end_matches('/'))
+            .filter(|name| !name.is_empty() && !tools.iter().any(|(known, _)| known == name));
+        if let Some(name) = unknown {
+            return Some(format!("{name} is not a registered tool"));
+        }
+    }
+    None
+}
+
+#[test]
+fn the_toolsets_table_links_every_tool_to_its_page() -> TestResult {
+    let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"))?;
+    let tools = registered_tools()?;
+
+    assert_eq!(table_disagreement(&readme, &tools), None);
+    assert_eq!(definitions_disagreement(&readme, &tools), None);
+    Ok(())
+}
+
+#[test]
+fn the_tool_link_checks_accept_a_clean_table_and_name_each_break() {
+    let tools = vec![
+        ("capture_pane".to_owned(), "inspect".to_owned()),
+        ("list_panes".to_owned(), "inspect".to_owned()),
+        ("send_keys".to_owned(), "execute".to_owned()),
+    ];
+    let page = |name: &str| format!("[{name}]: {TOOL_PAGE}{name}/");
+    let table = |inspect: &str, count: usize| {
+        format!(
+            "| [`inspect`][toolset-inspect] ({count}) | read | {inspect} |\n\
+             | [`execute`][toolset-execute] (1) | type | [`send_keys`][send_keys] |\n"
+        )
+    };
+    let both = "[`capture_pane`][capture_pane], [`list_panes`][list_panes]";
+    let definitions = ["capture_pane", "list_panes", "send_keys"]
+        .map(page)
+        .join("\n");
+
+    // The control: nothing is reported.
+    assert_eq!(table_disagreement(&table(both, 2), &tools), None);
+    assert_eq!(definitions_disagreement(&definitions, &tools), None);
+
+    // An unlinked tool, a link to another name, an extra link and a wrong
+    // count each fail.
+    for broken in [
+        table("`capture_pane`, [`list_panes`][list_panes]", 2),
+        table(
+            "[`capture_pane`][capture_pan], [`list_panes`][list_panes]",
+            2,
+        ),
+        table(&format!("{both}, [`kill_pane`][kill_pane]"), 2),
+        table(both, 3),
+        table(both, 2).replace("| [`execute`]", "| [`teardown`]"),
+    ] {
+        assert!(table_disagreement(&broken, &tools).is_some(), "{broken}");
+    }
+
+    // A tool without a page and a page without a tool each fail.
+    assert!(definitions_disagreement(&page("capture_pane"), &tools).is_some());
+    let stale = format!("{definitions}\n{}", page("kill_pane"));
+    assert_eq!(
+        definitions_disagreement(&stale, &tools),
+        Some("kill_pane is not a registered tool".to_owned())
+    );
 }
