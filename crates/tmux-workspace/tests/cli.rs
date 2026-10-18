@@ -785,7 +785,7 @@ async fn real_tmux_compat_layout_preflight_corpus_preserves_keeper() {
         .map(|pane| pane.id().clone())
         .collect::<Vec<_>>();
     let version = guard.server().capabilities().await.unwrap().tmux_version();
-    let key = if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+    let key = if version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS) {
         "3.7c"
     } else {
         "3.2a"

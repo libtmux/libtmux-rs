@@ -75,7 +75,7 @@ async fn real_tmux_compat_layout_preflight_uses_daemon_version() {
     let mirrored = selected
         .validate_layouts([(OsStr::new("main-horizontal-mirrored"), 1)])
         .await;
-    if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+    if version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS) {
         assert_eq!(abbreviated.unwrap_err().kind(), ErrorKind::InvalidInput);
         mirrored.unwrap();
     } else {
@@ -97,7 +97,7 @@ async fn real_tmux_compat_layout_preflight_cold_and_empty_daemons() {
         format!("tmux {}\n", observed.to_string_lossy()).as_bytes(),
     )
     .unwrap();
-    let layout = if version.meets(&libtmux::since::MIRRORED_LAYOUTS) {
+    let layout = if version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS) {
         "main-horizontal-m"
     } else {
         "main-h"

@@ -130,7 +130,7 @@ async fn real_tmux_compat_layout_preflight_control_version() {
     let session = guard.session("layout-control-version").await.unwrap();
     let window = session.active_window().await.unwrap().unwrap();
     let version = guard.server().capabilities().await.unwrap().tmux_version();
-    let modern = version.meets(&libtmux::since::MIRRORED_LAYOUTS);
+    let modern = version.has_behavior(&libtmux::since::MIRRORED_LAYOUTS);
     let (sender, _events) = libtmux::control::ControlMode::attach(guard.server(), session.id())
         .await
         .unwrap()
