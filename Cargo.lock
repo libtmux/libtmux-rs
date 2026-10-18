@@ -1177,6 +1177,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "libtmux-workspace-docs"
+version = "0.0.0"
+dependencies = [
+ "libtmux",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

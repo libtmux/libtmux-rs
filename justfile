@@ -344,7 +344,7 @@ doc-contents:
 # Report doctests that compile a definition and execute nothing
 [group: 'docs']
 doctests-run:
-    python3 scripts/check-doctests-run.py crates
+    python3 scripts/check-doctests-run.py crates tools/workspace-docs
 
 # Build documentation including dependencies, so intra-doc links resolve
 [group: 'docs']

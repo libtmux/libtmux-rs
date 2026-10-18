@@ -1,0 +1,16 @@
+[package]
+name = "libtmux-workspace-docs"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+doc = false
+
+[dev-dependencies]
+libtmux = { workspace = true, features = ["query", "test-support"] }
+
+[lints]
+workspace = true
