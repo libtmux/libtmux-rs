@@ -26,7 +26,7 @@ them where tmuxp does and takes tmuxp's flags, as one binary with no Python.
 
 ```console
 $ cargo install tmux-workspace \
-    --version 0.1.0-alpha.15 \
+    --version 0.1.0-alpha.16 \
     --locked
 ```
 
@@ -36,7 +36,7 @@ prebuilt binary for Linux or macOS when the release carries one, and builds
 from source when it does not:
 
 ```console
-$ cargo binstall tmux-workspace --version 0.1.0-alpha.15
+$ cargo binstall tmux-workspace --version 0.1.0-alpha.16
 ```
 
 ## Load a session
@@ -271,7 +271,7 @@ does, tmuxp's way; the command reference lists
 [where the two differ](docs/cli.md#where-the-command-and-the-library-differ).
 
 ```console
-$ cargo add tmux-workspace@0.1.0-alpha.15 --no-default-features
+$ cargo add tmux-workspace@0.1.0-alpha.16 --no-default-features
 ```
 
 `--no-default-features` leaves the command and its dependencies out.

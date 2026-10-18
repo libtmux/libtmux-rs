@@ -16,6 +16,16 @@ full.
 
 ## Unreleased
 
+## 0.1.0-alpha.16 - 2026-10-18
+
+`libtmux`, `libtmux-macros`, and `tmux-workspace` are 0.1.0-alpha.16;
+`tmux-mcp` is 0.1.0-alpha.17.
+
+tmux 3.3a is now the minimum. Every crate reads the running server's version
+before it sends anything and refuses an older server, or a report that names
+no release, with the remedy. Callers that upgrade must handle
+`Error::UnrecognizedTmuxVersion` and drop the removed `since` constants.
+
 ### Added
 
 - `Server::daemon_version` returns the version of the daemon a handle reaches

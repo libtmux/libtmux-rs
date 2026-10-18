@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The examples on this page run as written, against a throwaway tmux. To run
 them yourself, enable the `test-support` feature as a dev-dependency:
-`libtmux = { version = "0.1.0-alpha.15", features = ["test-support"] }`.
+`libtmux = { version = "0.1.0-alpha.16", features = ["test-support"] }`.
 
 Every accessor that reaches tmux is `async`; everything that reads an
 already-taken snapshot is not. Commands run without a shell, and results keep
@@ -103,7 +103,7 @@ no representation over an open control connection.
 
 ```toml
 [dependencies]
-libtmux = "0.1.0-alpha.15"
+libtmux = "0.1.0-alpha.16"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -660,7 +660,7 @@ own suite uses:
 
 ```toml
 [dev-dependencies]
-libtmux = { version = "0.1.0-alpha.15", features = ["test-support"] }
+libtmux = { version = "0.1.0-alpha.16", features = ["test-support"] }
 ```
 
 Each guard owns a tmux child on a private socket with an empty config, so tests

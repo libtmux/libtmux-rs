@@ -38,14 +38,14 @@ tmux 3.3a or newer, on `$PATH`. Rust 1.88 to build.
 ## Install
 
 ```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.16
+$ cargo install tmux-mcp --version 0.1.0-alpha.17
 ```
 
 [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
 prebuilt binary for Linux or macOS instead, when the release carries one:
 
 ```console
-$ cargo binstall tmux-mcp --version 0.1.0-alpha.16
+$ cargo binstall tmux-mcp --version 0.1.0-alpha.17
 ```
 
 Either puts a `tmux-mcp` binary on your path. It speaks MCP on stdin and stdout,
