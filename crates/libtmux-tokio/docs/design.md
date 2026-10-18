@@ -641,27 +641,10 @@ that does is `Server::hierarchy`'s, so `SessionTree` and `WindowTree` are
 `Filterable`, with a `windows` relation and a `panes` relation respectively.
 Their targets are `session_tree` and `window_tree`.
 
-Their field companions are hand-written, because libtmux does not use its own
-derive. Each keeps the owned handle's fields under a named field -- `session`
-and `window` -- and puts the relation beside it, so a session's own fields and
-a question about its contents compose in one expression:
-
-```no_run
-# fn expression() {
-use libtmux_tokio::query::Filterable as _;
-use libtmux_tokio::{SessionTree, WindowTree};
-
-let sessions = SessionTree::filter_fields();
-let windows = WindowTree::filter_fields();
-
-let expression = sessions
-    .session
-    .session_name
-    .starts_with("build")
-    .and(sessions.windows.any(windows.window.window_name.eq("editor")));
-# let _ = expression;
-# }
-```
+With `query` enabled, the field companions keep each handle's fields under
+`session` or `window` and put the relation beside them. The
+[`SessionTreeFields` example](../src/server/discovery.rs) composes a session
+name predicate with a predicate over its windows.
 
 Matching delegates: a predicate naming the relation resolves against the
 children, and anything else is handed to the owned handle, which already knows

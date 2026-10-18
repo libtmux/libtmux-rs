@@ -385,7 +385,6 @@ pub struct WindowTree {
 /// # Examples
 ///
 /// ```
-/// # #[cfg(feature = "query")] {
 /// use libtmux_tokio::query::Filterable as _;
 /// use libtmux_tokio::{SessionTree, WindowTree};
 ///
@@ -400,7 +399,6 @@ pub struct WindowTree {
 ///     .starts_with("build")
 ///     .and(sessions.windows.any(windows.window.window_name.eq("editor")));
 /// # let _ = building;
-/// # }
 /// ```
 #[cfg(feature = "query")]
 #[non_exhaustive]
@@ -427,7 +425,6 @@ impl fmt::Debug for SessionTreeFields {
 /// # Examples
 ///
 /// ```
-/// # #[cfg(feature = "query")] {
 /// use libtmux_tokio::query::Filterable as _;
 /// use libtmux_tokio::{Pane, WindowTree};
 ///
@@ -438,7 +435,6 @@ impl fmt::Debug for SessionTreeFields {
 /// // filtering the panes themselves: this keeps whole windows.
 /// let has_dead_pane = windows.panes.any(panes.pane_dead.eq(true));
 /// # let _ = has_dead_pane;
-/// # }
 /// ```
 #[cfg(feature = "query")]
 #[non_exhaustive]

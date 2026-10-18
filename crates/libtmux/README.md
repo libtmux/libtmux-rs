@@ -131,9 +131,11 @@ requires. `plan` and `control-mode` also work without crate dependencies.
 | Which request failed? | Request ID and redacted command summary |
 | Did scoped cleanup also fail? | `ScopeError` |
 
-The `tracing` feature records command outcomes without argument values or
-captured output. Request IDs correlate calls with failures. Output remains
-available from the returned result for a caller that deliberately needs it.
+The `tracing` feature records command outcomes. Diagnostics omit arguments
+marked sensitive and raw process output; public arguments may appear in
+bounded, escaped command summaries. Request IDs correlate calls with failures
+within one server core. Output remains available from the returned result
+for a caller that deliberately needs it.
 
 ## Further reading
 
