@@ -1,0 +1,2 @@
+# The parent config names Tokio lock types absent from this workspace.
+await-holding-invalid-types = []
