@@ -13,11 +13,10 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [tmux](https://github.com/tmux/tmux), built on
-[libtmux](https://docs.rs/libtmux).
+[libtmux][libtmux-docs].
 
 </div>
 
-> [!WARNING]
 > **Alpha.** The tool surface changes between releases, including in ways that
 > will not be called out as breaking, because nothing here is stable yet.
 > `cargo install` will not pick a prerelease unless asked, so the install
@@ -25,6 +24,10 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for
 
 Give an agent typed operations inside the terminal: inspect tmux, arrange its
 objects, drive pane programs, and wait for observable outcomes.
+
+The [tool pages][tools] describe each tool, [Connect a client][connect] makes a
+first call, and the [API reference][api-reference] covers running the server
+from Rust. The API is also on [docs.rs][docs-rs].
 
 Reading a pane goes through tmux's control mode rather than screen captures,
 so output that scrolled past between calls is still seen, and
@@ -48,8 +51,14 @@ prebuilt binary for Linux or macOS instead, when the release carries one:
 $ cargo binstall tmux-mcp --version 0.1.0-alpha.16
 ```
 
-Either puts a `tmux-mcp` binary on your path. It speaks MCP on stdin and stdout,
-so every client below is really the same thing: run `tmux-mcp`.
+Either puts a `tmux-mcp` binary on your path. Check that the shell finds it:
+
+```console
+$ tmux-mcp --version
+```
+
+It speaks MCP on stdin and stdout, so every client below is really the same
+thing: run `tmux-mcp`.
 
 ### Claude Code
 
@@ -218,6 +227,36 @@ Add to `~/.gemini/config/mcp_config.json`:
 Settings → Tools → AI Assistant → Model Context Protocol → Add, then choose a
 stdio server with command `tmux-mcp`.
 
+### Passing options
+
+Every client above starts the same command, so a socket or a toolset goes
+where the client keeps a command's arguments and environment. Claude Code
+takes both on the command line. This offers the read tools only, on the tmux
+socket named `work`:
+
+```console
+$ claude mcp add tmux \
+    --env LIBTMUX_TOOLSETS=inspect \
+    -- tmux-mcp --socket-name work
+```
+
+A JSON client takes the same two settings as `args` and `env`:
+
+```json
+{
+  "mcpServers": {
+    "tmux": {
+      "command": "tmux-mcp",
+      "args": ["--socket-name", "work"],
+      "env": { "LIBTMUX_TOOLSETS": "inspect" }
+    }
+  }
+}
+```
+
+[Toolset selection](#toolset-selection) and
+[Choosing a server](#choosing-a-server) list every setting.
+
 ### Anything else
 
 Any client that runs a stdio MCP server takes the same two pieces: the command
@@ -231,7 +270,7 @@ Forty-five tools belong to the unordered `inspect`, `manage`, `execute`, and
 record; registration, descriptions, annotations, selection, and
 `tmux://capabilities` all read that record. The
 [generated tool reference](TOOLS.md) records every route and capability
-directly from that registry.
+directly from that registry, and the [tool pages][tools] publish it.
 
 | Toolset | Intent | Tools |
 |---|---|---|
@@ -630,11 +669,11 @@ choosing another action.
 
 ## Using it from Rust
 
-The tool surface is a type, so a program can freeze a `Selection` in code or
-serve it over a transport other than stdio, or call a tool directly. The
-crate ships runnable examples. `run_and_wait` runs a command and reads
-its real exit status, then waits for a line a background job prints, through
-the same tools a client calls:
+The tool surface is a type, [`TmuxTools`][tmuxtools-docs], so a program can
+freeze a `Selection` in code, serve it over a transport other than stdio, or
+call a tool directly. The crate ships runnable examples. `run_and_wait` runs a
+command and reads its real exit status, then waits for a line a background job
+prints, through the same tools a client calls:
 
 ```console
 $ cargo run --example run_and_wait
@@ -689,7 +728,7 @@ The tests drive a real tmux on an isolated socket, so tmux must be on `$PATH`.
 
 ## Related
 
-- [libtmux](https://docs.rs/libtmux) — the typed tmux client underneath
+- [libtmux][libtmux-docs] — the typed tmux client underneath
 - [libtmux-mcp](https://github.com/tmux-python/libtmux-mcp) — the Python server
   this one learned its discoverability habits from
 
@@ -697,3 +736,10 @@ The tests drive a real tmux on an isolated socket, so tmux must be on `$PATH`.
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
 or [MIT license](LICENSE-MIT) at your option.
+
+[tools]: https://libtmux.org/en/rs/latest/mcp/tools/
+[connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
+[api-reference]: https://libtmux.org/en/rs/latest/mcp/reference/
+[docs-rs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
+[libtmux-docs]: https://docs.rs/libtmux/latest/libtmux/
+[tmuxtools-docs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/struct.TmuxTools.html

@@ -16,7 +16,7 @@
 [crates.io]: https://img.shields.io/crates/v/libtmux.svg
 [crate]: https://crates.io/crates/libtmux
 [docs.rs]: https://img.shields.io/docsrs/libtmux
-[docs]: https://docs.rs/libtmux
+[docs]: https://docs.rs/libtmux/latest/libtmux/
 [MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
 [rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
 
@@ -31,7 +31,9 @@ and panes.**
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
-See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
+See the [migration notes][migration] when upgrading from an earlier alpha.
+`libtmux-macros`, `tmux-workspace` and `tmux-mcp` are published beside this
+crate: see [Crates in this repository](#crates-in-this-repository).
 
 ```rust
 use libtmux::test::TestServer;
@@ -422,9 +424,10 @@ The third row is the one that surprises people, and it decides API shape. A
 window has one identity and several *links*, so a command that removes one link
 has to name the session too -- `session:@id`, because `@id` alone could not say
 which link to remove, and a bare index names a slot rather than whichever
-window is sitting in it. [`Window::unlink`] does exactly that, and reports
-[`Error::LinkGone`] rather than [`Error::ObjectGone`] when the link is already
-gone, because the window itself may still be running under another session.
+window is sitting in it. [`Window::unlink`][window-unlink] does exactly that,
+and reports [`Error::LinkGone`][error-linkgone] rather than
+[`Error::ObjectGone`][error-objectgone] when the link is already gone, because
+the window itself may still be running under another session.
 
 ## Walking the hierarchy
 
@@ -713,20 +716,146 @@ keeps `retry_until` in `libtmux/test/retry.py`, a test helper, so production
 code that waits on a pane writes the loop itself. `Pane::wait_for_text` and
 `Pane::wait_for_quiet` are here in the library and need no feature.
 
+## Crates in this repository
+
+Four crates are published from this repository. Each header links to the
+crate's directory, where its own README starts.
+
+### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux)
+
+This crate: the async tmux client and object model. The examples on this page
+are its own, and [`examples/`][libtmux-examples] holds longer programs.
+
+[API reference][libtmux-api] · [docs.rs][libtmux-docsrs]
+
+### [`libtmux-macros`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-macros)
+
+`#[derive(Filterable)]`, so your own structs take the same typed query grammar
+as tmux objects. You do not depend on this crate: the `derive` feature
+re-exports the macro.
+
+[API reference][macros-docsrs] · [Guide][macros-guide]
+
+```rust
+# // `derive` is an optional feature, so the example is compiled only when it
+# // is on.
+# #[cfg(feature = "derive")]
+# {
+use libtmux::query::{Filterable as _, QueryIteratorExt as _};
+
+#[derive(libtmux::Filterable)]
+#[filterable(target = "job")]
+struct Job {
+    name: String,
+    attempts: u32,
+}
+
+let jobs = [
+    Job { name: "build".into(), attempts: 3 },
+    Job { name: "deploy".into(), attempts: 1 },
+];
+
+let fields = Job::filter_fields();
+let retried = fields.name.starts_with("bui").and(fields.attempts.gt(2));
+
+assert_eq!(jobs.iter().matching(&retried).count(), 1);
+# }
+```
+
+### [`tmux-workspace`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-workspace)
+
+A native tmuxp: it loads tmuxp workspace files, freezes running sessions back
+into them, and imports tmuxinator and teamocil projects, as one binary with no
+Python.
+
+[Command reference][workspace-cli] · [API reference][workspace-api] ·
+[docs.rs][workspace-docsrs] · [Guide][workspace-guide]
+
+```console
+$ cargo install tmux-workspace \
+    --version 0.1.0-alpha.15 \
+    --locked
+```
+
+Build the session a workspace file describes, and attach to it:
+
+```console
+$ tmux-workspace load ./dev.yaml
+```
+
+Save a running session back to a file:
+
+```console
+$ tmux-workspace freeze dev -o dev.yaml
+```
+
+### [`tmux-mcp`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp)
+
+A Model Context Protocol server over this crate. It is read-biased, and every
+tool that changes state names what it changes.
+
+[Tools][mcp-tools] · [API reference][mcp-api] · [docs.rs][mcp-docsrs] ·
+[Connect a client][mcp-connect] · [Guide][mcp-guide]
+
+```console
+$ cargo install tmux-mcp --version 0.1.0-alpha.16
+```
+
+Register it with Claude Code. The guide has the same step for the other
+clients:
+
+```console
+$ claude mcp add tmux -- tmux-mcp
+```
+
+Offer only the read tools, on the tmux socket named `work`:
+
+```console
+$ claude mcp add tmux \
+    --env LIBTMUX_TOOLSETS=inspect \
+    -- tmux-mcp --socket-name work
+```
+
 ## Documentation
 
-[API documentation](https://docs.rs/libtmux) covers the public surface. Two
-longer documents ship inside the crate, next to the source:
+The API reference covers the public surface, [on libtmux.org][libtmux-api] and
+[on docs.rs][libtmux-docsrs]. Four longer documents ship inside the crate, next
+to the source:
 
-- `docs/design.md` — why the crate is shaped the way it is: the transport, the
-  snapshot and format boundary, the query grammar, the test guard, and the
-  compatibility lanes.
-- `docs/findings.md` — every tmux defect and platform surprise the crate works
-  around, each with the tmux releases it holds for and what the crate does.
-- `docs/parity.md` — the capability ledger against Python libtmux, naming each
-  Rust symbol and the test that exercises it.
+- [`docs/design.md`][design] — why the crate is shaped the way it is: the
+  transport, the snapshot and format boundary, the query grammar, the test
+  guard, and the compatibility lanes.
+- [`docs/findings.md`][findings] — every tmux defect and platform surprise the
+  crate works around, each with the tmux releases it holds for and what the
+  crate does.
+- [`docs/parity.md`][parity] — the capability ledger against Python libtmux,
+  naming each Rust symbol and the test that exercises it.
+- [`docs/migration.md`][migration] — what to change, release by release, when
+  upgrading from an earlier alpha.
 
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
 or [MIT license](LICENSE-MIT) at your option.
+
+[migration]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/migration.md
+[design]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/design.md
+[findings]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/findings.md
+[parity]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/parity.md
+[window-unlink]: https://docs.rs/libtmux/latest/libtmux/struct.Window.html#method.unlink
+[error-linkgone]: https://docs.rs/libtmux/latest/libtmux/enum.Error.html#variant.LinkGone
+[error-objectgone]: https://docs.rs/libtmux/latest/libtmux/enum.Error.html#variant.ObjectGone
+[libtmux-api]: https://libtmux.org/en/rs/latest/reference/
+[libtmux-docsrs]: https://docs.rs/libtmux/latest/libtmux/
+[libtmux-examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux/examples
+[macros-docsrs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
+[macros-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-macros/README.md
+[workspace-cli]: https://libtmux.org/en/rs/latest/workspace/cli/
+[workspace-api]: https://libtmux.org/en/rs/latest/workspace/reference/
+[workspace-docsrs]: https://docs.rs/tmux-workspace/latest/tmux_workspace/
+[workspace-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md
+[mcp-tools]: https://libtmux.org/en/rs/latest/mcp/tools/
+[mcp-api]: https://libtmux.org/en/rs/latest/mcp/reference/
+[mcp-docsrs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
+[mcp-connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
+[mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/README.md

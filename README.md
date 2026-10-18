@@ -36,8 +36,9 @@ expression instead of a parsing problem.**
 
 You may be looking for:
 
-- [API documentation](https://docs.rs/libtmux) — every public item, with a
-  runnable example
+- [API reference](https://libtmux.org/en/rs/latest/reference/), also on
+  [docs.rs](https://docs.rs/libtmux/latest/libtmux/) — every public item, with
+  a runnable example
 - [The `libtmux` guide](crates/libtmux/README.md) — features, the three
   transport switches, testing
 - [`tmux-mcp`](crates/tmux-mcp/README.md) — the MCP server, a **separate
@@ -238,37 +239,6 @@ evidence over a single process.
 [The `libtmux` guide](crates/libtmux/README.md#choosing-how-commands-reach-tmux)
 has the behavior table, the how-to-turn-it-on table, and the named presets.
 
-## Load workspaces from YAML
-
-[`tmux-workspace`](crates/tmux-workspace) is a native tmuxp: it loads tmuxp
-workspace files, freezes running sessions back into them, and imports
-tmuxinator and teamocil projects.
-
-```console
-$ cargo install tmux-workspace \
-    --version 0.1.0-alpha.15 \
-    --locked
-```
-
-```console
-$ tmux-workspace load ./dev.yaml
-```
-
-See [its README](crates/tmux-workspace/README.md) for every command.
-
-## Drive tmux from an agent
-
-[`tmux-mcp`](crates/tmux-mcp) is a separate package: a Model Context Protocol
-server over this API, read-biased, where every tool that changes state names
-exactly what it changes.
-
-```console
-$ cargo install tmux-mcp --version 0.1.0-alpha.16
-```
-
-See [its README](crates/tmux-mcp/README.md) for the tool list and for wiring
-it into an MCP client.
-
 ## Requirements
 
 Rust 1.85 or newer, tmux 3.3a or newer, and a Unix target. Native Windows is
@@ -281,24 +251,127 @@ output instead of returning it.
 
 ## Crates
 
-| Crate | Version | What it is |
-| --- | --- | --- |
-| [`libtmux`](crates/libtmux) | [![libtmux]][libtmux-crate] | The async tmux client and object model |
-| [`libtmux-macros`](crates/libtmux-macros) | [![libtmux-macros]][macros-crate] | `#[derive(Filterable)]`, for your own structs |
-| [`tmux-mcp`](crates/tmux-mcp) | [![tmux-mcp]][mcp-crate] | A Model Context Protocol server over tmux |
-| [`tmux-workspace`](crates/tmux-workspace) | [![tmux-workspace]][workspace-crate] | A tmuxp-style YAML builder |
+Four crates are published from this repository. Each header links to the
+crate's directory, where its own README starts. `tmux-workspace` and `tmux-mcp`
+also use `libtmux` from outside it: when either needs a workaround, that is
+treated as a finding about `libtmux` rather than about them.
+
+### [`libtmux`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux)
+
+The async tmux client and object model: servers, sessions, windows, and panes
+as typed handles, and the query layer over them.
+
+[![libtmux]][libtmux-crate] [API reference][libtmux-api] ·
+[docs.rs][libtmux-docsrs] · [Guide][libtmux-guide] ·
+[Programs][libtmux-examples]
+
+The examples above are this crate's: [Drive tmux](#drive-tmux),
+[Query what is there](#query-what-is-there), and
+[Pick how commands reach tmux](#pick-how-commands-reach-tmux). The programs
+under `examples/` are longer.
+
+### [`libtmux-macros`](https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux-macros)
+
+`#[derive(Filterable)]`, so your own structs take the same typed query grammar
+as tmux objects. You do not depend on this crate: `libtmux` re-exports the
+derive behind its `derive` feature, and never requires proc macros itself.
+
+[![libtmux-macros]][macros-crate] [API reference][macros-docsrs] ·
+[Guide][macros-guide]
+
+```console
+$ cargo add libtmux@0.1.0-alpha.15 --features derive
+```
+
+The example in [its README][macros-guide] derives `Filterable` for a `Job`
+struct and filters a list of jobs with the expressions `libtmux` uses for
+panes.
+
+### [`tmux-workspace`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-workspace)
+
+A native tmuxp: it loads tmuxp workspace files, freezes running sessions back
+into them, and imports tmuxinator and teamocil projects, as one binary with no
+Python.
+
+[![tmux-workspace]][workspace-crate] [Command reference][workspace-cli] ·
+[API reference][workspace-api] · [docs.rs][workspace-docsrs] ·
+[Guide][workspace-guide]
+
+```console
+$ cargo install tmux-workspace \
+    --version 0.1.0-alpha.15 \
+    --locked
+```
+
+Describe a session in `dev.yaml`:
+
+```yaml
+session_name: dev
+windows:
+  - window_name: editor
+    panes:
+      - vim
+      - git status
+```
+
+Build it and attach:
+
+```console
+$ tmux-workspace load ./dev.yaml
+```
+
+Save a running session back to a file:
+
+```console
+$ tmux-workspace freeze dev -o dev.yaml
+```
+
+### [`tmux-mcp`](https://github.com/libtmux/libtmux-rs/tree/master/crates/tmux-mcp)
+
+A Model Context Protocol server over `libtmux`. It is read-biased, and every
+tool that changes state names what it changes.
+
+[![tmux-mcp]][mcp-crate] [Tools][mcp-tools] · [API reference][mcp-api] ·
+[docs.rs][mcp-docsrs] · [Connect a client][mcp-connect] · [Guide][mcp-guide]
+
+```console
+$ cargo install tmux-mcp --version 0.1.0-alpha.16
+```
+
+Register it with Claude Code. [Its README][mcp-guide] has the same step for
+Codex, Gemini, Cursor, VS Code, and the other clients:
+
+```console
+$ claude mcp add tmux -- tmux-mcp
+```
+
+Offer only the read tools, on the tmux socket named `work`:
+
+```console
+$ claude mcp add tmux \
+    --env LIBTMUX_TOOLSETS=inspect \
+    -- tmux-mcp --socket-name work
+```
 
 [libtmux-macros]: https://img.shields.io/crates/v/libtmux-macros.svg?label=libtmux-macros
 [macros-crate]: https://crates.io/crates/libtmux-macros
 [tmux-workspace]: https://img.shields.io/crates/v/tmux-workspace.svg?label=tmux-workspace
 [workspace-crate]: https://crates.io/crates/tmux-workspace
-
-`libtmux` does not require proc macros: its own `Filterable` implementations
-are hand-written, and the derive exists for structs outside this workspace.
-
-The last two crates are also how the API gets used from outside it. When
-either needs a workaround, that is treated as a finding about `libtmux` rather
-than about them.
+[libtmux-api]: https://libtmux.org/en/rs/latest/reference/
+[libtmux-docsrs]: https://docs.rs/libtmux/latest/libtmux/
+[libtmux-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md
+[libtmux-examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux/examples
+[macros-docsrs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
+[macros-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux-macros/README.md#use-it
+[workspace-cli]: https://libtmux.org/en/rs/latest/workspace/cli/
+[workspace-api]: https://libtmux.org/en/rs/latest/workspace/reference/
+[workspace-docsrs]: https://docs.rs/tmux-workspace/latest/tmux_workspace/
+[workspace-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-workspace/README.md
+[mcp-tools]: https://libtmux.org/en/rs/latest/mcp/tools/
+[mcp-api]: https://libtmux.org/en/rs/latest/mcp/reference/
+[mcp-docsrs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
+[mcp-connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
+[mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/README.md
 
 ## Development
 
