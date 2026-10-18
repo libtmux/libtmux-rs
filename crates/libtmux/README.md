@@ -16,7 +16,7 @@
 [crates.io]: https://img.shields.io/crates/v/libtmux.svg
 [crate]: https://crates.io/crates/libtmux
 [docs.rs]: https://img.shields.io/docsrs/libtmux
-[docs]: https://docs.rs/libtmux/latest/libtmux/
+[docs]: https://docs.rs/libtmux
 [MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
 [rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
 
@@ -31,7 +31,7 @@ and panes.**
 > requirement does not pick this up: depend on the exact version below, and
 > expect to edit it.
 
-See the [migration notes][migration] when upgrading from an earlier alpha.
+See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
 `libtmux-macros`, `tmux-workspace` and `tmux-mcp` are published beside this
 crate: see [Crates in this repository](#crates-in-this-repository).
 
@@ -84,13 +84,13 @@ a mismatch invalidates the cache for a fresh probe on the next operation.
 
 A refusal means nothing was sent to the daemon. A daemon older than 3.3a
 (including 3.1 and older, which cannot answer the probe at all) is refused as
-`Error::UnsupportedTmuxVersion`. A report that names no release, such as a bare
-`master`, `openbsd-*` or `3.3a-dev`, is refused as
-`Error::UnrecognizedTmuxVersion`. The same holds when the probe fails
-(`Error::VersionProbeFailed`), when its output is not a version report
-(`Error::InvalidVersionOutput`), and when the deadline passes during the check
-(`Error::Timeout` with `before_dispatch` set). A daemon replaced between the
-check and the request fails with `Error::ServerReplaced`, and nothing ran.
+[`Error::UnsupportedTmuxVersion`]. A report that names no release, such as a
+bare `master`, `openbsd-*` or `3.3a-dev`, is refused as
+[`Error::UnrecognizedTmuxVersion`]. The same holds when the probe fails
+([`Error::VersionProbeFailed`]), when its output is not a version report
+([`Error::InvalidVersionOutput`]), and when the deadline passes during the check
+([`Error::Timeout`] with `before_dispatch` set). A daemon replaced between the
+check and the request fails with [`Error::ServerReplaced`], and nothing ran.
 Upgrade tmux and restart the server, or pin the previous release of libtmux.
 
 The configured executable and library-owned metadata and guard commands must
@@ -98,8 +98,8 @@ retain tmux's native built-in semantics. Owner-defined `command-alias`
 redefinitions of those commands are outside this qualification; their contents
 run with tmux's own semantics.
 
-`Server::capabilities` reports the configured executable and caches that
-result, including versions below the floor. Standalone `Server::cmd` calls
+[`Server::capabilities`] reports the configured executable and caches that
+result, including versions below the floor. Standalone [`Server::cmd`] calls
 with `-V` or `-h` also retain native executable diagnostics. Client flags have
 no representation over an open control connection.
 
@@ -110,8 +110,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 Async operations need an entered Tokio runtime. The default executable is
-`tmux`, resolved through the `PATH` captured when the `Server` is built; use
-`ServerBuilder::tmux_executable` to select another.
+`tmux`, resolved through the `PATH` captured when the [`Server`] is built; use
+[`ServerBuilder::tmux_executable`] to select another.
 
 **Minimum supported Rust version.** 1.85, the first compiler to ship Edition
 2024. It is checked in CI against the whole test suite, not just a build. A
@@ -130,7 +130,7 @@ below, so a caller who wants them all does not have to list them.
 | `control-mode` | One persistent tmux connection, so the server reports changes as they happen rather than being polled |
 | `blocking` | A runtime for calling from code that is not async |
 | `derive` | `#[derive(Filterable)]`, for filtering your own structs with the same expressions |
-| `serde` | Versioned serialization for `FilterExpr<T>`, for sending expressions over a wire |
+| `serde` | Versioned serialization for [`FilterExpr<T>`], for sending expressions over a wire |
 | `schema` | JSON Schema for serialized plans and portable filter expressions |
 | `tracing` | Sanitized command instrumentation: a `tmux_command` span per dispatch |
 | `test-support` | The real-tmux test guard, for your own tests |
@@ -140,30 +140,30 @@ below, so a caller who wants them all does not have to list them.
 
 | I want to | Call | Shown in |
 | --- | --- | --- |
-| Make a session and tear it down | `Server::with_session` | `examples/scratch.rs` |
-| Reach a session someone left running | `Server::session`, `Server::sessions` | `examples/inspect.rs` |
-| Find the pane my process is in | `Pane::from_env` | `examples/inspect.rs` |
-| Add a window, split a pane | `Session::new_window`, `Pane::split` | `examples/scratch.rs` |
-| Type into a pane | `Pane::send_line`, `Pane::send_keys`, `Pane::send_key_names` | `examples/scratch.rs` |
-| Read what a pane printed | `Pane::capture`, `Pane::capture_with` | `examples/scratch.rs` |
-| Wait for output rather than sleep | `Pane::wait_for_text`, `Pane::wait_for_quiet` | `examples/scratch.rs` |
-| Follow a pane as it writes | `Pane::stream_output` | `examples/watch.rs` |
-| Hear about changes as they happen | `ControlMode::attach`, `ControlSender::subscribe` | `examples/watch.rs` |
-| Select panes by a typed expression | `Filterable::filter_fields`, `QueryIteratorExt::matching` | `examples/find.rs` |
+| Make a session and tear it down | [`Server::with_session`] | `examples/scratch.rs` |
+| Reach a session someone left running | [`Server::session`], [`Server::sessions`] | `examples/inspect.rs` |
+| Find the pane my process is in | [`Pane::from_env`] | `examples/inspect.rs` |
+| Add a window, split a pane | [`Session::new_window`], [`Pane::split`] | `examples/scratch.rs` |
+| Type into a pane | [`Pane::send_line`], [`Pane::send_keys`], [`Pane::send_key_names`] | `examples/scratch.rs` |
+| Read what a pane printed | [`Pane::capture`], [`Pane::capture_with`] | `examples/scratch.rs` |
+| Wait for output rather than sleep | [`Pane::wait_for_text`], [`Pane::wait_for_quiet`] | `examples/scratch.rs` |
+| Follow a pane as it writes | [`Pane::stream_output`] | `examples/watch.rs` |
+| Hear about changes as they happen | [`ControlMode::attach`], [`ControlSender::subscribe`] | `examples/watch.rs` |
+| Select panes by a typed expression | [`Filterable::filter_fields`], [`QueryIteratorExt::matching`] | `examples/find.rs` |
 | Send tmux something this crate has no method for | `Server::cmd` | below |
-| Compare what each transport costs | `plan::Plan`, `plan::Planner` | `examples/matrix.rs` |
-| Clean up fixtures a killed run left | `test::reap_abandoned_servers` | `examples/sweep.rs` |
-| Tell a gone object from a gone link | `Error::is_object_gone`, `Error::is_transient` | `examples/recover.rs` |
+| Compare what each transport costs | [`plan::Plan`], [`plan::Planner`] | `examples/matrix.rs` |
+| Clean up fixtures a killed run left | [`test::reap_abandoned_servers`] | `examples/sweep.rs` |
+| Tell a gone object from a gone link | [`Error::is_object_gone`], [`Error::is_transient`] | `examples/recover.rs` |
 
 Waiting needs no feature: `Pane::wait_for_text` and `Pane::wait_for_quiet` are
 in the library, poll the scrollback with wrapped lines joined, and answer
-`PaneWait::Dead` when the pane's process ends rather than running to the
+[`PaneWait::Dead`] when the pane's process ends rather than running to the
 deadline. `docs/findings.md` records what they had to survive, and what a
 control-mode doorbell was measured to buy.
 
 ## Waiting for something to happen
 
-If the work can announce itself, do not poll. End it with
+If the work can announce itself, [do not poll]. End it with
 `tmux wait-for -S <channel>` and wait on that channel:
 
 ```rust
@@ -300,7 +300,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Choosing how commands reach tmux
 
-Three switches decide what a run costs and what it can prove. They compose:
+[Three switches] decide what a run costs and what it can prove. They compose:
 async is the API, control mode is the transport, and chaining is what a
 subprocess transport does instead of having one.
 
@@ -308,7 +308,7 @@ subprocess transport does instead of having one.
 
 | Switch | Off (the default) | On |
 | --- | --- | --- |
-| **Async** | Nothing: every method is already `async`. `blocking::Runtime` is a runtime you drive them from, not a second API to keep in step | `blocking::Runtime::new()?.run(future)` for scripts and tests |
+| **Async** | Nothing: every method is already `async`. [`blocking::Runtime`] is a runtime you drive them from, not a second API to keep in step | `blocking::Runtime::new()?.run(future)` for scripts and tests |
 | **Control mode** | One tmux process per command | One connection for every command, and tmux reports changes as they happen |
 | **Chaining** | One tmux process per command | Neighbouring commands share one process, trading the ability to say which one failed |
 
@@ -333,7 +333,7 @@ table on your own machine.
 | Async | none | already the default; every method is `async` |
 | Blocking runtime | `blocking` | `libtmux::blocking::Runtime::new()?` |
 | Control mode | `control-mode` | `ControlMode::attach(&server, session).await?` |
-| Chaining, by hand | none | `CommandChain::new(a).then(b)`, then `server.chain(chain).await?` |
+| Chaining, by hand | none | [`CommandChain::new(a).then(b)`], then `server.chain(chain).await?` |
 | Chaining, by planner | `plan` | `plan.run(&server, Planner::Folding).await?` |
 | Folding a pane creation in too | `plan` | `Planner::Marked` |
 | Never folding across your own work | `plan` | `Planner::steps_bounded(&plan, &boundaries)` |
@@ -341,7 +341,7 @@ table on your own machine.
 
 Control mode is never the default transport, and turning the feature on does
 not make it one: normal commands stay one process per command until you attach
-a connection and use it. `Server::over_control_mode` is how you use it for
+a connection and use it. [`Server::over_control_mode`] is how you use it for
 everything rather than command by command -- it returns a handle whose ordinary
 typed calls travel down the connection, and handles reached through it inherit
 the route:
@@ -415,10 +415,10 @@ Server ──┬── Session ──── Window ──── Pane
 | Type | Held by | Identified by | Notes |
 | --- | --- | --- | --- |
 | `Server` | a socket | its socket path | one daemon; `Server::new()` finds the default |
-| `Session` | the server | `$0` | what a client attaches to |
-| `Window` | *linked into* sessions | `@0` | one window can be linked into several sessions at once |
-| `Pane` | exactly one window | `%0` | holds the process and the scrollback |
-| `Client` | the server | its tty | attached to one session at a time |
+| [`Session`] | the server | `$0` | what a client attaches to |
+| [`Window`] | *linked into* sessions | `@0` | one window can be linked into several sessions at once |
+| [`Pane`] | exactly one window | `%0` | holds the process and the scrollback |
+| [`Client`] | the server | its tty | attached to one session at a time |
 
 The third row is the one that surprises people, and it decides API shape. A
 window has one identity and several *links*, so a command that removes one link
@@ -431,7 +431,7 @@ the window itself may still be running under another session.
 
 ## Walking the hierarchy
 
-`Server::hierarchy` gathers the whole tree in three tmux commands, rather than
+[`Server::hierarchy`] gathers the whole tree in three tmux commands, rather than
 one per object:
 
 ```rust
@@ -469,8 +469,8 @@ happily delete everything, and now has to say so at the call site.
 
 ## Filtering
 
-Typed field handles build an expression without accepting an untyped field name
-or value, so a comparison that has no meaning for a field does not compile:
+[Typed field handles] build an expression without accepting an untyped field
+name or value, so a comparison that has no meaning for a field does not compile:
 
 ```rust
 use std::time::Duration;
@@ -509,7 +509,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 A question about what a session *contains* needs the shape that holds its
-windows, so `SessionTree` and `WindowTree` carry relations:
+windows, so [`SessionTree`] and [`WindowTree`] carry relations:
 
 ```rust
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
@@ -543,13 +543,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-With `serde`, an expression lowers to a versioned JSON envelope, so a CLI, an
+With `serde`, an expression lowers to a [versioned JSON envelope], so a CLI, an
 MCP server, or a config file can carry one.
 
 ## Text from tmux is bytes
 
 tmux permits names, titles, and pane contents that are not valid UTF-8, so they
-arrive as `TmuxText` rather than `String`. There is no implicit conversion:
+arrive as [`TmuxText`] rather than `String`. There is no implicit conversion:
 
 ```rust
 let text = libtmux::TmuxText::from("editor");
@@ -561,7 +561,7 @@ assert_eq!(text.to_string_lossy(), "editor");
 
 ## Failures say what to do about them
 
-`Error` has a variant per failure mode; `Error::kind` reduces those to the
+[`Error`] has a variant per failure mode; [`Error::kind`] reduces those to the
 decision a caller makes. `Error::is_object_gone` is the branch most programs
 write, because an object disappearing is an ordinary race rather than a failed
 request.
@@ -573,7 +573,7 @@ usable, because tmux may have completed the command before its caller stopped
 waiting.
 
 A composed call can also fail after tmux accepted one of its effects. That is
-`Error::AfterEffect`, classified as `ErrorKind::PartialEffect`: its source
+[`Error::AfterEffect`], classified as [`ErrorKind::PartialEffect`]: its source
 still explains the later failure, but `is_transient` is `false` for the whole
 call because replay may repeat the accepted effect.
 
@@ -606,7 +606,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Each subprocess command runs in an isolated process group with a supervised
 deadline, 30 seconds by default and configurable through
-`ServerBuilder::default_timeout`. The deadline starts before the command waits
+[`ServerBuilder::default_timeout`]. The deadline starts before the command waits
 for dispatch capacity.
 Dropping the command future, reaching its timeout, or shutting the server down
 signals the group and waits for the direct child while the runtime is alive.
@@ -650,7 +650,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`Server::shutdown()` is shared by all clones: it cancels active subprocess
+[`Server::shutdown()`] is shared by all clones: it cancels active subprocess
 work and persistent control connections, rejects later commands and attaches,
 and is safe to call concurrently or repeatedly. Await it, or await your
 commands, before tearing the runtime down — runtime destruction signals
@@ -658,8 +658,8 @@ best-effort but cannot promise that child reaping finished.
 
 ## Testing against real tmux
 
-`test-support` exports `libtmux::test::TestServer`, the same guard this crate's
-own suite uses:
+`test-support` exports [`libtmux::test::TestServer`], the same guard this
+crate's own suite uses:
 
 ```toml
 [dev-dependencies]
@@ -715,6 +715,22 @@ One thing differs, and in this crate's favour: waiting. The Python library
 keeps `retry_until` in `libtmux/test/retry.py`, a test helper, so production
 code that waits on a pane writes the loop itself. `Pane::wait_for_text` and
 `Pane::wait_for_quiet` are here in the library and need no feature.
+
+## Documentation
+
+[API documentation](https://docs.rs/libtmux) covers the public surface. Two
+longer documents ship inside the crate, next to the source:
+
+- [`docs/design.md`][design] — why the crate is shaped the way it is: the
+  transport, the snapshot and format boundary, the query grammar, the test
+  guard, and the compatibility lanes.
+- [`docs/findings.md`][findings] — every tmux defect and platform surprise the
+  crate works around, each with the tmux releases it holds for and what the
+  crate does.
+- [`docs/parity.md`][parity] — the capability ledger against Python libtmux,
+  naming each Rust symbol and the test that exercises it.
+
+The same surface is in the [API reference][libtmux-api] on libtmux.org.
 
 ## Crates in this repository
 
@@ -816,35 +832,17 @@ $ claude mcp add tmux \
     -- tmux-mcp --socket-name work
 ```
 
-## Documentation
-
-The API reference covers the public surface, [on libtmux.org][libtmux-api] and
-[on docs.rs][libtmux-docsrs]. Four longer documents ship inside the crate, next
-to the source:
-
-- [`docs/design.md`][design] — why the crate is shaped the way it is: the
-  transport, the snapshot and format boundary, the query grammar, the test
-  guard, and the compatibility lanes.
-- [`docs/findings.md`][findings] — every tmux defect and platform surprise the
-  crate works around, each with the tmux releases it holds for and what the
-  crate does.
-- [`docs/parity.md`][parity] — the capability ledger against Python libtmux,
-  naming each Rust symbol and the test that exercises it.
-- [`docs/migration.md`][migration] — what to change, release by release, when
-  upgrading from an earlier alpha.
-
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
 or [MIT license](LICENSE-MIT) at your option.
 
-[migration]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/migration.md
 [design]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/design.md
 [findings]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/findings.md
 [parity]: https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/docs/parity.md
-[window-unlink]: https://docs.rs/libtmux/latest/libtmux/struct.Window.html#method.unlink
-[error-linkgone]: https://docs.rs/libtmux/latest/libtmux/enum.Error.html#variant.LinkGone
-[error-objectgone]: https://docs.rs/libtmux/latest/libtmux/enum.Error.html#variant.ObjectGone
+[window-unlink]: https://libtmux.org/en/rs/latest/reference/window-window-unlink/
+[error-linkgone]: https://libtmux.org/en/rs/latest/reference/error-error-linkgone/
+[error-objectgone]: https://libtmux.org/en/rs/latest/reference/error-error-objectgone/
 [libtmux-api]: https://libtmux.org/en/rs/latest/reference/
 [libtmux-docsrs]: https://docs.rs/libtmux/latest/libtmux/
 [libtmux-examples]: https://github.com/libtmux/libtmux-rs/tree/master/crates/libtmux/examples
@@ -859,3 +857,61 @@ or [MIT license](LICENSE-MIT) at your option.
 [mcp-docsrs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
 [mcp-connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
 [mcp-guide]: https://github.com/libtmux/libtmux-rs/blob/master/crates/tmux-mcp/README.md
+
+[`Error::UnsupportedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/error-error-unsupportedtmuxversion/
+[`Error::UnrecognizedTmuxVersion`]: https://libtmux.org/en/rs/latest/reference/error-error-unrecognizedtmuxversion/
+[`Error::VersionProbeFailed`]: https://libtmux.org/en/rs/latest/reference/error-error-versionprobefailed/
+[`Error::InvalidVersionOutput`]: https://libtmux.org/en/rs/latest/reference/error-error-invalidversionoutput/
+[`Error::Timeout`]: https://libtmux.org/en/rs/latest/reference/error-error-timeout/
+[`Error::ServerReplaced`]: https://libtmux.org/en/rs/latest/reference/error-error-serverreplaced/
+[`Server::capabilities`]: https://libtmux.org/en/rs/latest/reference/server-server-capabilities/
+[`Server::cmd`]: https://libtmux.org/en/rs/latest/reference/server-server-cmd/
+[`Server`]: https://libtmux.org/en/rs/latest/reference/server-server/
+[`ServerBuilder::tmux_executable`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-tmux_executable/
+[`FilterExpr<T>`]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
+[`Server::with_session`]: https://libtmux.org/en/rs/latest/reference/server-server-with_session/
+[`Server::session`]: https://libtmux.org/en/rs/latest/reference/server-server-session/
+[`Server::sessions`]: https://libtmux.org/en/rs/latest/reference/server-server-sessions/
+[`Pane::from_env`]: https://libtmux.org/en/rs/latest/reference/pane-pane-from_env/
+[`Session::new_window`]: https://libtmux.org/en/rs/latest/reference/session-session-new_window/
+[`Pane::split`]: https://libtmux.org/en/rs/latest/reference/pane-pane-split/
+[`Pane::send_line`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_line/
+[`Pane::send_keys`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_keys/
+[`Pane::send_key_names`]: https://libtmux.org/en/rs/latest/reference/pane-pane-send_key_names/
+[`Pane::capture`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture/
+[`Pane::capture_with`]: https://libtmux.org/en/rs/latest/reference/pane-pane-capture_with/
+[`Pane::wait_for_text`]: https://libtmux.org/en/rs/latest/reference/pane-pane-wait_for_text/
+[`Pane::wait_for_quiet`]: https://libtmux.org/en/rs/latest/reference/pane-pane-wait_for_quiet/
+[`Pane::stream_output`]: https://libtmux.org/en/rs/latest/reference/pane-pane-stream_output/
+[`ControlMode::attach`]: https://libtmux.org/en/rs/latest/reference/control-controlmode-attach/
+[`ControlSender::subscribe`]: https://libtmux.org/en/rs/latest/reference/control-controlsender-subscribe/
+[`Filterable::filter_fields`]: https://libtmux.org/en/rs/latest/reference/query-filterable-filter_fields/
+[`QueryIteratorExt::matching`]: https://libtmux.org/en/rs/latest/reference/query-queryiteratorext-matching/
+[`plan::Plan`]: https://libtmux.org/en/rs/latest/reference/plan-plan/
+[`plan::Planner`]: https://libtmux.org/en/rs/latest/reference/plan-planner-planner/
+[`test::reap_abandoned_servers`]: https://libtmux.org/en/rs/latest/reference/test-reap_abandoned_servers/
+[`Error::is_object_gone`]: https://libtmux.org/en/rs/latest/reference/error-error-is_object_gone/
+[`Error::is_transient`]: https://libtmux.org/en/rs/latest/reference/error-error-is_transient/
+[`PaneWait::Dead`]: https://libtmux.org/en/rs/latest/reference/pane-panewait-dead/
+[do not poll]: https://libtmux.org/en/rs/latest/topics/waiting-and-retry/
+[`blocking::Runtime`]: https://libtmux.org/en/rs/latest/reference/blocking-runtime/
+[Three switches]: https://libtmux.org/en/rs/latest/concepts/transports/
+[`Server::over_control_mode`]: https://libtmux.org/en/rs/latest/reference/server-server-over_control_mode/
+[`Session`]: https://libtmux.org/en/rs/latest/reference/session-session/
+[`Window`]: https://libtmux.org/en/rs/latest/reference/window-window/
+[`Pane`]: https://libtmux.org/en/rs/latest/reference/pane-pane/
+[`Client`]: https://libtmux.org/en/rs/latest/reference/client-client/
+[`Server::hierarchy`]: https://libtmux.org/en/rs/latest/reference/server-server-hierarchy/
+[Typed field handles]: https://libtmux.org/en/rs/latest/concepts/queries/
+[`SessionTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-sessiontree/
+[`WindowTree`]: https://libtmux.org/en/rs/latest/reference/server-discovery-windowtree/
+[versioned JSON envelope]: https://libtmux.org/en/rs/latest/reference/query-filterexpr/
+[`TmuxText`]: https://libtmux.org/en/rs/latest/reference/formats-text-tmuxtext/
+[`Error`]: https://libtmux.org/en/rs/latest/reference/error-error/
+[`Error::kind`]: https://libtmux.org/en/rs/latest/reference/error-error-kind/
+[`Error::AfterEffect`]: https://libtmux.org/en/rs/latest/reference/error-error-aftereffect/
+[`ErrorKind::PartialEffect`]: https://libtmux.org/en/rs/latest/reference/error-errorkind-partialeffect/
+[`ServerBuilder::default_timeout`]: https://libtmux.org/en/rs/latest/reference/server-builder-serverbuilder-default_timeout/
+[`Server::shutdown()`]: https://libtmux.org/en/rs/latest/reference/server-server-shutdown/
+[`libtmux::test::TestServer`]: https://libtmux.org/en/rs/latest/reference/test-testserver/
+[`CommandChain::new(a).then(b)`]: https://libtmux.org/en/rs/latest/reference/command-commandchain/

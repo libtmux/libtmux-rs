@@ -73,7 +73,7 @@ to the session you are in.
 ## Loading
 
 [`load`][cli-load] builds a workspace, and attaches to it unless told not to.
-Build the `.tmuxp.yaml` in a project directory:
+Build the [`.tmuxp.yaml`] in a project directory:
 
 ```console
 $ tmux-workspace load .
@@ -86,7 +86,7 @@ $ tmux-workspace load dev
 ```
 
 See what one would build -- sessions, windows, panes, directories and
-commands -- without touching tmux or running its `before_script`:
+commands -- without touching tmux or running its [`before_script`]:
 
 ```console
 $ tmux-workspace load --dry-run dev
@@ -193,7 +193,7 @@ bash, fish, PowerShell and elvish are in the
 [command reference](docs/cli.md#generating-completions-and-the-manual). Every
 command has examples under `--help`.
 
-Attach the output of [`debug-info`][cli-debug-info] to a bug report:
+Attach this to a bug report ([`debug-info`][cli-debug-info]):
 
 ```console
 $ tmux-workspace debug-info
@@ -208,14 +208,14 @@ project files, the same directories (`$TMUXP_CONFIGDIR`, `~/.config/tmuxp`,
 
 - An unknown key is refused rather than ignored. Prefix a key with `x-` to
   carry your own fields; `convert` preserves them.
-- A window that names no `layout` is tiled rather than stacked.
-- A `session_name` containing `:` or `.` is refused: tmux reads those as
+- A window that names no [`layout`] is tiled rather than stacked.
+- A [`session_name`] containing `:` or `.` is refused: tmux reads those as
   window and pane separators.
 - `$VAR` in a command is expanded by the pane's shell, with your value passed
   to it, rather than pasted into the command text: a value holding `;` stays
   a value.
-- `freeze` saves only where `-o` says, or prints with `--json`.
-- `plugins` and custom `workspace_builder`s run through tmuxp itself, so they
+- `freeze` saves only where `-o` says, or prints with [`--json`].
+- [`plugins`] and custom `workspace_builder`s run through tmuxp itself, so they
   need tmuxp 1.74.x and Python libtmux declaring a hard tmux minimum of 3.3a
   or newer with per-command daemon version check. Runtime discovery and the
   builder child check this before importing extension hooks.
@@ -225,7 +225,7 @@ change](https://github.com/tmux-python/libtmux/pull/779), which has not been
 released. CI qualifies its pinned source with tmux 3.3a. Released tmuxp 1.74.0
 pins libtmux below 0.62; installing that release alone does not qualify the
 bridge. Use a compatible tmuxp environment carrying the updated Python library
-and select it with `TMUX_WORKSPACE_PYTHON`.
+and select it with [`TMUX_WORKSPACE_PYTHON`].
 
 The [command reference](docs/cli.md) has the complete list.
 
@@ -272,9 +272,9 @@ covers installing it and wiring clients.
 
 ## Use it from Rust
 
-The same package is a library: parse a workspace, preview the tmux commands
-it would run, build it, or freeze a session, through
-[libtmux][libtmux-docs]. It reads a document the way the command
+The same package is a library: [parse a workspace], [preview the tmux commands]
+it would run, [build it], or [freeze a session], through
+[libtmux](https://docs.rs/libtmux). It reads a document the way the command
 does, tmuxp's way; the command reference lists
 [where the two differ](docs/cli.md#where-the-command-and-the-library-differ).
 
@@ -282,8 +282,10 @@ does, tmuxp's way; the command reference lists
 $ cargo add tmux-workspace@0.1.0-alpha.15 --no-default-features
 ```
 
-`--no-default-features` leaves the command and its dependencies out. The server
-handle below comes from `libtmux`, so add that too:
+`--no-default-features` leaves the command and its dependencies out.
+Examples and the API are on [docs.rs](https://docs.rs/tmux-workspace).
+
+The server handle below comes from `libtmux`, so add that too:
 
 ```console
 $ cargo add libtmux@0.1.0-alpha.15
@@ -320,8 +322,7 @@ windows:
 }
 ```
 
-Examples and the API are on [docs.rs][docs-rs] and in the
-[API reference][api-reference].
+The [API reference][api-reference] has the same items on libtmux.org.
 
 ## Development
 
@@ -349,4 +350,15 @@ or [MIT license](LICENSE-MIT) at your option.
 [cli-debug-info]: https://libtmux.org/en/rs/latest/workspace/cli/debug-info/
 [api-reference]: https://libtmux.org/en/rs/latest/workspace/reference/
 [docs-rs]: https://docs.rs/tmux-workspace/latest/tmux_workspace/
-[libtmux-docs]: https://docs.rs/libtmux/latest/libtmux/
+
+[`.tmuxp.yaml`]: https://libtmux.org/en/rs/latest/workspace/configuration/directories/
+[`before_script`]: https://libtmux.org/en/rs/latest/workspace/configuration/hooks/
+[`layout`]: https://libtmux.org/en/rs/latest/workspace/configuration/layouts/
+[`session_name`]: https://libtmux.org/en/rs/latest/workspace/configuration/session/
+[`plugins`]: https://libtmux.org/en/rs/latest/workspace/configuration/hooks/
+[`--json`]: https://libtmux.org/en/rs/latest/workspace/reference/output/
+[`TMUX_WORKSPACE_PYTHON`]: https://libtmux.org/en/rs/latest/workspace/reference/compatibility/
+[parse a workspace]: https://libtmux.org/en/rs/latest/workspace/reference/config-workspace-from_yaml/
+[preview the tmux commands]: https://libtmux.org/en/rs/latest/workspace/reference/src-workspacebuilder-plan/
+[build it]: https://libtmux.org/en/rs/latest/workspace/reference/src-workspacebuilder-build/
+[freeze a session]: https://libtmux.org/en/rs/latest/workspace/reference/freeze-freeze/

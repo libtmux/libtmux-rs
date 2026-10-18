@@ -11,8 +11,8 @@
 
 # libtmux-macros
 
-`#[derive(Filterable)]` for [`libtmux`][libtmux-docs]: give your own
-structs the same typed query grammar `libtmux` uses for tmux objects.
+[`#[derive(Filterable)]`] for [`libtmux`](https://docs.rs/libtmux): give your
+own structs the same [typed query grammar] `libtmux` uses for tmux objects.
 
 </div>
 
@@ -91,12 +91,12 @@ A relation lets a question about what a value *contains* stay one expression:
 
 - [`Filterable`][derive-docs] — the derive and the attributes it accepts
 - [`libtmux::query`](https://docs.rs/libtmux/latest/libtmux/query/) — the
-  expression grammar, relations, and the versioned wire format, also in the
-  [libtmux.org API reference][query-reference]
+  expression grammar, relations, and the versioned wire format
+- [`Filterable` in the libtmux.org reference][query-reference] — the trait the
+  derive implements
 - [The `libtmux` guide](https://github.com/libtmux/libtmux-rs/blob/master/crates/libtmux/README.md#filtering)
   — filtering tmux objects, which uses the same grammar
 
-[libtmux-docs]: https://docs.rs/libtmux/latest/libtmux/
 [derive-docs]: https://docs.rs/libtmux-macros/latest/libtmux_macros/derive.Filterable.html
 [query-reference]: https://libtmux.org/en/rs/latest/reference/query-filterable/
 
@@ -104,3 +104,7 @@ A relation lets a question about what a value *contains* stay one expression:
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE)
 or [MIT license](LICENSE-MIT) at your option.
+
+[`#[derive(Filterable)]`]:
+https://libtmux.org/en/rs/latest/reference/query-filterable/
+[typed query grammar]: https://libtmux.org/en/rs/latest/concepts/queries/

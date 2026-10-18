@@ -13,7 +13,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [tmux](https://github.com/tmux/tmux), built on
-[libtmux][libtmux-docs].
+[libtmux](https://docs.rs/libtmux).
 
 </div>
 
@@ -29,10 +29,10 @@ The [tool pages][tools] describe each tool, [Connect a client][connect] makes a
 first call, and the [API reference][api-reference] covers running the server
 from Rust. The API is also on [docs.rs][docs-rs].
 
-Reading a pane goes through tmux's control mode rather than screen captures,
-so output that scrolled past between calls is still seen, and
-`run_shell_command` reports a real exit status instead of leaving an agent to
-guess from text.
+Reading a pane goes through tmux's control mode rather than screen captures, so
+output that scrolled past between calls is still seen, and
+[`run_shell_command`][run_shell_command] reports a real exit status instead of
+leaving an agent to guess from text.
 
 ## Requirements
 
@@ -51,14 +51,14 @@ prebuilt binary for Linux or macOS instead, when the release carries one:
 $ cargo binstall tmux-mcp --version 0.1.0-alpha.16
 ```
 
-Either puts a `tmux-mcp` binary on your path. Check that the shell finds it:
+Either puts a `tmux-mcp` binary on your path. It speaks MCP on stdin and stdout,
+so every client below is really the same thing: run `tmux-mcp`.
+
+Check that the shell finds it:
 
 ```console
 $ tmux-mcp --version
 ```
-
-It speaks MCP on stdin and stdout, so every client below is really the same
-thing: run `tmux-mcp`.
 
 ### Claude Code
 
@@ -268,9 +268,10 @@ and a minimal tmux configuration.
 Forty-five tools belong to the unordered `inspect`, `manage`, `execute`, and
 `teardown` toolsets. Each native route carries one machine-readable capability
 record; registration, descriptions, annotations, selection, and
-`tmux://capabilities` all read that record. The
+[`tmux://capabilities`] all read that record. The
 [generated tool reference](TOOLS.md) records every route and capability
-directly from that registry, and the [tool pages][tools] publish it.
+directly from that registry.
+The [tool pages][tools] publish it.
 
 | Toolset | Intent | Tools |
 |---|---|---|
@@ -398,15 +399,15 @@ establish minimal-configuration provenance. An existing dedicated socket, an
 explicit socket, or an explicit tmux configuration defaults to `inspect`,
 `manage`, and `execute`; select `teardown` explicitly there.
 
-`LIBTMUX_TOOLSETS` replaces the default with a comma-separated unordered set.
+[`LIBTMUX_TOOLSETS`] replaces the default with a comma-separated unordered set.
 An empty string offers no toolsets. Empty tokens and unknown names stop startup.
 
 ```console
 $ LIBTMUX_TOOLSETS=inspect,execute tmux-mcp
 ```
 
-`LIBTMUX_TOOLS` adds named tools after toolset expansion.
-`LIBTMUX_EXCLUDE_TOOLS` removes named tools last, including aggregate nested
+[`LIBTMUX_TOOLS`] adds named tools after toolset expansion.
+[`LIBTMUX_EXCLUDE_TOOLS`] removes named tools last, including aggregate nested
 authority. Exclusions always win. Hidden tools are neither listed nor callable.
 
 ```console
@@ -459,7 +460,7 @@ now run in the client. Update existing client calls with this mapping:
 | `clear_pane` | Use teardown tool [`clear_pane_scrollback`][clear_pane_scrollback]. |
 | `set_option` | Use constrained tools such as [`set_mouse_enabled`][set_mouse_enabled], [`set_history_limit`][set_history_limit], or [`set_synchronize_panes`][set_synchronize_panes]. |
 | `set_environment` | No generic caller-controlled environment route remains. |
-| `show_environment` values | Values are withheld by default; allow names with `LIBTMUX_ENVIRONMENT_VALUES`. |
+| `show_environment` values | Values are withheld by default; allow names with [`LIBTMUX_ENVIRONMENT_VALUES`]. |
 | `run_plan` | Use [`call_read_tools_batch`][call_read_tools_batch] for inspect-only batches; issue typed state-changing calls separately. |
 | `kill_server` | Kill selected sessions explicitly or administer the server outside MCP. |
 | `tmux://server` | Use [`get_server_info`][get_server_info]; `tmux://capabilities` adds the frozen connection and selection boundary. |
@@ -701,7 +702,7 @@ choosing another action.
 ## Using it from Rust
 
 The tool surface is a type, [`TmuxTools`][tmuxtools-docs], so a program can
-freeze a `Selection` in code, serve it over a transport other than stdio, or
+freeze a [`Selection`] in code, serve it over a transport other than stdio, or
 call a tool directly. The crate ships runnable examples. `run_and_wait` runs a
 command and reads its real exit status, then waits for a line a background job
 prints, through the same tools a client calls:
@@ -759,7 +760,7 @@ The tests drive a real tmux on an isolated socket, so tmux must be on `$PATH`.
 
 ## Related
 
-- [libtmux][libtmux-docs] — the typed tmux client underneath
+- [libtmux](https://docs.rs/libtmux) — the typed tmux client underneath
 - [libtmux-mcp](https://github.com/tmux-python/libtmux-mcp) — the Python server
   this one learned its discoverability habits from
 
@@ -772,7 +773,6 @@ or [MIT license](LICENSE-MIT) at your option.
 [connect]: https://libtmux.org/en/rs/latest/mcp/guides/connect-client/
 [api-reference]: https://libtmux.org/en/rs/latest/mcp/reference/
 [docs-rs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/
-[libtmux-docs]: https://docs.rs/libtmux/latest/libtmux/
 [tmuxtools-docs]: https://docs.rs/tmux-mcp/latest/tmux_mcp/struct.TmuxTools.html
 [toolset-inspect]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-inspect
 [toolset-manage]: https://libtmux.org/en/rs/latest/mcp/topics/tool-selection/#toolsets-manage
@@ -823,3 +823,10 @@ or [MIT license](LICENSE-MIT) at your option.
 [swap_pane]: https://libtmux.org/en/rs/latest/mcp/tools/swap_pane/
 [wait_for_channel]: https://libtmux.org/en/rs/latest/mcp/tools/wait_for_channel/
 [wait_for_text]: https://libtmux.org/en/rs/latest/mcp/tools/wait_for_text/
+
+[`tmux://capabilities`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-resources-capabilities/
+[`LIBTMUX_TOOLSETS`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-toolsets_env/
+[`LIBTMUX_TOOLS`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-tools_env/
+[`LIBTMUX_EXCLUDE_TOOLS`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-exclude_tools_env/
+[`LIBTMUX_ENVIRONMENT_VALUES`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-environment_values_env/
+[`Selection`]: https://libtmux.org/en/rs/latest/mcp/reference/mcp-policy-selection/
