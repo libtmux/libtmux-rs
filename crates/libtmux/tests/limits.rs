@@ -286,7 +286,7 @@ async fn retained_waits_have_their_own_budget_and_release_it_after_signal() {
     let signalled = server
         .wait_for_channel(&first, libtmux::test::scaled(Duration::from_secs(5)))
         .await;
-    let reused = server.wait_for_channel(&third, within).await;
+    let after_signal = server.wait_for_channel(&third, within).await;
     fixture.shutdown().await.expect("all resident clients stop");
 
     assert!(matches!(initial, Ok(libtmux::ChannelWait::TimedOut)));
@@ -299,5 +299,5 @@ async fn retained_waits_have_their_own_budget_and_release_it_after_signal() {
         "a distinct channel is refused while the resident budget is full: {refused:?}",
     );
     assert!(matches!(signalled, Ok(libtmux::ChannelWait::Signalled)));
-    assert!(matches!(reused, Ok(libtmux::ChannelWait::TimedOut)));
+    assert!(matches!(after_signal, Ok(libtmux::ChannelWait::TimedOut)));
 }
