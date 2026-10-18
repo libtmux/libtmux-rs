@@ -37,6 +37,7 @@ use self::lifecycle::{
 #[cfg(feature = "control-mode")]
 use crate::ControlClientLimits;
 use crate::Server;
+use crate::driver::RuntimeExt as _;
 use crate::limits::{DispatchLimits, OutputLimits};
 
 const SOCKET_NAME: &str = "s";
@@ -315,6 +316,7 @@ impl std::error::Error for TestServerError {}
 /// A consuming builder for an isolated foreground tmux test server.
 #[must_use = "use start to create the isolated test server"]
 pub struct TestServerBuilder {
+    runtime: std::sync::Arc<dyn crate::driver::Runtime>,
     executable: OsString,
     lifecycle_timeout: Duration,
     output_limits: OutputLimits,
@@ -363,6 +365,7 @@ impl fmt::Debug for TestServerBuilder {
 impl TestServerBuilder {
     fn new() -> Self {
         Self {
+            runtime: std::sync::Arc::new(crate::driver::AsyncIoRuntime),
             executable: default_executable(),
             lifecycle_timeout: scaled(Duration::from_secs(5)),
             output_limits: OutputLimits::default(),
@@ -370,6 +373,12 @@ impl TestServerBuilder {
             #[cfg(feature = "control-mode")]
             control_client_limits: ControlClientLimits::default(),
         }
+    }
+
+    /// Use an explicit runtime for fixture clients and their supervisors.
+    pub fn runtime(mut self, runtime: std::sync::Arc<dyn crate::driver::Runtime>) -> Self {
+        self.runtime = runtime;
+        self
     }
 
     /// Bound how many bytes one command may read, as [`crate::ServerBuilder`]
@@ -477,6 +486,7 @@ impl TestServerBuilder {
         }
 
         let builder = Server::builder()
+            .runtime(self.runtime)
             .socket_path(&files.socket_path)
             .config_file(&files.config_path)
             .tmux_executable(self.executable.clone())
@@ -596,7 +606,7 @@ impl TestServerBuilder {
             if remaining_timeout(started, self.lifecycle_timeout).is_none() {
                 return startup_timeout(&server, startup).await;
             }
-            tokio::task::yield_now().await;
+            futures_lite::future::yield_now().await;
         }
     }
 }
@@ -908,9 +918,12 @@ impl TestServer {
             ));
         };
         let timeout = self.lifecycle_timeout;
-        let waiter = tokio::task::spawn_blocking(move || {
-            let outcome = lifecycle.cleanup(timeout);
-            (outcome, lifecycle.failure())
+        let waiter = self.server.runtime().spawn_value(async move {
+            blocking::unblock(move || {
+                let outcome = lifecycle.cleanup(timeout);
+                (outcome, lifecycle.failure())
+            })
+            .await
         });
         let Ok((cleanup, detail)) = waiter.await else {
             return Err(TestServerError::at(
@@ -1009,7 +1022,7 @@ pub async fn retry_until(
         // worker thread and competes with whatever it is waiting for, so on a
         // busy machine it makes its own deadline harder to meet. This is a
         // public helper, so every caller would inherit that.
-        tokio::time::sleep(RETRY_POLL_INTERVAL).await;
+        async_io::Timer::after(RETRY_POLL_INTERVAL).await;
     }
 }
 

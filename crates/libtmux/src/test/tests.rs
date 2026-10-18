@@ -185,7 +185,7 @@ async fn never_observe_fallback_cleans_an_exited_leaders_group() {
 )))]
 #[test]
 fn unavailable_observer_caps_oversized_grace_before_group_cleanup() {
-    for timeout in [Duration::MAX, Duration::from_secs(100 * 365 * 24 * 60 * 60)] {
+    for timeout in [Duration::MAX, Duration::from_hours(876_000)] {
         let root = tempfile::tempdir().expect("fallback process directory is created");
         let pids_path = root.path().join("pids");
         let mut child = ProcessCommand::new("sh");

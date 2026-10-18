@@ -80,6 +80,7 @@ impl Server {
         let unlocking = self.clone();
 
         crate::internal::scoped::run(
+            std::sync::Arc::clone(self.core.runtime()),
             "with-channel-lock",
             async move { server.lock_channel(&held).await.map(|()| server.clone()) },
             move |_| async move { unlocking.unlock_channel(&channel).await },

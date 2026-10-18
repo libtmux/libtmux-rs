@@ -737,10 +737,6 @@ pub(crate) struct CommandRequest {
     /// control mode cannot express, and it says so rather than guessing.
     #[cfg(feature = "control-mode")]
     control_line: Option<String>,
-    /// Commands in the request, which is how many blocks a connection answers
-    /// it with when none fails.
-    #[cfg(feature = "control-mode")]
-    command_count: usize,
     /// Whether this request runs without a deadline of its own.
     ///
     /// A dispatch is bounded so a caller cannot wait on tmux forever. The
@@ -780,8 +776,6 @@ impl CommandRequest {
             logical_subcommand_index,
             #[cfg(feature = "control-mode")]
             control_line: None,
-            #[cfg(feature = "control-mode")]
-            command_count: 1,
             unbounded: false,
         }
     }
@@ -792,8 +786,6 @@ impl CommandRequest {
         chain: CommandChain,
     ) -> Self {
         let command = chain.summary();
-        #[cfg(feature = "control-mode")]
-        let command_count = chain.command_count();
         let (argv, logical_subcommand_index) = chain.into_argv(global_argv);
 
         Self {
@@ -803,8 +795,6 @@ impl CommandRequest {
             logical_subcommand_index,
             #[cfg(feature = "control-mode")]
             control_line: None,
-            #[cfg(feature = "control-mode")]
-            command_count,
             unbounded: false,
         }
     }
@@ -831,12 +821,6 @@ impl CommandRequest {
     #[cfg(feature = "control-mode")]
     pub(crate) fn into_control_line(self) -> Option<String> {
         self.control_line
-    }
-
-    /// How many commands the request carries.
-    #[cfg(feature = "control-mode")]
-    pub(crate) const fn command_count(&self) -> usize {
-        self.command_count
     }
 
     pub(crate) const fn request_id(&self) -> RequestId {

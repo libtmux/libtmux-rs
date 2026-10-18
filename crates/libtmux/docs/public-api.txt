@@ -5,6 +5,7 @@ assoc_const libtmux::DispatchLimits::DEFAULT_IN_FLIGHT: usize
 assoc_const libtmux::OutputLimits::DEFAULT_STDERR_BYTES: usize
 assoc_const libtmux::OutputLimits::DEFAULT_STDOUT_BYTES: usize
 assoc_const libtmux::ReleaseSuffix::FINAL: Self
+assoc_const libtmux::ReleaseSuffix::PATCH_A: Self
 assoc_const libtmux::ReleaseSuffix::RELEASE_CANDIDATE: Self
 assoc_const libtmux::TmuxVersion::MIN_SUPPORTED: libtmux::ReleaseVersion
 assoc_const libtmux::plan::Operation::EFFECTS: libtmux::plan::Effects
@@ -236,6 +237,7 @@ constant libtmux::option_names::XTERM_KEYS: &str
 constant libtmux::since::CAPTURE_LINE_FLAGS: libtmux::ReleaseVersion
 constant libtmux::since::CAPTURE_TRIM_BLANK_CELLS: libtmux::ReleaseVersion
 constant libtmux::since::CLIENTS_HIDE_STOPPED: libtmux::ReleaseVersion
+constant libtmux::since::COMMAND_ERROR_HOOK: libtmux::ReleaseVersion
 constant libtmux::since::CONTROL_PANE_OFF: libtmux::ReleaseVersion
 constant libtmux::since::JSON_LAYOUTS: libtmux::ReleaseVersion
 constant libtmux::since::LIST_KEYS_FORMAT: libtmux::ReleaseVersion
@@ -281,6 +283,7 @@ enum libtmux::WindowPlacement
 enum libtmux::WindowTarget
 enum libtmux::control::Event
 enum libtmux::control::Subscription
+enum libtmux::driver::TaskError
 enum libtmux::plan::Attribution
 enum libtmux::plan::Op
 enum libtmux::plan::OperationKind
@@ -377,7 +380,9 @@ function libtmux::Error::is_object_gone: fn(&self) -> bool
 function libtmux::Error::is_transient: fn(&self) -> bool
 function libtmux::Error::kind: fn(&self) -> libtmux::ErrorKind
 function libtmux::Error::minimum_version: fn(&self) -> Option<&libtmux::ReleaseVersion>
+function libtmux::Error::runtime_unavailable: const fn(source: io::Error) -> Self
 function libtmux::IdParseError::expected_sigil: const fn(self) -> char
+function libtmux::IdParseError::new: const fn(expected_sigil: char) -> Self
 function libtmux::JoinOptions::full: const fn(self) -> Self
 function libtmux::JoinOptions::new: const fn(direction: libtmux::SplitDirection) -> Self
 function libtmux::JoinOptions::size: const fn(self, size: libtmux::PaneSize) -> Self
@@ -492,6 +497,7 @@ function libtmux::Pane::width: fn(&self) -> u32
 function libtmux::Pane::window: async fn(&self) -> Result<Option<libtmux::Window>, libtmux::Error>
 function libtmux::Pane::window_id: const fn(&self) -> &libtmux::WindowId
 function libtmux::Pane::window_index: const fn(&self) -> i32
+function libtmux::PaneId::number: const fn(&self) -> u32
 function libtmux::ReleaseSuffix::is_final: const fn(self) -> bool
 function libtmux::ReleaseSuffix::is_release_candidate: const fn(self) -> bool
 function libtmux::ReleaseSuffix::patch: fn(letter: char) -> Option<Self>
@@ -535,6 +541,7 @@ function libtmux::Server::find_window: async fn(&self, client: Option<&libtmux::
 function libtmux::Server::format: async fn(&self, pane: Option<&libtmux::Pane>, format: &str) -> Result<libtmux::TmuxText, libtmux::Error>
 function libtmux::Server::from_env: fn() -> Result<Self, libtmux::Error>
 function libtmux::Server::from_env_value: fn(value: Option<impl Into<OsString>>) -> Result<Self, libtmux::Error>
+function libtmux::Server::from_env_value_with_runtime: fn(value: Option<impl Into<OsString>>, runtime: Arc<dyn libtmux::driver::Runtime>) -> Result<Self, libtmux::Error>
 function libtmux::Server::generation: async fn(&self) -> Result<libtmux::ServerGeneration, libtmux::Error>
 function libtmux::Server::grant_access: async fn(&self, user: &str, mode: libtmux::AccessMode) -> Result<(), libtmux::Error>
 function libtmux::Server::has_session: async fn(&self, name: impl AsRef<[u8]>) -> Result<bool, libtmux::Error>
@@ -608,6 +615,7 @@ function libtmux::ServerBuilder::control_client_limits: const fn(self, limits: l
 function libtmux::ServerBuilder::default_timeout: const fn(self, timeout: Duration) -> Self
 function libtmux::ServerBuilder::dispatch_limits: const fn(self, limits: libtmux::DispatchLimits) -> Self
 function libtmux::ServerBuilder::output_limits: const fn(self, limits: libtmux::OutputLimits) -> Self
+function libtmux::ServerBuilder::runtime: fn(self, runtime: Arc<dyn libtmux::driver::Runtime>) -> Self
 function libtmux::ServerBuilder::socket_name: fn(self, name: impl Into<OsString>) -> Self
 function libtmux::ServerBuilder::socket_path: fn(self, path: impl Into<PathBuf>) -> Self
 function libtmux::ServerBuilder::tmux_executable: fn(self, executable: impl Into<OsString>) -> Self
@@ -661,6 +669,7 @@ function libtmux::Session::window_at: async fn(&self, index: i32) -> Result<Opti
 function libtmux::Session::window_count: fn(&self) -> u32
 function libtmux::Session::windows: async fn(&self) -> Result<Vec<libtmux::Window>, libtmux::Error>
 function libtmux::Session::with_window: async fn<T, E>(&self, options: impl Into<libtmux::NewWindowOptions>, operation: impl AsyncFnOnce(&libtmux::Window) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::SessionId::number: const fn(&self) -> u32
 function libtmux::SessionName::as_str: fn(&self) -> &str
 function libtmux::SessionName::new: fn(name: impl Into<String>) -> Result<Self, libtmux::SessionNameError>
 function libtmux::SparseValues::first: fn(&self) -> Option<&T>
@@ -681,6 +690,7 @@ function libtmux::SplitOptions::start_directory: fn(self, directory: impl Into<l
 function libtmux::SplitOptions::zoom: const fn(self) -> Self
 function libtmux::TmuxArg::as_os_str: fn(&self) -> &OsStr
 function libtmux::TmuxArg::format: fn(template: impl Into<OsString>) -> Self
+function libtmux::TmuxArg::into_os_string: fn(self) -> OsString
 function libtmux::TmuxArg::literal: fn(text: impl AsRef<OsStr>) -> Self
 function libtmux::TmuxText::as_bytes: fn(&self) -> &[u8]
 function libtmux::TmuxText::as_flag: fn(&self) -> Option<bool>
@@ -695,6 +705,7 @@ function libtmux::TmuxVersion::meets: fn(&self, required: &libtmux::ReleaseVersi
 function libtmux::TmuxVersion::parse_output: fn(output: &[u8]) -> Result<Self, libtmux::Error>
 function libtmux::TmuxVersion::raw: fn(&self) -> &str
 function libtmux::TmuxVersion::release: const fn(&self) -> Option<&libtmux::ReleaseVersion>
+function libtmux::WaitExt::wait: fn(self) -> <Self as core::future::future::Future>::Output
 function libtmux::Window::active_pane: async fn(&self) -> Result<Option<libtmux::Pane>, libtmux::Error>
 function libtmux::Window::append_option: async fn(&self, name: &str, value: impl Into<OsString>) -> Result<(), libtmux::Error>
 function libtmux::Window::cmd: async fn(&self, command: libtmux::Command) -> Result<libtmux::CommandResult, libtmux::Error>
@@ -752,6 +763,7 @@ function libtmux::Window::unset_hook: async fn(&self, name: &str) -> Result<(), 
 function libtmux::Window::unset_option: async fn(&self, name: &str) -> Result<(), libtmux::Error>
 function libtmux::Window::width: fn(&self) -> u32
 function libtmux::Window::with_pane: async fn<T, E>(&self, options: impl Into<libtmux::SplitOptions>, operation: impl AsyncFnOnce(&libtmux::Pane) -> Result<T, E>) -> Result<T, libtmux::ScopeError<T, E>>
+function libtmux::WindowId::number: const fn(&self) -> u32
 function libtmux::blocking::Runtime::new: fn() -> Result<Self, libtmux::Error>
 function libtmux::blocking::Runtime::run: fn<F: Future>(&self, future: F) -> <F as core::future::future::Future>::Output
 function libtmux::blocking::Runtime::try_run: fn<F: Future>(&self, future: F) -> Result<<F as core::future::future::Future>::Output, libtmux::Error>
@@ -787,6 +799,25 @@ function libtmux::control::PaneOutput::pane: const fn(&self) -> &libtmux::PaneId
 function libtmux::control::PaneOutput::sender: const fn(&self) -> &libtmux::control::ControlSender
 function libtmux::control::PaneOutput::shutdown: async fn(self) -> Result<(), libtmux::Error>
 function libtmux::control::PaneOutput::snapshot: async fn(&mut self, on_output: impl FnMut(&[u8])) -> Result<Vec<libtmux::TmuxText>, libtmux::Error>
+function libtmux::driver::AbortHandle::abort: fn(&self)
+function libtmux::driver::AbortHandle::new: fn(abort: impl Fn() + Send + Sync + 'static) -> Self
+function libtmux::driver::Process::id: fn(&self) -> Option<u32>
+function libtmux::driver::Process::start_kill: fn(&mut self) -> io::Result<()>
+function libtmux::driver::Process::take_stderr: fn(&mut self) -> Option<libtmux::driver::Reader>
+function libtmux::driver::Process::take_stdin: fn(&mut self) -> Option<libtmux::driver::Writer>
+function libtmux::driver::Process::take_stdout: fn(&mut self) -> Option<libtmux::driver::Reader>
+function libtmux::driver::Process::try_wait: fn(&mut self) -> io::Result<Option<ExitStatus>>
+function libtmux::driver::Process::wait: fn(&mut self) -> BoxFuture<'_, io::Result<ExitStatus>>
+function libtmux::driver::Runtime::sleep_until: fn(&self, deadline: Instant) -> BoxFuture<'static, ()>
+function libtmux::driver::Runtime::spawn: fn(&self, task: BoxFuture<'static, ()>) -> libtmux::driver::TaskHandle
+function libtmux::driver::Runtime::spawn_process: fn(&self, command: std::process::Command) -> std::io::Result<Box<dyn libtmux::driver::Process>>
+function libtmux::driver::RuntimeExt::spawn_value: fn<T: Send + 'static>(&self, task: impl Future<Output = T> + Send + 'static) -> libtmux::driver::TaskHandle<T>
+function libtmux::driver::TaskError::into_panic: fn(self) -> Box<dyn Any + Send + 'static>
+function libtmux::driver::TaskError::is_cancelled: fn(&self) -> bool
+function libtmux::driver::TaskError::is_panic: fn(&self) -> bool
+function libtmux::driver::TaskHandle::abort: fn(&self)
+function libtmux::driver::TaskHandle::abort_handle: fn(&self) -> libtmux::driver::AbortHandle
+function libtmux::driver::TaskHandle::new: fn(completion: BoxFuture<'static, Result<T, libtmux::driver::TaskError>>, abort: libtmux::driver::AbortHandle) -> Self
 function libtmux::escape_format: fn(text: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
 function libtmux::option_schema: fn(name: &str) -> Option<&'static libtmux::OptionSchema>
 function libtmux::plan::CapturePane::escape_sequences: const fn(self) -> Self
@@ -998,6 +1029,7 @@ function libtmux::test::TestServerBuilder::control_client_limits: const fn(self,
 function libtmux::test::TestServerBuilder::dispatch_limits: const fn(self, limits: libtmux::DispatchLimits) -> Self
 function libtmux::test::TestServerBuilder::lifecycle_timeout: fn(self, timeout: Duration) -> Self
 function libtmux::test::TestServerBuilder::output_limits: const fn(self, limits: libtmux::OutputLimits) -> Self
+function libtmux::test::TestServerBuilder::runtime: fn(self, runtime: std::sync::Arc<dyn libtmux::driver::Runtime>) -> Self
 function libtmux::test::TestServerBuilder::start: async fn(self) -> Result<libtmux::test::TestServer, libtmux::test::TestServerError>
 function libtmux::test::TestServerBuilder::tmux_executable: fn(self, executable: impl Into<OsString>) -> Self
 function libtmux::test::TestServerError::kind: const fn(&self) -> libtmux::test::TestServerErrorKind
@@ -1085,6 +1117,8 @@ impl Clone for libtmux::control::BlockResult
 impl Clone for libtmux::control::ControlSender
 impl Clone for libtmux::control::Event
 impl Clone for libtmux::control::Subscription
+impl Clone for libtmux::driver::AbortHandle
+impl Clone for libtmux::driver::AsyncIoRuntime
 impl Clone for libtmux::plan::Attribution
 impl Clone for libtmux::plan::CapturePane
 impl Clone for libtmux::plan::Effects
@@ -1167,6 +1201,7 @@ impl Copy for libtmux::ServerGoneKind
 impl Copy for libtmux::SessionNameError
 impl Copy for libtmux::SplitDirection
 impl Copy for libtmux::WindowPlacement
+impl Copy for libtmux::driver::AsyncIoRuntime
 impl Copy for libtmux::plan::Attribution
 impl Copy for libtmux::plan::Effects
 impl Copy for libtmux::plan::OperationKind
@@ -1270,6 +1305,9 @@ impl Debug for libtmux::control::ControlSender
 impl Debug for libtmux::control::Event
 impl Debug for libtmux::control::PaneOutput
 impl Debug for libtmux::control::Subscription
+impl Debug for libtmux::driver::AbortHandle
+impl Debug for libtmux::driver::AsyncIoRuntime
+impl Debug for libtmux::driver::TaskError
 impl Debug for libtmux::plan::Attribution
 impl Debug for libtmux::plan::CapturePane
 impl Debug for libtmux::plan::Effects
@@ -1322,6 +1360,8 @@ impl Default for libtmux::ControlClientLimits
 impl Default for libtmux::ControlLimits
 impl Default for libtmux::DispatchLimits
 impl Default for libtmux::OutputLimits
+impl Default for libtmux::blocking::Runtime
+impl Default for libtmux::driver::AsyncIoRuntime
 impl Default for libtmux::plan::Plan
 impl Default for libtmux::plan::Planner
 impl Display for libtmux::Client
@@ -1347,6 +1387,7 @@ impl Display for libtmux::TmuxVersion
 impl Display for libtmux::Window
 impl Display for libtmux::WindowId
 impl Display for libtmux::control::Subscription
+impl Display for libtmux::driver::TaskError
 impl Display for libtmux::plan::PlanValidationError
 impl Display for libtmux::query::ExactlyOneError
 impl Display for libtmux::query::FilterExpressionError
@@ -1354,7 +1395,6 @@ impl Display for libtmux::query::MultipleItemsError
 impl Display for libtmux::test::DaemonState
 impl Display for libtmux::test::RetryTimeout
 impl Display for libtmux::test::TestServerError
-impl Drop for libtmux::blocking::Runtime
 impl Drop for libtmux::test::TestServer
 impl Eq for libtmux::AccessMode
 impl Eq for libtmux::AccessRule
@@ -1452,6 +1492,7 @@ impl Error for libtmux::Error
 impl Error for libtmux::IdParseError
 impl Error for libtmux::ListingDecodeError
 impl Error for libtmux::SessionNameError
+impl Error for libtmux::driver::TaskError
 impl Error for libtmux::plan::PlanValidationError
 impl Error for libtmux::query::ExactlyOneError
 impl Error for libtmux::query::FilterExpressionError
@@ -1721,6 +1762,7 @@ impl Serialize for libtmux::plan::WindowSlot
 impl Serialize for libtmux::plan::WindowTarget
 impl Stream for libtmux::control::ControlEvents
 impl Stream for libtmux::control::PaneOutput
+impl libtmux::driver::Runtime for libtmux::driver::AsyncIoRuntime
 impl libtmux::plan::Chainable for libtmux::plan::KillPane
 impl libtmux::plan::Chainable for libtmux::plan::KillWindow
 impl libtmux::plan::Chainable for libtmux::plan::Pause
@@ -1812,6 +1854,7 @@ impl<'de> Deserialize<'de> for libtmux::plan::SplitWindow
 impl<'de> Deserialize<'de> for libtmux::plan::WindowSlot
 impl<'de> Deserialize<'de> for libtmux::plan::WindowTarget
 impl<'values, T> IntoIterator for &'values libtmux::SparseValues<T>
+impl<F: Future> libtmux::WaitExt for F
 impl<From, To> Clone for libtmux::query::ManyRelation<From, To>
 impl<From, To> Clone for libtmux::query::OneRelation<From, To>
 impl<From, To> Copy for libtmux::query::ManyRelation<From, To>
@@ -1823,6 +1866,7 @@ impl<From, To> Eq for libtmux::query::OneRelation<From, To>
 impl<From, To> PartialEq for libtmux::query::ManyRelation<From, To>
 impl<From, To> PartialEq for libtmux::query::OneRelation<From, To>
 impl<I: Iterator> libtmux::query::QueryIteratorExt for I
+impl<R: libtmux::driver::Runtime + ?Sized> libtmux::driver::RuntimeExt for R
 impl<T, E: fmt::Display> Display for libtmux::ScopeError<T, E>
 impl<T, E> Clone for libtmux::query::EnumField<T, E>
 impl<T, E> Copy for libtmux::query::EnumField<T, E>
@@ -1863,6 +1907,7 @@ impl<T> Clone for libtmux::query::BoolField<T>
 impl<T> Clone for libtmux::query::FilterExpr<T>
 impl<T> Copy for libtmux::plan::Slot<T>
 impl<T> Copy for libtmux::query::BoolField<T>
+impl<T> Debug for libtmux::driver::TaskHandle<T>
 impl<T> Debug for libtmux::plan::Slot<T>
 impl<T> Debug for libtmux::query::BoolField<T>
 impl<T> Debug for libtmux::query::FilterExpr<T>
@@ -1870,6 +1915,7 @@ impl<T> Eq for libtmux::plan::Slot<T>
 impl<T> Eq for libtmux::query::BoolField<T>
 impl<T> Eq for libtmux::query::FilterExpr<T>
 impl<T> From<BTreeMap<u32, T>> for libtmux::SparseValues<T>
+impl<T> Future for libtmux::driver::TaskHandle<T>
 impl<T> JsonSchema for libtmux::plan::Slot<T>
 impl<T> PartialEq for libtmux::plan::Slot<T>
 impl<T> PartialEq for libtmux::query::BoolField<T>
@@ -1933,6 +1979,9 @@ struct libtmux::control::ControlEvents
 struct libtmux::control::ControlMode
 struct libtmux::control::ControlSender
 struct libtmux::control::PaneOutput
+struct libtmux::driver::AbortHandle
+struct libtmux::driver::AsyncIoRuntime
+struct libtmux::driver::TaskHandle<T = ()>
 struct libtmux::plan::CapturePane
 struct libtmux::plan::Effects
 struct libtmux::plan::KillPane
@@ -2248,6 +2297,8 @@ struct_field libtmux::control::Event::WindowRenamed::name: libtmux::TmuxText
 struct_field libtmux::control::Event::WindowRenamed::window: libtmux::WindowId
 struct_field libtmux::control::Subscription::Pane::0: libtmux::PaneId
 struct_field libtmux::control::Subscription::Window::0: libtmux::WindowId
+struct_field libtmux::driver::TaskError::Panicked::0: Box<dyn Any + Send + 'static>
+struct_field libtmux::driver::TaskError::Spawn::0: std::io::Error
 struct_field libtmux::plan::Effects::creates: Option<libtmux::plan::Scope>
 struct_field libtmux::plan::Effects::destructive: bool
 struct_field libtmux::plan::Effects::idempotent: bool
@@ -2283,6 +2334,10 @@ struct_field libtmux::plan::SplitTarget::Window::0: libtmux::plan::WindowTarget
 struct_field libtmux::plan::WindowTarget::Id::0: libtmux::WindowId
 struct_field libtmux::plan::WindowTarget::Slot::0: libtmux::plan::Slot<libtmux::plan::WindowSlot>
 struct_field libtmux::test::DaemonState::Gone::0: std::process::ExitStatus
+trait libtmux::WaitExt: Future + Sized
+trait libtmux::driver::Process: Send
+trait libtmux::driver::Runtime: Send + Sync + 'static
+trait libtmux::driver::RuntimeExt: libtmux::driver::Runtime
 trait libtmux::plan::Chainable: libtmux::plan::Operation
 trait libtmux::plan::FromStep
 trait libtmux::plan::Operation: Into<libtmux::plan::Op>
@@ -2292,8 +2347,9 @@ trait libtmux::query::Filterable: Sized
 trait libtmux::query::Matcher<T>
 trait libtmux::query::QueryIteratorExt: Iterator + Sized
 trait libtmux::query::ReadField<Target>: Copy + sealed::Sealed
-trait libtmux::snapshot::sealed::Sealed
 type_alias libtmux::IndexedHooks = libtmux::SparseValues<libtmux::TmuxText>
+type_alias libtmux::driver::Reader = Box<dyn futures_io::AsyncRead + Send + Unpin>
+type_alias libtmux::driver::Writer = Box<dyn futures_io::AsyncWrite + Send + Unpin>
 variant libtmux::AccessMode::ReadOnly
 variant libtmux::AccessMode::Write
 variant libtmux::Availability::Absent
@@ -2490,6 +2546,9 @@ variant libtmux::control::Subscription::AllWindows
 variant libtmux::control::Subscription::Pane
 variant libtmux::control::Subscription::Session
 variant libtmux::control::Subscription::Window
+variant libtmux::driver::TaskError::Cancelled
+variant libtmux::driver::TaskError::Panicked
+variant libtmux::driver::TaskError::Spawn
 variant libtmux::plan::Attribution::Merged
 variant libtmux::plan::Attribution::PerCommand
 variant libtmux::plan::Op::CapturePane

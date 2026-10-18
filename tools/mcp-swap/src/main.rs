@@ -278,7 +278,7 @@ fn use_command(paths: &Paths, clients: &[Client], args: UseArgs) -> Result<(), F
                 continue;
             }
             eprintln!("preflight: {} {}", planned.command, planned.args.join(" "));
-            preflight(planned, Duration::from_secs(300))?;
+            preflight(planned, Duration::from_mins(5))?;
             checked.push(planned.clone());
         }
     }

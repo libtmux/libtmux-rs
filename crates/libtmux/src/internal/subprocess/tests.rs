@@ -1191,12 +1191,24 @@ fn runtime_teardown_signals_the_group_without_claiming_library_reaping() {
         .enable_all()
         .build()
         .expect("runtime builds");
+    // This gate tears down the task owner. The process driver remains the
+    // standard driver; native Tokio process I/O has its own integration tests.
+    let driver = Arc::new(TokioTasksWithStdProcesses {
+        handle: runtime.handle().clone(),
+        processes: crate::driver::AsyncIoRuntime,
+        spawned_processes: std::sync::atomic::AtomicUsize::new(0),
+    });
     let pids = runtime.block_on(async {
-        let executor = executor("descendant", TEST_TIMEOUT);
+        let executor = executor("descendant", TEST_TIMEOUT).with_runtime(driver.clone());
         let dispatch = executor.execute(request(24, [pid_path.as_os_str().to_os_string()]));
         tokio::spawn(dispatch);
         read_pids(&pid_path, 2).await
     });
+    assert_eq!(
+        driver.spawned_processes.load(Ordering::SeqCst),
+        1,
+        "the selected runtime delegates process creation to AsyncIoRuntime",
+    );
     drop(runtime);
 
     let direct = pid(pids[0]);
@@ -1224,5 +1236,50 @@ fn runtime_teardown_signals_the_group_without_claiming_library_reaping() {
     while !matches!(test_kill_process(descendant), Err(Errno::SRCH)) {
         assert!(Instant::now() < deadline, "descendant was not killed");
         std::thread::yield_now();
+    }
+}
+
+struct TokioTasksWithStdProcesses {
+    handle: tokio::runtime::Handle,
+    processes: crate::driver::AsyncIoRuntime,
+    spawned_processes: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::driver::Runtime for TokioTasksWithStdProcesses {
+    fn sleep_until(&self, deadline: Instant) -> futures_util::future::BoxFuture<'static, ()> {
+        let sleeper = {
+            let _entered = self.handle.enter();
+            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline))
+        };
+        Box::pin(sleeper)
+    }
+
+    fn spawn(
+        &self,
+        task: futures_util::future::BoxFuture<'static, ()>,
+    ) -> crate::driver::TaskHandle {
+        let task = self.handle.spawn(task);
+        let abort = task.abort_handle();
+        crate::driver::TaskHandle::new(
+            Box::pin(async move {
+                task.await.map_err(|error| {
+                    if error.is_panic() {
+                        crate::driver::TaskError::Panicked(error.into_panic())
+                    } else {
+                        crate::driver::TaskError::Cancelled
+                    }
+                })
+            }),
+            crate::driver::AbortHandle::new(move || abort.abort()),
+        )
+    }
+
+    fn spawn_process(
+        &self,
+        command: process::Command,
+    ) -> std::io::Result<Box<dyn crate::driver::Process>> {
+        let child = self.processes.spawn_process(command)?;
+        self.spawned_processes.fetch_add(1, Ordering::SeqCst);
+        Ok(child)
     }
 }

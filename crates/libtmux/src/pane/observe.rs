@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::formats::TmuxText;
 use crate::{Command, CommandChain, Error};
@@ -362,7 +362,7 @@ impl Pane {
         quiet_for: Duration,
         within: Duration,
     ) -> Result<PaneWait, Error> {
-        let mut last_change = tokio::time::Instant::now();
+        let mut last_change = Instant::now();
         let mut previous: Option<Vec<u8>> = None;
         self.look_until(within, move |text, now| {
             if previous.as_deref() == Some(text) {
@@ -457,7 +457,7 @@ impl Pane {
     async fn look_until(
         &self,
         within: Duration,
-        mut settled: impl FnMut(&[u8], tokio::time::Instant) -> bool,
+        mut settled: impl FnMut(&[u8], Instant) -> bool,
     ) -> Result<PaneWait, Error> {
         // Scrollback rather than the visible screen, and wrapped lines joined:
         // output that scrolled away would read as absent, and a needle
@@ -482,7 +482,7 @@ impl Pane {
         )
         .then(options.lower(&target, &version)?);
 
-        let deadline = tokio::time::Instant::now().checked_add(within);
+        let deadline = Instant::now().checked_add(within);
 
         loop {
             let result = self.core.execute_chain(look.clone()).await?;
@@ -495,7 +495,7 @@ impl Pane {
             }
             let (dead, text) = split_look(result.stdout());
 
-            let now = tokio::time::Instant::now();
+            let now = Instant::now();
             // Asked before the deadline is checked, so output already there
             // when the wait began is an answer rather than a timeout.
             if settled(text, now) {
@@ -508,10 +508,13 @@ impl Pane {
                 return Ok(PaneWait::Dead);
             }
 
-            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Ok(PaneWait::TimedOut);
             }
-            tokio::time::sleep(POLL_INTERVAL.min(within)).await;
+            self.core
+                .runtime()
+                .sleep_until(Instant::now() + POLL_INTERVAL.min(within))
+                .await;
         }
     }
 }

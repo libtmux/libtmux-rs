@@ -4,6 +4,33 @@ Each section is one release: what a caller has to change to build against it.
 Start at the section for the version you are on and work up. Changes that
 need no edit on your side are in the changelog, not here.
 
+## Package split on this branch
+
+Tokio applications select `libtmux-tokio`. A dependency alias preserves
+existing `use libtmux::...` paths:
+
+```toml
+[dependencies]
+libtmux = { package = "libtmux-tokio", path = "../libtmux-rs/crates/libtmux-tokio" }
+```
+
+Enable the same optional features as before. Construct servers through the
+Tokio package so returned handles retain that driver. `Session`, `Window`,
+`Pane`, options, and results remain shared types; `Server` is a native wrapper
+with explicit forwarding methods.
+
+The `libtmux` package defaults to the async-io driver and no longer requires
+Tokio. Its operations remain async. Synchronous callers import `WaitExt` and
+call `.wait()` on their futures. Neither choice changes a server's driver
+after construction. `libtmux-core` is the separate, dependency-free value and
+protocol package.
+
+The branch requires Rust 1.97.1 and supports Linux, including WSL. The new
+package names and dependency graph are not published by this branch's
+existing alpha version. Use checkout paths until a coordinated release.
+See [Packages and runtimes](packages.md) for ownership and control-mode
+contracts.
+
 ## From 0.1.0-alpha.12 to 0.1.0-alpha.13
 
 ### `ServerBuilder::colors` refuses 88

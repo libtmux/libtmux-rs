@@ -185,10 +185,11 @@ fn stop_process_tree(
     // mean there is nothing left to kill, and which one arrives is a platform
     // detail: Linux reports the group as missing, while macOS reports a group
     // whose members have exited but not yet been reaped as forbidden.
-    if let Err(error) = kill_process_group(pid, Signal::KILL) {
-        if error != Errno::SRCH && error != Errno::PERM {
-            failures.push(format!("kill MCP process group: {error}"));
-        }
+    if let Err(error) = kill_process_group(pid, Signal::KILL)
+        && error != Errno::SRCH
+        && error != Errno::PERM
+    {
+        failures.push(format!("kill MCP process group: {error}"));
     }
     let _ = child.kill();
     if let Err(error) = containment.terminate_all(deadline) {

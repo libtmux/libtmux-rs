@@ -30,7 +30,7 @@ include = [
 ]
 
 [dependencies]
-libtmux = { workspace = true, features = ["plan"] }
+libtmux = { package = "libtmux-tokio", path = "../libtmux-tokio", version = "0.1.0-alpha.15", features = ["plan"] }
 thiserror.workspace = true
 yaml-rust2 = "0.11.0"
 clap = { version = "4.6.6", optional = true, features = ["env", "string"] }
@@ -62,7 +62,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dev-dependencies]
-libtmux = { workspace = true, features = ["control-mode", "derive", "test-support"] }
+libtmux = { package = "libtmux-tokio", path = "../libtmux-tokio", version = "0.1.0-alpha.15", features = ["control-mode", "derive", "test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

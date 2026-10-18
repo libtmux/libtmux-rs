@@ -6,6 +6,11 @@ use std::time::Duration;
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::{NewSessionOptions, Server, Session};
 
+use libtmux::{
+    WaitExt as _,
+    driver::{AsyncIoRuntime, Runtime as _},
+};
+
 type ExampleError = Box<dyn Error>;
 
 fn check(condition: bool, message: &str) -> Result<(), ExampleError> {
@@ -36,8 +41,11 @@ async fn demonstrate(server: &Server) -> Result<(), ExampleError> {
     Ok(())
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), ExampleError> {
+fn main() -> Result<(), ExampleError> {
+    run().wait()
+}
+
+async fn run() -> Result<(), ExampleError> {
     let root = std::path::Path::new("/tmp/libtmux-rs-dev");
     std::fs::create_dir_all(root)?;
     let directory = tempfile::Builder::new()
@@ -52,7 +60,7 @@ async fn main() -> Result<(), ExampleError> {
         .config_file("/dev/null")
         .default_timeout(Duration::from_secs(5))
         .build()?;
-    let outcome = tokio::time::timeout(Duration::from_secs(10), demonstrate(&server)).await;
+    let outcome = within(Duration::from_secs(10), demonstrate(&server)).await;
 
     // Stop the owned daemon before closing the client executor.
     let killed = server.kill().await;
@@ -81,4 +89,21 @@ async fn main() -> Result<(), ExampleError> {
     } else {
         Err(failures.join("; ").into())
     }
+}
+
+async fn within<T>(budget: Duration, work: impl Future<Output = T>) -> Result<T, std::io::Error> {
+    let mut work = std::pin::pin!(work);
+    let mut timer = AsyncIoRuntime.sleep_until(std::time::Instant::now() + budget);
+    std::future::poll_fn(|context| {
+        if let std::task::Poll::Ready(result) = work.as_mut().poll(context) {
+            return std::task::Poll::Ready(Ok(result));
+        }
+        timer.as_mut().poll(context).map(|()| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "example deadline elapsed",
+            ))
+        })
+    })
+    .await
 }

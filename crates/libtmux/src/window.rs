@@ -873,6 +873,7 @@ impl Window {
         let window = self.clone();
         let options = options.into();
         scoped::run(
+            Arc::clone(self.core.runtime()),
             "with-pane",
             async move { window.split(options).await },
             Pane::kill,

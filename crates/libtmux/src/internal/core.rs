@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::OnceCell;
+#[cfg(test)]
+use crate::driver::AsyncIoRuntime;
+use crate::driver::Runtime;
+use async_lock::OnceCell;
 
 #[cfg(feature = "control-mode")]
 use crate::SessionId;
@@ -316,6 +319,7 @@ fn map_identity_error(error: &IdentityError) -> ServerConfigurationErrorKind {
 pub(crate) struct Core {
     configuration: CoreConfiguration,
     executor: Arc<dyn Executor>,
+    runtime: Arc<dyn Runtime>,
     capabilities: OnceCell<EngineCapabilities>,
     next_request_id: AtomicU64,
     /// The `wait-for` channels this handle has a client on, or a signal for.
@@ -337,32 +341,52 @@ pub(crate) struct Core {
 }
 
 impl Core {
+    #[cfg(test)]
     pub(crate) fn new(configuration: CoreConfiguration) -> Self {
+        Self::new_with_runtime(configuration, Arc::new(AsyncIoRuntime))
+    }
+
+    pub(crate) fn new_with_runtime(
+        configuration: CoreConfiguration,
+        runtime: Arc<dyn Runtime>,
+    ) -> Self {
         let executor = SubprocessExecutor::new(
             configuration.launch.executable().to_os_string(),
             configuration.timeout,
         )
         .with_launch_context(configuration.launch.clone())
         .with_output_limits(configuration.output_limits)
-        .with_dispatch_limits(configuration.dispatch_limits);
+        .with_dispatch_limits(configuration.dispatch_limits)
+        .with_runtime(Arc::clone(&runtime));
         #[cfg(feature = "test-support")]
         let executor = executor.with_synchronous_reap_on_supervisor_drop(
             configuration.synchronous_reap_on_supervisor_drop,
         );
-        Self::with_executor(configuration, Arc::new(executor))
+        Self::with_executor_and_runtime(configuration, Arc::new(executor), runtime)
     }
 
+    #[cfg(test)]
     fn with_executor(configuration: CoreConfiguration, executor: Arc<dyn Executor>) -> Self {
+        Self::with_executor_and_runtime(configuration, executor, Arc::new(AsyncIoRuntime))
+    }
+
+    fn with_executor_and_runtime(
+        configuration: CoreConfiguration,
+        executor: Arc<dyn Executor>,
+        runtime: Arc<dyn Runtime>,
+    ) -> Self {
         #[cfg(feature = "control-mode")]
-        let control_client_limits = configuration.control_client_limits;
+        let persistent_clients = PersistentClients::new(configuration.control_client_limits)
+            .with_runtime(Arc::clone(&runtime));
         Self {
             configuration,
             executor,
+            runtime,
             capabilities: OnceCell::new(),
             next_request_id: AtomicU64::new(1),
             channel_waits: ChannelWaits::default(),
             #[cfg(feature = "control-mode")]
-            persistent_clients: PersistentClients::new(control_client_limits),
+            persistent_clients,
             #[cfg(feature = "control-mode")]
             control_client_pids: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
@@ -384,10 +408,12 @@ impl Core {
         Self {
             configuration: self.configuration.clone(),
             executor: Arc::new(executor),
-            capabilities: OnceCell::new_with(Some(capabilities)),
+            runtime: Arc::clone(&self.runtime),
+            capabilities: OnceCell::from(capabilities),
             next_request_id: AtomicU64::new(1),
             channel_waits: ChannelWaits::default(),
-            persistent_clients: PersistentClients::new(self.configuration.control_client_limits),
+            persistent_clients: PersistentClients::new(self.configuration.control_client_limits)
+                .with_runtime(Arc::clone(&self.runtime)),
             // Shared with the parent: a control client this process spawned is
             // the same process whichever handle dispatches through it.
             control_client_pids: Arc::clone(&self.control_client_pids),
@@ -540,7 +566,7 @@ impl Core {
             .reserve(
                 request.request_id(),
                 request.summary().clone(),
-                tokio::time::Instant::now().checked_add(self.configuration.timeout),
+                std::time::Instant::now().checked_add(self.configuration.timeout),
             )
             .await?;
         PersistentChild::spawn(
@@ -568,14 +594,21 @@ impl Core {
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
         #[cfg(feature = "control-mode")]
         {
-            let (executor, ()) =
-                tokio::join!(self.executor.shutdown(), self.persistent_clients.shutdown());
+            let (executor, ()) = futures_util::future::join(
+                self.executor.shutdown(),
+                self.persistent_clients.shutdown(),
+            )
+            .await;
             executor
         }
         #[cfg(not(feature = "control-mode"))]
         {
             self.executor.shutdown().await
         }
+    }
+
+    pub(crate) fn runtime(&self) -> &Arc<dyn Runtime> {
+        &self.runtime
     }
 
     pub(crate) fn configuration(&self) -> &CoreConfiguration {

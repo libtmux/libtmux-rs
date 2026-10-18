@@ -1,0 +1,278 @@
+assoc_const libtmux_core::ReleaseSuffix::FINAL: Self
+assoc_const libtmux_core::ReleaseSuffix::PATCH_A: Self
+assoc_const libtmux_core::ReleaseSuffix::RELEASE_CANDIDATE: Self
+enum libtmux_core::PaneTarget
+enum libtmux_core::SessionNameError
+enum libtmux_core::SessionTarget
+enum libtmux_core::WindowTarget
+enum libtmux_core::control::Event
+enum libtmux_core::control::Line
+function libtmux_core::IdParseError::expected_sigil: const fn(self) -> char
+function libtmux_core::IdParseError::new: const fn(expected_sigil: char) -> Self
+function libtmux_core::PaneId::number: const fn(&self) -> u32
+function libtmux_core::ReleaseSuffix::is_final: const fn(self) -> bool
+function libtmux_core::ReleaseSuffix::is_release_candidate: const fn(self) -> bool
+function libtmux_core::ReleaseSuffix::patch: fn(letter: char) -> Option<Self>
+function libtmux_core::ReleaseSuffix::patch_letter: fn(self) -> Option<char>
+function libtmux_core::ReleaseSuffix::release_candidate: const fn(number: u16) -> Option<Self>
+function libtmux_core::ReleaseSuffix::release_candidate_number: const fn(self) -> Option<u16>
+function libtmux_core::ReleaseVersion::major: const fn(self) -> u16
+function libtmux_core::ReleaseVersion::minor: const fn(self) -> u16
+function libtmux_core::ReleaseVersion::new: const fn(major: u16, minor: u16, suffix: libtmux_core::ReleaseSuffix) -> Self
+function libtmux_core::ReleaseVersion::suffix: const fn(self) -> libtmux_core::ReleaseSuffix
+function libtmux_core::SessionId::number: const fn(&self) -> u32
+function libtmux_core::SessionName::as_str: fn(&self) -> &str
+function libtmux_core::SessionName::new: fn(name: impl Into<String>) -> Result<Self, libtmux_core::SessionNameError>
+function libtmux_core::TmuxArg::as_os_str: fn(&self) -> &OsStr
+function libtmux_core::TmuxArg::format: fn(template: impl Into<OsString>) -> Self
+function libtmux_core::TmuxArg::into_os_string: fn(self) -> OsString
+function libtmux_core::TmuxArg::literal: fn(text: impl AsRef<OsStr>) -> Self
+function libtmux_core::TmuxText::as_bytes: fn(&self) -> &[u8]
+function libtmux_core::TmuxText::as_flag: fn(&self) -> Option<bool>
+function libtmux_core::TmuxText::as_str: fn(&self) -> Result<&str, std::str::Utf8Error>
+function libtmux_core::TmuxText::from_bytes: fn(bytes: impl Into<Vec<u8>>) -> Self
+function libtmux_core::TmuxText::parse: fn<T: std::str::FromStr>(&self) -> Option<T>
+function libtmux_core::TmuxText::to_string_lossy: fn(&self) -> Cow<'_, str>
+function libtmux_core::WindowId::number: const fn(&self) -> u32
+function libtmux_core::control::Event::invalidates_listings: const fn(&self) -> bool
+function libtmux_core::control::Event::may_have_added_a_pane: const fn(&self) -> bool
+function libtmux_core::control::Event::pane: const fn(&self) -> Option<&libtmux_core::PaneId>
+function libtmux_core::control::Event::window: const fn(&self) -> Option<&libtmux_core::WindowId>
+function libtmux_core::control::Line::parse: fn(line: &[u8]) -> Self
+function libtmux_core::control::Line::parse_within_block: fn(line: &[u8], number: u64) -> Self
+function libtmux_core::control::unescape_output: fn(source: &[u8]) -> Vec<u8>
+function libtmux_core::escape_format: fn(text: impl AsRef<std::ffi::OsStr>) -> std::ffi::OsString
+impl AsRef<[u8]> for libtmux_core::TmuxText
+impl AsRef<str> for libtmux_core::PaneId
+impl AsRef<str> for libtmux_core::SessionId
+impl AsRef<str> for libtmux_core::WindowId
+impl Clone for libtmux_core::IdParseError
+impl Clone for libtmux_core::PaneId
+impl Clone for libtmux_core::PaneTarget
+impl Clone for libtmux_core::ReleaseSuffix
+impl Clone for libtmux_core::ReleaseVersion
+impl Clone for libtmux_core::SessionId
+impl Clone for libtmux_core::SessionName
+impl Clone for libtmux_core::SessionNameError
+impl Clone for libtmux_core::SessionTarget
+impl Clone for libtmux_core::TmuxArg
+impl Clone for libtmux_core::TmuxText
+impl Clone for libtmux_core::WindowId
+impl Clone for libtmux_core::WindowTarget
+impl Clone for libtmux_core::control::Event
+impl Clone for libtmux_core::control::Line
+impl Copy for libtmux_core::IdParseError
+impl Copy for libtmux_core::ReleaseSuffix
+impl Copy for libtmux_core::ReleaseVersion
+impl Copy for libtmux_core::SessionNameError
+impl Debug for libtmux_core::IdParseError
+impl Debug for libtmux_core::PaneId
+impl Debug for libtmux_core::PaneTarget
+impl Debug for libtmux_core::ReleaseSuffix
+impl Debug for libtmux_core::ReleaseVersion
+impl Debug for libtmux_core::SessionId
+impl Debug for libtmux_core::SessionName
+impl Debug for libtmux_core::SessionNameError
+impl Debug for libtmux_core::SessionTarget
+impl Debug for libtmux_core::TmuxArg
+impl Debug for libtmux_core::TmuxText
+impl Debug for libtmux_core::WindowId
+impl Debug for libtmux_core::WindowTarget
+impl Debug for libtmux_core::control::Event
+impl Debug for libtmux_core::control::Line
+impl Display for libtmux_core::IdParseError
+impl Display for libtmux_core::PaneId
+impl Display for libtmux_core::ReleaseSuffix
+impl Display for libtmux_core::ReleaseVersion
+impl Display for libtmux_core::SessionId
+impl Display for libtmux_core::SessionName
+impl Display for libtmux_core::SessionNameError
+impl Display for libtmux_core::WindowId
+impl Eq for libtmux_core::IdParseError
+impl Eq for libtmux_core::PaneId
+impl Eq for libtmux_core::PaneTarget
+impl Eq for libtmux_core::ReleaseSuffix
+impl Eq for libtmux_core::ReleaseVersion
+impl Eq for libtmux_core::SessionId
+impl Eq for libtmux_core::SessionName
+impl Eq for libtmux_core::SessionNameError
+impl Eq for libtmux_core::SessionTarget
+impl Eq for libtmux_core::TmuxArg
+impl Eq for libtmux_core::TmuxText
+impl Eq for libtmux_core::WindowId
+impl Eq for libtmux_core::WindowTarget
+impl Eq for libtmux_core::control::Event
+impl Eq for libtmux_core::control::Line
+impl Error for libtmux_core::IdParseError
+impl Error for libtmux_core::SessionNameError
+impl From<&OsStr> for libtmux_core::TmuxArg
+impl From<&OsString> for libtmux_core::TmuxArg
+impl From<&Path> for libtmux_core::TmuxArg
+impl From<&PathBuf> for libtmux_core::TmuxArg
+impl From<&String> for libtmux_core::TmuxArg
+impl From<&libtmux_core::TmuxText> for libtmux_core::TmuxArg
+impl From<&str> for libtmux_core::TmuxArg
+impl From<&str> for libtmux_core::TmuxText
+impl From<OsString> for libtmux_core::TmuxArg
+impl From<PathBuf> for libtmux_core::TmuxArg
+impl From<String> for libtmux_core::TmuxArg
+impl From<String> for libtmux_core::TmuxText
+impl From<Vec<u8>> for libtmux_core::TmuxText
+impl From<libtmux_core::PaneId> for libtmux_core::PaneTarget
+impl From<libtmux_core::SessionId> for libtmux_core::SessionTarget
+impl From<libtmux_core::WindowId> for libtmux_core::WindowTarget
+impl FromStr for libtmux_core::PaneId
+impl FromStr for libtmux_core::SessionId
+impl FromStr for libtmux_core::SessionName
+impl FromStr for libtmux_core::WindowId
+impl Hash for libtmux_core::IdParseError
+impl Hash for libtmux_core::PaneId
+impl Hash for libtmux_core::PaneTarget
+impl Hash for libtmux_core::ReleaseSuffix
+impl Hash for libtmux_core::ReleaseVersion
+impl Hash for libtmux_core::SessionId
+impl Hash for libtmux_core::SessionName
+impl Hash for libtmux_core::SessionTarget
+impl Hash for libtmux_core::TmuxArg
+impl Hash for libtmux_core::TmuxText
+impl Hash for libtmux_core::WindowId
+impl Hash for libtmux_core::WindowTarget
+impl Ord for libtmux_core::PaneId
+impl Ord for libtmux_core::PaneTarget
+impl Ord for libtmux_core::ReleaseSuffix
+impl Ord for libtmux_core::ReleaseVersion
+impl Ord for libtmux_core::SessionId
+impl Ord for libtmux_core::SessionName
+impl Ord for libtmux_core::SessionTarget
+impl Ord for libtmux_core::TmuxArg
+impl Ord for libtmux_core::TmuxText
+impl Ord for libtmux_core::WindowId
+impl Ord for libtmux_core::WindowTarget
+impl PartialEq for libtmux_core::IdParseError
+impl PartialEq for libtmux_core::PaneId
+impl PartialEq for libtmux_core::PaneTarget
+impl PartialEq for libtmux_core::ReleaseSuffix
+impl PartialEq for libtmux_core::ReleaseVersion
+impl PartialEq for libtmux_core::SessionId
+impl PartialEq for libtmux_core::SessionName
+impl PartialEq for libtmux_core::SessionNameError
+impl PartialEq for libtmux_core::SessionTarget
+impl PartialEq for libtmux_core::TmuxArg
+impl PartialEq for libtmux_core::TmuxText
+impl PartialEq for libtmux_core::WindowId
+impl PartialEq for libtmux_core::WindowTarget
+impl PartialEq for libtmux_core::control::Event
+impl PartialEq for libtmux_core::control::Line
+impl PartialEq<&[u8]> for libtmux_core::TmuxText
+impl PartialEq<&str> for libtmux_core::TmuxText
+impl PartialEq<[u8]> for libtmux_core::TmuxText
+impl PartialEq<str> for libtmux_core::TmuxText
+impl PartialOrd for libtmux_core::PaneId
+impl PartialOrd for libtmux_core::PaneTarget
+impl PartialOrd for libtmux_core::ReleaseSuffix
+impl PartialOrd for libtmux_core::ReleaseVersion
+impl PartialOrd for libtmux_core::SessionId
+impl PartialOrd for libtmux_core::SessionName
+impl PartialOrd for libtmux_core::SessionTarget
+impl PartialOrd for libtmux_core::TmuxArg
+impl PartialOrd for libtmux_core::TmuxText
+impl PartialOrd for libtmux_core::WindowId
+impl PartialOrd for libtmux_core::WindowTarget
+struct libtmux_core::IdParseError
+struct libtmux_core::PaneId
+struct libtmux_core::ReleaseSuffix
+struct libtmux_core::ReleaseVersion
+struct libtmux_core::SessionId
+struct libtmux_core::SessionName
+struct libtmux_core::TmuxArg
+struct libtmux_core::TmuxText
+struct libtmux_core::WindowId
+struct_field libtmux_core::PaneTarget::Id::0: libtmux_core::PaneId
+struct_field libtmux_core::SessionNameError::Separator::separator: char
+struct_field libtmux_core::SessionTarget::Id::0: libtmux_core::SessionId
+struct_field libtmux_core::WindowTarget::Id::0: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::ClientDetached::client: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::ClientSessionChanged::client: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::ClientSessionChanged::name: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::ClientSessionChanged::session: libtmux_core::SessionId
+struct_field libtmux_core::control::Event::ConfigError::message: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::Continued::pane: libtmux_core::PaneId
+struct_field libtmux_core::control::Event::Exit::reason: Option<libtmux_core::TmuxText>
+struct_field libtmux_core::control::Event::ExtendedOutput::age: std::time::Duration
+struct_field libtmux_core::control::Event::ExtendedOutput::bytes: Vec<u8>
+struct_field libtmux_core::control::Event::ExtendedOutput::pane: libtmux_core::PaneId
+struct_field libtmux_core::control::Event::LayoutChanged::flags: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::LayoutChanged::layout: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::LayoutChanged::visible_layout: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::LayoutChanged::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::Message::message: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::Other::name: String
+struct_field libtmux_core::control::Event::Other::rest: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::Output::bytes: Vec<u8>
+struct_field libtmux_core::control::Event::Output::pane: libtmux_core::PaneId
+struct_field libtmux_core::control::Event::PaneModeChanged::pane: libtmux_core::PaneId
+struct_field libtmux_core::control::Event::PasteBufferChanged::name: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::PasteBufferDeleted::name: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::Paused::pane: libtmux_core::PaneId
+struct_field libtmux_core::control::Event::SessionChanged::session: libtmux_core::SessionId
+struct_field libtmux_core::control::Event::SessionRenamed::name: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::SessionRenamed::session: libtmux_core::SessionId
+struct_field libtmux_core::control::Event::SessionWindowChanged::session: libtmux_core::SessionId
+struct_field libtmux_core::control::Event::SessionWindowChanged::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::SubscriptionChanged::index: Option<u32>
+struct_field libtmux_core::control::Event::SubscriptionChanged::name: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::SubscriptionChanged::pane: Option<libtmux_core::PaneId>
+struct_field libtmux_core::control::Event::SubscriptionChanged::session: libtmux_core::SessionId
+struct_field libtmux_core::control::Event::SubscriptionChanged::value: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::SubscriptionChanged::window: Option<libtmux_core::WindowId>
+struct_field libtmux_core::control::Event::UnlinkedWindowAdded::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::UnlinkedWindowClosed::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::UnlinkedWindowRenamed::name: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::UnlinkedWindowRenamed::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::WindowAdded::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::WindowClosed::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::WindowPaneChanged::pane: libtmux_core::PaneId
+struct_field libtmux_core::control::Event::WindowPaneChanged::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Event::WindowRenamed::name: libtmux_core::TmuxText
+struct_field libtmux_core::control::Event::WindowRenamed::window: libtmux_core::WindowId
+struct_field libtmux_core::control::Line::BlockEnd::number: u64
+struct_field libtmux_core::control::Line::BlockEnd::succeeded: bool
+struct_field libtmux_core::control::Line::BlockStart::flags: u64
+struct_field libtmux_core::control::Line::BlockStart::number: u64
+struct_field libtmux_core::control::Line::Event::0: libtmux_core::control::Event
+struct_field libtmux_core::control::Line::Text::0: libtmux_core::TmuxText
+variant libtmux_core::PaneTarget::Id
+variant libtmux_core::SessionNameError::Empty
+variant libtmux_core::SessionNameError::Separator
+variant libtmux_core::SessionTarget::Id
+variant libtmux_core::WindowTarget::Id
+variant libtmux_core::control::Event::ClientDetached
+variant libtmux_core::control::Event::ClientSessionChanged
+variant libtmux_core::control::Event::ConfigError
+variant libtmux_core::control::Event::Continued
+variant libtmux_core::control::Event::Exit
+variant libtmux_core::control::Event::ExtendedOutput
+variant libtmux_core::control::Event::LayoutChanged
+variant libtmux_core::control::Event::Message
+variant libtmux_core::control::Event::Other
+variant libtmux_core::control::Event::Output
+variant libtmux_core::control::Event::PaneModeChanged
+variant libtmux_core::control::Event::PasteBufferChanged
+variant libtmux_core::control::Event::PasteBufferDeleted
+variant libtmux_core::control::Event::Paused
+variant libtmux_core::control::Event::SessionChanged
+variant libtmux_core::control::Event::SessionRenamed
+variant libtmux_core::control::Event::SessionWindowChanged
+variant libtmux_core::control::Event::SessionsChanged
+variant libtmux_core::control::Event::SubscriptionChanged
+variant libtmux_core::control::Event::UnlinkedWindowAdded
+variant libtmux_core::control::Event::UnlinkedWindowClosed
+variant libtmux_core::control::Event::UnlinkedWindowRenamed
+variant libtmux_core::control::Event::WindowAdded
+variant libtmux_core::control::Event::WindowClosed
+variant libtmux_core::control::Event::WindowPaneChanged
+variant libtmux_core::control::Event::WindowRenamed
+variant libtmux_core::control::Line::BlockEnd
+variant libtmux_core::control::Line::BlockStart
+variant libtmux_core::control::Line::Event
+variant libtmux_core::control::Line::Text

@@ -17,14 +17,16 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use tokio::sync::{oneshot, watch};
-use tokio::time::Instant;
+use event_listener::{Event, EventListener};
+use futures_channel::oneshot;
+use futures_util::future::{Either, select};
 
 #[cfg(feature = "tracing")]
 use tracing::instrument::{Instrument as _, WithSubscriber as _};
 
+use crate::driver::runtime::Runtime;
 use crate::internal::core::Core;
 use crate::internal::listing;
 use crate::{ChannelWait, Command, CommandResult, Error};
@@ -35,6 +37,7 @@ pub(crate) struct ChannelWaits {
     channels: Mutex<HashMap<String, Channel>>,
 }
 
+#[derive(Default)]
 struct Channel {
     /// A signal that released a parked client with no caller left to hear it.
     ///
@@ -49,19 +52,8 @@ struct Channel {
     failure: Option<Error>,
     /// Releases seen on this channel, which is how a caller that ran out of
     /// time at the same moment still reads the signal it was released by.
-    releases: watch::Sender<u64>,
-}
-
-impl Default for Channel {
-    fn default() -> Self {
-        Self {
-            kept: false,
-            waiting: 0,
-            resident: false,
-            failure: None,
-            releases: watch::channel(0).0,
-        }
-    }
+    releases: u64,
+    changed: Event,
 }
 
 impl Channel {
@@ -98,8 +90,8 @@ impl ChannelWaits {
         Join::Waiting(Waiter {
             waits: self,
             channel: channel.to_owned(),
-            seen: *state.releases.borrow(),
-            released: state.releases.subscribe(),
+            seen: state.releases,
+            released: state.changed.listen(),
             opening,
             settled: false,
         })
@@ -114,14 +106,14 @@ impl ChannelWaits {
         state.resident = false;
         match outcome {
             Ok(()) => {
-                state.releases.send_modify(|count| *count += 1);
+                state.releases += 1;
                 state.kept = state.waiting == 0;
             }
             Err(error) => {
                 state.failure = Some(error);
-                state.releases.send_modify(|_| ());
             }
         }
+        state.changed.notify(usize::MAX);
         if state.is_idle() {
             channels.remove(channel);
         }
@@ -140,7 +132,7 @@ struct Waiter<'a> {
     waits: &'a ChannelWaits,
     channel: String,
     seen: u64,
-    released: watch::Receiver<u64>,
+    released: EventListener,
     /// Whether this caller is the one that opens the channel's client.
     opening: bool,
     settled: bool,
@@ -166,7 +158,7 @@ impl Waiter<'_> {
         };
         state.waiting -= 1;
 
-        let settled = if *state.releases.borrow() > self.seen {
+        let settled = if state.releases > self.seen {
             Settled::Signalled
         } else if state.resident {
             Settled::TimedOut
@@ -192,7 +184,7 @@ impl Drop for Waiter<'_> {
         state.waiting -= 1;
         // A signal this caller was released by and then dropped is nobody's,
         // so it goes back to being kept for the next wait.
-        state.kept = *state.releases.borrow() > self.seen && state.waiting == 0;
+        state.kept = state.releases > self.seen && state.waiting == 0;
         if state.is_idle() {
             channels.remove(&self.channel);
         }
@@ -221,12 +213,11 @@ pub(crate) async fn wait(
             park(core, channel);
         }
 
-        tokio::select! {
-            result = waiter.released.changed() => {
-                let _ = result;
-            }
-            () = elapsed(deadline) => {}
-        }
+        let _ = select(
+            &mut waiter.released,
+            std::pin::pin!(elapsed(&**core.runtime(), deadline)),
+        )
+        .await;
 
         match waiter.settle() {
             Settled::Signalled => return Ok(ChannelWait::Signalled),
@@ -242,13 +233,40 @@ pub(crate) async fn wait(
 
 /// Open the channel's client, which stays until tmux releases it.
 fn park(core: &Arc<Core>, channel: &str) {
-    let core = Arc::clone(core);
-    let channel = channel.to_owned();
-    spawn(async move {
-        let (_, dispatch) = core.dispatch_without_deadline(channel_command(None, &channel));
+    let command = channel_command(None, channel);
+    let summary = command.summary();
+    let (request_id, dispatch) = core.dispatch_without_deadline(command);
+    let parked = ParkedClient {
+        core: Arc::clone(core),
+        channel: channel.to_owned(),
+        lost: Some(Error::supervisor_lost(request_id.get(), summary)),
+    };
+    spawn(&**core.runtime(), async move {
         let outcome = mutated(dispatch.await);
-        core.channel_waits().finish(&channel, outcome);
+        parked.finish(outcome);
     });
+}
+
+/// A resident must end even if its supervisor never starts or unwinds.
+struct ParkedClient {
+    core: Arc<Core>,
+    channel: String,
+    lost: Option<Error>,
+}
+
+impl ParkedClient {
+    fn finish(mut self, outcome: Result<(), Error>) {
+        self.lost = None;
+        self.core.channel_waits().finish(&self.channel, outcome);
+    }
+}
+
+impl Drop for ParkedClient {
+    fn drop(&mut self) {
+        if let Some(error) = self.lost.take() {
+            self.core.channel_waits().finish(&self.channel, Err(error));
+        }
+    }
 }
 
 /// Lock `channel`, giving up after `budget` without leaving it wedged.
@@ -266,7 +284,7 @@ pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> R
     let (granted, taken) = oneshot::channel();
     let holder = Arc::clone(core);
     let name = channel.to_owned();
-    spawn(async move {
+    spawn(&**core.runtime(), async move {
         let outcome = mutated(dispatch.await);
         if let Err(outcome) = granted.send(outcome) {
             // The caller is gone, and tmux grants this client the lock all the
@@ -284,12 +302,21 @@ pub(crate) async fn lock(core: &Arc<Core>, channel: &str, budget: Duration) -> R
         settled: false,
     };
     let deadline = Instant::now().checked_add(budget);
-    tokio::select! {
-        outcome = &mut grant.taken => match outcome {
+    let outcome = match select(
+        &mut grant.taken,
+        std::pin::pin!(elapsed(&**core.runtime(), deadline)),
+    )
+    .await
+    {
+        Either::Left((outcome, _)) => Some(outcome),
+        Either::Right(((), _)) => None,
+    };
+    match outcome {
+        Some(outcome) => match outcome {
             Ok(outcome) => outcome,
             Err(_) => Err(Error::supervisor_lost(request_id.get(), summary)),
         },
-        () = elapsed(deadline) => grant
+        None => grant
             .close()
             .unwrap_or_else(|| Err(Error::timeout(request_id.get(), summary, budget))),
     }
@@ -313,7 +340,7 @@ impl Grant {
     fn close(&mut self) -> Option<Result<(), Error>> {
         self.settled = true;
         self.taken.close();
-        self.taken.try_recv().ok()
+        self.taken.try_recv().ok().flatten()
     }
 }
 
@@ -322,15 +349,11 @@ impl Drop for Grant {
         if self.settled || !matches!(self.close(), Some(Ok(()))) {
             return;
         }
-        // The caller was dropped holding a lock it never saw. Without a
-        // runtime there is nothing left to release it with, and the client
-        // holding it is going with the process.
-        if tokio::runtime::Handle::try_current().is_err() {
-            return;
-        }
+        // The caller was dropped holding a lock it never saw. Its owning
+        // runtime keeps the release task alive after this guard is gone.
         let core = Arc::clone(&self.core);
         let channel = std::mem::take(&mut self.channel);
-        spawn(async move {
+        spawn(&**self.core.runtime(), async move {
             let _ = unlock(&core, &channel).await;
         });
     }
@@ -377,9 +400,9 @@ fn mutated(result: Result<CommandResult, Error>) -> Result<(), Error> {
     }
 }
 
-async fn elapsed(deadline: Option<Instant>) {
+async fn elapsed(runtime: &dyn Runtime, deadline: Option<Instant>) {
     match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        Some(deadline) => runtime.sleep_until(deadline).await,
         None => std::future::pending().await,
     }
 }
@@ -388,15 +411,17 @@ fn out_of_time(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
-fn spawn(task: impl Future<Output = ()> + Send + 'static) {
+fn spawn(runtime: &dyn Runtime, task: impl Future<Output = ()> + Send + 'static) {
     #[cfg(feature = "tracing")]
-    tokio::spawn(task.in_current_span().with_current_subscriber());
+    drop(runtime.spawn(Box::pin(task.in_current_span().with_current_subscriber())));
     #[cfg(not(feature = "tracing"))]
-    tokio::spawn(task);
+    drop(runtime.spawn(Box::pin(task)));
 }
 
 #[cfg(test)]
 mod tests {
+    use futures_util::FutureExt as _;
+
     use super::{ChannelWaits, Join, Settled};
 
     /// What a release does depends on who is left to hear it, and the three
@@ -430,5 +455,49 @@ mod tests {
         waits.finish("build", Ok(()));
         drop(raced);
         assert!(matches!(waits.join("build"), Join::Kept));
+    }
+
+    #[test]
+    fn release_before_the_first_poll_wakes_every_registered_waiter() {
+        let waits = ChannelWaits::default();
+        let Join::Waiting(mut first) = waits.join("build") else {
+            panic!("the channel has no kept release");
+        };
+        let Join::Waiting(mut second) = waits.join("build") else {
+            panic!("the second caller joins the resident client");
+        };
+        assert!(first.opening);
+        assert!(!second.opening);
+
+        waits.finish("build", Ok(()));
+        assert!((&mut first.released).now_or_never().is_some());
+        assert!((&mut second.released).now_or_never().is_some());
+        assert!(matches!(first.settle(), Settled::Signalled));
+        assert!(matches!(second.settle(), Settled::Signalled));
+        assert!(waits.channels().is_empty());
+    }
+
+    #[test]
+    fn failed_client_wakes_every_waiter_and_delivers_its_error_once() {
+        let waits = ChannelWaits::default();
+        let Join::Waiting(mut first) = waits.join("build") else {
+            panic!("the channel has no kept release");
+        };
+        let Join::Waiting(mut second) = waits.join("build") else {
+            panic!("the second caller joins the resident client");
+        };
+        waits.finish(
+            "build",
+            Err(crate::Error::supervisor_lost(
+                1,
+                crate::Command::new("wait-for").summary(),
+            )),
+        );
+
+        assert!((&mut first.released).now_or_never().is_some());
+        assert!((&mut second.released).now_or_never().is_some());
+        assert!(matches!(first.settle(), Settled::Failed(_)));
+        assert!(matches!(second.settle(), Settled::Gone));
+        assert!(waits.channels().is_empty());
     }
 }

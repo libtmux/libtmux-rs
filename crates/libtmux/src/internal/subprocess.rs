@@ -9,14 +9,20 @@ use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::process::{Child, ChildStderr, ChildStdout};
-use tokio::sync::{Notify, OwnedSemaphorePermit, oneshot, watch};
-use tokio::task::JoinHandle;
-use tokio::time::Instant;
+use event_listener::Event;
+use futures_channel::oneshot;
+use futures_io::AsyncRead;
+use futures_util::FutureExt as _;
+use futures_util::io::AsyncReadExt as _;
 
+#[cfg(test)]
+use tokio::sync::Notify;
+
+use crate::driver::{
+    AsyncIoRuntime, Process, Reader, Runtime, RuntimeExt as _, TaskError, TaskHandle,
+};
 use crate::limits::{DispatchLimits, OutputLimits};
 
 #[cfg(feature = "tracing")]
@@ -26,8 +32,9 @@ use crate::Error;
 use crate::command::{CommandRequest, CommandResult, CommandSummary, ProcessStatus, RequestId};
 use crate::internal::executor::{DispatchFuture, DispatchSpan, Executor, ShutdownFuture};
 use crate::internal::process::{
-    LaunchContext, ProcessAdmission, ProcessGroupGuard, validate_request,
+    LaunchContext, OwnedSemaphorePermit, ProcessAdmission, ProcessGroupGuard, validate_request,
 };
+use crate::internal::watch;
 
 #[derive(Clone)]
 pub(crate) struct SubprocessExecutor {
@@ -37,6 +44,7 @@ pub(crate) struct SubprocessExecutor {
 
 #[derive(Clone)]
 struct Configuration {
+    runtime: Arc<dyn Runtime>,
     launch: LaunchContext,
     timeout: Duration,
     output_limits: OutputLimits,
@@ -48,7 +56,7 @@ struct Configuration {
 
 struct Shared {
     lifecycle: Mutex<Lifecycle>,
-    empty: Notify,
+    empty: Event,
     /// How many dispatches may hold a tmux client process at once.
     ///
     /// Each dispatch is a process, two pipes, and two reader tasks. Without a
@@ -65,6 +73,7 @@ struct Lifecycle {
 
 #[derive(Clone)]
 struct RequestContext {
+    runtime: Arc<dyn Runtime>,
     request_id: RequestId,
     command: CommandSummary,
     timeout: Duration,
@@ -108,6 +117,8 @@ impl SubprocessExecutor {
     ) -> Result<OwnedSemaphorePermit, Error> {
         self.shared
             .admission
+            .clone()
+            .with_runtime(Arc::clone(&self.configuration.runtime))
             .acquire(context.request_id, &context.command, context.deadline)
             .await
     }
@@ -119,7 +130,7 @@ impl SubprocessExecutor {
                 accepting: true,
                 entries: HashMap::new(),
             }),
-            empty: Notify::new(),
+            empty: Event::new(),
             admission: ProcessAdmission::new(limits.max_in_flight, limits.acquire_timeout),
         });
         self
@@ -131,9 +142,16 @@ impl SubprocessExecutor {
         self
     }
 
+    /// Select the runtime that owns this executor's processes and supervisors.
+    pub(crate) fn with_runtime(mut self, runtime: Arc<dyn Runtime>) -> Self {
+        Arc::make_mut(&mut self.configuration).runtime = runtime;
+        self
+    }
+
     pub(crate) fn new(executable: impl Into<OsString>, timeout: Duration) -> Self {
         Self {
             configuration: Arc::new(Configuration {
+                runtime: Arc::new(AsyncIoRuntime),
                 launch: LaunchContext::new(executable),
                 timeout,
                 output_limits: OutputLimits::default(),
@@ -147,7 +165,7 @@ impl SubprocessExecutor {
                     accepting: true,
                     entries: HashMap::new(),
                 }),
-                empty: Notify::new(),
+                empty: Event::new(),
                 admission: ProcessAdmission::new(DispatchLimits::DEFAULT_IN_FLIGHT, None),
             }),
         }
@@ -206,6 +224,7 @@ impl SubprocessExecutor {
         let request_id = request.request_id();
         validate_request(&self.configuration.launch, &request)?;
         let context = RequestContext {
+            runtime: Arc::clone(&self.configuration.runtime),
             request_id,
             command: request.summary().clone(),
             timeout: self.configuration.timeout,
@@ -287,7 +306,7 @@ impl SubprocessExecutor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let mut child = match process.spawn() {
+        let mut child = match self.configuration.runtime.spawn_process(process) {
             Ok(child) => child,
             Err(source) => {
                 drop(registry);
@@ -324,8 +343,9 @@ impl SubprocessExecutor {
 
         let process_group = ProcessGroupGuard::new(child.id());
         let readers = ReaderTasks::spawn(
-            child.stdout.take(),
-            child.stderr.take(),
+            &*self.configuration.runtime,
+            child.take_stdout(),
+            child.take_stderr(),
             self.configuration.output_limits,
             #[cfg(test)]
             &self.configuration.hooks,
@@ -351,9 +371,11 @@ impl SubprocessExecutor {
             self.configuration.hooks.clone(),
         );
         #[cfg(feature = "tracing")]
-        tokio::spawn(supervisor.in_current_span().with_current_subscriber());
+        drop(self.configuration.runtime.spawn(Box::pin(
+            supervisor.in_current_span().with_current_subscriber(),
+        )));
         #[cfg(not(feature = "tracing"))]
-        tokio::spawn(supervisor);
+        drop(self.configuration.runtime.spawn(Box::pin(supervisor)));
 
         await_result(result_receiver, caller_cancellation, context).await
     }
@@ -377,7 +399,7 @@ impl Executor for SubprocessExecutor {
             shared.admission.close();
 
             loop {
-                let notified = shared.empty.notified();
+                let notified = shared.empty.listen();
                 if lock_lifecycle(&shared).entries.is_empty() {
                     return Ok(());
                 }
@@ -407,7 +429,7 @@ async fn await_result(
 struct ChildOwnership {
     // This guard must drop before `child`; the unreaped leader anchors the PGID.
     process_group: ProcessGroupGuard,
-    child: Child,
+    child: Box<dyn Process>,
     readers: ReaderTasks,
     #[cfg(feature = "test-support")]
     synchronous_reap_on_drop: bool,
@@ -461,7 +483,7 @@ async fn supervise_outer(
 ) {
     let outcome = {
         let inner = supervise_inner(
-            &mut ownership.child,
+            &mut *ownership.child,
             &mut ownership.readers,
             &mut ownership.process_group,
             &mut cancellation,
@@ -486,7 +508,7 @@ async fn supervise_outer(
         )),
         Ok(InnerOutcome::Failed(error)) => {
             match cleanup_child(
-                &mut ownership.child,
+                &mut *ownership.child,
                 &mut ownership.readers,
                 &mut ownership.process_group,
                 &context,
@@ -499,7 +521,7 @@ async fn supervise_outer(
         }
         Err(()) => {
             let cleanup = cleanup_child(
-                &mut ownership.child,
+                &mut *ownership.child,
                 &mut ownership.readers,
                 &mut ownership.process_group,
                 &context,
@@ -521,7 +543,7 @@ async fn supervise_outer(
 }
 
 async fn supervise_inner(
-    child: &mut Child,
+    child: &mut dyn Process,
     readers: &mut ReaderTasks,
     process_group: &mut ProcessGroupGuard,
     cancellation: &mut watch::Receiver<bool>,
@@ -541,16 +563,19 @@ async fn supervise_inner(
     }
 
     let deadline = context.deadline;
-    let (stdout, stderr) = match drain_readers(readers, cancellation, deadline, context).await {
+    let (stdout, stderr) = match drain_readers(readers, cancellation, context).await {
         Ok(streams) => streams,
         Err(error) => return InnerOutcome::Failed(error),
     };
 
     let wait_result = loop {
-        let outcome = tokio::select! {
-            result = child.wait() => Some(result),
-            () = cancelled(cancellation) => None,
-            () = deadline_elapsed(deadline) => {
+        let mut waited = child.wait().fuse();
+        let mut cancelled = std::pin::pin!(cancelled(cancellation).fuse());
+        let mut elapsed = std::pin::pin!(deadline_elapsed(&*context.runtime, deadline).fuse());
+        let outcome = futures_util::select! {
+            result = waited => Some(result),
+            () = cancelled => None,
+            () = elapsed => {
                 return InnerOutcome::Failed(Error::timeout(
                     context.request_id(),
                     context.command.clone(),
@@ -602,31 +627,36 @@ enum InnerOutcome {
 async fn drain_readers(
     readers: &mut ReaderTasks,
     cancellation: &mut watch::Receiver<bool>,
-    deadline: Option<Instant>,
     context: &RequestContext,
 ) -> Result<(Vec<u8>, Vec<u8>), Error> {
     let mut stdout = None;
     let mut stderr = None;
 
     while stdout.is_none() || stderr.is_none() {
-        let stdout_reader = &mut readers.stdout;
-        let stderr_reader = &mut readers.stderr;
-        tokio::select! {
-            result = wait_reader(stdout_reader), if stdout.is_none() => {
-                *stdout_reader = None;
+        let ready = next_reader(
+            readers,
+            stdout.is_none(),
+            stderr.is_none(),
+            cancellation,
+            context,
+        )
+        .await;
+        match ready {
+            ReaderReady::Stdout(result) => {
+                readers.stdout = None;
                 stdout = Some(map_reader_result(result, "stdout", context)?);
             }
-            result = wait_reader(stderr_reader), if stderr.is_none() => {
-                *stderr_reader = None;
+            ReaderReady::Stderr(result) => {
+                readers.stderr = None;
                 stderr = Some(map_reader_result(result, "stderr", context)?);
             }
-            () = cancelled(cancellation) => {
+            ReaderReady::Cancelled => {
                 return Err(Error::executor_shutdown(
                     context.request_id(),
                     context.command.clone(),
                 ));
             }
-            () = deadline_elapsed(deadline) => {
+            ReaderReady::TimedOut => {
                 return Err(Error::timeout(
                     context.request_id(),
                     context.command.clone(),
@@ -655,17 +685,47 @@ async fn drain_readers(
     Ok((stdout, stderr))
 }
 
-async fn deadline_elapsed(deadline: Option<Instant>) {
+enum ReaderReady {
+    Stdout(Result<Result<Vec<u8>, io::Error>, TaskError>),
+    Stderr(Result<Result<Vec<u8>, io::Error>, TaskError>),
+    Cancelled,
+    TimedOut,
+}
+
+async fn next_reader(
+    readers: &mut ReaderTasks,
+    need_stdout: bool,
+    need_stderr: bool,
+    cancellation: &mut watch::Receiver<bool>,
+    context: &RequestContext,
+) -> ReaderReady {
+    let mut stdout = std::pin::pin!(wait_reader(&mut readers.stdout, need_stdout).fuse());
+    let mut stderr = std::pin::pin!(wait_reader(&mut readers.stderr, need_stderr).fuse());
+    let mut cancelled = std::pin::pin!(cancelled(cancellation).fuse());
+    let mut elapsed = std::pin::pin!(deadline_elapsed(&*context.runtime, context.deadline).fuse());
+    futures_util::select! {
+        result = stdout => ReaderReady::Stdout(result),
+        result = stderr => ReaderReady::Stderr(result),
+        () = cancelled => ReaderReady::Cancelled,
+        () = elapsed => ReaderReady::TimedOut,
+    }
+}
+
+async fn deadline_elapsed(runtime: &dyn Runtime, deadline: Option<Instant>) {
     if let Some(deadline) = deadline {
-        tokio::time::sleep_until(deadline).await;
+        runtime.sleep_until(deadline).await;
     } else {
         std::future::pending::<()>().await;
     }
 }
 
 async fn wait_reader(
-    reader: &mut Option<JoinHandle<Result<Vec<u8>, io::Error>>>,
-) -> Result<Result<Vec<u8>, io::Error>, tokio::task::JoinError> {
+    reader: &mut Option<TaskHandle<Result<Vec<u8>, io::Error>>>,
+    enabled: bool,
+) -> Result<Result<Vec<u8>, io::Error>, TaskError> {
+    if !enabled {
+        return std::future::pending().await;
+    }
     match reader.as_mut() {
         Some(reader) => reader.await,
         None => Ok(Err(io::Error::new(
@@ -676,7 +736,7 @@ async fn wait_reader(
 }
 
 fn map_reader_result(
-    result: Result<Result<Vec<u8>, io::Error>, tokio::task::JoinError>,
+    result: Result<Result<Vec<u8>, io::Error>, TaskError>,
     stream: &'static str,
     context: &RequestContext,
 ) -> Result<Vec<u8>, Error> {
@@ -717,7 +777,7 @@ fn map_reader_result(
 }
 
 async fn cleanup_child(
-    child: &mut Child,
+    child: &mut dyn Process,
     readers: &mut ReaderTasks,
     process_group: &mut ProcessGroupGuard,
     context: &RequestContext,
@@ -758,31 +818,33 @@ async fn cancelled(receiver: &mut watch::Receiver<bool>) {
 }
 
 struct ReaderTasks {
-    stdout: Option<JoinHandle<Result<Vec<u8>, io::Error>>>,
-    stderr: Option<JoinHandle<Result<Vec<u8>, io::Error>>>,
+    stdout: Option<TaskHandle<Result<Vec<u8>, io::Error>>>,
+    stderr: Option<TaskHandle<Result<Vec<u8>, io::Error>>>,
 }
 
 impl ReaderTasks {
     fn spawn(
-        stdout: Option<ChildStdout>,
-        stderr: Option<ChildStderr>,
+        runtime: &dyn Runtime,
+        stdout: Option<Reader>,
+        stderr: Option<Reader>,
         limits: OutputLimits,
         #[cfg(test)] hooks: &TestHooks,
     ) -> Self {
         #[cfg(test)]
         let stdout = spawn_reader(
+            runtime,
             stdout,
             limits.max_stdout_bytes,
             hooks.reader_failure,
             hooks.reader_failure_release.clone(),
         );
         #[cfg(not(test))]
-        let stdout = spawn_reader(stdout, limits.max_stdout_bytes);
+        let stdout = spawn_reader(runtime, stdout, limits.max_stdout_bytes);
 
         #[cfg(test)]
-        let stderr = spawn_reader(stderr, limits.max_stderr_bytes, None, None);
+        let stderr = spawn_reader(runtime, stderr, limits.max_stderr_bytes, None, None);
         #[cfg(not(test))]
-        let stderr = spawn_reader(stderr, limits.max_stderr_bytes);
+        let stderr = spawn_reader(runtime, stderr, limits.max_stderr_bytes);
 
         Self {
             stdout: Some(stdout),
@@ -816,19 +878,20 @@ impl ReaderTasks {
     test,
     allow(
         clippy::panic,
-        reason = "the panic branch exercises JoinError sanitization"
+        reason = "the panic branch exercises task error sanitization"
     )
 )]
 fn spawn_reader<R>(
+    runtime: &dyn Runtime,
     reader: Option<R>,
     limit: usize,
     #[cfg(test)] failure: Option<ReaderFailure>,
     #[cfg(test)] failure_release: Option<Arc<Notify>>,
-) -> JoinHandle<Result<Vec<u8>, io::Error>>
+) -> TaskHandle<Result<Vec<u8>, io::Error>>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    tokio::spawn(async move {
+    runtime.spawn_value(async move {
         #[cfg(test)]
         if let Some(failure) = failure {
             if let Some(release) = failure_release {
@@ -908,7 +971,7 @@ impl RegistryGuard {
                 .entries
                 .remove(&self.request_id);
             self.armed = false;
-            self.shared.empty.notify_waiters();
+            self.shared.empty.notify(usize::MAX);
         }
     }
 }

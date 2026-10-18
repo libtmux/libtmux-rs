@@ -33,7 +33,7 @@ guess from text.
 
 ## Requirements
 
-tmux 3.2a or newer, on `$PATH`. Rust 1.88 to build.
+tmux 3.2a or newer, on `$PATH`. Rust 1.97.1 to build.
 
 ## Install
 
@@ -42,7 +42,7 @@ $ cargo install tmux-mcp --version 0.1.0-alpha.16
 ```
 
 [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) fetches a
-prebuilt binary for Linux or macOS instead, when the release carries one:
+prebuilt binary for Linux instead, when the release carries one:
 
 ```console
 $ cargo binstall tmux-mcp --version 0.1.0-alpha.16

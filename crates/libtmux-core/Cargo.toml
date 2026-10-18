@@ -1,0 +1,17 @@
+[package]
+name = "libtmux-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version = "1.97.1"
+description = "Dependency-free tmux values and protocol primitives"
+documentation = "https://docs.rs/libtmux-core"
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
+keywords = ["tmux", "terminal", "multiplexer"]
+categories = ["api-bindings", "os::unix-apis"]
+include = ["/Cargo.toml", "/LICENSE-*", "/README.md", "/src/**/*.rs", "/tests/**/*.rs"]
+
+[lints]
+workspace = true

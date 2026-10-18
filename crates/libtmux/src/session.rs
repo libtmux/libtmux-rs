@@ -787,6 +787,7 @@ impl Session {
         let session = self.clone();
         let options = options.into();
         scoped::run(
+            Arc::clone(self.core.runtime()),
             "with-window",
             async move { session.new_window(options).await },
             Window::kill,

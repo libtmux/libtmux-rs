@@ -685,9 +685,14 @@ pub(super) async fn readiness_with_timeout(
     if timeout == Duration::MAX {
         Ok(readiness_probe(server).await)
     } else {
-        tokio::time::timeout(timeout, readiness_probe(server))
-            .await
-            .map_err(|_| ())
+        futures_lite::future::race(async { Ok(readiness_probe(server).await) }, async {
+            match Instant::now().checked_add(timeout) {
+                Some(deadline) => server.runtime().sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+            Err(())
+        })
+        .await
     }
 }
 

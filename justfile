@@ -28,7 +28,7 @@ test *args:
 [group: 'test']
 doctest:
     cargo test --locked --workspace --doc --all-features
-    cargo test --locked --package libtmux --doc --features test-support
+    cargo test --locked --package libtmux --package libtmux-tokio --doc --features test-support
 
 # tmux never unlinks its socket when the server exits, so whatever named one
 # owns removing it. `TestServer` does; a test that hand-rolls a socket path
@@ -47,6 +47,7 @@ doctest:
 api-examples:
     python3 -m unittest scripts/test_check_api_examples.py
     python3 scripts/check-api-examples.py
+    python3 scripts/check-api-examples.py --crate libtmux-tokio
 
 # Run every example and check it cleaned up
 [group: 'test']
@@ -100,24 +101,11 @@ fixture-root:
     printf 'owns that lifecycle; prefer it over Server::builder().socket_path().\n' >&2
     exit 1
 
-# Run the suite on each crate's minimum supported Rust version
-#
-# Two floors, because they are two promises. The libraries support 1.85 and
-# say so; tmux-mcp cannot, because rmcp and darling require 1.88. A crate
-# tested only at the workspace floor can publish a rust-version it does not
-# meet, which is what happened before this covered it.
-[doc("Run the suite on each crate's minimum supported Rust version")]
+# Verify the workspace at its declared compiler floor.
 [group: 'test']
 msrv:
-    rustup run 1.85.0 cargo test --locked \
-        --package libtmux --package libtmux-macros --package tmux-workspace \
-        --package mcp-swap \
-        --all-targets --all-features
-    rustup run 1.85.0 cargo hack check --locked \
-        --package libtmux --package libtmux-macros \
-        --each-feature --all-targets
-    rustup run 1.88.0 cargo test --locked \
-        --package tmux-mcp --all-targets
+    rustup run 1.97.1 cargo test --locked --workspace --all-targets --all-features
+    rustup run 1.97.1 cargo hack check --locked --workspace --each-feature --all-targets
 
 # The compile-fail cases run only on the toolchain `rust-toolchain.toml` pins,
 # because their `.stderr` files quote rustc's own wording. A toolchain bump
@@ -157,19 +145,12 @@ compat:
 # Report which crate-root types lack a runnable example
 [group: 'docs']
 example-coverage:
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json > /dev/null
-    python3 scripts/example-coverage.py target/doc/libtmux.json
+    python3 scripts/check-api-packages.py --examples
 
-# Needs nightly for rustdoc's JSON output, so it runs beside `api-check`
-# rather than in `just check`.
-#
-# Fail when any crate-root type lacks a runnable example
+# Check each package that owns public client or value types.
 [group: 'docs']
 example-coverage-check:
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json > /dev/null
-    python3 scripts/example-coverage.py --require-all target/doc/libtmux.json
+    python3 scripts/check-api-packages.py --examples
 
 # Which format names each listing asks tmux for.
 #
@@ -189,32 +170,18 @@ list-profiles:
 [doc('Regenerate the recorded public API surface')]
 [group: 'release']
 api:
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json
-    python3 scripts/public-api.py target/doc/libtmux.json \
-        > crates/libtmux/docs/public-api.txt
+    python3 scripts/check-api-packages.py --write
 
-# There is no automated semver gate while every version is a prerelease, so
-# this is what makes a change to the surface visible. It does not judge whether
-# a change is allowed; it says one happened.
-#
-# Report any change to the public API surface
+# Report changes to each package's public surface.
 [group: 'release']
 api-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
     python3 -m unittest scripts/test_public_api.py
-    cargo +nightly rustdoc -p libtmux --all-features \
-        -- -Zunstable-options --output-format json > /dev/null
-    # A fixed path in /tmp is one file shared between checkouts.
-    current="$(mktemp -t libtmux-api-XXXXXX)"
-    trap 'rm -f "$current"' EXIT
-    python3 scripts/public-api.py target/doc/libtmux.json > "$current"
-    if ! diff -u crates/libtmux/docs/public-api.txt "$current"; then
-        printf '\npublic API changed. Run `just api` and commit the result.\n' >&2
-        exit 1
-    fi
-    printf 'public API unchanged\n'
+    python3 scripts/check-api-packages.py
+
+# Enforce the dependency contracts of the three client packages.
+[group: 'lint']
+runtime-boundaries:
+    python3 scripts/check-runtime-boundaries.py
 
 # Nightly and a sanitizer, so `fuzz/` is not a workspace member and this is not
 # part of `just check`. The seeds matter: random bytes rarely produce a line
@@ -393,12 +360,12 @@ serve-docs port='8971': docs-full
 # Run the hierarchy benchmark against real tmux
 [group: 'bench']
 bench *args:
-    cargo bench --features test-support --bench hierarchy -- {{ args }}
+    cargo bench --package libtmux --features test-support --bench hierarchy -- {{ args }}
 
 # Run the pane-wait benchmark against real tmux, both wait paths
 [group: 'bench']
 bench-waits *args:
-    cargo bench --features test-support,control-mode --bench waits -- {{ args }}
+    cargo bench --package libtmux --features test-support,control-mode --bench waits -- {{ args }}
 
 # Compare the last benchmark run with the one before it; fails past 2x
 [group: 'bench']
@@ -425,8 +392,8 @@ package:
     package_target="$(mktemp -d "${TMPDIR:-/tmp}/libtmux-package.XXXXXX")"
     trap 'rm -rf -- "$package_target"' EXIT
     CARGO_TARGET_DIR="$package_target" cargo package --locked --allow-dirty \
-        --package libtmux --package libtmux-macros \
-        --package tmux-mcp --package tmux-workspace --all-features
+        --package libtmux-core --package libtmux --package libtmux-tokio \
+        --package libtmux-macros --package tmux-mcp --package tmux-workspace --all-features
     bash scripts/check-package-contents.sh
 
 # Regenerate the tmux option schema from tmux's own source
@@ -436,7 +403,7 @@ option-schema path:
 
 # Run every gate CI runs
 [group: 'check']
-check: fmt-check clippy test swap-test compat-supervisor-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
+check: runtime-boundaries fmt-check clippy test swap-test compat-supervisor-test doctest api-examples examples example-tables fixture-root docs doc-blocks doc-contents doctests-run parity-claims format-coverage-check features deny msrv package
 
 [private]
 _entr-warn:

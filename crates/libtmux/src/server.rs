@@ -390,6 +390,11 @@ pub enum ChannelWait {
 }
 
 impl Server {
+    #[cfg(any(feature = "control-mode", feature = "test-support"))]
+    pub(crate) fn runtime(&self) -> &Arc<dyn crate::driver::Runtime> {
+        self.core.runtime()
+    }
+
     /// Build a handle onto a connection an object already holds.
     ///
     /// Not feature-gated: a `Client` resolving what it is attached to needs a
@@ -831,6 +836,18 @@ impl Server {
     /// Returns an error when the value is absent, empty, or not shaped like
     /// tmux's triple, and when the socket path it names is unusable.
     pub fn from_env_value(value: Option<impl Into<OsString>>) -> Result<Self, Error> {
+        Self::from_env_value_with_runtime(value, Arc::new(crate::driver::AsyncIoRuntime))
+    }
+
+    /// Build from a `TMUX` value with an explicitly selected driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same configuration errors as [`Self::from_env_value`].
+    pub fn from_env_value_with_runtime(
+        value: Option<impl Into<OsString>>,
+        runtime: Arc<dyn crate::driver::Runtime>,
+    ) -> Result<Self, Error> {
         use std::os::unix::ffi::OsStrExt as _;
 
         let value: OsString = value.map(Into::into).ok_or_else(|| {
@@ -856,6 +873,7 @@ impl Server {
             })?;
 
         Self::builder()
+            .runtime(runtime)
             .socket_path(PathBuf::from(OsString::from_vec(socket.to_vec())))
             .build()
     }
@@ -1504,6 +1522,7 @@ impl Server {
         let server = self.clone();
         let options = options.into();
         scoped::run(
+            Arc::clone(self.core.runtime()),
             "with-session",
             async move { server.new_session(options).await },
             Session::kill,

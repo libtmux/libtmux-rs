@@ -4,7 +4,11 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use tokio::sync::{mpsc, oneshot, watch};
+use futures_channel::oneshot;
+
+use super::channel as mpsc;
+use crate::driver::{AsyncIoRuntime, RuntimeExt as _};
+use crate::internal::watch;
 
 use super::{
     BlockResult, ControlEvents, ControlSender, Delivery, Event, HELD_WHILE_AWAITING, Line,
@@ -21,7 +25,7 @@ fn reply(number: u64) -> BlockResult {
         succeeded: true,
         output: Vec::new(),
         sensitive_input: false,
-        chained: 0,
+        failed_lines: Vec::new(),
     }
 }
 
@@ -51,7 +55,7 @@ async fn bootstrap_cleanup_drains_events_and_preserves_error_priority() {
             .await
             .expect("queue has room");
         let (stop, _stopped) = watch::channel(());
-        let connection = tokio::spawn(async move {
+        let connection = AsyncIoRuntime.spawn_value(async move {
             deliveries.closed().await;
             Err(Error::control_mode_frame_too_large("line", 64))
         });
@@ -95,7 +99,7 @@ async fn cancelling_bootstrap_cleanup_still_stops_the_connection() {
     let (stop, mut stopped) = watch::channel(());
     let (release, released) = oneshot::channel();
     let (finished, complete) = oneshot::channel();
-    let connection = tokio::spawn(async move {
+    let connection = AsyncIoRuntime.spawn_value(async move {
         stopped.changed().await.expect("cleanup requested closure");
         drop(deliveries);
         released.await.expect("cleanup is released");
@@ -127,7 +131,7 @@ async fn cancelling_a_pending_next_preserves_the_terminal_error() {
     let (deliveries, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
     let (release, released) = oneshot::channel();
-    let connection = tokio::spawn(async move {
+    let connection = AsyncIoRuntime.spawn_value(async move {
         released.await.expect("cleanup is released");
         Err(Error::control_mode_timeout())
     });
@@ -163,7 +167,6 @@ fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
             commit,
             result,
             boundary: None,
-            blocks: 1,
         },
         answer,
     )
@@ -171,6 +174,7 @@ fn request() -> (Request, oneshot::Receiver<Result<BlockResult, Error>>) {
 
 fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
     ControlSender {
+        runtime: Arc::new(AsyncIoRuntime),
         commands,
         timeout,
         pane_off_is_safe: true,
@@ -183,6 +187,7 @@ fn sender(commands: mpsc::Sender<Request>, timeout: Duration) -> ControlSender {
 fn refused(mut answer: oneshot::Receiver<Result<BlockResult, Error>>) -> Error {
     answer
         .try_recv()
+        .expect("reply sender remains available")
         .expect("the request is answered")
         .expect_err("the request is refused")
 }
@@ -197,7 +202,7 @@ fn block_refusal_classification_withholds_sensitive_output() {
         succeeded: false,
         output: vec![TmuxText::from(secret)],
         sensitive_input: true,
-        chained: 0,
+        failed_lines: Vec::new(),
     };
     let error = block
         .refusal_for("display-message")
@@ -224,6 +229,7 @@ fn watch_only_rejects_unreadable_pane_ids_without_echoing_them() {
 async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
     let (commands, mut requests) = mpsc::channel(4);
     let sender = ControlSender {
+        runtime: Arc::new(AsyncIoRuntime),
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
@@ -242,7 +248,7 @@ async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
             succeeded: true,
             output: vec![TmuxText::from_bytes(*b"%1"), TmuxText::from_bytes(*b"%2")],
             sensitive_input: false,
-            chained: 0,
+            failed_lines: Vec::new(),
         }))
         .expect("watch is waiting for the listing");
 
@@ -279,6 +285,7 @@ async fn watch_only_marks_a_transport_failure_after_its_first_mute() {
 async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
     let (commands, mut requests) = mpsc::channel(2);
     let sender = ControlSender {
+        runtime: Arc::new(AsyncIoRuntime),
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
@@ -296,7 +303,7 @@ async fn watch_only_refuses_a_failed_listing_before_muting_any_pane() {
             succeeded: false,
             output: vec![TmuxText::from_bytes(*b"listing refused")],
             sensitive_input: false,
-            chained: 0,
+            failed_lines: Vec::new(),
         }))
         .expect("watch is waiting for the listing");
 
@@ -320,8 +327,8 @@ async fn pane_output_shutdown_reports_the_specific_terminal_error() {
     let sender = sender(commands, Duration::from_secs(5));
     let (deliveries, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
-    let connection =
-        tokio::spawn(async { Err(Error::control_mode_frame_too_large("test-frame", 42)) });
+    let connection = AsyncIoRuntime
+        .spawn_value(async { Err(Error::control_mode_frame_too_large("test-frame", 42)) });
     let mut output = PaneOutput::new(
         "%1".parse().expect("a pane id"),
         ControlEvents {
@@ -350,7 +357,7 @@ async fn dirty_narrowing_reruns_after_an_in_flight_failure() {
     let sender = sender(commands, Duration::from_secs(5));
     let (_events, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+    let connection = AsyncIoRuntime.spawn_value(async { Ok::<(), Error>(()) });
     let mut output = PaneOutput::new(
         "%1".parse().expect("a pane id"),
         ControlEvents {
@@ -387,7 +394,7 @@ async fn cancelling_a_snapshot_leaves_consumed_output_in_the_callers_sink() {
     let sender = sender(commands, Duration::from_secs(5));
     let (deliveries, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+    let connection = AsyncIoRuntime.spawn_value(async { Ok::<(), Error>(()) });
     let mut output = PaneOutput::new(
         "%1".parse().expect("a pane id"),
         ControlEvents {
@@ -463,7 +470,7 @@ async fn a_snapshot_streams_a_flood_into_caller_owned_storage() {
     let sender = sender(commands, Duration::from_secs(5));
     let (deliveries, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+    let connection = AsyncIoRuntime.spawn_value(async { Ok::<(), Error>(()) });
     let mut output = PaneOutput::new(
         "%1".parse().expect("a pane id"),
         ControlEvents {
@@ -536,7 +543,7 @@ async fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
     let sender = sender(commands, Duration::from_secs(5));
     let (deliveries, received) = mpsc::channel(1);
     let (stop, _stopped) = watch::channel(());
-    let connection = tokio::spawn(async { Ok::<(), Error>(()) });
+    let connection = AsyncIoRuntime.spawn_value(async { Ok::<(), Error>(()) });
     let mut output = PaneOutput::new(
         "%1".parse().expect("a pane id"),
         ControlEvents {
@@ -569,6 +576,7 @@ async fn a_snapshot_rejected_before_writing_does_not_wait_for_a_boundary() {
 async fn mute_pane_reports_a_control_error_block() {
     let (commands, mut requests) = mpsc::channel(1);
     let sender = ControlSender {
+        runtime: Arc::new(AsyncIoRuntime),
         commands,
         timeout: Duration::from_secs(1),
         pane_off_is_safe: true,
@@ -587,7 +595,7 @@ async fn mute_pane_reports_a_control_error_block() {
             succeeded: false,
             output: vec![TmuxText::from_bytes(*b"mute refused")],
             sensitive_input: false,
-            chained: 0,
+            failed_lines: Vec::new(),
         }))
         .expect("mute is waiting for its block");
 
@@ -624,7 +632,7 @@ fn a_refused_reply_keeps_the_next_reply_aligned() {
     assert!(replies.has_live(), "C keeps reply reading unpaused");
     replies.complete(reply(2));
     assert!(
-        matches!(c_reply.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+        matches!(c_reply.try_recv(), Ok(None)),
         "B's block is discarded rather than answering C",
     );
 
@@ -632,6 +640,7 @@ fn a_refused_reply_keeps_the_next_reply_aligned() {
     assert_eq!(
         c_reply
             .try_recv()
+            .expect("reply sender remains available")
             .expect("C is answered")
             .expect("C succeeds")
             .number(),
@@ -639,38 +648,49 @@ fn a_refused_reply_keeps_the_next_reply_aligned() {
     );
 }
 
-/// tmux answers each command of a chain with its own block and runs nothing
-/// after the first that fails. Either way the chain gets every block it is
-/// owed, and the next caller gets none of them.
+/// Successes and failures belong to the request until its fence arrives.
 #[test]
-fn a_chain_takes_one_block_per_command_and_stops_at_a_failure() {
+fn a_chain_keeps_its_blocks_until_the_completion_fence() {
     fn block(number: u64, succeeded: bool, text: &str) -> BlockResult {
         BlockResult {
             output: vec![TmuxText::from(text)],
+            failed_lines: vec![!succeeded],
             succeeded,
             ..reply(number)
         }
     }
     let pending = |answer: &mut oneshot::Receiver<Result<BlockResult, Error>>| {
-        matches!(answer.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+        matches!(answer.try_recv(), Ok(None))
     };
 
     let mut replies = ReplySlots::default();
     let (chain, mut chain_answer) = oneshot::channel();
     let (next, mut next_answer) = oneshot::channel();
     let (failing, mut failing_answer) = oneshot::channel();
-    replies.push_chain(chain, 2);
+    let chain_fence = replies.push(chain, None);
     replies.push(next, None);
-    replies.push_chain(failing, 3);
+    let failing_fence = replies.push(failing, None);
 
-    replies.complete(block(1, true, "first"));
+    replies
+        .consume(block(1, true, "first"), usize::MAX)
+        .expect("first block fits");
     assert!(
         pending(&mut chain_answer),
         "one block of two is not the answer"
     );
-    replies.complete(block(2, true, "second"));
+    replies
+        .consume(block(2, true, "second"), usize::MAX)
+        .expect("second block fits");
+    assert!(
+        pending(&mut chain_answer),
+        "blocks wait for their completion fence"
+    );
+    replies
+        .consume(chain_fence.block(), usize::MAX)
+        .expect("chain completes");
     let chained = chain_answer
         .try_recv()
+        .expect("reply sender remains available")
         .expect("the chain is answered")
         .expect("both commands succeeded");
     assert_eq!(
@@ -683,24 +703,43 @@ fn a_chain_takes_one_block_per_command_and_stops_at_a_failure() {
     assert_eq!(
         next_answer
             .try_recv()
+            .expect("reply sender remains available")
             .expect("the next caller is answered")
             .expect("it succeeded")
             .number(),
         3,
     );
 
-    replies.complete(block(4, true, "printed"));
-    replies.complete(block(5, false, "refused"));
+    replies
+        .consume(block(4, true, "printed"), usize::MAX)
+        .expect("success fits");
+    replies
+        .consume(block(5, false, "refused"), usize::MAX)
+        .expect("error fits");
+    assert!(
+        pending(&mut failing_answer),
+        "failure still waits for its fence"
+    );
+    replies
+        .consume(failing_fence.block(), usize::MAX)
+        .expect("failed chain completes");
     let failed = failing_answer
         .try_recv()
+        .expect("reply sender remains available")
         .expect("a failure ends the chain early")
         .expect("a refusal is a result");
     assert!(!failed.succeeded());
     assert_eq!(
-        failed.split_by_outcome(),
+        {
+            let (stdout, stderr) = failed.split_by_outcome();
+            (
+                stdout.cloned().collect::<Vec<_>>(),
+                stderr.cloned().collect::<Vec<_>>(),
+            )
+        },
         (
-            &[TmuxText::from("printed")][..],
-            &[TmuxText::from("refused")][..]
+            vec![TmuxText::from("printed")],
+            vec![TmuxText::from("refused")]
         ),
         "what ran before the failure is kept apart from the refusal",
     );
@@ -819,7 +858,7 @@ async fn cancellation_after_commit_keeps_reply_alignment() {
     );
 
     let mut replies = ReplySlots::default();
-    replies.push(request.result, request.deadline);
+    let cancelled_fence = replies.push(request.result, request.deadline);
     assert!(
         matches!(replies.slots.front(), Some(ReplySlot::Tombstone { .. })),
         "the committed command keeps its reply slot",
@@ -827,28 +866,38 @@ async fn cancellation_after_commit_keeps_reply_alignment() {
 
     let (next, mut next_answer) = oneshot::channel();
     replies.push(next, None);
-    replies.complete(reply(1));
+    replies
+        .consume(reply(1), usize::MAX)
+        .expect("cancelled parent block fits");
+    replies
+        .consume(reply(2), usize::MAX)
+        .expect("cancelled nested block fits");
     assert!(
-        matches!(
-            next_answer.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ),
+        matches!(next_answer.try_recv(), Ok(None)),
         "the cancelled command consumes its own block",
     );
-    replies.complete(reply(2));
+    replies
+        .consume(cancelled_fence.block(), usize::MAX)
+        .expect("cancelled request ends");
+    assert!(
+        matches!(next_answer.try_recv(), Ok(None)),
+        "a fence contains no caller output"
+    );
+    replies.complete(reply(3));
     assert_eq!(
         next_answer
             .try_recv()
+            .expect("reply sender remains available")
             .expect("the next caller is answered")
             .expect("the next command succeeds")
             .number(),
-        2,
+        3,
     );
 }
 
 #[test]
 fn reply_deadline_is_the_earliest_pending_deadline() {
-    let now = tokio::time::Instant::now();
+    let now = std::time::Instant::now();
     let earlier = now + Duration::from_secs(1);
     let later = now + Duration::from_secs(2);
     let mut replies = ReplySlots::default();
@@ -908,7 +957,10 @@ fn retries_at_the_unread_limit_do_not_grow_reply_slots() {
 fn block_headers_correlate_by_the_number_tmux_assigns() {
     assert_eq!(
         Line::parse(b"%begin 1786582374 347 0"),
-        Line::BlockStart(347)
+        Line::BlockStart {
+            number: 347,
+            flags: 0
+        }
     );
     assert_eq!(
         Line::parse(b"%end 1786582374 347 0"),
@@ -1264,7 +1316,7 @@ async fn a_line_that_never_ends_stops_at_its_budget() {
     // An endless stream carrying no newline is what a line budget is for, and
     // what a budget checked after the read never gets to see: `read_until`
     // does not return, so the check does not run.
-    let mut stream = tokio::io::BufReader::new(tokio::io::repeat(b'a'));
+    let mut stream = futures_util::io::BufReader::new(futures_util::io::repeat(b'a'));
     let mut pending = Vec::new();
     let error = super::protocol::read_line(&mut stream, &mut pending, 4096)
         .await

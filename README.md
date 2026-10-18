@@ -11,7 +11,7 @@
 
 # libtmux for Rust
 
-[![CI]][actions] [![libtmux]][libtmux-crate] [![tmux-mcp]][mcp-crate] [![MSRV]][rust-1.85] [![License]][license]
+[![CI]][actions] [![libtmux]][libtmux-crate] [![tmux-mcp]][mcp-crate] [![MSRV]][rust-1.97.1] [![License]][license]
 
 [CI]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml/badge.svg
 [actions]: https://github.com/libtmux/libtmux-rs/actions/workflows/ci.yml
@@ -19,8 +19,8 @@
 [libtmux-crate]: https://crates.io/crates/libtmux
 [tmux-mcp]: https://img.shields.io/crates/v/tmux-mcp.svg?label=tmux-mcp
 [mcp-crate]: https://crates.io/crates/tmux-mcp
-[MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
-[rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
+[MSRV]: https://img.shields.io/badge/rustc-1.97.1+-lightgray.svg
+[rust-1.97.1]: https://www.rust-lang.org/tools/install
 [License]: https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg
 [license]: #license
 
@@ -52,14 +52,17 @@ You may be looking for:
 
 | You want to | Use |
 | --- | --- |
-| Script tmux from Rust, async | [`libtmux`](crates/libtmux) |
+| Drive tmux without Tokio | [`libtmux`](crates/libtmux), using async-io |
+| Integrate with a Tokio application | [`libtmux-tokio`](crates/libtmux-tokio) |
+| Parse tmux values and control frames with no dependencies | [`libtmux-core`](crates/libtmux-core) |
 | Ask "which pane/window/session matches X?" | [`libtmux`](crates/libtmux) query layer, below |
 | Let an AI agent read and drive tmux | [`tmux-mcp`](crates/tmux-mcp) |
 | Filter *your own* structs with the same grammar | [`libtmux-macros`](crates/libtmux-macros) |
 | Load tmuxp workspaces from the command line, or build them from Rust | [`tmux-workspace`](crates/tmux-workspace) |
 
-Not for you if you need Windows without WSL — tmux does not run there — or a
-synchronous-first API. Blocking callers get a runtime, not a mirrored API.
+The client supports Linux and WSL. Its operations return futures; blocking
+callers can use `WaitExt::wait`. Only `libtmux-core` uses the standard library
+alone. [Package boundaries](crates/libtmux/docs/packages.md) explains the split.
 
 ## Install
 
@@ -76,7 +79,6 @@ $ cargo add libtmux@0.1.0-alpha.15
 ```toml
 [dependencies]
 libtmux = "0.1.0-alpha.15"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
 </details>
@@ -86,8 +88,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```rust
 use libtmux::test::TestServer;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+use libtmux::WaitExt as _;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    run().wait()
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // This example runs. `TestServer` is an isolated tmux on its own socket
     // under `/tmp/libtmux-rs-test/`, torn down at the end, so it cannot touch
     // sessions you are using. In your own code, that line is
@@ -127,8 +134,13 @@ use std::time::Duration;
 use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::test::{TestServer, retry_until};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+use libtmux::WaitExt as _;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    run().wait()
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
     server.new_session("work").await?;
@@ -165,8 +177,13 @@ use libtmux::query::{Filterable as _, QueryIteratorExt as _};
 use libtmux::test::TestServer;
 use libtmux::{SessionTree, WindowTree};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+use libtmux::WaitExt as _;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    run().wait()
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let guard = TestServer::new().await?;
     let server = guard.server();
 
@@ -201,13 +218,13 @@ a CLI, a config file, or an MCP tool call can carry one.
 ## Pick how commands reach tmux
 
 Three switches, each a Cargo feature, none of them the default. The same
-workload under each, printed by `cargo run --example matrix --all-features`.
+workload under each, printed by `cargo run --package libtmux --example matrix --all-features`.
 Every column but `wall` is exact and checked against this block by
 `just example-tables`; the timings are one run on one developer machine.
 `processes` is counted: the example runs tmux through a wrapper that logs
 each start. `routed` is `Plan::run` on a `Server::over_control_mode` handle:
 
-<!-- example-output: matrix --all-features -->
+<!-- example-output: matrix --package libtmux --all-features -->
 
 ```text
 mode                     feature            dispatches processes      wall  attribution  query output
@@ -271,7 +288,7 @@ it into an MCP client.
 
 ## Requirements
 
-Rust 1.85 or newer, tmux 3.2a or newer, and a Unix target. Native Windows is
+Rust 1.97.1 or newer, tmux 3.2a or newer, and Linux. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
 Every supported tmux release — 3.2a, 3.4, 3.5a, 3.6b, and 3.7b — is built from
@@ -284,7 +301,9 @@ command's output instead of returning it.
 
 | Crate | Version | What it is |
 | --- | --- | --- |
-| [`libtmux`](crates/libtmux) | [![libtmux]][libtmux-crate] | The async tmux client and object model |
+| [`libtmux-core`](crates/libtmux-core) | Workspace version | Dependency-free tmux values and protocol parsing |
+| [`libtmux`](crates/libtmux) | [![libtmux]][libtmux-crate] | The async client and shared object model |
+| [`libtmux-tokio`](crates/libtmux-tokio) | Workspace version | Native Tokio driver and server constructors |
 | [`libtmux-macros`](crates/libtmux-macros) | [![libtmux-macros]][macros-crate] | `#[derive(Filterable)]`, for your own structs |
 | [`tmux-mcp`](crates/tmux-mcp) | [![tmux-mcp]][mcp-crate] | A Model Context Protocol server over tmux |
 | [`tmux-workspace`](crates/tmux-workspace) | [![tmux-workspace]][workspace-crate] | A tmuxp-style YAML builder |
@@ -311,7 +330,7 @@ $ just check
 ```
 
 That runs what CI runs: formatting, Clippy, tests, doctests, docs, the feature
-powerset, `cargo deny`, both MSRV builds, and a packaging check.
+powerset, `cargo deny`, the declared compiler floor, and a packaging check.
 
 Tests run against real tmux rather than a mock. `libtmux::test::TestServer`
 gives each test an isolated socket under `/tmp/libtmux-rs-test/` and

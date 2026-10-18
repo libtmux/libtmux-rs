@@ -36,15 +36,16 @@
 
 ## Outcome
 
-The repository is a Cargo workspace whose members live under `crates/`, and
-all four are published:
+The workspace has six published crates and one private developer tool:
 
-| Crate            | What it is                                              |
-| ---------------- | ------------------------------------------------------- |
-| `libtmux`        | The async tmux client and object model                  |
-| `libtmux-macros` | `#[derive(Filterable)]`, for downstream structs         |
-| `tmux-mcp`       | A Model Context Protocol server over `libtmux`          |
-| `tmux-workspace` | A tmuxp-compatible command and workspace-building library |
+| Crate | Responsibility |
+| --- | --- |
+| `libtmux-core` | Dependency-free values and control protocol |
+| `libtmux` | Shared async object model and the default async-io driver |
+| `libtmux-tokio` | Native Tokio process and timer adapter |
+| `libtmux-macros` | `Filterable` derive for downstream structs |
+| `tmux-mcp` | MCP server using the Tokio client |
+| `tmux-workspace` | YAML workspace builder using the Tokio client |
 
 `tmux-mcp` and `tmux-workspace` exist to exercise the public API from outside,
 the way a real consumer would, and are published so their dependency
@@ -64,7 +65,8 @@ documentation, and publishing. A `justfile` groups those commands so `just`
 alone lists them; it adds no build step and does not participate in the
 published crate.
 
-The default transport runs each command as a Tokio subprocess; the
+The default driver uses async-io readiness with standard processes.
+`libtmux-tokio` injects native Tokio process, task, and timer support. The
 `control-mode` feature adds a persistent control-mode client. Command, target,
 result, capability, snapshot, and query values do not depend on the transport,
 so either serves the same object APIs.
@@ -99,24 +101,16 @@ so either serves the same object APIs.
 - Reproducing Python's `QueryList` type, its equality and lookup-suffix
   defects, stale fields, or cross-server identity defects.
 - A process-global engine or operation registry.
-- Runtime independence. `tokio` is a required dependency, not an optional one:
-  the crate spawns and supervises child processes, bounds every dispatch with a
-  timer, and multiplexes a control connection, so it needs a runtime's process
-  reaping and timers rather than only its executor. `async-std` and `smol`
-  offer no compatible child supervision, and abstracting over the parts that
-  differ would mean either a lowest-common-denominator transport or a second
-  one to keep in step. `blocking::Runtime` is how code that is not async calls
-  in; it is a `tokio` current-thread runtime, so entering it from inside
-  another runtime is a panic rather than a nested executor -- use
-  `blocking::Runtime::try_run` where that is possible.
+- A dependency-free full client. Only `libtmux-core` is dependency-free;
+  the shared client uses async-io, synchronization, and process support.
+  Its futures can run without Tokio, including through `WaitExt::wait`.
+  Runtime adapters implement the public `driver::Runtime` contract.
 
 ## Compatibility contract
 
-The target compatibility surface is tmux 3.2a and newer on Linux, macOS, and
-WSL. Native Windows is unsupported because tmux is unavailable there. The
-initial Rust MSRV is 1.85, the first stable compiler supporting Edition 2024.
-The Foundation gate verifies Linux with both Rust 1.85 and the pinned
-development toolchain; the release slice adds the remaining platform matrix.
+The target compatibility surface is tmux 3.2a and newer on Linux and WSL.
+All workspace packages require Rust 1.97.1. Native Windows is unsupported.
+The compiler floor and pinned development compiler are verified by the gates.
 
 The compatibility baseline for the first Rust release is the Python package at
 commit
@@ -275,7 +269,9 @@ Server / Session / Window / Pane / Client
                                    |
                          private Executor trait
                                    |
-                        Tokio subprocess executor
+                        Shared subprocess supervisor
+                                   |
+                         async-io or Tokio driver
                                    |
                                   tmux
 ```
@@ -291,8 +287,8 @@ The private executor is stored as
 `Arc<dyn Executor + Send + Sync + 'static>`. It consumes an owned
 `CommandRequest` and returns a `Send` future producing a raw result. It never
 receives domain objects. Adding a public alternate executor later is additive
-because the boundary already exists, but the first release does not freeze an
-unused public async trait.
+because the boundary already exists. Public runtime adapters provide tasks,
+timers, and supervised processes without making object handles generic.
 
 Each `Core` owns its dispatch-request counter. Cloned `Server` values share
 that Core and counter; separately constructed servers have separate scopes,
@@ -301,7 +297,7 @@ executor validation, so a rejected request can carry an ID without spawning a
 process. A caller retry is another Core dispatch request and receives another
 ID. The ID is not globally unique or a process ID.
 
-The Tokio executor uses argv directly and never invokes a shell. Each spawned
+The shared executor uses argv directly and never invokes a shell. Each spawned
 child is transferred to an independently owned supervisor task. That task
 captures stdout and stderr concurrently, applies a deadline, and remains
 responsible for terminating the child's isolated process group and awaiting the
@@ -311,13 +307,12 @@ process-group identity until inherited pipes close or the overall deadline
 expires. Dropping the caller future signals cancellation; `kill_on_drop` is
 only a final safety net and is never the reaping strategy.
 
-Deterministic async reaping requires the Tokio runtime to remain alive until
-the operation or explicit executor shutdown completes. Runtime teardown cannot
-make that async guarantee; it synchronously signals the process group and uses
-`kill_on_drop` for the direct-child fallback, without claiming a completed
-wait. Callers that own a runtime shut the `Server` down before the runtime.
-`TestServer` separately owns its foreground tmux daemon as a synchronous child
-so its `Drop` cleanup does not depend on a live Tokio runtime.
+Deterministic cleanup requires the chosen driver to keep running through
+`Server::shutdown`. The default async-io driver owns a shared worker; the Tokio
+adapter uses the application's active runtime. Shut servers down before that
+runtime. Process teardown uses a synchronous cleanup fallback, while explicit
+shutdown joins the supervised work and reports failures. `TestServer` owns its
+foreground daemon separately for cleanup when its guard drops.
 
 Concurrent subprocess requests have no ordering guarantee beyond the atomic
 execution of each process. Callers that require ordering await requests in
@@ -728,7 +723,7 @@ Python context-manager cleanup maps to `Server::with_session`,
 `Session::with_window`, and `Window::with_pane`. Each accepts an async closure
 and waits for cleanup after success or error. An owned task completes creation,
 arms cleanup before handing the object to the caller, and keeps cleanup running
-after cancellation. Cleanup needs the Tokio runtime to remain active; ordinary
+after cancellation. Cleanup needs the selected runtime driver to remain active; ordinary
 cloneable handles remain non-destructive.
 
 `ScopeError<T, E>` separates creation, operation and cleanup failures.
@@ -1169,44 +1164,20 @@ is `Copy`, so joining them allocates nothing per object.
 
 ## Toolchain and packaging
 
-MSRV is a promise about the published crates. `libtmux` and `libtmux-macros`
-build and test on 1.85. The consumer crates, `tmux-mcp` and `tmux-workspace`,
-exist to exercise the public API from outside. `tmux-mcp` carries its own MSRV
-of 1.88, because its dependencies need a compiler the libraries do not, and is
-tested on its own lane. All four crates publish; being published is part of
-the consumers' job rather than beside it, since a crate built only inside its
-own workspace never proves its dependency requirements resolve.
+Every package requires Rust 1.97.1. The workspace uses Edition 2024,
+Cargo resolver 3, and the MIT OR Apache-2.0 license. `rust-toolchain.toml` pins
+the development compiler and installs Rustfmt, Clippy, and rust-src.
 
-The consumers also prove the dependency edge runs one way: `libtmux` names
-neither of them, and `cargo tree -p libtmux` lists only caseless, regex,
-rustix, thiserror, and tokio.
+`libtmux-core` has no dependencies, including build and dev dependencies.
+`libtmux` uses async-io, async-executor, futures utilities, synchronization,
+process support, and optional query/serialization tooling. `libtmux-tokio`
+adds Tokio through its driver. `just runtime-boundaries` checks the actual
+normal/build dependency graphs, including the shared client's optional features.
 
-A declared dependency version is the minimum this crate supports, not the
-newest published one. Cargo's version-aware resolver picks the newest release
-each toolchain can build, so a floor below the latest is the normal state
-rather than staleness. A floor is raised only for a fix the crate needs, and
-never above a version whose own `rust-version` exceeds the MSRV -- which is
-what rules out criterion 0.8 and trybuild 1.0.120 today.
-
-The crate uses Edition 2024, Cargo resolver 3, `rust-version = "1.85"`, and
-the repository's MIT license. `rust-toolchain.toml` pins the development
-compiler and installs Rustfmt, Clippy, and rust-src. Rustfmt uses stable
-settings only.
-
-The Foundation dependency set stays narrow:
-
-- Tokio with only process, I/O, time, synchronization, runtime, and macro
-  features;
-- thiserror for the public error enum;
-- optional tracing instrumentation without subscriber configuration;
-- optional tempfile support for the public test guard.
-
-The query slice adds regex support plus independent optional `serde` and
-`derive` features. The derive macro lives in the sibling
-`libtmux-macros` proc-macro package; normal snapshot querying does not compile
-it. Current Cargo verifies the unpublished workspace packages in dependency
-order, while Rust 1.85 remains a build-and-test gate rather than a packaging
-toolchain.
+The consumer packages depend on `libtmux-tokio`. Neither client depends on the
+consumers. Package verification uses current Cargo to stage the unpublished
+workspace packages together; release order follows the dependency graph.
+[Package boundaries](packages.md) describes installation and feature behavior.
 
 The manifest includes complete description, repository, documentation,
 readme, license, keywords, categories, docs.rs feature metadata, and an

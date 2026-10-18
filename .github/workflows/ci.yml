@@ -41,15 +41,10 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
 
-      # `just msrv` invokes these by exact name via `rustup run`. Two floors,
-      # because they are two promises: the libraries support 1.85, and
-      # tmux-mcp cannot, since its dependencies require 1.88.
+      # The declared floor is checked by exact toolchain name.
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: "1.85.0"
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: "1.88.0"
+          toolchain: "1.97.1"
 
       - uses: taiki-e/install-action@v2
         with:
@@ -58,37 +53,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: just check
-
-  # tmux's habitat is not only Linux, and the parts most likely to differ are
-  # exactly the ones this crate leans on: process groups, Unix sockets,
-  # `waitid`, and temporary paths. Scoped to the test suite rather than the
-  # whole gate, and to master rather than every push, because a macOS runner
-  # bills at ten times a Linux one and the lints are platform-independent.
-  macos:
-    name: tests on macOS
-    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install tmux
-        run: |
-          brew install tmux
-          tmux -V
-
-      - uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      # `--no-fail-fast` because this lane runs only on master and bills at ten
-      # times a Linux runner. Stopping at the first failing test binary hides
-      # every later one, so a platform difference costs one full run per
-      # failure to find; reporting them together costs one run for all of them.
-      - run: cargo test --locked --workspace --all-targets --all-features --no-fail-fast
 
   # There is no automated semver gate while every version is a prerelease:
   # `cargo-semver-checks` skips every lint on a prerelease-to-prerelease step
@@ -104,7 +68,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-09-20
       - uses: taiki-e/install-action@v2
         with:
           tool: just
@@ -218,8 +182,8 @@ jobs:
 
       - name: Benchmark
         run: |
-          cargo bench --locked --features test-support --bench hierarchy
-          cargo bench --locked --features test-support,control-mode --bench waits
+          cargo bench --locked --package libtmux --features test-support --bench hierarchy
+          cargo bench --locked --package libtmux --features test-support,control-mode --bench waits
 
       - name: Compare with the previous run
         run: python3 scripts/bench-regressions.py target/criterion

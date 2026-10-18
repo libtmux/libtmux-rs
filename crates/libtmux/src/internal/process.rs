@@ -12,15 +12,21 @@ use std::process::Stdio;
 #[cfg(feature = "control-mode")]
 use std::sync::{Mutex, MutexGuard};
 
+use crate::driver::{AsyncIoRuntime, Runtime};
+use event_listener::Event;
+use futures_util::FutureExt as _;
 use rustix::process::{Pid, Signal, kill_process_group};
-use tokio::process::Command as TokioCommand;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::time::Instant;
+use std::os::unix::process::CommandExt as _;
+use std::process::Command as StdCommand;
+use std::sync::atomic::{AtomicBool, Ordering};
+pub(crate) type OwnedSemaphorePermit = async_lock::SemaphoreGuardArc;
+use async_lock::Semaphore;
+use std::time::Instant;
 
 #[cfg(feature = "control-mode")]
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use crate::driver::{Process, Reader, Writer};
 #[cfg(feature = "control-mode")]
-use tokio::sync::{Notify, watch};
+use crate::internal::watch;
 
 use crate::Error;
 use crate::command::{CommandRequest, CommandSummary, RequestId};
@@ -62,9 +68,9 @@ impl LaunchContext {
         self
     }
 
-    pub(crate) fn command(&self, arguments: &[OsString]) -> TokioCommand {
-        let mut command = TokioCommand::new(&self.executable);
-        command.args(arguments).kill_on_drop(true).process_group(0);
+    pub(crate) fn command(&self, arguments: &[OsString]) -> StdCommand {
+        let mut command = StdCommand::new(&self.executable);
+        command.args(arguments).process_group(0);
         if let Some(current_dir) = &self.current_dir {
             command.current_dir(current_dir);
         }
@@ -194,17 +200,28 @@ pub(crate) fn validate_request(
 #[derive(Clone)]
 pub(crate) struct ProcessAdmission {
     permits: Arc<Semaphore>,
+    closed: Arc<AtomicBool>,
+    stopped: Arc<Event>,
     limit: usize,
     acquire_timeout: Option<Duration>,
+    runtime: Arc<dyn Runtime>,
 }
 
 impl ProcessAdmission {
     pub(crate) fn new(limit: usize, acquire_timeout: Option<Duration>) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(limit)),
+            closed: Arc::new(AtomicBool::new(false)),
+            stopped: Arc::new(Event::new()),
             limit,
             acquire_timeout,
+            runtime: Arc::new(AsyncIoRuntime),
         }
+    }
+
+    pub(crate) fn with_runtime(mut self, runtime: Arc<dyn Runtime>) -> Self {
+        self.runtime = runtime;
+        self
     }
 
     pub(crate) async fn acquire(
@@ -222,28 +239,41 @@ impl ProcessAdmission {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
-        let acquired = match deadline {
-            Some(deadline) => {
-                match tokio::time::timeout_at(deadline, Arc::clone(&self.permits).acquire_owned())
-                    .await
-                {
-                    Ok(acquired) => acquired,
-                    Err(_) => {
-                        return Err(Error::Overloaded {
-                            request_id: request_id.get(),
-                            command: command.clone(),
-                            in_flight: self.limit,
-                        });
-                    }
+        let closed = async {
+            loop {
+                let changed = self.stopped.listen();
+                if self.closed.load(Ordering::Acquire) {
+                    return;
                 }
+                changed.await;
             }
-            None => Arc::clone(&self.permits).acquire_owned().await,
-        };
-        acquired.map_err(|_| Error::executor_shutdown(request_id.get(), command.clone()))
+        }
+        .fuse();
+        let timeout = async {
+            match deadline {
+                Some(deadline) => self.runtime.sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        }
+        .fuse();
+        let acquired = self.permits.acquire_arc().fuse();
+        futures_util::pin_mut!(closed, timeout, acquired);
+        futures_util::select_biased! {
+            () = closed => Err(Error::executor_shutdown(request_id.get(), command.clone())),
+            () = timeout => Err(Error::Overloaded {
+                request_id: request_id.get(), command: command.clone(), in_flight: self.limit,
+            }),
+            permit = acquired => {
+                if self.closed.load(Ordering::Acquire) {
+                    Err(Error::executor_shutdown(request_id.get(), command.clone()))
+                } else { Ok(permit) }
+            },
+        }
     }
 
     pub(crate) fn close(&self) {
-        self.permits.close();
+        self.closed.store(true, Ordering::Release);
+        self.stopped.notify(usize::MAX);
     }
 }
 
@@ -269,10 +299,10 @@ impl ProcessGroupGuard {
     }
 
     pub(crate) fn signal(&self) {
-        if self.armed {
-            if let Some(process_group) = self.process_group {
-                let _ = kill_process_group(process_group, Signal::KILL);
-            }
+        if self.armed
+            && let Some(process_group) = self.process_group
+        {
+            let _ = kill_process_group(process_group, Signal::KILL);
         }
     }
 
@@ -292,13 +322,14 @@ impl Drop for ProcessGroupGuard {
 pub(crate) struct PersistentClients {
     shared: Arc<PersistentShared>,
     admission: ProcessAdmission,
+    runtime: Arc<dyn Runtime>,
 }
 
 #[cfg(feature = "control-mode")]
 struct PersistentShared {
     lifecycle: Mutex<PersistentLifecycle>,
     stopped: watch::Sender<bool>,
-    empty: Notify,
+    empty: Event,
 }
 
 #[cfg(feature = "control-mode")]
@@ -318,10 +349,17 @@ impl PersistentClients {
                     active: 0,
                 }),
                 stopped,
-                empty: Notify::new(),
+                empty: Event::new(),
             }),
             admission: ProcessAdmission::new(limits.max_clients, limits.acquire_timeout),
+            runtime: Arc::new(AsyncIoRuntime),
         }
+    }
+
+    pub(crate) fn with_runtime(mut self, runtime: Arc<dyn Runtime>) -> Self {
+        self.admission = self.admission.with_runtime(Arc::clone(&runtime));
+        self.runtime = runtime;
+        self
     }
 
     pub(crate) async fn reserve(
@@ -344,6 +382,7 @@ impl PersistentClients {
         };
 
         Ok(PersistentReservation {
+            runtime: Arc::clone(&self.runtime),
             stopped,
             registration: PersistentRegistration {
                 shared: Arc::clone(&self.shared),
@@ -361,7 +400,7 @@ impl PersistentClients {
         self.admission.close();
 
         loop {
-            let notified = self.shared.empty.notified();
+            let notified = self.shared.empty.listen();
             if lock_persistent(&self.shared).active == 0 {
                 return;
             }
@@ -372,6 +411,7 @@ impl PersistentClients {
 
 #[cfg(feature = "control-mode")]
 pub(crate) struct PersistentReservation {
+    runtime: Arc<dyn Runtime>,
     stopped: watch::Receiver<bool>,
     registration: PersistentRegistration,
 }
@@ -390,7 +430,7 @@ impl Drop for PersistentRegistration {
         let empty = lifecycle.active == 0;
         drop(lifecycle);
         if empty {
-            self.shared.empty.notify_waiters();
+            self.shared.empty.notify(usize::MAX);
         }
     }
 }
@@ -422,7 +462,7 @@ impl Drop for ControlClientPidGuard {
 pub(crate) struct PersistentChild {
     // The group guard must drop while the unreaped leader still anchors its PGID.
     process_group: ProcessGroupGuard,
-    child: Child,
+    child: Box<dyn Process>,
     stopped: watch::Receiver<bool>,
     request_id: RequestId,
     command: CommandSummary,
@@ -448,24 +488,27 @@ impl PersistentChild {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let child = command.spawn().map_err(|source| {
-            // The same test the subprocess path applies, so a missing tmux is
-            // `ExecutableNotFound` whichever path meets it first. Anything else
-            // stays a control-mode failure.
-            let executable_not_found = (source.kind() == io::ErrorKind::NotFound
-                && launch.current_dir().is_none_or(Path::is_dir))
-                || launch.executable_missing_from_path();
-            if executable_not_found {
-                Error::spawn(
-                    request.request_id().get(),
-                    request.summary().clone(),
-                    source,
-                    true,
-                )
-            } else {
-                Error::control_mode(source)
-            }
-        })?;
+        let child = reservation
+            .runtime
+            .spawn_process(command)
+            .map_err(|source| {
+                // The same test the subprocess path applies, so a missing tmux is
+                // `ExecutableNotFound` whichever path meets it first. Anything else
+                // stays a control-mode failure.
+                let executable_not_found = (source.kind() == io::ErrorKind::NotFound
+                    && launch.current_dir().is_none_or(Path::is_dir))
+                    || launch.executable_missing_from_path();
+                if executable_not_found {
+                    Error::spawn(
+                        request.request_id().get(),
+                        request.summary().clone(),
+                        source,
+                        true,
+                    )
+                } else {
+                    Error::control_mode(source)
+                }
+            })?;
         let process_group = ProcessGroupGuard::new(child.id());
         // `child.id()` is `None` only once the child has already been
         // reaped, which cannot be true immediately after `spawn` returns.
@@ -491,12 +534,12 @@ impl PersistentChild {
         })
     }
 
-    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
+    pub(crate) fn take_stdin(&mut self) -> Option<Writer> {
+        self.child.take_stdin()
     }
 
-    pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.child.stdout.take()
+    pub(crate) fn take_stdout(&mut self) -> Option<Reader> {
+        self.child.take_stdout()
     }
 
     pub(crate) fn stopped(&self) -> watch::Receiver<bool> {

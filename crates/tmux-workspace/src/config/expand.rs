@@ -94,15 +94,15 @@ fn expand_with(text: &str, variable: impl Fn(&str) -> Option<OsString>) -> Resul
     };
     let mut expanded = String::with_capacity(text.len());
     let mut rest = text;
-    if let Some(tail) = text.strip_prefix('~') {
-        if tail.is_empty() || tail.starts_with('/') {
-            let home = variable("HOME").ok_or("starts with `~`, and HOME is not set")?;
-            expanded.push_str(text_of("HOME", home)?.trim_end_matches('/'));
-            if expanded.is_empty() && tail.is_empty() {
-                expanded.push('/');
-            }
-            rest = tail;
+    if let Some(tail) = text.strip_prefix('~')
+        && (tail.is_empty() || tail.starts_with('/'))
+    {
+        let home = variable("HOME").ok_or("starts with `~`, and HOME is not set")?;
+        expanded.push_str(text_of("HOME", home)?.trim_end_matches('/'));
+        if expanded.is_empty() && tail.is_empty() {
+            expanded.push('/');
         }
+        rest = tail;
     }
     while let Some(at) = rest.find('$') {
         expanded.push_str(&rest[..at]);

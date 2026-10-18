@@ -257,8 +257,7 @@ impl ControlLimits {
     /// displays.
     pub const DEFAULT_LINE_BYTES: usize = 8 * 1024 * 1024;
 
-    /// 64 MiB for one `%begin`/`%end` block, which is a whole command's
-    /// answer rather than one line.
+    /// 64 MiB for one response block or the combined reply to a request.
     pub const DEFAULT_BLOCK_BYTES: usize = 64 * 1024 * 1024;
 
     /// Set the budget for a single protocol line.
@@ -270,7 +269,10 @@ impl ControlLimits {
         }
     }
 
-    /// Set the budget for one command's response block.
+    /// Set the budget for a response block and the combined request reply.
+    ///
+    /// Nested commands and aliases share the request's budget. Output line
+    /// separators count toward it; private completion fences do not.
     #[must_use]
     pub const fn max_block_bytes(self, bytes: usize) -> Self {
         Self {
@@ -285,7 +287,7 @@ impl ControlLimits {
         self.max_line_bytes
     }
 
-    /// The budget for one command's response block.
+    /// The budget for a response block and the combined request reply.
     #[must_use]
     pub const fn block_bytes(self) -> usize {
         self.max_block_bytes

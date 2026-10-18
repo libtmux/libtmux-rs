@@ -1,0 +1,1306 @@
+//! Recording work, grouping it, and running it against real tmux.
+//!
+//! The property under test throughout is that a planner changes what a plan
+//! *costs* and not what it *does*. Where that stops being true -- a failure
+//! inside a shared invocation -- the tests pin the honest answer rather than a
+//! convenient one.
+
+#![cfg(all(feature = "plan", feature = "test-support"))]
+// Helpers outside a test function are not covered by clippy.toml's
+// in-test exemptions, and this file has them.
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use libtmux_tokio::plan::{
+    Attribution, CapturePane, KillPane, KillWindow, NewSession, NewWindow, OperationKind,
+    OperationReport, OperationValue, Outcome, PaneTarget, Pause, Plan, PlanResult,
+    PlanValidationErrorKind, Planner, SelectLayout, SelectPane, SelectWindow, SendKeys,
+    SetEnvironment, SetOption, SplitWindow, StepReason, WindowTarget,
+};
+use libtmux_tokio::test::TestServer;
+use libtmux_tokio::{
+    ChannelWait, Command, NewSessionOptions, PaneId, PaneWait, Server, SplitDirection, WindowId,
+};
+
+#[tokio::test]
+async fn layout_preflight_precedes_every_planner_mutation() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-plan-keeper").await.unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    let mut plan = Plan::new();
+    plan.add(SetOption::session(
+        session.id().clone(),
+        "@layout-changed",
+        "yes",
+    ));
+    plan.add(SelectLayout::new(window.id().clone(), "not-a-layout"));
+    assert_eq!(plan.preview().len(), 2);
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let error = plan.run(guard.server(), planner).await.unwrap_err();
+        assert_eq!(error.kind(), libtmux_tokio::ErrorKind::InvalidInput);
+        assert!(
+            session
+                .typed_option("@layout-changed")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    guard.shutdown().await.unwrap();
+}
+
+// Two- and three-cell trees. tmux refuses the first for a three-pane window.
+const TWO_CELL_LAYOUT: &str = "89f5,80x24,0,0{39x24,0,0,0,40x24,40,0,1}";
+const THREE_CELL_LAYOUT: &str =
+    "ac5c,80x24,0,0{39x24,0,0,0,40x24,40,0[40x11,40,0,1,40x12,40,12,2]}";
+
+#[tokio::test]
+async fn layout_preflight_counts_the_panes_a_plan_creates() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-plan-panes").await.unwrap();
+    let mut plan = Plan::new();
+    let window = plan.add(NewWindow::new(session.id().clone()));
+    plan.add(SplitWindow::new(window));
+    plan.add(SplitWindow::new(window));
+    plan.add(SelectLayout::new(window, TWO_CELL_LAYOUT));
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let error = plan.run(guard.server(), planner).await.unwrap_err();
+        assert_eq!(error.kind(), libtmux_tokio::ErrorKind::InvalidInput);
+        assert_eq!(session.windows().await.unwrap().len(), 1);
+    }
+
+    let mut plan = Plan::new();
+    let window = plan.add(NewWindow::new(session.id().clone()));
+    plan.add(SplitWindow::new(window));
+    plan.add(SplitWindow::new(window));
+    plan.add(SelectLayout::new(window, THREE_CELL_LAYOUT));
+    assert!(
+        plan.run(guard.server(), Planner::Sequential)
+            .await
+            .unwrap()
+            .is_complete()
+    );
+    guard.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn layout_preflight_precedes_control_plan_mutation() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-control-keeper").await.unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    let (sender, _events) =
+        libtmux_tokio::control::ControlMode::attach(guard.server(), session.id())
+            .await
+            .unwrap()
+            .split();
+    let mut plan = Plan::new();
+    plan.add(SetOption::session(
+        session.id().clone(),
+        "@layout-changed",
+        "yes",
+    ));
+    plan.add(SelectLayout::new(window.id().clone(), "not-a-layout"));
+    let error = plan.run_over_control_mode(&sender).await.unwrap_err();
+    assert_eq!(error.kind(), libtmux_tokio::ErrorKind::InvalidInput);
+    assert!(
+        session
+            .typed_option("@layout-changed")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    guard.shutdown().await.unwrap();
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_layout_preflight_control_version() {
+    let guard = TestServer::new().await.unwrap();
+    let session = guard.session("layout-control-version").await.unwrap();
+    let window = session.active_window().await.unwrap().unwrap();
+    let version = guard.server().capabilities().await.unwrap().tmux_version();
+    let modern = version.meets(&libtmux_tokio::since::MIRRORED_LAYOUTS);
+    let (sender, _events) =
+        libtmux_tokio::control::ControlMode::attach(guard.server(), session.id())
+            .await
+            .unwrap()
+            .split();
+    for (index, layout, valid) in [
+        (0, "main-h", !modern),
+        (1, "main-horizontal-mirrored", modern),
+    ] {
+        let option = format!("@layout-control-{index}");
+        let mut plan = Plan::new();
+        plan.add(SetOption::session(session.id().clone(), &option, "yes"));
+        plan.add(SelectLayout::new(window.id().clone(), layout));
+        let result = plan.run_over_control_mode(&sender).await;
+        if valid {
+            let result = result.unwrap();
+            assert!(result.is_complete());
+            assert_eq!(
+                result.dispatches(),
+                2,
+                "metadata is not a recorded operation"
+            );
+            assert!(session.typed_option(&option).await.unwrap().is_some());
+        } else {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                if modern {
+                    libtmux_tokio::ErrorKind::InvalidInput
+                } else {
+                    libtmux_tokio::ErrorKind::UnsupportedVersion
+                }
+            );
+            assert!(session.typed_option(&option).await.unwrap().is_none());
+        }
+    }
+    guard.shutdown().await.unwrap();
+}
+
+/// A plan that builds a session and types into the pane it makes.
+fn build_plan(name: &str) -> Plan {
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new(name));
+    let pane = plan.add(SplitWindow::new(session.window()).focus());
+    plan.add(SendKeys::new(pane).text("true").enter());
+    plan.add(SelectPane::new(session.pane()));
+    plan
+}
+
+#[test]
+fn a_planner_changes_what_a_plan_costs_and_not_what_it_records() {
+    let plan = build_plan("counted");
+
+    // Every grouping runs the same four operations.
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let covered: Vec<usize> = planner
+            .steps(&plan)
+            .iter()
+            .flat_map(|step| step.indices().to_vec())
+            .collect();
+        assert_eq!(
+            covered,
+            [0, 1, 2, 3],
+            "{planner:?} runs every operation once"
+        );
+    }
+
+    assert_eq!(Planner::Sequential.steps(&plan).len(), 4);
+    assert!(Planner::Marked.steps(&plan).len() < Planner::Sequential.steps(&plan).len());
+}
+
+#[test]
+fn an_operation_that_reads_output_never_shares_an_invocation() {
+    let pane: PaneId = "%1".parse().expect("a pane id");
+    let mut plan = Plan::new();
+    plan.add(SendKeys::new(pane.clone()).text("ls").enter());
+    plan.add(CapturePane::new(pane.clone()));
+    plan.add(SendKeys::new(pane).text("clear").enter());
+
+    let steps = Planner::Folding.steps(&plan);
+    assert_eq!(steps.len(), 3, "the capture splits its neighbours apart");
+
+    let reasons: Vec<StepReason> = Planner::Folding
+        .explain(&plan)
+        .into_iter()
+        .map(|(_, reason)| reason)
+        .collect();
+    assert_eq!(reasons[1], StepReason::ReadsOutput);
+}
+
+#[test]
+fn a_boundary_stops_a_fold_without_changing_what_runs() {
+    let pane: PaneId = "%1".parse().expect("a pane id");
+    let mut plan = Plan::new();
+    for text in ["one", "two", "three"] {
+        plan.add(SendKeys::new(pane.clone()).text(text).enter());
+    }
+
+    assert_eq!(Planner::Folding.steps(&plan).len(), 1);
+
+    let bounded = Planner::Folding.steps_bounded(&plan, &BTreeSet::from([0]));
+    assert_eq!(bounded.len(), 2);
+    let covered: Vec<usize> = bounded
+        .iter()
+        .flat_map(|step| step.indices().to_vec())
+        .collect();
+    assert_eq!(covered, [0, 1, 2], "splitting regroups, it does not drop");
+}
+
+#[test]
+fn a_detached_split_does_not_take_the_marked_fold() {
+    let window: WindowId = "@1".parse().expect("a window id");
+
+    // The fold marks the active pane, so a split that leaves focus alone would
+    // send its decorations to whichever pane was already active.
+    let mut detached = Plan::new();
+    let pane = detached.add(SplitWindow::new(window.clone()));
+    detached.add(SendKeys::new(pane).text("go").enter());
+    assert_eq!(Planner::Marked.steps(&detached).len(), 2);
+
+    let mut focused = Plan::new();
+    let pane = focused.add(SplitWindow::new(window).focus());
+    focused.add(SendKeys::new(pane).text("go").enter());
+    assert_eq!(Planner::Marked.steps(&focused).len(), 1);
+}
+
+#[test]
+fn a_plan_renders_what_it_can_before_it_runs() {
+    let plan = build_plan("previewed");
+    let rendered = plan.preview();
+
+    assert_eq!(rendered.len(), 4);
+    assert!(
+        rendered[0]
+            .as_ref()
+            .is_some_and(|command| command.summary().to_string().contains("new-session")),
+        "an operation naming nothing unbuilt renders now",
+    );
+    assert!(
+        rendered[1].is_none(),
+        "an operation targeting an object no step has made yet cannot render yet",
+    );
+}
+
+#[test]
+fn sensitive_plan_arguments_are_absent_from_diagnostics() {
+    let secret = "sentinel-plan-secret";
+    let session: libtmux_tokio::SessionId = "$1".parse().expect("a session id");
+    let window: WindowId = "@1".parse().expect("a window id");
+    let pane: PaneId = "%1".parse().expect("a pane id");
+
+    let mut plan = Plan::new();
+    plan.add(
+        NewWindow::new(session.clone())
+            .environment("TOKEN", secret)
+            .command(secret),
+    );
+    plan.add(
+        SplitWindow::new(window.clone())
+            .environment("TOKEN", secret)
+            .command(secret),
+    );
+    plan.add(SendKeys::new(pane).text(secret));
+    plan.add(SetOption::window(window, "status-left", secret));
+    plan.add(SetEnvironment::new(session, "TOKEN", secret));
+
+    let mut diagnostics = vec![format!("{plan:?}")];
+    diagnostics.extend(
+        plan.steps()
+            .iter()
+            .map(|operation| format!("{operation:?}")),
+    );
+    diagnostics.extend(
+        plan.preview()
+            .into_iter()
+            .flatten()
+            .map(|command| format!("{:?}", command.summary())),
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.contains(secret)),
+        "a plan diagnostic exposed a sensitive argument: {diagnostics:#?}",
+    );
+
+    let sensitive_arguments: usize = plan
+        .preview()
+        .into_iter()
+        .flatten()
+        .map(|command| command.summary().sensitive_argument_count())
+        .sum();
+    assert_eq!(sensitive_arguments, 7);
+}
+
+#[test]
+fn plan_validation_rejects_a_dependency_that_is_not_earlier() {
+    let mut other = Plan::new();
+    other.add(NewSession::new("other-first"));
+    let future_session = other.add(NewSession::new("other-second"));
+
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("first"));
+    plan.add(NewWindow::new(future_session));
+
+    let failure = plan
+        .validate()
+        .expect_err("step one cannot depend on itself");
+    assert_eq!(failure.step(), 1);
+    assert_eq!(failure.source_step(), 1);
+    assert_eq!(failure.kind(), PlanValidationErrorKind::SourceNotEarlier);
+}
+
+#[test]
+fn plan_validation_rejects_a_slot_owned_by_another_plan() {
+    let mut other = Plan::new();
+    let foreign_session = other.add(NewSession::new("same"));
+
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("same"));
+    plan.add(NewWindow::new(foreign_session));
+
+    let failure = plan
+        .validate()
+        .expect_err("a foreign slot must not alias a compatible local producer");
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SourceProvenanceMismatch,
+    );
+    assert!(!failure.to_string().contains("same"));
+    #[cfg(feature = "serde")]
+    assert!(
+        serde_json::to_value(plan).is_err(),
+        "an invalid plan must not become valid on the wire",
+    );
+}
+
+#[test]
+fn cloned_plans_share_existing_but_not_divergent_producers() {
+    let mut base = Plan::new();
+    let session = base.add(NewSession::new("cloned"));
+    let mut left = base.clone();
+    let mut right = base.clone();
+
+    let left_window = left.add(NewWindow::new(session).name("same"));
+    right.add(NewWindow::new(session).name("same"));
+    right.add(SelectWindow::new(left_window));
+
+    left.validate().expect("the original producer was cloned");
+    let failure = right
+        .validate()
+        .expect_err("divergent producers must not share identity");
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SourceProvenanceMismatch,
+    );
+}
+
+#[test]
+fn destructive_targets_are_inspectable_without_serialization() {
+    let pane: PaneId = "%7".parse().expect("a pane id");
+    let window: WindowId = "@8".parse().expect("a window id");
+
+    assert_eq!(KillPane::new(pane.clone()).target(), &PaneTarget::Id(pane));
+    assert_eq!(
+        KillWindow::new(window.clone()).target(),
+        &WindowTarget::Id(window),
+    );
+}
+
+/// How many panes the server holds, as tmux counts them.
+async fn pane_count(server: &Server) -> usize {
+    server.panes().await.expect("panes list").len()
+}
+
+#[tokio::test]
+async fn an_invalid_plan_refuses_before_its_first_mutation() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut other = Plan::new();
+    other.add(NewSession::new("other-first"));
+    let future_session = other.add(NewSession::new("other-second"));
+
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("must-not-exist"));
+    plan.add(NewWindow::new(future_session));
+
+    let failure = plan
+        .run(server, Planner::Sequential)
+        .await
+        .expect_err("the plan is invalid");
+    assert!(
+        server.sessions().await.unwrap_or_default().is_empty(),
+        "validation happened after a mutation",
+    );
+    assert_eq!(failure.kind(), libtmux_tokio::ErrorKind::InvalidInput);
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn every_planner_leaves_the_same_tmux_state_for_a_different_price() {
+    let mut costs = Vec::new();
+    let mut shapes = Vec::new();
+
+    for (index, planner) in [Planner::Sequential, Planner::Folding, Planner::Marked]
+        .into_iter()
+        .enumerate()
+    {
+        let guard = TestServer::builder().start().await.expect("tmux starts");
+        let server = guard.server();
+
+        let plan = build_plan(&format!("priced-{index}"));
+        let result = plan.run(server, planner).await.expect("the plan runs");
+
+        assert!(
+            result.is_complete(),
+            "{planner:?} completed every operation: {:?}",
+            result.operations(),
+        );
+        costs.push((planner, result.dispatches()));
+        shapes.push(pane_count(server).await);
+
+        guard.shutdown().await.expect("tmux fixture shuts down");
+    }
+
+    assert!(
+        shapes.windows(2).all(|pair| pair[0] == pair[1]),
+        "the planner did not change the tmux state that resulted: {shapes:?}",
+    );
+    let dispatches: Vec<usize> = costs.iter().map(|(_, count)| *count).collect();
+    assert!(
+        dispatches[0] > dispatches[2],
+        "folding costs fewer tmux invocations than one per operation: {costs:?}",
+    );
+}
+
+#[tokio::test]
+async fn a_slot_addresses_an_object_the_plan_has_not_made_yet() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("forward"));
+    let window = plan.add(NewWindow::new(session).name("built"));
+    plan.add(SetOption::window(window, "synchronize-panes", "on"));
+
+    let result = plan.run(server, Planner::Sequential).await.expect("runs");
+    assert!(result.is_complete(), "{:?}", result.operations());
+
+    // The ids came back from the commands that made them, so no listing was
+    // needed to address the window from the session.
+    let created = result.created(1).expect("the window bound an id");
+    let synchronized = server
+        .cmd(
+            Command::new("show-options")
+                .arg("-w")
+                .arg("-v")
+                .arg("-t")
+                .arg(created)
+                .arg("synchronize-panes"),
+        )
+        .await
+        .expect("tmux reports the option");
+    assert_eq!(synchronized.stdout_lossy().trim(), "on");
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+fn expected_attributions(planner: Planner) -> [Option<Attribution>; 4] {
+    match planner {
+        Planner::Sequential => [Some(Attribution::PerCommand); 4],
+        Planner::Folding => [
+            Some(Attribution::PerCommand),
+            Some(Attribution::Merged),
+            Some(Attribution::Merged),
+            Some(Attribution::PerCommand),
+        ],
+        Planner::Marked => [
+            Some(Attribution::Merged),
+            Some(Attribution::Merged),
+            Some(Attribution::Merged),
+            Some(Attribution::PerCommand),
+        ],
+        _ => panic!("the test needs an attribution matrix for {planner:?}"),
+    }
+}
+
+fn assert_operation_reports(result: &PlanResult, planner: Planner, marker: &str) {
+    let reports = result.operations();
+    assert_eq!(reports.len(), 4);
+    for (index, report) in reports.iter().enumerate() {
+        assert_eq!(report.index(), index);
+        assert_eq!(report.outcome(), Outcome::Complete);
+    }
+    assert_eq!(
+        reports
+            .iter()
+            .map(OperationReport::kind)
+            .collect::<Vec<_>>(),
+        [
+            OperationKind::NewWindow,
+            OperationKind::SendKeys,
+            OperationKind::SelectPane,
+            OperationKind::CapturePane,
+        ],
+    );
+    assert_eq!(
+        reports
+            .iter()
+            .map(OperationReport::attribution)
+            .collect::<Vec<_>>(),
+        expected_attributions(planner),
+    );
+
+    let Some(OperationValue::CreatedWindow {
+        window: created_window,
+        pane,
+    }) = reports[0].value()
+    else {
+        panic!("the creating operation carries typed bindings: {reports:?}");
+    };
+    assert_eq!(
+        result.created(0).and_then(|id| id.to_str()),
+        Some(created_window.as_ref()),
+    );
+    assert!(pane.as_ref().starts_with('%'));
+    assert!(matches!(
+        reports[1].value(),
+        Some(OperationValue::Acknowledged)
+    ));
+    assert!(matches!(
+        reports[2].value(),
+        Some(OperationValue::Acknowledged)
+    ));
+    let Some(OperationValue::CapturedPane(text)) = reports[3].value() else {
+        panic!("the capture operation carries pane bytes: {reports:?}");
+    };
+    assert!(
+        text.as_bytes()
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes()),
+        "the captured bytes stay on operation 3",
+    );
+}
+
+#[tokio::test]
+async fn operation_reports_keep_typed_values_aligned_across_planners() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let marker = "operation-report";
+    let session = guard
+        .session(
+            NewSessionOptions::new("report-parent")
+                .command(format!("printf '{marker}\\n'; exec sleep 60")),
+        )
+        .await
+        .expect("the source pane is created");
+    let pane = session.panes().await.expect("panes list").remove(0);
+    assert_eq!(
+        pane.wait_for_text(marker, Duration::from_secs(5))
+            .await
+            .expect("capture waits"),
+        PaneWait::Arrived,
+    );
+
+    for (case, planner) in [Planner::Sequential, Planner::Folding, Planner::Marked]
+        .into_iter()
+        .enumerate()
+    {
+        let mut plan = Plan::new();
+        let window = plan.add(
+            NewWindow::new(session.id().clone())
+                .name(format!("report-window-{case}"))
+                .command("sleep 60")
+                .focus(),
+        );
+        plan.add(SendKeys::new(window.pane()).text("ignored"));
+        plan.add(SelectPane::new(window.pane()));
+        plan.add(CapturePane::new(pane.id().clone()));
+
+        let result = plan.run(server, planner).await.expect("the plan runs");
+        assert_operation_reports(&result, planner, marker);
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_failure_alone_is_named_and_a_failure_in_a_fold_is_not() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let absent: PaneId = "%999".parse().expect("a pane id");
+
+    // Alone, every operation has its own exit status, so the failure is placed
+    // exactly.
+    let mut plan = Plan::new();
+    plan.add(NewSession::new("named"));
+    plan.add(KillPane::new(absent.clone()));
+    plan.add(SendKeys::new(absent.clone()).text("never").enter());
+
+    let sequential = plan.run(server, Planner::Sequential).await.expect("runs");
+    assert_eq!(sequential.operations()[0].outcome(), Outcome::Complete);
+    assert_eq!(sequential.operations()[1].outcome(), Outcome::Failed);
+    assert_eq!(sequential.operations()[2].outcome(), Outcome::Skipped);
+    assert_eq!(sequential.steps()[1].attribution(), Attribution::PerCommand,);
+
+    // Folded, the same two operations share one exit status. tmux reports the
+    // same status and stderr whichever member failed, so neither is blamed.
+    let mut folded_plan = Plan::new();
+    folded_plan.add(KillPane::new(absent.clone()));
+    folded_plan.add(SendKeys::new(absent).text("never").enter());
+
+    let folded = folded_plan
+        .run(server, Planner::Folding)
+        .await
+        .expect("runs");
+    assert_eq!(folded.steps().len(), 1, "the two shared an invocation");
+    assert_eq!(folded.steps()[0].attribution(), Attribution::Merged);
+    assert_eq!(
+        folded
+            .operations()
+            .iter()
+            .map(OperationReport::outcome)
+            .collect::<Vec<_>>(),
+        vec![Outcome::Unknown, Outcome::Unknown],
+        "a merged failure names no member, and unknown is not success",
+    );
+    assert!(!folded.is_complete());
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A pause holds the plan where it stands, folded or not: inside a shared
+/// invocation the wait happens in tmux, between its neighbours.
+#[tokio::test]
+async fn a_pause_holds_the_plan_on_every_planner() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    server
+        .new_session("paused")
+        .await
+        .expect("session is created");
+    let pane = server.panes().await.expect("panes list").remove(0);
+    let pause = Duration::from_millis(300);
+
+    let mut plan = Plan::new();
+    plan.add(SelectPane::new(pane.id().clone()));
+    plan.add(Pause::new(pause));
+    plan.add(SelectPane::new(pane.id().clone()));
+    assert_eq!(Planner::Folding.steps(&plan).len(), 1, "one invocation");
+
+    for planner in [Planner::Sequential, Planner::Folding] {
+        let started = std::time::Instant::now();
+        let result = plan.run(server, planner).await.expect("the plan runs");
+        let elapsed = started.elapsed();
+
+        assert!(result.is_complete(), "{planner:?}: {result:?}");
+        assert!(elapsed >= pause, "{planner:?} returned after {elapsed:?}");
+    }
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// tmux answers a delayed `run-shell` on a connection before the delay ends,
+/// so both control-mode routes refuse a pause rather than report it done.
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn a_pause_is_refused_over_control_mode() {
+    use libtmux_tokio::control::ControlMode;
+    use libtmux_tokio::{ControlModeErrorKind, Error};
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("paused-control")
+        .await
+        .expect("session is created");
+    let (sender, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+    let routed = server
+        .over_control_mode(&sender)
+        .await
+        .expect("the connection reaches this server");
+
+    let mut plan = Plan::new();
+    plan.add(Pause::new(Duration::from_millis(50)));
+    let blocking = |outcome: Result<PlanResult, Error>| {
+        matches!(
+            outcome,
+            Err(Error::ControlMode {
+                kind: ControlModeErrorKind::BlockingCommand,
+                ..
+            })
+        )
+    };
+    assert!(blocking(plan.run_over_control_mode(&sender).await));
+    assert!(blocking(plan.run(&routed, Planner::Sequential).await));
+
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_control_plan_refusals_preserve_safe_diagnostics() {
+    use libtmux_tokio::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("control-plan-refusal")
+        .await
+        .expect("session is created");
+    let (commands, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let absent: PaneId = "%999999".parse().expect("a pane id");
+    let mut missing = Plan::new();
+    missing.add(KillPane::new(absent));
+    let missing = missing
+        .run_over_control_mode(&commands)
+        .await
+        .expect("tmux refusals remain plan result data");
+    let step = &missing.steps()[0];
+    assert!(step.stdout().is_empty(), "an error block is not stdout");
+    assert!(
+        String::from_utf8_lossy(step.stderr()).contains("can't find pane: %999999"),
+        "the error block keeps tmux's diagnostic: {step:?}",
+    );
+    assert!(
+        matches!(
+            step.refusal(),
+            Some(libtmux_tokio::Error::ObjectGone {
+                kind: libtmux_tokio::ObjectKind::Pane,
+                ref id,
+                ..
+            }) if id == "%999999"
+        ),
+        "the preserved diagnostic remains classifiable",
+    );
+
+    let window = session
+        .windows()
+        .await
+        .expect("windows are listed")
+        .remove(0);
+    let secret = "sentinel-sensitive-control-value";
+    let mut sensitive = Plan::new();
+    sensitive.add(SetOption::window(
+        window.id().clone(),
+        "synchronize-panes",
+        secret,
+    ));
+    let sensitive = sensitive
+        .run_over_control_mode(&commands)
+        .await
+        .expect("tmux refusals remain plan result data");
+    let step = &sensitive.steps()[0];
+    assert!(step.has_sensitive_input());
+    assert!(
+        String::from_utf8_lossy(step.stderr()).contains(secret),
+        "the raw error stream remains inspectable",
+    );
+    let refusal = step.refusal().expect("the operation was refused");
+    assert!(matches!(
+        refusal,
+        libtmux_tokio::Error::CommandFailed { .. }
+    ));
+    for diagnostic in [format!("{refusal:?} {refusal}"), format!("{sensitive:?}")] {
+        assert!(!diagnostic.contains(secret), "{diagnostic}");
+    }
+
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn a_plan_survives_a_round_trip_through_json() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("wired"));
+    let window = plan.add(NewWindow::new(session).name("build").focus());
+    plan.add(SendKeys::new(window.pane()).text("cargo test").enter());
+    // An argument tmux accepts but a text format cannot carry as text.
+    plan.add(SendKeys::new(window.pane()).text(OsString::from_vec(vec![0xff, b'x'])));
+    plan.add(SetOption::window(window, "synchronize-panes", "on"));
+    plan.add(Pause::new(Duration::from_millis(1500)));
+
+    let json = serde_json::to_string(&plan).expect("a plan serialises");
+    // The common case stays readable rather than becoming an array of bytes.
+    assert!(json.contains("\"cargo test\""), "{json}");
+    // A pause is seconds, as tmuxp writes one.
+    assert!(json.contains(r#"{"Pause":{"seconds":1.5}}"#), "{json}");
+
+    let restored: Plan = serde_json::from_str(&json).expect("a plan deserialises");
+    assert_eq!(restored.len(), plan.len());
+
+    // Rendering is what the plan is for, so comparing rendered commands
+    // compares what actually reaches tmux, including the bytes that are not
+    // text.
+    let before: Vec<_> = plan.preview().iter().map(|c| format!("{c:?}")).collect();
+    let after: Vec<_> = restored
+        .preview()
+        .iter()
+        .map(|c| format!("{c:?}"))
+        .collect();
+    assert_eq!(before, after, "a round trip changes nothing that renders");
+
+    // Grouping is a property of the operations, so it survives too.
+    assert_eq!(
+        Planner::Marked.steps(&restored).len(),
+        Planner::Marked.steps(&plan).len(),
+    );
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn deserialization_rejects_a_slot_with_the_wrong_scope() {
+    let session: libtmux_tokio::SessionId = "$1".parse().expect("a session id");
+    let mut plan = Plan::new();
+    plan.add(NewWindow::new(session.clone()));
+    plan.add(NewWindow::new(session));
+
+    let mut wire = serde_json::to_value(plan).expect("the plan serializes");
+    wire[1]["NewWindow"]["target"] = serde_json::json!({
+        "Slot": {"index": 0, "part": "Created"}
+    });
+
+    let failure = serde_json::from_value::<Plan>(wire).expect_err("window is not a session");
+    assert!(failure.to_string().contains("not Session"), "{failure}");
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn deserialization_rejects_a_pause_no_duration_can_hold() {
+    for seconds in [-1.0, f64::MAX] {
+        let wire = serde_json::json!([{ "Pause": { "seconds": seconds } }]);
+        assert!(
+            serde_json::from_value::<Plan>(wire).is_err(),
+            "{seconds} seconds was accepted",
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_creation_the_run_can_name_is_not_reported_as_unproven() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("named"));
+    // The split's id comes back on stdout. Killing the pane clears tmux's
+    // marked register, so the send that follows fails and the whole folded
+    // invocation reports one status for three operations.
+    let pane = plan.add(SplitWindow::new(session.window()).focus());
+    plan.add(KillPane::new(pane));
+    plan.add(SendKeys::new(pane).text("unreachable").enter());
+
+    let result = plan
+        .run(server, Planner::Marked)
+        .await
+        .expect("the run reports rather than refusing");
+
+    let created = result
+        .operations()
+        .iter()
+        .find(|report| report.kind() == OperationKind::SplitWindow)
+        .expect("the split is reported");
+
+    // `Outcome::Unknown` means the absence of evidence. tmux prints a pane id
+    // only once it has made the pane, so naming it is evidence.
+    assert!(
+        created.value().is_some(),
+        "the run named the pane it created",
+    );
+    assert_eq!(
+        created.outcome(),
+        Outcome::Complete,
+        "a creation the run can name is not unproven",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[tokio::test]
+async fn a_plan_will_not_write_an_option_where_tmux_keeps_another() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    let mut plan = Plan::new();
+    let session = plan.add(NewSession::new("scoped"));
+    let window = plan.add(NewWindow::new(session));
+    // `mouse` is a session option. A plan renders its own commands, so this
+    // reached tmux without the check the direct path makes, and the whole
+    // plan reported success for a change that landed on the session.
+    plan.add(SetOption::window(window, "mouse", "on"));
+
+    let error = plan
+        .run(server, Planner::Sequential)
+        .await
+        .map(|_| ())
+        .expect_err("the plan names a scope tmux would not use");
+    assert!(
+        matches!(
+            error,
+            libtmux_tokio::Error::OptionScopeMismatch {
+                requested: libtmux_tokio::OptionScope::Window,
+                ..
+            }
+        ),
+        "and says so before anything ran: {error:?}",
+    );
+
+    // Nothing was dispatched, so the session the first step would have made
+    // is not there either.
+    assert!(
+        server.sessions().await.expect("sessions").is_empty(),
+        "validation happens before the first command",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// A plan refuses a `select-layout` value `select-layout` itself cannot
+/// parse, before its first command.
+///
+/// A plan renders its own commands, so `SelectLayout` reached tmux without
+/// the check the direct `Window::select_layout` path makes: tmux 3.3 and
+/// 3.3a exit on a layout value they cannot parse, taking every session on
+/// the socket with them.
+#[tokio::test]
+async fn a_plan_refuses_a_layout_value_select_layout_cannot_parse() {
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+
+    for value in ["-o", "garbage", ""] {
+        let mut plan = Plan::new();
+        let session = plan.add(NewSession::new("layout-guard"));
+        plan.add(SelectLayout::new(session.window(), value));
+
+        let error = plan
+            .run(server, Planner::Sequential)
+            .await
+            .map(|_| ())
+            .expect_err("select-layout cannot parse this value");
+        assert_eq!(
+            error.kind(),
+            libtmux_tokio::ErrorKind::InvalidInput,
+            "{value:?}: {error:?}",
+        );
+        assert!(
+            server.sessions().await.expect("sessions").is_empty(),
+            "{value:?}: validation happens before the first command",
+        );
+    }
+
+    assert!(
+        server.is_alive().await,
+        "the server survives every refused value",
+    );
+
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+#[cfg(feature = "control-mode")]
+#[tokio::test]
+async fn real_tmux_compat_control_plan_validates_layouts_before_effects() {
+    use libtmux_tokio::control::ControlMode;
+
+    let guard = TestServer::builder().start().await.expect("tmux starts");
+    let server = guard.server();
+    let session = server
+        .new_session("layout-control")
+        .await
+        .expect("session is created");
+    let (sender, events) = ControlMode::attach(server, session.id())
+        .await
+        .expect("control mode attaches")
+        .split();
+
+    let mut invalid = vec![
+        ("-o", libtmux_tokio::ErrorKind::InvalidInput),
+        ("garbage", libtmux_tokio::ErrorKind::InvalidInput),
+        ("", libtmux_tokio::ErrorKind::InvalidInput),
+    ];
+    if !server
+        .capabilities()
+        .await
+        .expect("capabilities")
+        .tmux_version()
+        .has_behavior(&libtmux_tokio::since::JSON_LAYOUTS)
+    {
+        invalid.push((
+            r#"{"V":2,"L":[]}"#,
+            libtmux_tokio::ErrorKind::UnsupportedVersion,
+        ));
+    }
+    for (value, expected) in invalid {
+        let mut plan = Plan::new();
+        let created = plan.add(NewSession::new("layout-effect"));
+        plan.add(SelectLayout::new(created.window(), value));
+
+        let result = plan.run_over_control_mode(&sender).await;
+        assert!(server.is_alive().await, "{value:?}: the server survives");
+        assert_eq!(
+            result.expect_err("invalid layout is refused").kind(),
+            expected,
+            "{value:?}",
+        );
+        assert_eq!(
+            server.sessions().await.expect("sessions").len(),
+            1,
+            "{value:?}: validation happens before creating a session",
+        );
+    }
+
+    let window = session.windows().await.expect("windows").remove(0);
+    for value in ["tiled", "tile"] {
+        let mut plan = Plan::new();
+        plan.add(SelectLayout::new(window.id().clone(), value));
+        let result = plan
+            .run_over_control_mode(&sender)
+            .await
+            .expect("valid layouts are accepted");
+        assert!(result.is_complete(), "{value:?}: {result:?}");
+    }
+
+    events.shutdown().await.expect("control mode shuts down");
+    guard.shutdown().await.expect("tmux fixture shuts down");
+}
+
+/// Text that happens to name a tmux key is typed, not pressed.
+///
+/// `send-keys` resolves every argument against its key table before treating
+/// it as text, so `Space` without `-l` presses the space bar and leaves the
+/// prompt empty. `--` does not help: it stops a leading dash being read as a
+/// flag, and says nothing about key lookup. Every other input in this file --
+/// `true`, `ls`, `clear`, `go` -- is safe by accident, so this case needs its
+/// own test.
+#[tokio::test]
+async fn text_that_names_a_key_is_typed_rather_than_pressed() {
+    let guard = TestServer::new().await.expect("a server");
+    let server = guard.server();
+    let session = server.new_session("literal").await.expect("a session");
+
+    for planner in [Planner::Sequential, Planner::Folding, Planner::Marked] {
+        let window = session
+            .new_window(&format!("{planner:?}"))
+            .await
+            .expect("a window");
+        let pane = window.panes().await.expect("panes").remove(0);
+
+        let mut plan = Plan::new();
+        // No `.enter()`: the text stays on the prompt line, so the shell never
+        // runs it and the capture reads exactly what tmux typed.
+        plan.add(SendKeys::new(pane.id().clone()).text("Space"));
+        plan.run(server, planner).await.expect("the plan runs");
+
+        assert_eq!(
+            pane.wait_for_text("Space", Duration::from_secs(5))
+                .await
+                .expect("the capture waits"),
+            PaneWait::Arrived,
+            "{planner:?} typed the text rather than pressing the key it names",
+        );
+    }
+
+    guard.shutdown().await.expect("shutdown");
+}
+
+/// `.text(...).enter()` still submits the line.
+///
+/// Enter is folded into the literal payload as a trailing carriage return
+/// rather than sent as the named key `Enter`, so a shell only runs the line
+/// if that byte is interpreted the same way `Pane::send_line` relies on --
+/// `cancelling_a_line_send_cannot_leave_enter_undispatched` in
+/// `tests/mutations.rs` is where that construction is proven to run a
+/// command rather than merely type it. This is the same proof for the
+/// `SendKeys` plan operation.
+#[tokio::test]
+async fn text_followed_by_enter_runs_the_line() {
+    let guard = TestServer::new().await.expect("a server");
+    let server = guard.server();
+    let session = server.new_session("submitted").await.expect("a session");
+
+    for (index, planner) in [Planner::Sequential, Planner::Folding, Planner::Marked]
+        .into_iter()
+        .enumerate()
+    {
+        let window = session
+            .new_window(&format!("{planner:?}"))
+            .await
+            .expect("a window");
+        let pane = window.panes().await.expect("panes").remove(0);
+        let channel = format!("send-keys-enter-ran-{index}");
+
+        let mut plan = Plan::new();
+        plan.add(
+            SendKeys::new(pane.id().clone())
+                .text(format!("tmux wait-for -S {channel}"))
+                .enter(),
+        );
+        plan.run(server, planner).await.expect("the plan runs");
+
+        assert_eq!(
+            server
+                .wait_for_channel(&channel, Duration::from_secs(5))
+                .await
+                .expect("the channel wait can be read"),
+            ChannelWait::Signalled,
+            "{planner:?}: text folded with a trailing carriage return did not run as a line",
+        );
+    }
+
+    guard.shutdown().await.expect("shutdown");
+}
+
+/// `SendKeys` cannot carry literal text and named keys in one invocation:
+/// `-l` is required to type the text, and `-l` would literalize the keys too.
+#[test]
+fn plan_validation_rejects_text_together_with_named_keys() {
+    let pane: PaneId = "%1".parse().expect("a pane id");
+
+    let mut plan = Plan::new();
+    plan.add(SendKeys::new(pane).text("make").keys(["Enter"]));
+
+    let failure = plan
+        .validate()
+        .expect_err("text and named keys cannot share one send-keys");
+    assert_eq!(failure.step(), 0);
+    assert_eq!(
+        failure.kind(),
+        PlanValidationErrorKind::SendKeysTextWithKeys,
+    );
+    assert!(failure.to_string().contains("literal text"), "{failure}");
+}
+
+/// A plan can put a new pane on any of the four sides.
+///
+/// `SplitWindow::horizontal` alone reached two of them: it picks tmux's axis
+/// and leaves `-b` unset, so a plan could ask for below and right and had no
+/// spelling at all for above and left. The object API's `SplitOptions` has
+/// always taken the full `SplitDirection`.
+#[tokio::test]
+async fn a_plan_can_split_on_any_of_the_four_sides() {
+    let guard = TestServer::new().await.expect("a server");
+    let server = guard.server();
+
+    for direction in [
+        SplitDirection::Above,
+        SplitDirection::Below,
+        SplitDirection::Left,
+        SplitDirection::Right,
+    ] {
+        let mut plan = Plan::new();
+        let session = plan.add(NewSession::new(format!("{direction:?}").as_str()));
+        plan.add(SplitWindow::new(session.window()).direction(direction));
+
+        let result = plan
+            .run(server, Planner::Sequential)
+            .await
+            .expect("the plan runs");
+        assert!(result.is_complete(), "{:?}", result.operations());
+
+        let created = result.created(1).expect("the split bound a pane id");
+        let id: PaneId = created
+            .to_str()
+            .expect("a utf-8 pane id")
+            .parse()
+            .expect("a pane id");
+        let pane = server
+            .pane_by_id(&id)
+            .await
+            .expect("the lookup runs")
+            .expect("the pane tmux just made");
+
+        // Splitting a window that holds one full pane leaves two, so the new
+        // one is against the edge it was asked for and away from its opposite.
+        let (against, opposite) = match direction {
+            SplitDirection::Above => (pane.is_at_top(), pane.is_at_bottom()),
+            SplitDirection::Below => (pane.is_at_bottom(), pane.is_at_top()),
+            SplitDirection::Left => (pane.is_at_left(), pane.is_at_right()),
+            SplitDirection::Right => (pane.is_at_right(), pane.is_at_left()),
+        };
+        assert!(against, "a {direction:?} split lands on that side");
+        assert!(!opposite, "a {direction:?} split is not on the far side");
+    }
+
+    guard.shutdown().await.expect("shutdown");
+}
+
+/// A plan serialized before `SplitWindow` grew `before` still decodes.
+///
+/// The struct carries `deny_unknown_fields`, which rejects a key it does not
+/// know and says nothing about one that is absent, so the new field is
+/// defaulted rather than required. Splitting the direction out into an enum
+/// would have renamed `vertical` instead and refused every stored plan.
+#[cfg(feature = "serde")]
+#[test]
+fn a_split_recorded_before_the_side_was_addressable_still_decodes() {
+    // Written by hand rather than by an older build of this crate, so the
+    // absent key is the point rather than an artefact of how it was produced.
+    let stored = r#"[{"SplitWindow":{
+        "target":{"Id":"@1"},
+        "vertical":true,
+        "start_directory":null,
+        "command":null,
+        "environment":[],
+        "focus":false
+    }}]"#;
+
+    let plan: Plan = serde_json::from_str(stored).expect("an older plan deserialises");
+    assert_eq!(plan.len(), 1);
+
+    // `-b` is what the new field renders, and an older plan never asked for
+    // it, so its command must come back byte-identical to what it always was.
+    let rendered = format!("{:?}", plan.preview());
+    assert!(rendered.contains("-v"), "{rendered}");
+    assert!(!rendered.contains("-b"), "{rendered}");
+}
+
+/// Either split setter, in either order, leaves one of the four positions.
+///
+/// `horizontal` used to set only the axis, so it inherited whatever side a
+/// preceding `direction` had asked for: `direction(Above).horizontal()`
+/// rendered `-h -b` and put the pane on the left, against its own
+/// documentation.
+#[test]
+fn a_split_setter_never_leaves_half_a_position() {
+    let window: WindowId = "@1".parse().expect("a window id");
+    let rendered = |split: SplitWindow| {
+        let mut plan = Plan::new();
+        plan.add(split);
+        format!("{:?}", plan.preview())
+    };
+
+    let right = rendered(SplitWindow::new(window.clone()).direction(SplitDirection::Right));
+    let horizontal = rendered(SplitWindow::new(window.clone()).horizontal());
+    assert_eq!(horizontal, right, "horizontal is Right");
+
+    // The order the two setters are applied in cannot change the outcome.
+    for direction in [
+        SplitDirection::Above,
+        SplitDirection::Below,
+        SplitDirection::Left,
+        SplitDirection::Right,
+    ] {
+        assert_eq!(
+            rendered(
+                SplitWindow::new(window.clone())
+                    .direction(direction)
+                    .horizontal()
+            ),
+            right,
+            "direction({direction:?}) then horizontal is Right",
+        );
+        assert_eq!(
+            rendered(
+                SplitWindow::new(window.clone())
+                    .horizontal()
+                    .direction(direction)
+            ),
+            rendered(SplitWindow::new(window.clone()).direction(direction)),
+            "horizontal then direction({direction:?}) is that direction",
+        );
+    }
+
+    // `-b` is the flag that was leaking across the two setters.
+    assert!(!right.contains("-b"), "{right}");
+    assert!(
+        rendered(SplitWindow::new(window).direction(SplitDirection::Left)).contains("-b"),
+        "a Left split still asks for -b",
+    );
+}

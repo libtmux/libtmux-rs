@@ -1,14 +1,16 @@
 use std::future::Future;
+use std::sync::Arc;
 
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use futures_channel::oneshot;
 
+use crate::driver::runtime::{Runtime, TaskError, TaskHandle};
 use crate::{Error, ScopeError};
 
 #[cfg(feature = "tracing")]
 use tracing::instrument::WithSubscriber as _;
 
 pub(crate) async fn run<R, T, E, Create, Cleanup, CleanupFuture, Operation>(
+    runtime: Arc<dyn Runtime>,
     operation_name: &'static str,
     create: Create,
     cleanup: Cleanup,
@@ -21,7 +23,7 @@ where
     CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
     Operation: AsyncFnOnce(&R) -> Result<T, E>,
 {
-    let (created, cleanup) = acquire(create, cleanup)
+    let (created, cleanup) = acquire(runtime, create, cleanup)
         .await
         .map_err(ScopeError::Creation)?;
     let outcome = operation(&created).await;
@@ -40,6 +42,7 @@ where
 }
 
 async fn acquire<R, Create, Cleanup, CleanupFuture>(
+    runtime: Arc<dyn Runtime>,
     create: Create,
     cleanup: Cleanup,
 ) -> Result<(R, ScopeCleanup), Error>
@@ -50,22 +53,23 @@ where
     CleanupFuture: Future<Output = Result<(), Error>> + Send + 'static,
 {
     let (handoff, receive) = oneshot::channel();
+    let cleanup_runtime = Arc::clone(&runtime);
     let supervisor = async move {
         let outcome = create.await.map(|created| {
-            let cleanup = ScopeCleanup::new(cleanup(created.clone()));
+            let cleanup = ScopeCleanup::new(&*cleanup_runtime, cleanup(created.clone()));
             (created, cleanup)
         });
         let _ = handoff.send(outcome);
     };
     #[cfg(feature = "tracing")]
-    let supervisor = tokio::spawn(supervisor.with_current_subscriber());
+    let supervisor = runtime.spawn(Box::pin(supervisor.with_current_subscriber()));
     #[cfg(not(feature = "tracing"))]
-    let supervisor = tokio::spawn(supervisor);
+    let supervisor = runtime.spawn(Box::pin(supervisor));
 
     match receive.await {
         Ok(outcome) => outcome,
         Err(_) => match supervisor.await {
-            Err(error) => std::panic::resume_unwind(error.into_panic()),
+            Err(error) => Err(supervisor_failure(error)),
             Ok(()) => unreachable!("the creation supervisor ended without a handoff"),
         },
     }
@@ -76,11 +80,14 @@ struct ScopeCleanup {
     outcome: oneshot::Receiver<Result<(), Error>>,
     #[cfg(feature = "tracing")]
     observed: oneshot::Sender<()>,
-    supervisor: JoinHandle<()>,
+    supervisor: TaskHandle,
 }
 
 impl ScopeCleanup {
-    fn new(cleanup: impl Future<Output = Result<(), Error>> + Send + 'static) -> Self {
+    fn new(
+        runtime: &dyn Runtime,
+        cleanup: impl Future<Output = Result<(), Error>> + Send + 'static,
+    ) -> Self {
         let (release, released) = oneshot::channel();
         let (outcome_sender, outcome) = oneshot::channel();
         #[cfg(feature = "tracing")]
@@ -105,9 +112,9 @@ impl ScopeCleanup {
             }
         };
         #[cfg(feature = "tracing")]
-        let supervisor = tokio::spawn(supervisor.with_current_subscriber());
+        let supervisor = runtime.spawn(Box::pin(supervisor.with_current_subscriber()));
         #[cfg(not(feature = "tracing"))]
-        let supervisor = tokio::spawn(supervisor);
+        let supervisor = runtime.spawn(Box::pin(supervisor));
 
         Self {
             release,
@@ -127,11 +134,23 @@ impl ScopeCleanup {
                 outcome
             }
             Err(_) => match self.supervisor.await {
-                Err(error) => std::panic::resume_unwind(error.into_panic()),
+                Err(error) => Err(supervisor_failure(error)),
                 Ok(()) => unreachable!("the cleanup supervisor ended without an outcome"),
             },
         }
     }
+}
+
+fn supervisor_failure(error: TaskError) -> Error {
+    let source = match error {
+        TaskError::Panicked(payload) => std::panic::resume_unwind(payload),
+        TaskError::Spawn(source) => source,
+        TaskError::Cancelled => std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "scope supervisor was cancelled",
+        ),
+    };
+    Error::RuntimeUnavailable { source }
 }
 
 #[cfg(feature = "tracing")]
@@ -166,6 +185,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_failure_after_a_successful_operation_marks_the_effect() {
         let error = super::run(
+            Arc::new(crate::driver::AsyncIoRuntime),
             "with-pane",
             async {
                 Ok::<_, Error>(Resource {
@@ -205,6 +225,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_failure_owns_the_replay_boundary_when_the_operation_also_fails() {
         let error = super::run(
+            Arc::new(crate::driver::AsyncIoRuntime),
             "with-window",
             async {
                 Ok::<_, Error>(Resource {
@@ -288,6 +309,7 @@ mod tests {
         let operation_polled = Arc::new(AtomicBool::new(false));
 
         let scope = tokio::spawn(super::run(
+            Arc::new(crate::driver::AsyncIoRuntime),
             "with-session",
             {
                 let creation_started = Arc::clone(&creation_started);
@@ -335,6 +357,7 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let mut scope = Box::pin(super::run(
+            Arc::new(crate::driver::AsyncIoRuntime),
             "with-window",
             async {
                 Ok::<_, Error>(Resource {
@@ -379,6 +402,7 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let outcome = super::run(
+            Arc::new(crate::driver::AsyncIoRuntime),
             "with-pane",
             async {
                 Ok::<_, Error>(Resource {

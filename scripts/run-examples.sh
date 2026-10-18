@@ -52,6 +52,21 @@ libtmux  | watch    | control-mode,test-support                     |    |      
 libtmux  | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
 libtmux  | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
 libtmux  | recover  | test-support                                  |    |               | is_object_gone: false
+libtmux-tokio | api_construction | query | | | construction: private daemon started by new_session
+libtmux-tokio | api_listings | query | | | listings: 1 session, 2 windows, 2 panes
+libtmux-tokio | api_creation | query | | | creation: 2 windows, 4 panes
+libtmux-tokio | api_query | query | | | query: prod-api
+libtmux-tokio | api_cardinality | query | | | cardinality: none, one, multiple
+libtmux-tokio | api_input | query | | | input: C-c is text
+libtmux-tokio | api_capture | query | | | capture: first line, second line
+libtmux-tokio | inspect  |                                               |    |               | examples
+libtmux-tokio | find     | query                                         | sh |               | in window
+libtmux-tokio | scratch  | test-support                                  |    |               | hello from tmux
+libtmux-tokio | sweep    | test-support                                  |    |               | fixture
+libtmux-tokio | watch    | control-mode,test-support                     |    |               | on the same socket
+libtmux-tokio | matrix   | plan,control-mode,blocking,test-support,query |    |               | every mode built the same thing: true
+libtmux-tokio | orchestrate | test-support                              |    |               | 3 of 3 jobs finished
+libtmux-tokio | recover  | test-support                                  |    |               | is_object_gone: false
 tmux-mcp | budget   |                                               |    |               | of it output schemas
 tmux-mcp | surface  |                                               |    |               | answers with:
 tmux-mcp | readonly |                                               |    | mcp_handshake | serverInfo

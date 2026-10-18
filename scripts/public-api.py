@@ -13,7 +13,9 @@ skips every lint.
 
 from __future__ import annotations
 
-import json
+import argparse
+
+import rustdoc_workspace
 import sys
 
 # Item kinds that are part of the surface. Modules only contribute paths;
@@ -476,14 +478,7 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
     implemented: set = set()
 
     def name_of(identifier) -> str | None:
-        reached = reachable.get(str(identifier))
-        if reached:
-            return reached
-        summary = paths.get(str(identifier)) or paths.get(identifier)
-        if summary and summary.get("path"):
-            return "::".join(summary["path"])
-        item = index.get(str(identifier)) or index.get(identifier)
-        return item.get("name") if item else None
+        return reachable.get(str(identifier))
 
     for item in index.values():
         inner = item.get("inner") or {}
@@ -522,7 +517,7 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
                 held = variant.get("name")
                 for field in fields:
                     if field is not None:
-                        owner[str(field)] = f"{here}::{held}" if here and held else held
+                        owner[str(field)] = f"{here}::{held}" if here and held else None
 
         if "trait" in inner:
             here = name_of(item.get("id"))
@@ -532,7 +527,7 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
         if "impl" in inner:
             target = inner["impl"].get("for") or {}
             resolved = target.get("resolved_path") or {}
-            here = name_of(resolved.get("id")) or resolved.get("path")
+            here = name_of(resolved.get("id"))
             trait = inner["impl"].get("trait") or {}
             # The trait declares its members; its implementation header is
             # recorded separately. Only inherent items need an owner here.
@@ -545,9 +540,8 @@ def parents(index: dict, paths: dict, reachable: dict) -> tuple[dict, set]:
     return owner, implemented
 
 
-def main(path: str) -> int:
-    with open(path, encoding="utf-8") as handle:
-        doc = json.load(handle)
+def main(path: str, dependencies: list[str] | None = None) -> int:
+    doc = rustdoc_workspace.load(path, dependencies or [])
 
     index = doc["index"]
     paths = doc["paths"]
@@ -571,7 +565,6 @@ def main(path: str) -> int:
             continue
         reached = reachable.get(str(identifier))
         held_by = owner.get(str(identifier))
-        summary = paths.get(str(identifier)) or paths.get(identifier)
         # The owner is consulted before rustdoc's own path because rustdoc
         # carries a path for a method too, and it is the one under the private
         # module the type was defined in rather than the one it is reached by.
@@ -579,10 +572,6 @@ def main(path: str) -> int:
             name = reached
         elif held_by and item.get("name"):
             name = f"{held_by}::{item['name']}"
-        elif summary and summary.get("path"):
-            name = "::".join(summary["path"])
-        elif item.get("name"):
-            name = item["name"]
         else:
             continue
 
@@ -596,7 +585,8 @@ def main(path: str) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: public-api.py <rustdoc.json>", file=sys.stderr)
-        raise SystemExit(2)
-    raise SystemExit(main(sys.argv[1]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("path")
+    parser.add_argument("--dependency-json", action="append", default=[])
+    arguments = parser.parse_args()
+    raise SystemExit(main(arguments.path, arguments.dependency_json))

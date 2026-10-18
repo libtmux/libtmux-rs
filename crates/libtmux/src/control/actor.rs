@@ -1,16 +1,22 @@
-use std::collections::VecDeque;
-use std::time::Duration;
+use std::collections::{VecDeque, hash_map::RandomState};
+use std::future::Future;
+use std::hash::BuildHasher as _;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
-use tokio::io::BufReader;
-use tokio::process::{ChildStdin, ChildStdout};
-use tokio::sync::{mpsc, oneshot, watch};
-use tokio::time::Instant;
+use futures_channel::oneshot;
+use futures_util::{FutureExt as _, io::BufReader};
 
-use super::protocol::{Line, read_line, read_line_within, write_line};
+use super::channel as mpsc;
+use crate::driver::{Reader, Runtime, RuntimeExt as _, TaskHandle, Writer};
+use crate::internal::watch;
+
+use super::protocol::{Line, read_line, read_line_within, write_request};
 use super::{BlockResult, Boundary, Delivery, Event};
-use crate::Error;
 use crate::internal::process::PersistentChild;
 use crate::limits::ControlLimits;
+use crate::{Error, TmuxText};
 
 /// How many commands may queue before a sender waits.
 const COMMAND_QUEUE: usize = 16;
@@ -24,8 +30,8 @@ pub(super) const EVENT_QUEUE: usize = 256;
 /// arrives on the connection that would otherwise pause. That is bounded by
 /// how long a reply takes, and tmux answers most commands at once -- but not
 /// all. `run-shell` without `-b` answers its own block immediately and then
-/// parks the queue for as long as its shell command runs, so the next command
-/// sent is outstanding for that long and this end would hold events for the
+/// parks the queue for as long as its shell command runs, so its completion
+/// fence remains outstanding and this end would hold events for the
 /// duration. A ceiling turns that into a pause rather than a memory leak.
 pub(super) const HELD_WHILE_AWAITING: usize = EVENT_QUEUE * 8;
 
@@ -34,11 +40,12 @@ pub(super) struct OpenedConnection {
     pub(super) commands: mpsc::Sender<Request>,
     pub(super) events: mpsc::Receiver<Delivery>,
     pub(super) stop: watch::Sender<()>,
-    pub(super) connection: tokio::task::JoinHandle<Result<(), Error>>,
+    pub(super) connection: TaskHandle<Result<(), Error>>,
 }
 
 /// Take ownership of a control process and wait until tmux has attached it.
 pub(super) async fn open(
+    runtime: Arc<dyn Runtime>,
     mut child: PersistentChild,
     limits: ControlLimits,
     timeout: Duration,
@@ -57,6 +64,7 @@ pub(super) async fn open(
     let (events, received) = mpsc::channel(EVENT_QUEUE);
     let (stop, stopped) = watch::channel(());
     let actor = Connection {
+        runtime: Arc::clone(&runtime),
         child,
         stdin,
         stdout: BufReader::new(stdout),
@@ -72,10 +80,9 @@ pub(super) async fn open(
     };
 
     let (ready, mut opened) = oneshot::channel();
-    let mut connection = tokio::spawn(actor.run(ready));
-    tokio::select! {
-        biased;
-        result = &mut opened => {
+    let mut connection = runtime.spawn_value(actor.run(ready));
+    futures_util::select_biased! {
+        result = (&mut opened).fuse() => {
             if result.is_err() {
                 return match connection.await {
                     Ok(Err(error)) => Err(error),
@@ -83,7 +90,7 @@ pub(super) async fn open(
                 };
             }
         }
-        result = &mut connection => {
+        result = (&mut connection).fuse() => {
             return match result {
                 Ok(Err(error)) => Err(error),
                 Ok(Ok(())) | Err(_) => Err(Error::control_mode_closed()),
@@ -107,8 +114,6 @@ pub(super) struct Request {
     pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
     pub(super) commit: oneshot::Sender<()>,
     pub(super) boundary: Option<Boundary>,
-    /// Commands on the line: tmux answers each with its own block.
-    pub(super) blocks: usize,
 }
 
 /// A request whose caller can no longer prevent the first write.
@@ -118,7 +123,6 @@ pub(super) struct CommittedRequest {
     pub(super) deadline: Option<Instant>,
     pub(super) result: oneshot::Sender<Result<BlockResult, Error>>,
     pub(super) boundary: Option<Boundary>,
-    pub(super) blocks: usize,
 }
 
 impl Request {
@@ -129,7 +133,6 @@ impl Request {
             result,
             commit,
             boundary,
-            blocks,
         } = self;
         commit.send(()).ok()?;
         Some(CommittedRequest {
@@ -137,7 +140,6 @@ impl Request {
             deadline,
             result,
             boundary,
-            blocks,
         })
     }
 }
@@ -151,23 +153,59 @@ pub(super) fn admit_request(request: Request, pending_events: usize) -> Option<R
     None
 }
 
-/// Reply ownership in the order tmux will answer it.
+/// An ordered parse-error callback that cannot run a command alias or hook.
+#[derive(Clone, Debug)]
+pub(super) struct ReplyFence {
+    command: String,
+    output: TmuxText,
+}
+
+impl ReplyFence {
+    fn new() -> Self {
+        static SALT: OnceLock<u64> = OnceLock::new();
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let salt = SALT.get_or_init(|| RandomState::new().hash_one(std::process::id()));
+        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+        Self::named(format!("_lt{salt:016x}{sequence:x}"))
+    }
+
+    fn named(command: String) -> Self {
+        let output = TmuxText::from(format!("parse error: unknown command: {command}"));
+        Self { command, output }
+    }
+
+    fn matches(&self, block: &BlockResult) -> bool {
+        !block.succeeded() && block.output() == std::slice::from_ref(&self.output)
+    }
+
+    #[cfg(any(test, feature = "unstable-fuzzing"))]
+    pub(super) fn block(&self) -> BlockResult {
+        BlockResult {
+            number: 0,
+            succeeded: false,
+            output: vec![self.output.clone()],
+            sensitive_input: false,
+            failed_lines: vec![true],
+        }
+    }
+}
+
+/// Reply ownership in the order tmux will pass each completion boundary.
 #[derive(Debug)]
 pub(super) enum ReplySlot {
     Live {
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
-        /// Blocks still to come, one per command on the line.
-        owed: usize,
-        /// The chain's blocks so far, all of them successes.
+        fence: ReplyFence,
         received: Option<BlockResult>,
+        bytes: usize,
     },
-    /// Consume these blocks without giving them to a later caller.
+    /// Consume this request's replies even though nobody can receive them.
     Tombstone {
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
-        owed: usize,
+        fence: ReplyFence,
     },
 }
 
@@ -178,47 +216,39 @@ impl ReplySlot {
         }
     }
 
-    const fn boundary(&self) -> Option<Boundary> {
+    const fn fence(&self) -> &ReplyFence {
         match self {
-            Self::Live { boundary, .. } | Self::Tombstone { boundary, .. } => *boundary,
+            Self::Live { fence, .. } | Self::Tombstone { fence, .. } => fence,
         }
     }
 
-    /// Whether `block` is the last this slot is owed. tmux runs nothing
-    /// after the first command in a chain that fails, so a failure ends it.
-    const fn is_last(&self, block: &BlockResult) -> bool {
-        let (Self::Live { owed, .. } | Self::Tombstone { owed, .. }) = self;
-        *owed <= 1 || !block.succeeded()
+    fn take_boundary(&mut self) -> Option<Boundary> {
+        match self {
+            Self::Live { boundary, .. } | Self::Tombstone { boundary, .. } => boundary.take(),
+        }
     }
 
-    /// Take one block, returning the whole reply once the last one arrives.
-    fn take(&mut self, block: BlockResult) -> Option<BlockResult> {
-        let last = self.is_last(&block);
-        match self {
-            Self::Live { owed, received, .. } => {
-                let block = match received.take() {
-                    Some(earlier) => earlier.followed_by(block),
-                    None => block,
-                };
-                if last {
-                    return Some(block);
-                }
-                *owed -= 1;
-                *received = Some(block);
-                None
+    fn take(&mut self, block: BlockResult, limit: usize) -> Result<(), Error> {
+        if let Self::Live {
+            received, bytes, ..
+        } = self
+        {
+            for line in block.output() {
+                *bytes = bytes.saturating_add(line.as_bytes().len().saturating_add(1));
             }
-            Self::Tombstone { owed, .. } => {
-                if last {
-                    return Some(block);
-                }
-                *owed -= 1;
-                None
+            if *bytes > limit {
+                return Err(Error::control_mode_frame_too_large("reply", limit));
             }
+            *received = Some(match received.take() {
+                Some(earlier) => earlier.followed_by(block),
+                None => block,
+            });
         }
+        Ok(())
     }
 }
 
-/// Ordered reply slots, including blocks whose callers were refused.
+/// Ordered requests, including replies whose callers were refused.
 #[derive(Debug, Default)]
 pub(super) struct ReplySlots {
     pub(super) slots: VecDeque<ReplySlot>,
@@ -227,22 +257,15 @@ pub(super) struct ReplySlots {
 }
 
 impl ReplySlots {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "unstable-fuzzing"))]
     pub(super) fn push(
         &mut self,
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
-    ) {
-        self.push_ordered(result, deadline, None, 1);
-    }
-
-    #[cfg(any(test, feature = "unstable-fuzzing"))]
-    pub(super) fn push_chain(
-        &mut self,
-        result: oneshot::Sender<Result<BlockResult, Error>>,
-        blocks: usize,
-    ) {
-        self.push_ordered(result, None, None, blocks);
+    ) -> ReplyFence {
+        let fence = ReplyFence::new();
+        self.push_ordered(result, deadline, None, fence.clone());
+        fence
     }
 
     fn push_ordered(
@@ -250,35 +273,25 @@ impl ReplySlots {
         result: oneshot::Sender<Result<BlockResult, Error>>,
         deadline: Option<Instant>,
         boundary: Option<Boundary>,
-        blocks: usize,
+        fence: ReplyFence,
     ) {
         self.earliest = earliest_deadline(self.earliest, deadline);
-        let owed = blocks.max(1);
-        if result.is_closed() {
+        if result.is_canceled() {
             self.slots.push_back(ReplySlot::Tombstone {
                 deadline,
                 boundary,
-                owed,
+                fence,
             });
         } else {
             self.slots.push_back(ReplySlot::Live {
                 result,
                 deadline,
                 boundary,
-                owed,
+                fence,
                 received: None,
+                bytes: 0,
             });
             self.live += 1;
-        }
-    }
-
-    /// The front slot's boundary, when `block` is the last it is owed.
-    fn boundary_closed_by(&self, block: &BlockResult) -> Option<Boundary> {
-        let front = self.slots.front()?;
-        if front.is_last(block) {
-            front.boundary()
-        } else {
-            None
         }
     }
 
@@ -307,44 +320,69 @@ impl ReplySlots {
             let ReplySlot::Live {
                 deadline,
                 boundary,
-                owed,
+                fence,
                 ..
-            } = *slot
+            } = slot
             else {
                 continue;
             };
-            let ReplySlot::Live { result, .. } = std::mem::replace(
-                slot,
-                ReplySlot::Tombstone {
-                    deadline,
-                    boundary,
-                    owed,
-                },
-            ) else {
-                continue;
+            let tombstone = ReplySlot::Tombstone {
+                deadline: *deadline,
+                boundary: *boundary,
+                fence: fence.clone(),
             };
-            let _ = result.send(Err(Error::control_mode_unread()));
+            if let ReplySlot::Live { result, .. } = std::mem::replace(slot, tombstone) {
+                let _ = result.send(Err(Error::control_mode_unread()));
+            }
         }
         self.live = 0;
     }
 
-    pub(super) fn complete(&mut self, block: BlockResult) {
+    pub(super) fn consume(
+        &mut self,
+        block: BlockResult,
+        limit: usize,
+    ) -> Result<Option<Boundary>, Error> {
         let Some(front) = self.slots.front_mut() else {
-            return;
+            return Ok(None);
         };
-        let Some(block) = front.take(block) else {
-            return;
-        };
+        if !front.fence().matches(&block) {
+            let boundary = front.take_boundary();
+            front.take(block, limit)?;
+            return Ok(boundary);
+        }
         let Some(slot) = self.slots.pop_front() else {
-            return;
+            return Ok(None);
         };
         let deadline = slot.deadline();
-        if let ReplySlot::Live { result, .. } = slot {
+        if let ReplySlot::Live {
+            result, received, ..
+        } = slot
+        {
             self.live -= 1;
-            let _ = result.send(Ok(block));
+            let empty = || BlockResult {
+                number: block.number(),
+                succeeded: true,
+                output: Vec::new(),
+                sensitive_input: false,
+                failed_lines: Vec::new(),
+            };
+            let _ = result.send(Ok(received.unwrap_or_else(empty)));
         }
         if deadline == self.earliest {
             self.earliest = self.slots.iter().filter_map(ReplySlot::deadline).min();
+        }
+        Ok(None)
+    }
+
+    #[cfg(test)]
+    pub(super) fn complete(&mut self, block: BlockResult) {
+        let fence = self.slots.front().map(|slot| slot.fence().block());
+        self.consume(block, usize::MAX)
+            .expect("unbounded test reply fits");
+        if let Some(fence) = fence {
+            self.consume(fence, usize::MAX)
+                .expect("fence completes request");
         }
     }
 
@@ -399,9 +437,10 @@ impl TerminalError {
 
 /// The task that owns the pipes and multiplexes both directions.
 struct Connection {
+    runtime: Arc<dyn Runtime>,
     child: PersistentChild,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdin: Writer,
+    stdout: BufReader<Reader>,
     /// What one line and one block may accumulate before this gives up.
     limits: ControlLimits,
     timeout: Duration,
@@ -417,8 +456,8 @@ struct Connection {
     core_stopped: watch::Receiver<bool>,
     /// Commands whose result block has not arrived yet.
     ///
-    /// tmux answers in order and blocks do not nest, so the front of this
-    /// queue owns the next block that completes.
+    /// Nested commands can add blocks; only each private fence advances
+    /// ownership to the next submitted request.
     awaiting: ReplySlots,
     /// Events tmux has reported that the caller has not taken yet.
     ///
@@ -494,17 +533,15 @@ impl Connection {
             // Biased: the stop and executor-shutdown signals are checked
             // before the read, so either wins a race against a pending EOF
             // instead of the outcome depending on poll order.
-            let step = tokio::select! {
-                biased;
-                asked = self.stopped.changed(), if watching => Step::Unwatched {
+            let step = futures_util::select_biased! {
+                asked = when(watching, self.stopped.changed()).fuse() => Step::Unwatched {
                     asked: asked.is_ok(),
                 },
-                () = cancellation_requested(&mut self.core_stopped) => Step::CoreStopped,
-                line = read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes),
-                    if !held_back => Step::Read(line),
-                room = self.events.reserve(), if !self.pending.is_empty() => Step::Deliver(room.is_ok()),
-                request = self.commands.recv(), if sending => Step::Send(request),
-                () = deadline_elapsed(reply_deadline), if self.awaiting.has_slots() => Step::TimedOut,
+                () = cancellation_requested(&mut self.core_stopped).fuse() => Step::CoreStopped,
+                line = when(!held_back, read_line(&mut self.stdout, &mut self.line, self.limits.max_line_bytes)).fuse() => Step::Read(line),
+                room = when(!self.pending.is_empty(), self.events.reserve()).fuse() => Step::Deliver(room.is_ok()),
+                request = when(sending, self.commands.recv()).fuse() => Step::Send(request),
+                () = when(self.awaiting.has_slots(), deadline_elapsed(self.runtime.as_ref(), reply_deadline)).fuse() => Step::TimedOut,
             };
 
             match step {
@@ -538,40 +575,42 @@ impl Connection {
                         continue;
                     };
                     let write_deadline = earliest_deadline(reply_deadline, request.deadline);
-                    let write = write_line(&mut self.stdin, &request.line);
-                    tokio::pin!(write);
-                    loop {
-                        let result = tokio::select! {
-                            biased;
-                            () = cancellation_requested(&mut self.core_stopped) => {
-                                let _ = request.result.send(Err(self.child.shutdown_error()));
-                                return Err(self.child.shutdown_error());
-                            }
-                            changed = self.stopped.changed(), if watching => {
-                                if changed.is_ok() {
-                                    let _ = request.result.send(Err(Error::control_mode_closed()));
-                                    return Ok(());
+                    let fence = ReplyFence::new();
+                    {
+                        let write = write_request(&mut self.stdin, &request.line, &fence.command);
+                        let mut write = std::pin::pin!(write);
+                        loop {
+                            let result = futures_util::select_biased! {
+                                () = cancellation_requested(&mut self.core_stopped).fuse() => {
+                                    let _ = request.result.send(Err(self.child.shutdown_error()));
+                                    return Err(self.child.shutdown_error());
                                 }
-                                watching = false;
-                                continue;
+                                changed = when(watching, self.stopped.changed()).fuse() => {
+                                    if changed.is_ok() {
+                                        let _ = request.result.send(Err(Error::control_mode_closed()));
+                                        return Ok(());
+                                    }
+                                    watching = false;
+                                    continue;
+                                }
+                                () = deadline_elapsed(self.runtime.as_ref(), write_deadline).fuse() => {
+                                    let _ = request.result.send(Err(Error::control_mode_timeout()));
+                                    return Err(Error::control_mode_timeout());
+                                }
+                                result = write.as_mut().fuse() => result,
+                            };
+                            if let Err(error) = result {
+                                let _ = request.result.send(Err(Error::control_mode_closed()));
+                                return Err(error);
                             }
-                            () = deadline_elapsed(write_deadline) => {
-                                let _ = request.result.send(Err(Error::control_mode_timeout()));
-                                return Err(Error::control_mode_timeout());
-                            }
-                            result = &mut write => result,
-                        };
-                        if let Err(error) = result {
-                            let _ = request.result.send(Err(Error::control_mode_closed()));
-                            return Err(error);
+                            break;
                         }
-                        break;
                     }
                     self.awaiting.push_ordered(
                         request.result,
                         request.deadline,
                         request.boundary,
-                        request.blocks,
+                        fence,
                     );
                 }
                 // The caller took one, so the next one can go.
@@ -608,24 +647,23 @@ impl Connection {
         deadline: Option<Instant>,
     ) -> Result<bool, Error> {
         loop {
-            let held_back = self.events.capacity() == 0;
-            let line = tokio::select! {
-                biased;
-                () = ready.closed() => return Ok(false),
-                () = cancellation_requested(&mut self.core_stopped) => {
+            let held_back = self.events.is_full();
+            let line = futures_util::select_biased! {
+                () = ready.cancellation().fuse() => return Ok(false),
+                () = cancellation_requested(&mut self.core_stopped).fuse() => {
                     return Err(self.child.shutdown_error());
                 }
-                () = deadline_elapsed(deadline) => {
+                () = deadline_elapsed(self.runtime.as_ref(), deadline).fuse() => {
                     return Err(Error::control_mode_timeout());
                 }
-                line = read_line(
+                line = when(!held_back, read_line(
                     &mut self.stdout,
                     &mut self.line,
                     self.limits.max_line_bytes,
-                ), if !held_back => line?,
+                )).fuse() => line?,
             };
             match line {
-                Some(Line::BlockStart(number)) => {
+                Some(Line::BlockStart { number, .. }) => {
                     return match self.read_opening_block(number, ready, deadline).await? {
                         Some(true) => Ok(true),
                         Some(false) => Err(Error::control_mode_closed()),
@@ -653,13 +691,12 @@ impl Connection {
     ) -> Result<Option<bool>, Error> {
         let mut accumulated = 0usize;
         loop {
-            let line = tokio::select! {
-                biased;
-                () = ready.closed() => return Ok(None),
-                () = cancellation_requested(&mut self.core_stopped) => {
+            let line = futures_util::select_biased! {
+                () = ready.cancellation().fuse() => return Ok(None),
+                () = cancellation_requested(&mut self.core_stopped).fuse() => {
                     return Err(self.child.shutdown_error());
                 }
-                () = deadline_elapsed(deadline) => {
+                () = deadline_elapsed(self.runtime.as_ref(), deadline).fuse() => {
                     return Err(Error::control_mode_timeout());
                 }
                 line = read_line_within(
@@ -667,7 +704,7 @@ impl Connection {
                     &mut self.line,
                     self.limits.max_line_bytes,
                     Some(number),
-                ) => line?,
+                ).fuse() => line?,
             };
             match line {
                 Some(Line::BlockEnd {
@@ -683,7 +720,7 @@ impl Connection {
                         ));
                     }
                 }
-                Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
+                Some(Line::Event(_) | Line::BlockStart { .. } | Line::BlockEnd { .. }) => {}
                 None => return Err(Error::control_mode_closed()),
             }
         }
@@ -692,18 +729,17 @@ impl Connection {
     /// Deliver every parsed event after terminal work has been released.
     async fn drain_pending_events(&mut self) -> Result<(), Error> {
         while let Some(delivery) = self.pending.pop_front() {
-            let permit = tokio::select! {
-                biased;
-                () = cancellation_requested(&mut self.core_stopped) => {
+            let permit = futures_util::select_biased! {
+                () = cancellation_requested(&mut self.core_stopped).fuse() => {
                     return Err(self.child.shutdown_error());
                 }
-                _ = self.stopped.changed() => return Ok(()),
-                permit = self.events.reserve() => permit,
+                _ = self.stopped.changed().fuse() => return Ok(()),
+                permit = self.events.reserve().fuse() => permit,
             };
             let Ok(permit) = permit else {
                 return Ok(());
             };
-            permit.send(delivery);
+            let _ = permit.send(delivery);
         }
         Ok(())
     }
@@ -711,7 +747,7 @@ impl Connection {
     /// Act on one protocol line, reporting whether to keep reading.
     async fn dispatch(&mut self, line: Line, watching: &mut bool) -> Result<bool, Error> {
         match line {
-            Line::BlockStart(number) => {
+            Line::BlockStart { number, flags } => {
                 let deadline = self.awaiting.block_deadline(self.timeout);
                 match self.read_block(number, deadline, watching).await? {
                     BlockRead::Complete(block) => {
@@ -719,10 +755,12 @@ impl Connection {
                         // order. Put the private marker after `%end` and
                         // before reading another line so the receiver sees
                         // the same boundary without exposing protocol state.
-                        if let Some(boundary) = self.awaiting.boundary_closed_by(&block) {
+                        if flags & 1 != 0
+                            && let Some(boundary) =
+                                self.awaiting.consume(block, self.limits.max_block_bytes)?
+                        {
                             self.report(Delivery::Boundary(boundary));
                         }
-                        self.awaiting.complete(block);
                         Ok(true)
                     }
                     BlockRead::Stopped => Ok(false),
@@ -761,7 +799,7 @@ impl Connection {
         // Anything but a full channel is finished with here. A receiver that
         // has gone away is not a reason to stop, because commands may still be
         // in flight and a caller who only sends is a valid caller.
-        let Err(mpsc::error::TrySendError::Full(delivery)) = self.events.try_send(delivery) else {
+        let Err(mpsc::TrySendError::Full(delivery)) = self.events.try_send(delivery) else {
             return;
         };
 
@@ -777,47 +815,69 @@ impl Connection {
     ) -> Result<BlockRead, Error> {
         let mut output = Vec::new();
         let mut accumulated = 0usize;
+        let fence = self.awaiting.slots.front().map(|slot| slot.fence().clone());
+        let line_limit = fence.as_ref().map_or(self.limits.max_line_bytes, |fence| {
+            self.limits
+                .max_line_bytes
+                .max(fence.output.as_bytes().len() + 1)
+        });
         loop {
-            let line = tokio::select! {
-                biased;
-                () = cancellation_requested(&mut self.core_stopped) => {
+            let line = futures_util::select_biased! {
+                () = cancellation_requested(&mut self.core_stopped).fuse() => {
                     return Err(self.child.shutdown_error());
                 }
-                changed = self.stopped.changed(), if *watching => {
+                changed = when(*watching, self.stopped.changed()).fuse() => {
                     if changed.is_ok() {
                         return Ok(BlockRead::Stopped);
                     }
                     *watching = false;
                     continue;
                 }
-                () = deadline_elapsed(deadline) => {
+                () = deadline_elapsed(self.runtime.as_ref(), deadline).fuse() => {
                     return Err(Error::control_mode_timeout());
                 }
                 line = read_line_within(
                     &mut self.stdout,
                     &mut self.line,
-                    self.limits.max_line_bytes,
+                    line_limit,
                     Some(number),
-                ) => line?,
+                ).fuse() => line?,
             };
             match line {
                 Some(Line::BlockEnd {
                     number: end,
                     succeeded,
                 }) if end == number => {
+                    let private_fence = !succeeded
+                        && fence.as_ref().is_some_and(|fence| {
+                            output.as_slice() == std::slice::from_ref(&fence.output)
+                        });
+                    if accumulated > self.limits.max_block_bytes && !private_fence {
+                        return Err(Error::control_mode_frame_too_large(
+                            "block",
+                            self.limits.max_block_bytes,
+                        ));
+                    }
                     return Ok(BlockRead::Complete(BlockResult {
                         number,
                         succeeded,
+                        failed_lines: vec![!succeeded; output.len()],
                         output,
                         sensitive_input: false,
-                        chained: 0,
                     }));
                 }
                 Some(Line::Text(text)) => {
-                    // A block whose `%end` never arrives grows without bound,
-                    // and unlike a line it can do so one valid line at a time.
-                    accumulated = accumulated.saturating_add(text.as_bytes().len());
-                    if accumulated > self.limits.max_block_bytes {
+                    let bytes = text.as_bytes().len().saturating_add(1);
+                    let private_fence = output.is_empty()
+                        && fence.as_ref().is_some_and(|fence| text == fence.output);
+                    if bytes > self.limits.max_line_bytes && !private_fence {
+                        return Err(Error::control_mode_frame_too_large(
+                            "line",
+                            self.limits.max_line_bytes,
+                        ));
+                    }
+                    accumulated = accumulated.saturating_add(bytes);
+                    if accumulated > self.limits.max_block_bytes && !private_fence {
                         return Err(Error::control_mode_frame_too_large(
                             "block",
                             self.limits.max_block_bytes,
@@ -829,7 +889,7 @@ impl Connection {
                 // open its reply never waits on a caller draining events.
                 // Only once it is open: the `%begin` that opens it is read by
                 // the loop above, which does report events.
-                Some(Line::Event(_) | Line::BlockStart(_) | Line::BlockEnd { .. }) => {}
+                Some(Line::Event(_) | Line::BlockStart { .. } | Line::BlockEnd { .. }) => {}
                 None => return Err(Error::control_mode_closed()),
             }
         }
@@ -838,7 +898,7 @@ impl Connection {
 
 async fn cancellation_requested(stopped: &mut watch::Receiver<bool>) {
     loop {
-        if *stopped.borrow() {
+        if *stopped.borrow_and_update() {
             return;
         }
         if stopped.changed().await.is_err() {
@@ -847,9 +907,9 @@ async fn cancellation_requested(stopped: &mut watch::Receiver<bool>) {
     }
 }
 
-pub(super) async fn deadline_elapsed(deadline: Option<Instant>) {
+pub(super) async fn deadline_elapsed(runtime: &dyn Runtime, deadline: Option<Instant>) {
     match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        Some(deadline) => runtime.sleep_until(deadline).await,
         None => std::future::pending().await,
     }
 }
@@ -859,5 +919,14 @@ fn earliest_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<In
         (Some(left), Some(right)) => Some(left.min(right)),
         (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
         (None, None) => None,
+    }
+}
+
+/// Keep disabled branches pending without changing their cancellation state.
+pub(super) async fn when<F: Future>(enabled: bool, future: F) -> F::Output {
+    if enabled {
+        future.await
+    } else {
+        std::future::pending().await
     }
 }

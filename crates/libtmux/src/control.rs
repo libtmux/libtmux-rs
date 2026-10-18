@@ -51,305 +51,36 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use futures_channel::oneshot;
 use futures_core::Stream;
-use tokio::sync::{mpsc, oneshot, watch};
-use tokio::time::Instant;
+use futures_util::FutureExt as _;
+
+use crate::driver::{Runtime, RuntimeExt as _, TaskHandle};
+use crate::internal::watch;
+
+use self::channel as mpsc;
 
 use crate::limits::ControlLimits;
 use crate::version::since::CONTROL_PANE_OFF;
 use crate::{Command, Error, IdParseError, PaneId, Server, SessionId, TmuxText, WindowId};
 
 mod actor;
+mod channel;
 #[cfg(feature = "unstable-fuzzing")]
 mod fuzz;
 mod protocol;
 
 #[cfg(test)]
 use actor::{HELD_WHILE_AWAITING, ReplySlot, ReplySlots, admit_request};
-use actor::{Request, deadline_elapsed};
+use actor::{Request, deadline_elapsed, when};
 #[cfg(any(test, feature = "unstable-fuzzing"))]
 use protocol::Line;
 #[cfg(test)]
 use protocol::unescape_output;
 
-/// Something tmux reported that no command asked for.
-///
-/// The variants cover every notification tmux publishes across the supported
-/// releases. [`Event::Other`] keeps an unrecognized one rather than dropping
-/// it, because tmux adds notifications between releases; its name is the tmux
-/// notification without the leading `%`.
-///
-/// Four of these are newer than the oldest tmux this crate supports:
-/// `%config-error`, `%message`, `%paste-buffer-changed` and
-/// `%paste-buffer-deleted` are never emitted by 3.2a. Nothing else in the
-/// vocabulary is version-dependent.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Event {
-    /// A pane produced output.
-    ///
-    /// The bytes are exactly what the pane wrote. tmux escapes only what
-    /// would break the line protocol -- bytes below `0x20`, and backslash --
-    /// so everything above `0x7f` arrives literally and the line as a whole
-    /// is not necessarily UTF-8. That is why this is bytes.
-    Output {
-        /// The pane that produced it.
-        pane: PaneId,
-        /// The output bytes.
-        bytes: Vec<u8>,
-    },
-    /// A pane produced output, and tmux said how far behind it is.
-    ///
-    /// Replaces [`Event::Output`] for the whole connection once a client asks
-    /// for `pause-after`, so a caller that sets that flag must handle both.
-    ExtendedOutput {
-        /// The pane that produced it.
-        pane: PaneId,
-        /// How long this output sat before tmux sent it.
-        age: Duration,
-        /// The output bytes.
-        bytes: Vec<u8>,
-    },
-    /// tmux stopped sending a pane's output.
-    ///
-    /// Two things ask for this: [`ControlSender::pause_after`], after which
-    /// tmux pauses a pane this client has fallen behind on, and
-    /// [`ControlSender::mute_pane`] below [`crate::since::CONTROL_PANE_OFF`],
-    /// which pauses rather than take a pane out of the stream. Resume with
-    /// [`ControlSender::resume_pane`].
-    Paused {
-        /// The pane that was paused.
-        pane: PaneId,
-    },
-    /// tmux resumed a pane it had paused.
-    Continued {
-        /// The pane that resumed.
-        pane: PaneId,
-    },
-    /// The attached session changed.
-    SessionChanged {
-        /// The session now attached.
-        session: SessionId,
-    },
-    /// A session was renamed.
-    SessionRenamed {
-        /// The session that was renamed.
-        session: SessionId,
-        /// Its new name.
-        name: TmuxText,
-    },
-    /// A session's active window changed.
-    SessionWindowChanged {
-        /// The session whose active window changed.
-        session: SessionId,
-        /// The window now active in it.
-        window: WindowId,
-    },
-    /// A session was created or destroyed, so the session list is now wrong.
-    ///
-    /// tmux says only that the set changed, not which session it was.
-    SessionsChanged,
-    /// A window was linked into the attached session.
-    WindowAdded {
-        /// The window that appeared.
-        window: WindowId,
-    },
-    /// A window in the attached session closed.
-    WindowClosed {
-        /// The window that closed.
-        window: WindowId,
-    },
-    /// A window in the attached session was renamed.
-    WindowRenamed {
-        /// The window that was renamed.
-        window: WindowId,
-        /// Its new name.
-        name: TmuxText,
-    },
-    /// A window's active pane changed.
-    WindowPaneChanged {
-        /// The window whose active pane changed.
-        window: WindowId,
-        /// The pane now active in it.
-        pane: PaneId,
-    },
-    /// A window appeared that the attached session does not link.
-    UnlinkedWindowAdded {
-        /// The window that appeared.
-        window: WindowId,
-    },
-    /// A window the attached session does not link closed.
-    UnlinkedWindowClosed {
-        /// The window that closed.
-        window: WindowId,
-    },
-    /// A window the attached session does not link was renamed.
-    UnlinkedWindowRenamed {
-        /// The window that was renamed.
-        window: WindowId,
-        /// Its new name.
-        name: TmuxText,
-    },
-    /// A window's panes were rearranged, added to, or removed from.
-    ///
-    /// tmux has no notification for a pane appearing, so this is the one that
-    /// reports it: every split changes the layout, including a detached split
-    /// that leaves the active pane alone and reports nothing else.
-    LayoutChanged {
-        /// The window whose layout changed.
-        window: WindowId,
-        /// The new layout, in tmux's own layout syntax.
-        layout: TmuxText,
-        /// The layout as displayed, which differs when a pane is zoomed.
-        visible_layout: TmuxText,
-        /// The window's flags, such as `*` for active.
-        flags: TmuxText,
-    },
-    /// A pane entered or left a mode, such as copy mode.
-    ///
-    /// tmux says the pane changed mode, not which mode it is now; read
-    /// `pane_mode` to learn that.
-    PaneModeChanged {
-        /// The pane whose mode changed.
-        pane: PaneId,
-    },
-    /// A client detached from the server.
-    ClientDetached {
-        /// The client that left.
-        client: TmuxText,
-    },
-    /// A client switched to a different session.
-    ClientSessionChanged {
-        /// The client that switched.
-        client: TmuxText,
-        /// The session it switched to.
-        session: SessionId,
-        /// That session's name.
-        name: TmuxText,
-    },
-    /// A paste buffer was created or replaced.
-    PasteBufferChanged {
-        /// The buffer's name.
-        name: TmuxText,
-    },
-    /// A paste buffer was deleted.
-    PasteBufferDeleted {
-        /// The buffer's name.
-        name: TmuxText,
-    },
-    /// A format this client subscribed to with `refresh-client -B` changed.
-    SubscriptionChanged {
-        /// The subscription name the caller chose.
-        name: TmuxText,
-        /// The session it is about.
-        session: SessionId,
-        /// The window it is about, when the subscription names one.
-        window: Option<WindowId>,
-        /// That window's index, when the subscription names one.
-        index: Option<u32>,
-        /// The pane it is about, when the subscription names one.
-        pane: Option<PaneId>,
-        /// The format's new value.
-        value: TmuxText,
-    },
-    /// tmux could not read part of its configuration.
-    ConfigError {
-        /// What tmux said was wrong.
-        message: TmuxText,
-    },
-    /// A message tmux was asked to display, by `display-message` or a hook.
-    Message {
-        /// The message text.
-        message: TmuxText,
-    },
-    /// The server is going away, so no further events will arrive.
-    Exit {
-        /// Why, when tmux gave a reason. `None` is an ordinary shutdown.
-        reason: Option<TmuxText>,
-    },
-    /// A notification this crate does not model.
-    Other {
-        /// The notification name, without its `%`.
-        name: String,
-        /// The rest of the line.
-        rest: TmuxText,
-    },
-}
-
-impl Event {
-    /// Report whether a listing taken before this event may now be wrong.
-    ///
-    /// Output and the flow-control events say nothing about the shape of the
-    /// server. [`Event::Other`] counts as invalidating, because an unmodelled
-    /// notification is one whose meaning is not known here.
-    #[must_use]
-    pub const fn invalidates_listings(&self) -> bool {
-        !matches!(
-            self,
-            Self::Output { .. }
-                | Self::ExtendedOutput { .. }
-                | Self::Paused { .. }
-                | Self::Continued { .. }
-                | Self::SubscriptionChanged { .. }
-                | Self::ConfigError { .. }
-                | Self::Message { .. }
-        )
-    }
-
-    /// Report whether a pane may have appeared since the last look.
-    ///
-    /// tmux publishes no notification for a pane being created, so this is a
-    /// conservative union of the events that can accompany one. A caller that
-    /// narrowed with [`ControlSender::watch_only`] must repeat it when this
-    /// answers `true`.
-    #[must_use]
-    pub const fn may_have_added_a_pane(&self) -> bool {
-        matches!(
-            self,
-            Self::LayoutChanged { .. }
-                | Self::WindowAdded { .. }
-                | Self::UnlinkedWindowAdded { .. }
-                | Self::SessionsChanged
-                | Self::SessionChanged { .. }
-                | Self::Other { .. }
-        )
-    }
-
-    /// Return the pane this event is about, when it is about one.
-    #[must_use]
-    pub const fn pane(&self) -> Option<&PaneId> {
-        match self {
-            Self::Output { pane, .. }
-            | Self::ExtendedOutput { pane, .. }
-            | Self::Paused { pane }
-            | Self::Continued { pane }
-            | Self::PaneModeChanged { pane }
-            | Self::WindowPaneChanged { pane, .. } => Some(pane),
-            Self::SubscriptionChanged { pane, .. } => pane.as_ref(),
-            _ => None,
-        }
-    }
-
-    /// Return the window this event is about, when it is about one.
-    #[must_use]
-    pub const fn window(&self) -> Option<&WindowId> {
-        match self {
-            Self::WindowAdded { window }
-            | Self::WindowClosed { window }
-            | Self::WindowRenamed { window, .. }
-            | Self::WindowPaneChanged { window, .. }
-            | Self::UnlinkedWindowAdded { window }
-            | Self::UnlinkedWindowClosed { window }
-            | Self::UnlinkedWindowRenamed { window, .. }
-            | Self::LayoutChanged { window, .. }
-            | Self::SessionWindowChanged { window, .. } => Some(window),
-            Self::SubscriptionChanged { window, .. } => window.as_ref(),
-            _ => None,
-        }
-    }
-}
+pub use libtmux_core::control::Event;
 
 /// The outcome of one command sent over control mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -358,58 +89,54 @@ pub struct BlockResult {
     succeeded: bool,
     output: Vec<TmuxText>,
     sensitive_input: bool,
-    /// Leading lines of `output` printed by earlier commands of the same
-    /// chain, each of which succeeded.
-    chained: usize,
+    /// Which lines came from error blocks, in the same order as `output`.
+    failed_lines: Vec<bool>,
 }
 
 impl BlockResult {
     /// Return the block number tmux assigned.
     ///
-    /// tmux assigns this, and correlation uses it rather than counting
-    /// commands: a command that fails early can leave a caller waiting
-    /// forever for a block tmux will never send.
+    /// This is the last command block in the reply. An empty alias has no
+    /// command block, so its number belongs to the completion boundary.
     #[must_use]
     pub const fn number(&self) -> u64 {
         self.number
     }
 
-    /// Report whether tmux closed the block with `%end` rather than `%error`.
+    /// Report whether every command block succeeded.
     #[must_use]
     pub const fn succeeded(&self) -> bool {
         self.succeeded
     }
 
-    /// Return the lines tmux printed inside the block.
+    /// Return all command output lines in their original arrival order.
     #[must_use]
     pub fn output(&self) -> &[TmuxText] {
         &self.output
     }
 
-    /// Split the output into what succeeded and what the failing command
-    /// printed, the way a process separates stdout from stderr.
-    pub(crate) fn split_by_outcome(&self) -> (&[TmuxText], &[TmuxText]) {
-        if self.succeeded {
-            (&self.output, &[])
-        } else {
-            self.output.split_at(self.chained.min(self.output.len()))
-        }
+    /// Split output by each block's outcome, retaining order within each stream.
+    pub(crate) fn split_by_outcome(
+        &self,
+    ) -> (
+        impl Iterator<Item = &TmuxText>,
+        impl Iterator<Item = &TmuxText>,
+    ) {
+        let lines = || self.output.iter().zip(&self.failed_lines);
+        (
+            lines().filter_map(|(line, failed)| (!failed).then_some(line)),
+            lines().filter_map(|(line, failed)| failed.then_some(line)),
+        )
     }
 
-    /// Append the block tmux sent for the next command of the same chain.
-    ///
-    /// Only called while every block so far has succeeded: tmux runs nothing
-    /// after the first command in a chain that fails.
+    /// Append another block without letting a success erase an earlier error.
     pub(super) fn followed_by(mut self, next: Self) -> Self {
-        let chained = self.output.len();
+        self.number = next.number;
+        self.succeeded &= next.succeeded;
+        self.sensitive_input |= next.sensitive_input;
         self.output.extend(next.output);
-        Self {
-            number: next.number,
-            succeeded: next.succeeded,
-            output: self.output,
-            sensitive_input: next.sensitive_input,
-            chained,
-        }
+        self.failed_lines.extend(next.failed_lines);
+        self
     }
 
     /// Classify an error block as a refusal for a named operation.
@@ -522,9 +249,16 @@ impl ControlMode {
             events,
             stop,
             connection,
-        } = actor::open(server.spawn_control(session).await?, limits, timeout).await?;
+        } = actor::open(
+            Arc::clone(server.runtime()),
+            server.spawn_control(session).await?,
+            limits,
+            timeout,
+        )
+        .await?;
 
         let sender = ControlSender {
+            runtime: Arc::clone(server.runtime()),
             commands,
             timeout,
             pane_off_is_safe,
@@ -671,8 +405,9 @@ fn check_subscription_name(name: &str) -> Result<(), Error> {
 ///
 /// Cheap to clone, and every method that sends takes `&self`, so several tasks
 /// can issue commands while another watches events.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ControlSender {
+    runtime: Arc<dyn Runtime>,
     commands: mpsc::Sender<Request>,
     timeout: Duration,
     /// Whether this tmux can take a pane out of the stream with `off`.
@@ -686,6 +421,18 @@ pub struct ControlSender {
     /// handle for a different server would silently talk to this one.
     /// [`crate::Server::over_control_mode`] compares it and refuses.
     identity: crate::ServerIdentity,
+}
+
+impl std::fmt::Debug for ControlSender {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControlSender")
+            .field("commands", &self.commands)
+            .field("timeout", &self.timeout)
+            .field("pane_off_is_safe", &self.pane_off_is_safe)
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ControlSender {
@@ -712,15 +459,12 @@ impl ControlSender {
     /// reported through [`BlockResult::succeeded`], the same way the process
     /// API keeps a nonzero exit status as data.
     ///
-    /// The block says tmux answered the command, not that what the command
-    /// asked for has happened. Almost always those are the same moment. They
-    /// are not for the commands tmux answers at once and then parks this
-    /// client's queue behind: `wait-for <channel>` until something signals it,
-    /// and `run-shell` without `-b` for as long as its shell command runs.
-    /// Each reports success, neither has finished, and the next command sent
-    /// waits for it however long that is. Send those through
-    /// [`crate::Server::cmd`], where the wait costs one process rather than
-    /// the connection everything else on it is sharing.
+    /// The reply includes nested commands and alias expansions. Completion
+    /// waits until this client's command queue passes the request, so
+    /// `wait-for` and foreground `run-shell` hold the shared connection until
+    /// they finish. Send long waits through [`crate::Server::cmd`] on a
+    /// subprocess-backed server. Background jobs and hooks are independent
+    /// work; their blocks are not part of this reply.
     ///
     /// # Errors
     ///
@@ -752,11 +496,10 @@ impl ControlSender {
         let line = command
             .control_mode_line()
             .ok_or_else(Error::control_mode_unrepresentable)?;
-        self.dispatch_line(line, sensitive_input, boundary, 1).await
+        self.dispatch_line(line, sensitive_input, boundary).await
     }
 
-    /// Send one already-rendered control-mode line holding `commands`
-    /// commands.
+    /// Send one already-rendered control-mode command line.
     ///
     /// The typed API routes through here: a request built for dispatch carries
     /// its own rendering, so re-deriving one from the argv is neither needed
@@ -766,10 +509,8 @@ impl ControlSender {
         &self,
         line: String,
         sensitive_input: bool,
-        commands: usize,
     ) -> Result<BlockResult, Error> {
-        self.dispatch_line(line, sensitive_input, None, commands)
-            .await
+        self.dispatch_line(line, sensitive_input, None).await
     }
 
     async fn dispatch_line(
@@ -777,12 +518,11 @@ impl ControlSender {
         line: String,
         sensitive_input: bool,
         boundary: Option<Boundary>,
-        commands: usize,
     ) -> Result<BlockResult, Error> {
         let deadline = Instant::now().checked_add(self.timeout);
         let (result, mut answer) = oneshot::channel();
         let (commit, mut commitment) = oneshot::channel();
-        let finish = |answer: Result<Result<BlockResult, Error>, oneshot::error::RecvError>| {
+        let finish = |answer: Result<Result<BlockResult, Error>, oneshot::Canceled>| {
             let mut block = answer.map_err(|_| Error::control_mode_closed())??;
             block.sensitive_input = sensitive_input;
             Ok(block)
@@ -791,37 +531,34 @@ impl ControlSender {
         if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
             return Err(Error::control_mode_dispatch_timeout());
         }
-        let permit = tokio::select! {
-            biased;
-            permit = self.commands.reserve() => {
+        let permit = futures_util::select_biased! {
+            permit = self.commands.reserve().fuse() => {
                 permit.map_err(|_| Error::control_mode_closed())?
             }
-            () = deadline_elapsed(deadline) => {
+            () = deadline_elapsed(self.runtime.as_ref(), deadline).fuse() => {
                 return Err(Error::control_mode_dispatch_timeout());
             }
         };
-        permit.send(Request {
+        let _ = permit.send(Request {
             line,
             deadline,
             result,
             commit,
             boundary,
-            blocks: commands.max(1),
         });
 
-        tokio::select! {
-            biased;
-            answer = &mut answer => return finish(answer),
-            () = deadline_elapsed(deadline) => {
+        futures_util::select_biased! {
+            answer = (&mut answer).fuse() => return finish(answer),
+            () = deadline_elapsed(self.runtime.as_ref(), deadline).fuse() => {
                 commitment.close();
                 match commitment.try_recv() {
-                    Ok(()) => {}
-                    Err(oneshot::error::TryRecvError::Closed | oneshot::error::TryRecvError::Empty) => {
+                    Ok(Some(())) => {}
+                    Ok(None) | Err(_) => {
                         return Err(Error::control_mode_dispatch_timeout());
                     }
                 }
             }
-            committed = &mut commitment => {
+            committed = (&mut commitment).fuse() => {
                 if committed.is_err() {
                     return finish(answer.await);
                 }
@@ -1191,7 +928,7 @@ pub struct ControlEvents {
     events: mpsc::Receiver<Delivery>,
     /// Requests closure; dropping it leaves remaining senders working.
     stop: watch::Sender<()>,
-    connection: Option<tokio::task::JoinHandle<Result<(), Error>>>,
+    connection: Option<TaskHandle<Result<(), Error>>>,
 }
 
 impl ControlEvents {
@@ -1339,7 +1076,7 @@ pub struct PaneOutput {
     narrowing: Arc<AtomicU8>,
     /// The re-narrowing pass in flight, if any, polled for whether it found
     /// the watched pane still listed.
-    narrow_handle: Option<tokio::task::JoinHandle<bool>>,
+    narrow_handle: Option<TaskHandle<bool>>,
 }
 
 impl PaneOutput {
@@ -1381,7 +1118,8 @@ impl PaneOutput {
         let sender = self.sender.clone();
         let pane = self.pane.clone();
         let narrowing = Arc::clone(&self.narrowing);
-        self.narrow_handle = Some(tokio::spawn(async move {
+        let runtime = Arc::clone(&self.sender.runtime);
+        self.narrow_handle = Some(runtime.spawn_value(async move {
             loop {
                 let _ = sender.watch_only(std::slice::from_ref(&pane)).await;
                 match narrowing.compare_exchange(
@@ -1471,20 +1209,19 @@ impl PaneOutput {
             .arg(self.pane.to_string());
         let sender = self.sender.clone();
         let reply = sender.send_ordered(command, Some(boundary));
-        tokio::pin!(reply);
+        let mut reply = std::pin::pin!(reply);
         let mut answer = None;
 
         loop {
             let mut reached = false;
-            tokio::select! {
-                biased;
-                outcome = reply.as_mut(), if answer.is_none() => {
+            futures_util::select_biased! {
+                outcome = when(answer.is_none(), reply.as_mut()).fuse() => {
                     match outcome {
                         Ok(block) => answer = Some(block),
                         Err(error) => return Err(error),
                     }
                 }
-                delivery = self.events.next_delivery() => {
+                delivery = self.events.next_delivery().fuse() => {
                     match delivery {
                         Some(Delivery::Event(
                             Event::Output { pane, bytes }

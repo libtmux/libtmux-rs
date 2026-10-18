@@ -1573,17 +1573,14 @@ async fn next_report(events: &mut ControlEvents, name: &str, within: Duration) -
             .await
             .ok()??;
         let event = event.expect("subscription connection remains healthy");
-        // Two ifs rather than a let-chain: this crate's floor is 1.85, and
-        // let-chains landed in 1.88.
         if let Event::SubscriptionChanged {
             name: reported,
             value,
             ..
         } = event
+            && reported.as_str().is_ok_and(|reported| reported == name)
         {
-            if reported.as_str().is_ok_and(|reported| reported == name) {
-                return value.as_str().ok().map(str::to_owned);
-            }
+            return value.as_str().ok().map(str::to_owned);
         }
     }
 }

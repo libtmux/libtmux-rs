@@ -358,6 +358,7 @@ mod client;
 mod command;
 #[cfg(feature = "control-mode")]
 pub mod control;
+pub mod driver;
 mod error;
 mod formats;
 pub mod hooks;
@@ -375,7 +376,9 @@ mod session;
 mod snapshot;
 mod target;
 mod version;
+mod wait;
 mod window;
+pub use wait::WaitExt;
 
 /// Exercise layout validation for fuzzing; not a supported API.
 #[cfg(feature = "unstable-fuzzing")]

@@ -78,10 +78,10 @@ async fn assert_process_gone(value: u32) {
 async fn wait_for_file(path: &Path) -> String {
     tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         loop {
-            if let Ok(contents) = fs::read_to_string(path) {
-                if !contents.is_empty() {
-                    return contents;
-                }
+            if let Ok(contents) = fs::read_to_string(path)
+                && !contents.is_empty()
+            {
+                return contents;
             }
             tokio::task::yield_now().await;
         }

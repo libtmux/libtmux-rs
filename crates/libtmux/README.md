@@ -11,17 +11,16 @@
 
 # libtmux
 
-[![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.85]
+[![crates.io]][crate] [![docs.rs]][docs] [![MSRV]][rust-1.97.1]
 
 [crates.io]: https://img.shields.io/crates/v/libtmux.svg
 [crate]: https://crates.io/crates/libtmux
 [docs.rs]: https://img.shields.io/docsrs/libtmux
 [docs]: https://docs.rs/libtmux
-[MSRV]: https://img.shields.io/badge/rustc-1.85+-lightgray.svg
-[rust-1.85]: https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/
+[MSRV]: https://img.shields.io/badge/rustc-1.97.1+-lightgray.svg
+[rust-1.97.1]: https://www.rust-lang.org/tools/install
 
-**Drive tmux from Rust: typed, async control over servers, sessions, windows,
-and panes.**
+**An async tmux client with typed servers, sessions, windows, and panes.**
 
 </div>
 
@@ -34,10 +33,10 @@ and panes.**
 See the [migration notes](docs/migration.md) when upgrading from an earlier alpha.
 
 ```rust
-use libtmux::test::TestServer;
+use libtmux::{test::TestServer, WaitExt as _};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    async {
     // Runs for real. `TestServer` is an isolated tmux on its own socket under
     // `/tmp/libtmux-rs-test/`, torn down at the end. Your own code says
     // `let server = libtmux::Server::new()?;` instead; nothing else changes.
@@ -56,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     guard.shutdown().await?;
     Ok(())
+    }.wait()
 }
 ```
 
@@ -69,23 +69,28 @@ stdout and stderr as raw bytes, so decoding stays the caller's decision.
 
 ## Requirements and installation
 
-Rust 1.85 or newer, tmux 3.2a or newer, and a Unix target. Native Windows is
+Rust 1.97.1 or newer, tmux 3.2a or newer, and Linux. Native Windows is
 unsupported because tmux is unavailable there; WSL works.
 
 ```toml
 [dependencies]
 libtmux = "0.1.0-alpha.15"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Async operations need an entered Tokio runtime. The default executable is
-`tmux`, resolved through the `PATH` captured when the `Server` is built; use
-`ServerBuilder::tmux_executable` to select another.
+The default driver uses `async-io` and `async-executor`; it has no Tokio
+runtime dependency. `WaitExt::wait` runs an operation from ordinary blocking
+code. Applications already using Tokio should select `libtmux-tokio`, whose
+constructors choose native Tokio I/O while retaining this object model.
 
-**Minimum supported Rust version.** 1.85, the first compiler to ship Edition
-2024. It is checked in CI against the whole test suite, not just a build. A
-raise is a minor version bump and is called out in the release notes, so a
-patch release never moves it.
+This client is not dependency-free. `libtmux-core` is the dependency-free
+values and protocol package; it does not run tmux. See
+[the package boundaries](docs/packages.md) for the dependency graph.
+
+The default executable is `tmux`, resolved through the `PATH` captured when
+`Server` is built. Use `ServerBuilder::tmux_executable` to select another.
+
+**Minimum supported Rust version.** 1.97.1. `just msrv` tests the workspace
+and checks each feature with this exact compiler.
 
 ## Features
 

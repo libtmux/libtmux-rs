@@ -5,6 +5,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 workspace_root="$(cd "$script_dir/.." && pwd -P)"
 core_root="$workspace_root/crates/libtmux"
+values_root="$workspace_root/crates/libtmux-core"
+native_root="$workspace_root/crates/libtmux-tokio"
 macros_root="$workspace_root/crates/libtmux-macros"
 mcp_root="$workspace_root/crates/tmux-mcp"
 workspace_crate_root="$workspace_root/crates/tmux-workspace"
@@ -12,6 +14,8 @@ workspace_crate_root="$workspace_root/crates/tmux-workspace"
 cd "$workspace_root"
 
 core_package="$(cargo package --locked --allow-dirty --package libtmux --list)"
+values_package="$(cargo package --locked --allow-dirty --package libtmux-core --list)"
+native_package="$(cargo package --locked --allow-dirty --package libtmux-tokio --list)"
 macros_package="$(cargo package --locked --allow-dirty --package libtmux-macros --list)"
 mcp_package="$(cargo package --locked --allow-dirty --package tmux-mcp --list)"
 workspace_crate_package="$(cargo package --locked --allow-dirty --package tmux-workspace --list)"
@@ -49,6 +53,7 @@ core_files=(
     "$core_root"/LICENSE-APACHE
     "$core_root"/LICENSE-MIT
     "$core_root"/README.md
+    "$core_root"/docs/packages.md
     "$core_root"/docs/design.md
     "$core_root"/docs/findings.md
     "$core_root"/docs/parity.md
@@ -111,6 +116,13 @@ for file in "${core_files[@]}"; do
     require_line "$core_package" "${file#"$core_root"/}" "libtmux"
 done
 
+for file in "${core_files[@]}"; do
+    require_line "$native_package" "${file#"$core_root"/}" "libtmux-tokio"
+done
+for file in LICENSE-APACHE LICENSE-MIT README.md src/lib.rs; do
+    require_line "$values_package" "$file" "libtmux-core"
+done
+
 for file in "${macros_files[@]}"; do
     require_line "$macros_package" "${file#"$macros_root"/}" "libtmux-macros"
 done
@@ -134,7 +146,7 @@ done
 # install command is the one most often split over lines.
 documented_versions() {
     perl -0777 -ne '
-        my $crate = qr/\b(libtmux-macros|libtmux|tmux-mcp|tmux-workspace)\b/;
+        my $crate = qr/\b(libtmux-macros|libtmux-core|libtmux-tokio|libtmux|tmux-mcp|tmux-workspace)\b/;
         s/\\\n\s*/ /g;
         print "$1 $2\n" while /$crate\s*=\s*(?:\{[^}]*version\s*=\s*)?"([^"]+)"/g;
         my $version = qr/([0-9A-Za-z.+-]+)/;
@@ -172,7 +184,7 @@ check_documented_version() {
 
 declare -A crate_versions=()
 metadata="$(cargo metadata --format-version 1 --no-deps)"
-for crate in libtmux libtmux-macros tmux-mcp tmux-workspace; do
+for crate in libtmux-core libtmux libtmux-tokio libtmux-macros tmux-mcp tmux-workspace; do
     crate_versions[$crate]="$(
         printf '%s' "$metadata" \
             | grep -oP "\"name\":\"$crate\",\"version\":\"\K[^\"]+"
@@ -184,6 +196,8 @@ for crate in libtmux libtmux-macros tmux-mcp tmux-workspace; do
 done
 
 check_documented_version "$core_root" libtmux "$core_package"
+check_documented_version "$native_root" libtmux-tokio "$native_package"
+check_documented_version "$values_root" libtmux-core "$values_package"
 check_documented_version "$macros_root" libtmux-macros "$macros_package"
 check_documented_version "$mcp_root" tmux-mcp "$mcp_package"
 check_documented_version "$workspace_crate_root" tmux-workspace "$workspace_crate_package"
@@ -230,6 +244,8 @@ check_relative_links() {
 }
 
 check_relative_links "$core_package" "$core_root" libtmux
+check_relative_links "$native_package" "$native_root" libtmux-tokio
+check_relative_links "$values_package" "$values_root" libtmux-core
 check_relative_links "$macros_package" "$macros_root" libtmux-macros
 check_relative_links "$mcp_package" "$mcp_root" tmux-mcp
 check_relative_links "$workspace_crate_package" "$workspace_crate_root" tmux-workspace

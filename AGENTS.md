@@ -9,19 +9,20 @@ was asked for.
 
 ## What is here
 
-One Cargo workspace, four crates, all published:
+One Cargo workspace, six published crates and a private developer tool:
 
 | Crate | What it is |
 | --- | --- |
-| `crates/libtmux` | The async tmux client and object model |
+| `crates/libtmux-core` | Dependency-free values and control protocol |
+| `crates/libtmux` | Shared async tmux client and default async-io driver |
+| `crates/libtmux-tokio` | Native Tokio driver and constructors |
 | `crates/libtmux-macros` | `#[derive(Filterable)]`, for downstream structs |
 | `crates/tmux-mcp` | A Model Context Protocol server over tmux |
 | `crates/tmux-workspace` | A tmuxp-style YAML builder |
 
-`tmux-mcp` carries its own `version` and `rust-version` rather than inheriting
-the workspace's, because it moves at its own pace and its dependencies need a
-newer compiler than the libraries promise. `fuzz/` is excluded from the
-workspace: it needs nightly and a sanitizer.
+`tmux-mcp` carries its own version because it moves at its own pace. Every
+crate requires Rust 1.97.1. `fuzz/` is excluded from the workspace: it needs
+nightly and a sanitizer.
 
 `just` lists every recipe. Cargo is authoritative; the justfile only groups
 Cargo commands.

@@ -49,10 +49,10 @@ pub(super) fn commands(value: &Yaml, path: &str) -> Result<Vec<ShellCommand>, Pr
     };
     // tmuxp reads a lone null, `pane` or `blank` as a pane with no command.
     // Among other commands the words are typed, and a null is refused.
-    if let [only] = entries {
-        if matches!(only, Yaml::Null) || matches!(only.as_str(), Some("pane" | "blank")) {
-            return Ok(Vec::new());
-        }
+    if let [only] = entries
+        && (matches!(only, Yaml::Null) || matches!(only.as_str(), Some("pane" | "blank")))
+    {
+        return Ok(Vec::new());
     }
     entries
         .iter()

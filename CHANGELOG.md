@@ -4,8 +4,7 @@ Notable changes to the workspace. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the crates follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Crates are versioned together except `tmux-mcp`, which moves at its own pace
-because its dependencies need a newer compiler than the libraries do.
+Library crates share a version; `tmux-mcp` moves at its own pace.
 
 While the version is `0.1.0-alpha.*`, any release may break the API, and
 breaking changes are not called out as such: nothing here is stable yet. The
@@ -15,6 +14,18 @@ requirement selects nothing, so a caller opts in by writing the version out in
 full.
 
 ## Unreleased
+
+### Changed
+
+- Split the client into a runtime-independent async `libtmux`, a dependency-free
+  `libtmux-core` for protocol and value types, and `libtmux-tokio` for native
+  Tokio process I/O. `Server`, `Session`, `Window`, and `Pane` remain usable
+  through either client package. `tmux-mcp` and `tmux-workspace` use the Tokio
+  package. See the package guide for imports and dependency changes.
+- Require Rust 1.97.1 and Linux or WSL. Release binaries target Linux x86_64
+  and aarch64.
+- Correlate control-mode replies by command boundaries, preserving a pending
+  reply when unrelated notifications arrive.
 
 ## 0.1.0-alpha.15 - 2026-09-27
 

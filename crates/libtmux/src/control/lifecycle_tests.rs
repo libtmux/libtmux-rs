@@ -221,7 +221,14 @@ fn process_script(parent: &Path, descendant: &Path, prefix: &str) -> String {
 /// before returning -- block 1 is the opening handshake, block 2 answers that
 /// request, so a test's own first command after attaching is block 3.
 fn opening_success() -> &'static str {
-    "printf '%%begin 0 1 0\\n%%end 0 1 0\\n'\nIFS= read -r _new_layouts\nprintf '%%begin 0 2 0\\n%%end 0 2 0\\n'"
+    r#"reply_fence() {
+    IFS= read -r _fence
+    printf '%%begin 0 900 1\nparse error: unknown command: %s\n%%error 0 900 1\n' "$_fence"
+}
+printf '%%begin 0 1 0\n%%end 0 1 0\n'
+IFS= read -r _new_layouts
+printf '%%begin 0 2 1\n%%end 0 2 1\n'
+reply_fence"#
 }
 
 async fn attach(server: &Server) -> Result<ControlMode, Error> {
@@ -397,7 +404,7 @@ async fn an_open_response_block_has_one_deadline() {
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 1\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -501,7 +508,7 @@ async fn the_earliest_committed_deadline_ends_the_connection() {
     let second_seen = fixture.path().join("second-command");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _first\n: > {}\nIFS= read -r _second\n: > {}",
+        "{}\nIFS= read -r _first\n: > {}\nIFS= read -r _first_fence\nIFS= read -r _second\n: > {}",
         opening_success(),
         shell_quote(&first_seen),
         shell_quote(&second_seen),
@@ -611,7 +618,7 @@ async fn watcher_shutdown_interrupts_an_open_response_block() {
     let marker = fixture.path().join("command-started");
     let _guard = ProcessGuard::new([parent.clone(), descendant.clone()]);
     let prefix = format!(
-        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 0\\n'",
+        "{}\nIFS= read -r _line\n: > {}\nprintf '%%begin 0 3 1\\n'",
         opening_success(),
         shell_quote(&marker),
     );
@@ -774,7 +781,7 @@ async fn terminal_notifications_drain_after_eof_inside_a_reply() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 3 0\\npartial\\n'",
+            "{}\nIFS= read -r _command\nIFS= read -r _completion_fence\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone\nprintf '%%begin 0 3 1\\npartial\\n'",
             opening_success(),
             EVENT_QUEUE + 1,
         ),
@@ -836,7 +843,7 @@ async fn terminal_drain_releases_a_committed_command_and_server_shutdown() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone",
+            "{}\nIFS= read -r _command\nIFS= read -r _completion_fence\nindex=0\nwhile [ \"$index\" -lt {} ]; do\n    printf '%%sessions-changed\\n'\n    index=$((index + 1))\ndone",
             opening_success(),
             EVENT_QUEUE + 1,
         ),
@@ -889,7 +896,7 @@ async fn pane_snapshot_separates_output_at_the_capture_block() {
     let executable = write_script(
         fixture.path(),
         &format!(
-            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 3 0\\nvisible\\n%%end 0 3 0\\n'\nprintf '%%output %%1 after\\n'\nprintf '%%exit done\\n'",
+            "{}\nIFS= read -r _command\nprintf '%%output %%1 before\\n'\nprintf '%%begin 0 3 1\\nvisible\\n%%end 0 3 1\\n'\nprintf '%%output %%1 after\\n'\nreply_fence\nprintf '%%exit done\\n'",
             opening_success(),
         ),
     );
@@ -1109,7 +1116,7 @@ async fn initial_watch_failure_preserves_the_connection_error() {
     let payload = fixture.path().join("payload");
     fs::write(
         &payload,
-        format!("%begin 0 2 0\n%end 0 2 0\n{}\n", "x".repeat(256)),
+        format!("%begin 0 2 1\n%end 0 2 1\n{}\n", "x".repeat(256)),
     )
     .expect("payload is writable");
     let guard = crate::test::TestServer::builder()

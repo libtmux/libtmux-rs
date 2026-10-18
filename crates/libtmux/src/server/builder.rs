@@ -35,6 +35,7 @@ use crate::{DispatchLimits, Error, OutputLimits, ServerConfigurationErrorKind};
 /// ```
 #[must_use = "a server builder has no effect until build is called"]
 pub struct ServerBuilder {
+    runtime: Arc<dyn crate::driver::Runtime>,
     socket_name: Option<OsString>,
     socket_path: Option<PathBuf>,
     config_file: Option<PathBuf>,
@@ -81,6 +82,7 @@ impl fmt::Debug for ServerBuilder {
 impl ServerBuilder {
     pub(super) fn new() -> Self {
         Self {
+            runtime: Arc::new(crate::driver::AsyncIoRuntime),
             socket_name: None,
             socket_path: None,
             config_file: None,
@@ -94,6 +96,15 @@ impl ServerBuilder {
             #[cfg(feature = "test-support")]
             prevent_server_start: false,
         }
+    }
+
+    /// Select the driver for processes, timers, and background cleanup.
+    ///
+    /// Construction stays inert. Every handle produced by this server shares
+    /// the selected driver.
+    pub fn runtime(mut self, runtime: Arc<dyn crate::driver::Runtime>) -> Self {
+        self.runtime = runtime;
+        self
     }
 
     /// Bound how many bytes one command may read from tmux.
@@ -312,7 +323,7 @@ impl ServerBuilder {
             configuration
         };
         Ok(Server {
-            core: Arc::new(Core::new(configuration)),
+            core: Arc::new(Core::new_with_runtime(configuration, self.runtime)),
         })
     }
 }
