@@ -98,6 +98,25 @@ to exercise these features. Each example owns its fixture and cleanup. See
 [design](crates/libtmux/docs/design.md), [findings](crates/libtmux/docs/findings.md),
 and the [capability ledger](crates/libtmux/docs/parity.md) for their contracts.
 
+## Load workspaces from YAML
+
+`tmux-workspace` loads tmuxp workspace files through the native async client.
+Build the CLI from this checkout:
+
+```console
+$ cargo build --locked --package tmux-workspace
+```
+
+Preview the bundled workspace without creating a tmux session:
+
+```console
+$ PATH="$PWD/target/debug:$PATH" tmux-workspace load --dry-run \
+    crates/tmux-workspace/tests/fixtures/tmuxp/minimal.yaml
+```
+
+See the [workspace guide](crates/tmux-workspace/README.md) for loading,
+validation, and supported tmuxp settings.
+
 ## Development
 
 `just` lists the recipes. `just check` runs the local verification gates;

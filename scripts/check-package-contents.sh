@@ -118,6 +118,9 @@ for file in "${core_files[@]}"; do
     require_line "$native_package" "${file#"$core_root"/}" "libtmux-tokio"
 done
 
+require_line "$core_package" "docs/list-profiles.txt" "libtmux"
+require_line "$native_package" "docs/list-profiles.txt" "libtmux-tokio"
+
 for file in "${macros_files[@]}"; do
     require_line "$macros_package" "${file#"$macros_root"/}" "libtmux-macros"
 done

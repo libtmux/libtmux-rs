@@ -75,7 +75,7 @@ src/window/navigation.rs	generated	src/window/navigation.rs	-	The generator tran
 src/window/settings.rs	generated	src/window/settings.rs	-	The generator translates the canonical operation, example, or regression test.
 src/window.rs	generated	src/window.rs	-	The generator translates the canonical operation, example, or regression test.
 tests/blocking.rs	manual	tests/blocking.rs	7d7304d327b0bb7f0ff275d2e076e1cb61b86721084b6bf83887095659096a66	Direct blocking calls cover scripted and multi-server use; nested-runtime refusal applies only to the native runtime facade.
-tests/cancel_safety.rs	manual	tests/cancel_safety.rs	38a1c9d798c11749033bc4bc961c512d74760b28dbc6bb09046994ec25cb0e31	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
+tests/cancel_safety.rs	manual	tests/cancel_safety.rs	2440d23359162d757393066dff51288b72c1a317e4e3521b014301d3af33f17a	Native task races and cancellation are exercised with coordinated threads and explicit tokens; ordinary assertions remain.
 tests/command.rs	generated	tests/command.rs	-	The generator translates the canonical operation, example, or regression test.
 tests/command_budget.rs	generated	tests/command_budget.rs	-	The generator translates the canonical operation, example, or regression test.
 tests/command_chain.rs	generated	tests/command_chain.rs	-	The generator translates the canonical operation, example, or regression test.
