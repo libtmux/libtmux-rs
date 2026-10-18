@@ -253,7 +253,14 @@ impl PromptKind {
 ///
 /// **Connecting.** [`new`] takes the default socket, [`builder`] configures
 /// one, and [`from_env`] reads the server this process is already inside.
-/// [`is_alive`] and [`check_alive`] answer whether anything is listening.
+/// [`is_alive`] and [`check_alive`] answer whether anything is listening. A
+/// socket path does not identify a daemon, so [`generation`] captures the one
+/// answering and [`require_generation`] fails once a different one has taken
+/// the endpoint. [`resolved_tmux_executable`] reports where the configured
+/// tmux resolves, or `None` when it is not on `PATH`. With the `control-mode`
+/// feature, which is off by default, [`over_control_mode`] runs a handle's
+/// commands over an open control connection, and [`owns_control_client`] says
+/// whether a pid is a control client this process opened.
 ///
 /// **Finding one thing.** [`session`] and [`client`] take names;
 /// [`session_by_id`], [`window_by_id`], and [`pane_by_id`] take tmux IDs.
@@ -264,21 +271,50 @@ impl PromptKind {
 /// as an empty server. [`hierarchy`] gathers the whole tree in
 /// three tmux commands rather than one per object.
 ///
-/// **Changing things.** [`new_session`], [`kill`], and [`with_session`],
-/// which cleans up after itself whether the body succeeded or not.
+/// **Querying things and getting around.** [`has_session`] answers whether a
+/// name exists, and [`attached_sessions`] keeps the ones a client is attached
+/// to. To narrow a listing further, borrow it with `.iter()`, give
+/// [`QueryIteratorExt::matching`] a predicate built from the typed fields
+/// [`Filterable`] provides, and finish with [`QueryIteratorExt::exactly_one`]
+/// or [`QueryIteratorExt::one_or_none`]; [`Session::search_windows`] and
+/// [`Window::search_panes`] apply a matcher to one branch. The `query` feature
+/// supplies all of that, and is on by default. The [`SessionTree`] and
+/// [`WindowTree`] that [`hierarchy`] returns hold their children as fields, so
+/// walking down them costs no further tmux command, and with `query` a
+/// predicate can also ask about a session's windows or a window's panes. To
+/// move between levels, go down with [`Session::windows`] and
+/// [`Window::panes`], to the active child with [`Session::active_window`] and
+/// [`Window::active_pane`], and up with [`Pane::window`], [`Pane::session`],
+/// and [`Window::session`], which re-read tmux and report `Ok(None)` when the
+/// parent has gone.
+///
+/// **Changing things.** [`new_session`], [`kill`], [`lock_all`] to lock every
+/// client, and [`with_session`], which cleans up after itself whether the body
+/// succeeded or not.
 ///
 /// **Options and hooks.** [`typed_option`] and [`set_typed_option`] for this
 /// server, [`typed_global_option`] and [`set_typed_global_option`] for the
-/// session defaults, [`set_option`] to send text tmux's option table does not
-/// check, and [`set_hook`] and [`unset_hook`]. [`OptionValue`] says how the
-/// reads and writes fit together.
+/// session defaults, [`typed_global_window_option`] and
+/// [`set_typed_global_window_option`] for the window defaults, [`set_option`]
+/// to send text tmux's option table does not check, and [`set_hook`] and
+/// [`unset_hook`]. An option that holds a numbered set, such as
+/// `command-alias`, is read with [`array_option`] and changed with
+/// [`set_array_option`], [`append_array_option`], and [`unset_array_option`].
+/// [`OptionValue`] says how the reads and writes fit together.
 ///
 /// **Everything else tmux keeps.** Paste buffers ([`buffer`], [`set_buffer`],
-/// [`buffer_names`], [`delete_buffer`]), key bindings ([`bind_key`],
-/// [`unbind_key`], [`key_bindings`]), format expansion ([`format`]),
-/// configuration ([`source_file`]), shell commands ([`run_shell`],
-/// [`spawn_shell`]), and wait-for channels ([`lock_channel`],
-/// [`unlock_channel`], [`signal_channel`]).
+/// [`buffer_names`], [`delete_buffer`], and [`load_buffer`] and
+/// [`save_buffer`], which move one through a file), key bindings
+/// ([`bind_key`], [`unbind_key`], [`key_bindings`], and, on tmux 3.7 and
+/// later, [`typed_key_bindings`] for the same bindings as fields), the global
+/// environment ([`environment`], [`environment_all`], [`set_environment`],
+/// [`hide_environment`], [`unset_environment`]), format expansion
+/// ([`format`]), configuration ([`source_file`]), layout validation
+/// ([`validate_layouts`], which checks each layout and its pane count before
+/// any command applies it), shell commands ([`run_shell`], [`spawn_shell`]),
+/// and wait-for channels ([`lock_channel`], [`unlock_channel`],
+/// [`signal_channel`], [`wait_for_channel`], and [`with_channel_lock`], which
+/// unlocks however its body ends).
 ///
 /// **Things that need a terminal.** [`display_popup`], [`display_menu`],
 /// [`command_prompt`], [`choose`], [`find_window`], and [`display_panes`] all
@@ -292,6 +328,11 @@ impl PromptKind {
 /// [`from_env`]: Server::from_env
 /// [`is_alive`]: Server::is_alive
 /// [`check_alive`]: Server::check_alive
+/// [`generation`]: Server::generation
+/// [`require_generation`]: Server::require_generation
+/// [`resolved_tmux_executable`]: Server::resolved_tmux_executable
+/// [`over_control_mode`]: Server::over_control_mode
+/// [`owns_control_client`]: Server::owns_control_client
 /// [`session`]: Server::session
 /// [`client`]: Server::client
 /// [`session_by_id`]: Server::session_by_id
@@ -302,31 +343,66 @@ impl PromptKind {
 /// [`panes`]: Server::panes
 /// [`clients`]: Server::clients
 /// [`hierarchy`]: Server::hierarchy
+/// [`has_session`]: Server::has_session
+/// [`attached_sessions`]: Server::attached_sessions
+/// [`QueryIteratorExt::matching`]: crate::query::QueryIteratorExt::matching
+/// [`QueryIteratorExt::exactly_one`]: crate::query::QueryIteratorExt::exactly_one
+/// [`QueryIteratorExt::one_or_none`]: crate::query::QueryIteratorExt::one_or_none
+/// [`Filterable`]: crate::query::Filterable
+/// [`Session::search_windows`]: crate::Session::search_windows
+/// [`Window::search_panes`]: crate::Window::search_panes
+/// [`SessionTree`]: crate::SessionTree
+/// [`WindowTree`]: crate::WindowTree
+/// [`Session::windows`]: crate::Session::windows
+/// [`Window::panes`]: crate::Window::panes
+/// [`Pane::window`]: crate::Pane::window
+/// [`Pane::session`]: crate::Pane::session
+/// [`Window::session`]: crate::Window::session
+/// [`Session::active_window`]: crate::Session::active_window
+/// [`Window::active_pane`]: crate::Window::active_pane
 /// [`new_session`]: Server::new_session
 /// [`kill`]: Server::kill
+/// [`lock_all`]: Server::lock_all
 /// [`with_session`]: Server::with_session
 /// [`typed_option`]: Server::typed_option
 /// [`set_typed_option`]: Server::set_typed_option
 /// [`typed_global_option`]: Server::typed_global_option
 /// [`set_typed_global_option`]: Server::set_typed_global_option
+/// [`typed_global_window_option`]: Server::typed_global_window_option
+/// [`set_typed_global_window_option`]: Server::set_typed_global_window_option
 /// [`set_option`]: Server::set_option
 /// [`OptionValue`]: crate::OptionValue
 /// [`set_hook`]: Server::set_hook
 /// [`unset_hook`]: Server::unset_hook
+/// [`array_option`]: Server::array_option
+/// [`set_array_option`]: Server::set_array_option
+/// [`append_array_option`]: Server::append_array_option
+/// [`unset_array_option`]: Server::unset_array_option
 /// [`buffer`]: Server::buffer
 /// [`set_buffer`]: Server::set_buffer
 /// [`buffer_names`]: Server::buffer_names
 /// [`delete_buffer`]: Server::delete_buffer
+/// [`load_buffer`]: Server::load_buffer
+/// [`save_buffer`]: Server::save_buffer
 /// [`bind_key`]: Server::bind_key
 /// [`unbind_key`]: Server::unbind_key
 /// [`key_bindings`]: Server::key_bindings
+/// [`typed_key_bindings`]: Server::typed_key_bindings
+/// [`environment`]: Server::environment
+/// [`environment_all`]: Server::environment_all
+/// [`set_environment`]: Server::set_environment
+/// [`hide_environment`]: Server::hide_environment
+/// [`unset_environment`]: Server::unset_environment
 /// [`format`]: Server::format
 /// [`source_file`]: Server::source_file
+/// [`validate_layouts`]: Server::validate_layouts
 /// [`run_shell`]: Server::run_shell
 /// [`spawn_shell`]: Server::spawn_shell
 /// [`lock_channel`]: Server::lock_channel
 /// [`unlock_channel`]: Server::unlock_channel
 /// [`signal_channel`]: Server::signal_channel
+/// [`wait_for_channel`]: Server::wait_for_channel
+/// [`with_channel_lock`]: Server::with_channel_lock
 /// [`display_popup`]: Server::display_popup
 /// [`display_menu`]: Server::display_menu
 /// [`command_prompt`]: Server::command_prompt
